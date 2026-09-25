@@ -1,0 +1,56 @@
+CREATE TABLE IF NOT EXISTS workspaces (
+  id uuid PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS instagram_connections (
+  id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES workspaces (id),
+  account_id text NOT NULL UNIQUE CHECK (length(btrim(account_id)) > 0),
+  active boolean NOT NULL DEFAULT false,
+  UNIQUE (id, workspace_id)
+);
+
+CREATE TABLE IF NOT EXISTS instagram_comment_rules (
+  id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  media_id text NOT NULL CHECK (length(btrim(media_id)) > 0),
+  keyword text NOT NULL CHECK (length(btrim(keyword)) > 0),
+  private_reply_text text NOT NULL CHECK (length(btrim(private_reply_text)) > 0),
+  enabled boolean NOT NULL DEFAULT false,
+  FOREIGN KEY (connection_id, workspace_id) REFERENCES instagram_connections (id, workspace_id),
+  UNIQUE (connection_id, media_id),
+  UNIQUE (id, connection_id, workspace_id)
+);
+
+CREATE TABLE IF NOT EXISTS instagram_comment_events (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  workspace_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  comment_id text NOT NULL CHECK (length(btrim(comment_id)) > 0),
+  media_id text NOT NULL CHECK (length(btrim(media_id)) > 0),
+  sender_id text NOT NULL CHECK (length(btrim(sender_id)) > 0),
+  comment_text text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  FOREIGN KEY (connection_id, workspace_id) REFERENCES instagram_connections (id, workspace_id),
+  UNIQUE (connection_id, comment_id),
+  UNIQUE (id, connection_id, workspace_id)
+);
+
+CREATE TABLE IF NOT EXISTS private_reply_outbox (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  workspace_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  event_id bigint NOT NULL UNIQUE,
+  rule_id uuid NOT NULL,
+  comment_id text NOT NULL,
+  media_id text NOT NULL,
+  sender_id text NOT NULL,
+  private_reply_text text NOT NULL,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  FOREIGN KEY (connection_id, workspace_id) REFERENCES instagram_connections (id, workspace_id),
+  FOREIGN KEY (event_id, connection_id, workspace_id) REFERENCES instagram_comment_events (id, connection_id, workspace_id),
+  FOREIGN KEY (rule_id, connection_id, workspace_id) REFERENCES instagram_comment_rules (id, connection_id, workspace_id),
+  UNIQUE (connection_id, media_id, sender_id)
+);
