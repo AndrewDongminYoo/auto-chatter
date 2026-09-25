@@ -59,12 +59,13 @@ Outbox status semantics matter for correctness:
 
 - `pending` + `next_attempt_at` pushed 1 minute: verification failed (including transient Graph errors on read calls), or `PreSendVerificationError` with `retry`.
 - `blocked` + `failure_code`: the policy rejected it, or `PreSendVerificationError` with `block`.
-- `failed` + `failure_code = meta_error_<code>`: `ProviderRejectedError`, i.e. Meta answered the send `POST` with a non-transient error carrying a code.
+- `pending` + `rate_limit_retries` incremented: `ProviderRateLimitedError`, i.e. Meta refused the send `POST` with a throttle code in a 4xx body. The delay comes from the backoff tiers in `reply-worker.ts`, or from a longer `Retry-After`. The connection's `send_paused_until` is pushed out by the same delay, and the claim query skips every reply of a paused connection, so the other replies do not spend their own retries.
+- `failed` + `failure_code = meta_error_<code>`: `ProviderRejectedError` (a non-transient error code on the send `POST`), or a rate limit after the backoff tiers are used up.
 - `unknown`: `send()` threw anything else, or a `sending` row outlived 10 minutes (`recoverStalePrivateReplies`). These are never retried automatically, to avoid double-sending.
 - `sent` + `provider_message_id`.
 
-A transport may throw `PreSendVerificationError` only before it issues the provider send request, and `ProviderRejectedError` only for a definite rejection of that request; any other error from `send()` is treated as an ambiguous outcome.
-Besides HTTP 429 and 5xx, `meta-graph-error.ts` owns which Meta error bodies count as transient.
+A transport may throw `PreSendVerificationError` only before it issues the provider send request, and `ProviderRejectedError` or `ProviderRateLimitedError` only for a definite rejection of that request; any other error from `send()` is treated as an ambiguous outcome.
+`classifyMetaGraphFailure` in `meta-graph-error.ts` is the single place both transports use to classify a non-2xx, non-5xx Graph response.
 
 **Transports** (selected by `META_LOGIN_MODE`, default `facebook`; the configured Meta app uses `instagram`):
 
