@@ -417,6 +417,76 @@ test("a rate-limited reply is re-verified and blocked once its comment has expir
   assert.equal(limited.sends(), 1);
 });
 
+test("a connection pause during verification defers an already claimed reply without spending a retry", async () => {
+  await queueReply();
+  let releaseVerification!: () => void;
+  let signalVerification!: () => void;
+  const verificationStarted = new Promise<void>((resolve) => {
+    signalVerification = resolve;
+  });
+  const verificationReleased = new Promise<void>((resolve) => {
+    releaseVerification = resolve;
+  });
+  let sends = 0;
+  const waitingWorker = processNextPrivateReply(
+    pool,
+    {
+      verify: async (request) => {
+        signalVerification();
+        await verificationReleased;
+        return verified(request);
+      },
+      send: async () => {
+        sends++;
+        return { messageId: "unexpected" };
+      },
+    },
+    () => now,
+    connectionId,
+  );
+  try {
+    await verificationStarted;
+    await ingestComments(pool, [
+      { accountId: "account-1", commentId: "comment-2", postId: "post-1", senderId: "sender-2", text: "자료 주세요" },
+    ]);
+    assert.equal(await processNextPrivateReply(pool, rateLimitedTransport([4]), () => now, connectionId), true);
+  } finally {
+    releaseVerification();
+    await waitingWorker;
+  }
+  assert.equal(sends, 0);
+  const state = await rateLimitState();
+  assert.equal(state.status, "pending");
+  assert.equal(state.failure_code, "connection_paused");
+  assert.equal(state.rate_limit_retries, 0);
+  assertAbout(state.delay_seconds, 15 * 60);
+  const attempt = await pool.query(
+    "SELECT attempt_id, attempt_started_at FROM private_reply_outbox WHERE sender_id = 'sender-1'",
+  );
+  assert.deepEqual(attempt.rows[0], { attempt_id: null, attempt_started_at: null });
+});
+
+test("rate-limit migration preserves existing replies and retry state when reapplied", async () => {
+  await queueReply();
+  const migration = await readFile(new URL("../../db/migrations/002_rate_limit_backoff.sql", import.meta.url), "utf8");
+  await pool.query("ALTER TABLE instagram_connections DROP COLUMN send_paused_until");
+  await pool.query("ALTER TABLE private_reply_outbox DROP COLUMN rate_limit_retries");
+  try {
+    await pool.query(migration);
+    assert.equal((await rateLimitState()).rate_limit_retries, 0);
+    assert.equal((await rateLimitState()).status, "pending");
+    await processNextPrivateReply(pool, rateLimitedTransport([4]), () => now, connectionId);
+    await pool.query(migration);
+    const state = await rateLimitState();
+    assert.equal(state.rate_limit_retries, 1);
+    assert.equal(state.failure_code, "meta_error_4");
+    assertAbout(state.pause_seconds, 15 * 60);
+    assert.equal(await processNextPrivateReply(pool, rateLimitedTransport([4]), () => now, connectionId), false);
+  } finally {
+    await pool.query(migration);
+  }
+});
+
 test("invalid reply input is blocked before a provider POST", async () => {
   await queueReply();
   await processNextPrivateReply(
