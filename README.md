@@ -1,7 +1,7 @@
 # Messaging Automation Platform
 
 ManyChat 유료 기능에 대응하는 자체 운영형 메시징 자동화 서비스를 만드는 저장소입니다.
-현재는 Instagram 웹훅 수신, PostgreSQL 이벤트 저장, 댓글 키워드에 따른 개인 답장 요청 보관까지 구현했습니다.
+현재는 Instagram 웹훅 수신, PostgreSQL 이벤트 저장, 댓글 키워드에 따른 개인 답장 요청 보관, 발송 정책과 워커 모듈까지 구현했습니다.
 외부 서비스 계정과 실제 메시지 발송은 연결하지 않았습니다.
 
 ## 문서
@@ -9,6 +9,7 @@ ManyChat 유료 기능에 대응하는 자체 운영형 메시징 자동화 서�
 - [시장·API·오픈소스 조사](docs/notes/2026-09-25-manychat-research.md): ManyChat 요금제, 공식 연동 경로, 비용과 재사용 후보를 정리했습니다.
 - [ChatbotX 채택 검증](docs/notes/2026-09-25-chatbotx-validation.md): 고정 커밋의 라이선스·설치·검사 결과와 직접 구현으로 전환한 근거를 기록했습니다.
 - [Instagram 수신 검증](docs/notes/2026-09-25-ingress-validation.md): 실제 PostgreSQL 통합 테스트와 적대적 검토 결과를 기록했습니다.
+- [Meta 권한과 발송 워커](docs/notes/2026-09-25-meta-permissions-and-worker.md): 공식 권한 조건, 발송 상태, 실제 계정 확인에 남은 조건을 기록했습니다.
 - [제품·기술 명세](docs/specs/2026-09-25-messaging-automation-platform.md): 목표와 비목표, 기술 스택, 아키텍처, 과금과 AI 에이전트 경계를 정의했습니다.
 - [구현 계획](docs/plans/2026-09-25-delivery-plan.md): 검증 순서, 단계별 완료 조건, 개발 에이전트 워크플로를 기록했습니다.
 
@@ -18,7 +19,8 @@ ManyChat 유료 기능에 대응하는 자체 운영형 메시징 자동화 서�
 ChatbotX Community Edition의 현재 고정 커밋은 채택을 보류하고 최소 기능을 직접 구현합니다.
 현재 수신기는 구독 확인과 원본 본문 서명을 검증하고, 활성 연결의 댓글만 저장합니다.
 같은 댓글은 하나의 이벤트로 기록하고 같은 계정·게시물·발신자에게는 개인 답장 요청을 하나만 보관합니다.
-요청은 `pending` 상태로만 남으며, 실제 발송은 계정 권한, 채널 정책, 재시도 경계를 구현한 뒤 연결합니다.
+발송 워커 모듈은 계정 권한과 댓글 생성 시각을 확인하는 어댑터를 요구하고, 허용되지 않은 요청을 차단합니다.
+현재 실행 명령은 웹훅 수신기만 시작하며, Meta 어댑터와 실제 발송은 아직 연결하지 않았습니다.
 
 ## 로컬 실행
 
@@ -28,6 +30,12 @@ Node.js 24, pnpm 10, PostgreSQL 17이 필요합니다.
 ```bash
 docker run --rm -d --name automations-postgres -p 127.0.0.1:5433:5432 -e POSTGRES_PASSWORD=local-dev -e POSTGRES_DB=automations postgres:17-alpine
 docker exec -i automations-postgres psql -U postgres -d automations < db/schema.sql
+```
+
+기존 스키마로 만든 DB에는 워커를 사용하기 전에 다음 마이그레이션을 적용합니다.
+
+```bash
+docker exec -i automations-postgres psql -v ON_ERROR_STOP=1 -U postgres -d automations < db/migrations/001_reply_worker.sql
 ```
 
 활성 Instagram 연결과 키워드 규칙은 `db/schema.sql`의 테이블에 별도로 등록해야 합니다.

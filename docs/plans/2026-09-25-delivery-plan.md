@@ -1,16 +1,17 @@
 # 메시징 자동화 플랫폼 구현 계획
 
-상태: ChatbotX 채택 검증을 수행하고 Instagram 웹훅 수신·이벤트 저장·개인 답장 요청 보관을 구현했습니다.
-실제 Meta 계정 권한과 발송은 아직 검증하지 않았습니다.
+상태: ChatbotX 채택 검증을 수행하고 Instagram 웹훅 수신·이벤트 저장·개인 답장 요청 보관·발송 정책·워커 모듈을 구현했습니다.
+실제 Meta 계정 권한과 발송 어댑터는 아직 검증하지 않았습니다.
 검증 결과와 남은 조건은 [채택 검증 기록](../notes/2026-09-25-chatbotx-validation.md)에 있습니다.
 제품 경계는 [명세](../specs/2026-09-25-messaging-automation-platform.md), 외부 사실과 후보 비교는 [조사 보고서](../notes/2026-09-25-manychat-research.md)를 따릅니다.
 
 ## 권장 경로
 
 ChatbotX Community Edition의 고정 커밋을 검증했고, 워커 타입 검사 실패와 불명확한 CE 추출 경계 때문에 채택을 보류했습니다.
-같은 TypeScript·PostgreSQL·Redis 경계로 최소 기능을 직접 구현합니다.
+TypeScript·PostgreSQL로 최소 기능을 직접 구현하고, 지연 작업의 부하가 확인되면 Redis를 검토합니다.
 첫 구현은 Instagram 웹훅 검증과 댓글 이벤트 정규화·저장입니다.
-PostgreSQL outbox에 개인 답장 요청을 보관하지만 발송 워커와 외부 API 호출은 다음 단계입니다.
+PostgreSQL outbox를 처리하는 워커 모듈을 구현했습니다.
+실제 계정의 로그인 방식과 권한을 확인한 뒤 Meta 어댑터와 실행 진입점을 연결해야 합니다.
 Chatwoot은 인박스 요구가 특히 강할 때 비교 대상이지만, ManyChat식 마케팅 플로를 구현할 추가 비용이 큽니다.
 [후보 평가 근거](../notes/2026-09-25-manychat-research.md#유사-오픈소스-평가).
 
