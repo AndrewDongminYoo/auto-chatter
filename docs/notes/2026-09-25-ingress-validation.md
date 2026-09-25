@@ -20,13 +20,13 @@
 수신·저장 경로 구현 뒤 추가한 교차 작업 공간 참조 테스트는 기존 스키마에서 실제로 통과하지 못했습니다.
 규칙과 이벤트의 외래 키를 연결 ID·작업 공간 ID까지 포함하도록 수정했습니다.
 
-| 검사 | 확인한 범위 | 결과 |
-| --- | --- | --- |
-| `corepack pnpm install --frozen-lockfile` | 의존성 선언과 잠금 파일 일치 | 통과 |
-| `corepack pnpm check-types` | 현재 TypeScript 파일의 정적 타입 | 통과 |
-| `corepack pnpm test` | 구독·서명·페이로드 정규화의 순수 함수 | 5개 통과 |
-| `TEST_DATABASE_URL=... corepack pnpm test:db` | 로컬 PostgreSQL 17의 HTTP·DB 경로, 재전달, 동시성, 작업 공간 제약 | 15개 통과 |
-| `corepack pnpm start`와 로컬 `curl` | 실제 프로세스의 구독 응답 | 올바른 토큰은 200과 challenge, 잘못된 토큰은 403 |
+| 검사                                          | 확인한 범위                                                       | 결과                                             |
+| --------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------ |
+| `corepack pnpm install --frozen-lockfile`     | 의존성 선언과 잠금 파일 일치                                      | 통과                                             |
+| `corepack pnpm check-types`                   | 현재 TypeScript 파일의 정적 타입                                  | 통과                                             |
+| `corepack pnpm test`                          | 구독·서명·페이로드 정규화의 순수 함수                             | 5개 통과                                         |
+| `TEST_DATABASE_URL=... corepack pnpm test:db` | 로컬 PostgreSQL 17의 HTTP·DB 경로, 재전달, 동시성, 작업 공간 제약 | 15개 통과                                        |
+| `corepack pnpm start`와 로컬 `curl`           | 실제 프로세스의 구독 응답                                         | 올바른 토큰은 200과 challenge, 잘못된 토큰은 403 |
 
 DB 테스트는 `automations_test`라는 로컬 DB의 제품 테이블을 삭제하고 초기 스키마로 재생성합니다.
 이 검사는 Meta의 실제 권한 승인, 정책 준수, API 발송 또는 외부 중복 발송 방지를 입증하지 않습니다.

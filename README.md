@@ -63,15 +63,15 @@ corepack pnpm start
 다음 환경 변수는 서버에서만 설정합니다.
 토큰 값은 저장소나 검사 결과에 기록하지 않습니다.
 
-| 변수 | 용도 |
-| --- | --- |
-| `META_LOGIN_MODE` | `instagram`은 현재 앱의 Instagram Login 경로입니다. 생략하면 기존 `facebook` 경로를 사용합니다. |
-| `META_GRAPH_VERSION` | 앱에서 사용할 명시적 Graph API 버전입니다. |
-| `META_INSTAGRAM_ACCESS_TOKEN` | Instagram Login 경로의 Instagram 사용자 토큰입니다. |
-| `META_APP_ID`, `META_APP_ACCESS_TOKEN`, `META_USER_ACCESS_TOKEN`, `META_PAGE_ID` | Facebook Login 경로에서만 앱 권한과 Page 연결을 확인합니다. |
-| `META_INSTAGRAM_ACCOUNT_ID` | 전문 계정의 `user_id`입니다. Meta 앱 ID나 Instagram 앱 ID와 다릅니다. |
-| `META_INSTAGRAM_CONNECTION_ID` | 발송 워커가 처리할 DB 연결 하나입니다. Instagram Login의 읽기 전용 계정 확인에는 필요하지 않습니다. |
-| `DATABASE_URL` | 발송 워커가 outbox에 접근할 때 필요합니다. |
+| 변수                                                                             | 용도                                                                                                |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `META_LOGIN_MODE`                                                                | `instagram`은 현재 앱의 Instagram Login 경로입니다. 생략하면 기존 `facebook` 경로를 사용합니다.     |
+| `META_GRAPH_VERSION`                                                             | 앱에서 사용할 명시적 Graph API 버전입니다.                                                          |
+| `META_INSTAGRAM_ACCESS_TOKEN`                                                    | Instagram Login 경로의 Instagram 사용자 토큰입니다.                                                 |
+| `META_APP_ID`, `META_APP_ACCESS_TOKEN`, `META_USER_ACCESS_TOKEN`, `META_PAGE_ID` | Facebook Login 경로에서만 앱 권한과 Page 연결을 확인합니다.                                         |
+| `META_INSTAGRAM_ACCOUNT_ID`                                                      | 전문 계정의 `user_id`입니다. Meta 앱 ID나 Instagram 앱 ID와 다릅니다.                               |
+| `META_INSTAGRAM_CONNECTION_ID`                                                   | 발송 워커가 처리할 DB 연결 하나입니다. Instagram Login의 읽기 전용 계정 확인에는 필요하지 않습니다. |
+| `DATABASE_URL`                                                                   | 발송 워커가 outbox에 접근할 때 필요합니다.                                                          |
 
 현재 앱은 Instagram Login 사용 사례를 설정했으므로 `META_LOGIN_MODE=instagram`을 지정합니다.
 이 경로에서 `corepack pnpm meta:check`는 토큰의 전문 계정 ID만 읽기 전용으로 확인하며, 부여된 권한 범위와 실제 발송 가능 여부는 증명하지 않습니다.
