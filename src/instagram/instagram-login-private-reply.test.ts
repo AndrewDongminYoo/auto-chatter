@@ -31,6 +31,11 @@ function mockGraph(
     commentTimestamp?: string;
     failSecondProfile?: boolean;
     sendStatus?: number;
+    commentErrorCode?: number;
+    commentErrorStatus?: number;
+    commentErrorTransient?: boolean;
+    sendErrorCode?: number;
+    sendMalformedError?: boolean;
   } = {},
 ): { calls: Array<{ url: URL; init: RequestInit }>; fetchImpl: typeof fetch } {
   const calls: Array<{ url: URL; init: RequestInit }> = [];
@@ -49,6 +54,11 @@ function mockGraph(
     }
     if (url.pathname === "/v25.0/111") {
       assert.equal(url.searchParams.get("fields"), "id,from,media,timestamp");
+      if (overrides.commentErrorCode !== undefined)
+        return graphResponse(
+          { error: { code: overrides.commentErrorCode, is_transient: overrides.commentErrorTransient ?? false } },
+          overrides.commentErrorStatus ?? 400,
+        );
       return graphResponse({
         id: "111",
         from: { id: "333" },
@@ -66,6 +76,9 @@ function mockGraph(
         recipient: { comment_id: "111" },
         message: { text: "자료 링크입니다" },
       });
+      if (overrides.sendErrorCode !== undefined)
+        return graphResponse({ error: { code: overrides.sendErrorCode } }, 400);
+      if (overrides.sendMalformedError) return graphResponse({ error: {} }, 400);
       return graphResponse({ message_id: "mid-instagram" }, overrides.sendStatus ?? 200);
     }
     throw new Error(`Unexpected Graph path: ${url.pathname}`);
@@ -123,7 +136,13 @@ test("permission inspection can run without a database connection but sending ca
   const graph = mockGraph();
   const transport = new InstagramLoginPrivateReplyTransport({ ...config(graph.fetchImpl), connectionId: undefined });
   assert.deepEqual(await transport.inspectAccount(), { verified: true });
-  await assert.rejects(transport.send(request), /Private reply connection or text is invalid/);
+  await assert.rejects(
+    transport.send(request),
+    (error: unknown) =>
+      error instanceof PreSendVerificationError &&
+      error.disposition === "block" &&
+      error.failureCode === "invalid_request",
+  );
   assert.equal(
     graph.calls.some(({ url }) => url.pathname.endsWith("/messages")),
     false,
@@ -183,4 +202,83 @@ test("a failed Instagram send has an unknown outcome", async () => {
   const graph = mockGraph({ sendStatus: 503 });
   const transport = new InstagramLoginPrivateReplyTransport(config(graph.fetchImpl));
   await assert.rejects(transport.send(request), /Meta Graph HTTP 503/);
+});
+
+test("invalid reply input is blocked before any provider POST", async () => {
+  for (const invalid of [
+    { ...request, connectionId: "other" },
+    { ...request, text: "  " },
+  ]) {
+    const graph = mockGraph();
+    const transport = new InstagramLoginPrivateReplyTransport(config(graph.fetchImpl));
+    await assert.rejects(
+      transport.send(invalid),
+      (error: unknown) =>
+        error instanceof PreSendVerificationError &&
+        error.disposition === "block" &&
+        error.failureCode === "invalid_request",
+    );
+    assert.equal(
+      graph.calls.some(({ url }) => url.pathname.endsWith("/messages")),
+      false,
+    );
+  }
+});
+
+test("a Graph throttle code in HTTP 400 keeps a pre-send lookup retryable", async () => {
+  for (const code of [4, 17, 32, 613]) {
+    const graph = mockGraph({ commentErrorCode: code });
+    const transport = new InstagramLoginPrivateReplyTransport(config(graph.fetchImpl));
+    await assert.rejects(transport.verify(request), new RegExp(`Meta Graph transient error code ${code}`));
+    await assert.rejects(
+      transport.send(request),
+      (error: unknown) => error instanceof PreSendVerificationError && error.disposition === "retry",
+    );
+    assert.equal(
+      graph.calls.some(({ url }) => url.pathname.endsWith("/messages")),
+      false,
+    );
+  }
+});
+
+test("a transient Graph error in HTTP 403 keeps a pre-send lookup retryable", async () => {
+  const graph = mockGraph({ commentErrorCode: 100, commentErrorStatus: 403, commentErrorTransient: true });
+  const transport = new InstagramLoginPrivateReplyTransport(config(graph.fetchImpl));
+  await assert.rejects(transport.verify(request), /Meta Graph transient error code 100/);
+  await assert.rejects(
+    transport.send(request),
+    (error: unknown) => error instanceof PreSendVerificationError && error.disposition === "retry",
+  );
+  assert.equal(
+    graph.calls.some(({ url }) => url.pathname.endsWith("/messages")),
+    false,
+  );
+});
+
+test("a clear Graph POST rejection retains its Meta error code", async () => {
+  const graph = mockGraph({ sendErrorCode: 100 });
+  const transport = new InstagramLoginPrivateReplyTransport(config(graph.fetchImpl));
+  await assert.rejects(
+    transport.send(request),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.name === "ProviderRejectedError" &&
+      "failureCode" in error &&
+      error.failureCode === "meta_error_100",
+  );
+  assert.equal(graph.calls.filter(({ url }) => url.pathname.endsWith("/messages")).length, 1);
+});
+
+test("a throttled or malformed POST response remains outcome unknown", async () => {
+  for (const overrides of [{ sendErrorCode: 4 }, { sendStatus: 400 }, { sendMalformedError: true }]) {
+    const graph = mockGraph(overrides);
+    const transport = new InstagramLoginPrivateReplyTransport(config(graph.fetchImpl));
+    const expectedMessage =
+      "sendErrorCode" in overrides ? "Meta Graph transient error code 4" : "Meta private reply outcome is unknown";
+    await assert.rejects(
+      transport.send(request),
+      (error: unknown) => error instanceof Error && error.constructor === Error && error.message === expectedMessage,
+    );
+    assert.equal(graph.calls.filter(({ url }) => url.pathname.endsWith("/messages")).length, 1);
+  }
 });

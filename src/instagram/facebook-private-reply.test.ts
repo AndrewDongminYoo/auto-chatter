@@ -34,6 +34,8 @@ function mockGraph(
     mediaOwnerId?: string;
     commentTimestamp?: string;
     sendStatus?: number;
+    commentErrorCode?: number;
+    sendErrorCode?: number;
     expiresAt?: number;
     dataAccessExpiresAt?: number;
     failSecondDebug?: boolean;
@@ -81,6 +83,8 @@ function mockGraph(
     }
     if (url.pathname === "/v25.0/111") {
       assert.equal(url.searchParams.get("fields"), "id,from,media,timestamp");
+      if (overrides.commentErrorCode !== undefined)
+        return graphResponse({ error: { code: overrides.commentErrorCode } }, 400);
       return graphResponse({
         id: "111",
         from: { id: "333" },
@@ -99,6 +103,8 @@ function mockGraph(
         recipient: { comment_id: "111" },
         message: { text: "자료 링크입니다" },
       });
+      if (overrides.sendErrorCode !== undefined)
+        return graphResponse({ error: { code: overrides.sendErrorCode } }, 400);
       return graphResponse({ message_id: "mid-123" }, overrides.sendStatus ?? 200);
     }
     throw new Error(`Unexpected Graph path: ${url.pathname}`);
@@ -206,6 +212,57 @@ test("a Graph lookup failure inside send is identified as pre-send", async () =>
     graph.calls.some(({ url }) => url.pathname.endsWith("/messages")),
     false,
   );
+});
+
+test("invalid reply input is blocked before any provider POST", async () => {
+  for (const invalid of [
+    { ...request, connectionId: "other" },
+    { ...request, text: "  " },
+  ]) {
+    const graph = mockGraph();
+    const transport = new FacebookPrivateReplyTransport(config(graph.fetchImpl));
+    await assert.rejects(
+      transport.send(invalid),
+      (error: unknown) =>
+        error instanceof PreSendVerificationError &&
+        error.disposition === "block" &&
+        error.failureCode === "invalid_request",
+    );
+    assert.equal(
+      graph.calls.some(({ url }) => url.pathname.endsWith("/messages")),
+      false,
+    );
+  }
+});
+
+test("a Graph throttle code in HTTP 400 keeps a pre-send lookup retryable", async () => {
+  for (const code of [4, 17, 32, 613]) {
+    const graph = mockGraph({ commentErrorCode: code });
+    const transport = new FacebookPrivateReplyTransport(config(graph.fetchImpl));
+    await assert.rejects(transport.verify(request), new RegExp(`Meta Graph transient error code ${code}`));
+    await assert.rejects(
+      transport.send(request),
+      (error: unknown) => error instanceof PreSendVerificationError && error.disposition === "retry",
+    );
+    assert.equal(
+      graph.calls.some(({ url }) => url.pathname.endsWith("/messages")),
+      false,
+    );
+  }
+});
+
+test("a clear Graph POST rejection retains its Meta error code", async () => {
+  const graph = mockGraph({ sendErrorCode: 100 });
+  const transport = new FacebookPrivateReplyTransport(config(graph.fetchImpl));
+  await assert.rejects(
+    transport.send(request),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.name === "ProviderRejectedError" &&
+      "failureCode" in error &&
+      error.failureCode === "meta_error_100",
+  );
+  assert.equal(graph.calls.filter(({ url }) => url.pathname.endsWith("/messages")).length, 1);
 });
 
 test("token expiration uses the injected policy clock", async () => {

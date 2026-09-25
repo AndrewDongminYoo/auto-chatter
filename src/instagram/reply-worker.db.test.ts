@@ -5,6 +5,7 @@ import { Pool } from "pg";
 import { ingestComments } from "./store.ts";
 import {
   PreSendVerificationError,
+  ProviderRejectedError,
   processNextPrivateReply,
   recoverStalePrivateReplies,
   runPrivateReplyWorker,
@@ -232,6 +233,40 @@ test("an uncertain send is never automatically retried", async () => {
   assert.equal((await outbox()).failure_code, "send_outcome_unknown");
   assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), false);
   assert.equal(sends, 1);
+});
+
+test("a definite provider rejection is failed with its Meta code and not retried", async () => {
+  await queueReply();
+  let sends = 0;
+  const transport: PrivateReplyTransport = {
+    verify: verified,
+    send: async () => {
+      sends++;
+      throw new ProviderRejectedError(100);
+    },
+  };
+  assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), true);
+  assert.equal((await outbox()).status, "failed");
+  assert.equal((await outbox()).failure_code, "meta_error_100");
+  assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), false);
+  assert.equal(sends, 1);
+});
+
+test("invalid reply input is blocked before a provider POST", async () => {
+  await queueReply();
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: verified,
+      send: async () => {
+        throw new PreSendVerificationError("block", "invalid_request");
+      },
+    },
+    () => now,
+    connectionId,
+  );
+  assert.equal((await outbox()).status, "blocked");
+  assert.equal((await outbox()).failure_code, "invalid_request");
 });
 
 test("a failed read-only check inside send returns to pending before a POST", async () => {

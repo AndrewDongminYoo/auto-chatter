@@ -37,6 +37,16 @@ export class PreSendVerificationError extends Error {
   }
 }
 
+export class ProviderRejectedError extends Error {
+  readonly failureCode: string;
+
+  constructor(metaCode: number) {
+    super("Meta Graph send rejected");
+    this.name = "ProviderRejectedError";
+    this.failureCode = `meta_error_${metaCode}`;
+  }
+}
+
 interface ClaimedRow {
   id: string;
   workspace_id: string;
@@ -164,6 +174,14 @@ export async function processNextPrivateReply(
           [row.id, attemptId, error.failureCode],
         );
       }
+      return true;
+    }
+    if (error instanceof ProviderRejectedError) {
+      await updateClaim(
+        pool,
+        "UPDATE private_reply_outbox SET status = 'failed', failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
+        [row.id, attemptId, error.failureCode],
+      );
       return true;
     }
     await updateClaim(

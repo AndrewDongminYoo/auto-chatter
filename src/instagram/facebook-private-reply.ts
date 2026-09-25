@@ -1,5 +1,11 @@
-import { PreSendVerificationError, type PrivateReplyRequest, type PrivateReplyTransport } from "./reply-worker.ts";
+import {
+  PreSendVerificationError,
+  ProviderRejectedError,
+  type PrivateReplyRequest,
+  type PrivateReplyTransport,
+} from "./reply-worker.ts";
 import { evaluatePrivateReply } from "./reply-policy.ts";
+import { readMetaGraphError } from "./meta-graph-error.ts";
 
 const requiredPermissions = [
   "pages_show_list",
@@ -90,7 +96,14 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
       throw new Error("Meta Graph request failed");
     }
     if (response.status === 429 || response.status >= 500) throw new Error(`Meta Graph HTTP ${response.status}`);
-    if (!response.ok) return { status: response.status, data: null };
+    if (!response.ok) {
+      const error = await readMetaGraphError(response);
+      if (error?.transient)
+        throw new Error(`Meta Graph transient error${error.code === null ? "" : ` code ${error.code}`}`);
+      if (method === "POST" && error?.code !== null && error?.code !== undefined)
+        throw new ProviderRejectedError(error.code);
+      return { status: response.status, data: null };
+    }
     try {
       return { status: response.status, data: (await response.json()) as unknown };
     } catch {
@@ -211,7 +224,7 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
 
   async send(request: PrivateReplyRequest): ReturnType<PrivateReplyTransport["send"]> {
     if (!this.matchesConnection(request) || !request.text.trim())
-      throw new Error("Private reply connection or text is invalid");
+      throw new PreSendVerificationError("block", "invalid_request");
     let verification;
     try {
       verification = await this.verify(request);
