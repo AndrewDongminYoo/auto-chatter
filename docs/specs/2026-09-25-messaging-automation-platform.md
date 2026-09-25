@@ -59,7 +59,8 @@ ChatbotX Community Edition을 [고정 커밋에서 검증](../notes/2026-09-25-c
 후보 저장소는 [Next.js·TypeScript 프런트엔드, PostgreSQL·pgvector, Redis·BullMQ 워커, S3 호환 저장소](https://github.com/ChatbotXIO/ChatbotX)를 사용하며, Instagram·WhatsApp·TikTok 어댑터와 자동화 테스트를 포함합니다.
 직접 구현에서는 TypeScript와 PostgreSQL을 사용합니다.
 현재 코드는 Node.js 24의 타입 제거 실행 기능을 사용해 웹훅 수신 서버와 PostgreSQL 이벤트·outbox 저장, 발송 정책과 워커 모듈을 구현했습니다.
-Facebook Login과 Instagram Login용 발송 어댑터와 별도 워커 명령은 구현했지만 실계정 발송은 아직 검증하지 않았습니다.
+Facebook Login과 Instagram Login용 발송 어댑터와 별도 워커 명령을 구현했습니다.
+운영자는 Meta 개발자 대시보드에서 일반 DM 발송에 성공했다고 보고했지만, 이 저장소의 댓글 비공개 답장 발송은 실계정에서 아직 검증하지 않았습니다.
 OAuth 계정 연결과 사용자 화면은 아직 구현하지 않았습니다.
 
 | 계층 | 선택 | 이유와 도입 조건 |

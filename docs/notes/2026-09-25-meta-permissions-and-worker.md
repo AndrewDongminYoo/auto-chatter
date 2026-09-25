@@ -6,7 +6,8 @@
 운영자는 [Meta 앱 `1802833180713730`](https://developers.facebook.com/apps/1802833180713730)을 만들었다고 알렸습니다.
 앱 대시보드에는 이름 `AutoMessage`와 `게시되지 않음`이, Instagram 사용 사례에는 `Instagram 로그인이 포함된 API 설정`과 Instagram 앱 ID `1822350878757042`가 표시됐습니다.
 `비즈니스용 Facebook 로그인`도 대시보드에 보이지만, 현재 확인된 Instagram 설정은 Instagram Login 경로입니다.
-Instagram 전문 계정 연결과 실제 토큰 권한은 아직 확인되지 않았습니다.
+운영자는 Instagram API 설정에서 발급한 토큰을 `META_INSTAGRAM_ACCESS_TOKEN`으로 설정하고, 개발자 대시보드에서 일반 DM 발송에 성공했다고 보고했습니다.
+이 결과만으로 전문 계정 연결, 댓글 관리 권한 또는 댓글 비공개 답장 발송은 확인되지 않습니다.
 Facebook Login 구현을 유지하면서 이 앱의 Instagram Login 경로도 추가했으며, 운영 경로는 실계정 검증 뒤 확정합니다.
 
 ## 공식 발송 조건
@@ -43,7 +44,8 @@ Instagram Login으로 댓글 개인 답장을 시험하려면 먼저 댓글 관�
 `src/instagram/instagram-login-private-reply.ts`는 Instagram 사용자 토큰의 전문 계정 `user_id`를 조회하고, 댓글·미디어 ID와 미디어 소유자를 확인한 뒤 `graph.instagram.com`으로 발송합니다.
 Instagram Login 계정 확인은 부여된 권한 범위와 앱 검수 상태를 증명하지 않습니다.
 댓글 ID·작성자·미디어·생성 시각과 미디어 소유자·게시 표면이 요청과 맞는지도 확인합니다.
-실제 발송에는 Page 목록에서 받은 Page access token과 댓글 ID를 사용합니다.
+Facebook Login 경로의 발송에는 Page access token을, Instagram Login 경로의 발송에는 Instagram 사용자 토큰을 사용합니다.
+두 경로 모두 댓글 비공개 답장에는 댓글 ID가 필요합니다.
 발송 함수 자체도 정책을 다시 확인하고 Graph 요청에는 10초 제한을 둡니다.
 발송 성공 시 공급자 메시지 ID를 보관합니다.
 발송 호출의 결과가 불명확하거나 프로세스가 발송 중 중단되면 상태를 `unknown`으로 남기며 자동 재시도하지 않습니다.
@@ -53,7 +55,8 @@ Instagram Login 계정 확인은 부여된 권한 범위와 앱 검수 상태를
 현재 앱에는 `META_LOGIN_MODE=instagram`을 설정하며, 이때 `corepack pnpm meta:check`는 토큰의 전문 계정 ID만 읽기 전용으로 확인합니다.
 기존 `facebook` 경로에서는 토큰 범위, Page 연결과 `MESSAGING` 작업을 확인합니다.
 `corepack pnpm worker:instagram`은 활성 DB 연결 하나에 범위를 제한해 실제 발송을 처리하고, 10분 이상 남은 `sending` 작업을 시작 시점과 실행 중 주기적으로 `unknown`으로 전환합니다.
-앱은 생성됐지만 로컬에 Instagram 사용자 토큰과 전문 계정 ID가 설정되지 않아 실계정 Graph 호출은 실행하지 않았습니다.
+운영자가 Instagram 사용자 토큰을 로컬에 설정했다고 보고했지만, 전문 계정 ID의 설정 여부는 확인되지 않았습니다.
+이 저장소에서 실계정 Graph 호출이나 댓글 비공개 답장 발송은 실행하지 않았습니다.
 기존 Facebook 경로에서 앱 ID만 설정해 `meta:check`를 실행한 결과, 나머지 필수 환경 변수 여섯 개가 없어 종료 코드 2로 끝났으며 Graph 요청은 시작되지 않았습니다.
 Instagram Login 경로의 `meta:check`도 Graph 버전, 전문 계정 ID와 Instagram 사용자 토큰이 없어 종료 코드 2로 끝났습니다.
 `meta:check`는 앱 검수 승인과 실제 발송 가능 여부를 증명하지 않습니다.
@@ -63,9 +66,9 @@ Instagram Login 경로의 `meta:check`도 Graph 버전, 전문 계정 ID와 Inst
 ## 남은 실계정 확인
 
 1. 앱의 Instagram 사용 사례에 `instagram_business_manage_comments`를 추가하고, 앱 역할이 있는 Instagram 전문 계정을 연결합니다.
-2. 해당 계정의 Instagram 사용자 토큰을 발급한 뒤 `GET /me?fields=user_id,username`으로 전문 계정 ID를 확인합니다.
+2. 운영자가 발급한 Instagram 사용자 토큰으로 `GET /me?fields=user_id,username`을 호출해 전문 계정 ID를 확인합니다.
    Meta 앱 ID `1802833180713730`과 Instagram 앱 ID `1822350878757042`는 이 전문 계정 ID를 대신하지 않습니다.
-3. 서버에 토큰과 전문 계정 ID를 설정하고 `META_LOGIN_MODE=instagram corepack pnpm meta:check`를 실행합니다.
+3. 토큰, 전문 계정 ID와 Graph 버전을 현재 셸의 환경 변수로 내보내고 `META_LOGIN_MODE=instagram corepack pnpm meta:check`를 실행합니다.
    이 검사는 계정 ID만 확인하므로 댓글 관리 권한과 발송 권한은 테스트 계정의 실제 읽기·발송 호출에서 따로 검증합니다.
 4. 웹훅 콜백과 검증 토큰, 앱 검수 상태를 확인합니다.
    현재 앱 화면은 `게시되지 않음`이며 웹훅의 `확인 및 저장` 버튼이 비활성 상태입니다.

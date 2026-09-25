@@ -3,7 +3,8 @@
 ManyChat 유료 기능에 대응하는 자체 운영형 메시징 자동화 서비스를 만드는 저장소입니다.
 현재는 Instagram 웹훅 수신, PostgreSQL 이벤트 저장, 댓글 키워드에 따른 개인 답장 요청 보관, 발송 정책과 워커 모듈까지 구현했습니다.
 Instagram Login과 Facebook Login용 Meta Graph 어댑터와 별도 발송 워커 명령이 있습니다.
-Meta 앱은 생성됐지만 전문 계정 연결과 실제 발송은 아직 검증하지 않았습니다.
+운영자는 Meta 개발자 대시보드에서 일반 DM 발송에 성공했다고 보고했습니다.
+전문 계정 연결과 댓글 비공개 답장 발송은 이 저장소에서 아직 검증하지 않았습니다.
 
 ## 문서
 
@@ -73,6 +74,7 @@ corepack pnpm start
 
 현재 앱은 Instagram Login 사용 사례를 설정했으므로 `META_LOGIN_MODE=instagram`을 지정합니다.
 이 경로에서 `corepack pnpm meta:check`는 토큰의 전문 계정 ID만 읽기 전용으로 확인하며, 부여된 권한 범위와 실제 발송 가능 여부는 증명하지 않습니다.
+패키지 명령은 로컬 환경 변수 파일을 자동으로 읽지 않으므로, 실행 전에 필수 변수를 현재 셸로 내보내야 합니다.
 Facebook Login 경로에서는 토큰 범위, Page 연결과 `MESSAGING` 작업을 확인합니다.
 앱 검수와 실제 발송 성공은 어느 경로에서도 별도 확인이 필요합니다.
 전문 계정과 토큰을 준비하고 권한을 확인한 뒤 `corepack pnpm worker:instagram`을 실행합니다.
