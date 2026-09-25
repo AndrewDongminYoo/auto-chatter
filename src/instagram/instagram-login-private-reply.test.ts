@@ -314,6 +314,12 @@ test("a valid Retry-After header is carried on the rate limit", async () => {
     ["Thu, 24 Sep 2026 23:00:00 GMT", null],
     ["soon", null],
     ["-5", null],
+    ["9007199254740991", null],
+    ["604800", 604800],
+    ["604801", null],
+    ["Fri, 02 Oct 2026 00:00:00 GMT", 604800],
+    ["Fri, 02 Oct 2026 00:00:01 GMT", null],
+    ["Fri, 25 Sep 9999 02:00:00 GMT", null],
   ] as const) {
     const graph = mockGraph({
       sendResponse: () =>
@@ -332,6 +338,7 @@ test("a valid Retry-After header is carried on the rate limit", async () => {
 
 test("an ambiguous POST failure stays outcome unknown rather than rate limited", async () => {
   for (const [sendResponse, message] of [
+    [() => graphResponse({ error: { code: 4 } }, 302), "Meta Graph HTTP 302"],
     [() => graphResponse({ error: { code: 100, is_transient: true } }, 400), "Meta Graph transient error code 100"],
     [() => new Response(null, { status: 429 }), "Meta Graph HTTP 429"],
     [() => graphResponse({ error: { code: 100 } }, 429), "Meta Graph HTTP 429"],

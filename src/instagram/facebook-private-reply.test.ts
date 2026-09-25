@@ -294,6 +294,7 @@ test("a throttle code in a 4xx POST body is a retryable rate limit with its Retr
 
 test("an ambiguous POST failure stays outcome unknown rather than rate limited", async () => {
   for (const [sendResponse, message] of [
+    [() => graphResponse({ error: { code: 4 } }, 302), "Meta Graph HTTP 302"],
     [() => graphResponse({ error: { code: 100, is_transient: true } }, 400), "Meta Graph transient error code 100"],
     [() => new Response(null, { status: 429 }), "Meta Graph HTTP 429"],
     [() => graphResponse({ error: { code: 100 } }, 429), "Meta Graph HTTP 429"],

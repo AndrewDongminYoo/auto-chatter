@@ -1,6 +1,8 @@
 import { ProviderRateLimitedError, ProviderRejectedError } from "./reply-worker.ts";
 
 const rateLimitCodes = new Set([4, 17, 32, 613]);
+// Accept provider delays only within this service's seven-day private-reply window.
+const maxRetryAfterSeconds = 7 * 24 * 60 * 60;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -26,24 +28,25 @@ export function retryAfterSeconds(header: string | null, now: Date): number | nu
   if (!value) return null;
   if (/^\d+$/.test(value)) {
     const seconds = Number(value);
-    return Number.isSafeInteger(seconds) ? seconds : null;
+    return Number.isSafeInteger(seconds) && seconds <= maxRetryAfterSeconds ? seconds : null;
   }
   if (!value.endsWith("GMT")) return null;
   const date = Date.parse(value);
   if (!Number.isFinite(date)) return null;
   const seconds = Math.ceil((date - now.getTime()) / 1000);
-  return seconds >= 0 ? seconds : null;
+  return seconds >= 0 && seconds <= maxRetryAfterSeconds ? seconds : null;
 }
 
 // Returns the error to throw for a non-2xx, non-5xx Graph response, or null when the caller should treat it as no data.
 export async function classifyMetaGraphFailure(response: Response, method: string, now: Date): Promise<Error | null> {
+  if (response.status < 400 || response.status >= 500) return new Error(`Meta Graph HTTP ${response.status}`);
   const error = await readMetaGraphError(response);
   const transient = new Error(`Meta Graph transient error${error?.code == null ? "" : ` code ${error.code}`}`);
   if (method !== "POST") {
     if (response.status === 429) return new Error("Meta Graph HTTP 429");
     return error?.transient ? transient : null;
   }
-  // A throttle code in a 4xx body means Meta refused the send, so it is safe to retry later.
+  // Only an allowlisted throttle code in a 4xx body qualifies for a delayed retry.
   if (error?.rateLimited && error.code !== null) {
     return new ProviderRateLimitedError(error.code, retryAfterSeconds(response.headers.get("retry-after"), now));
   }
