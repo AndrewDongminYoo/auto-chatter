@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node src/instagram/main.ts",
     "check-types": "tsc --noEmit",
-    "test": "node --test src/instagram/webhook.test.ts src/instagram/reply-policy.test.ts",
+    "test": "node --test src/instagram/webhook.test.ts src/instagram/reply-policy.test.ts src/instagram/facebook-private-reply.test.ts",
     "test:db": "node --test --test-concurrency=1 src/instagram/http.db.test.ts src/instagram/reply-worker.db.test.ts"
   },
   "devDependencies": {
