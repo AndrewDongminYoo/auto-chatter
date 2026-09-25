@@ -107,13 +107,17 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
     if (!isRecord(details) || details.is_valid !== true || details.app_id !== this.config.appId) {
       return { verified: false, reason: "user_token_unverified" };
     }
-    if (typeof details.expires_at === "number" && details.expires_at > 0 && details.expires_at * 1000 <= Date.now()) {
+    if (
+      typeof details.expires_at === "number" &&
+      details.expires_at > 0 &&
+      details.expires_at * 1000 <= this.now().getTime()
+    ) {
       return { verified: false, reason: "user_token_expired" };
     }
     if (
       typeof details.data_access_expires_at === "number" &&
       details.data_access_expires_at > 0 &&
-      details.data_access_expires_at * 1000 <= Date.now()
+      details.data_access_expires_at * 1000 <= this.now().getTime()
     ) {
       return { verified: false, reason: "data_access_expired" };
     }

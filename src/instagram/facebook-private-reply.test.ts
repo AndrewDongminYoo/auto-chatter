@@ -34,6 +34,8 @@ function mockGraph(
     mediaOwnerId?: string;
     commentTimestamp?: string;
     sendStatus?: number;
+    expiresAt?: number;
+    dataAccessExpiresAt?: number;
     failSecondDebug?: boolean;
   } = {},
 ): MockGraph {
@@ -52,7 +54,8 @@ function mockGraph(
         data: {
           app_id: "123",
           is_valid: true,
-          expires_at: 0,
+          expires_at: overrides.expiresAt ?? 0,
+          data_access_expires_at: overrides.dataAccessExpiresAt ?? 0,
           scopes: overrides.scopes ?? [
             "pages_show_list",
             "instagram_basic",
@@ -203,4 +206,19 @@ test("a Graph lookup failure inside send is identified as pre-send", async () =>
     graph.calls.some(({ url }) => url.pathname.endsWith("/messages")),
     false,
   );
+});
+
+test("token expiration uses the injected policy clock", async () => {
+  const expiresAt = Date.parse("2026-09-26T00:00:00.000Z") / 1000;
+  for (const [overrides, reason] of [
+    [{ expiresAt }, "user_token_expired"],
+    [{ dataAccessExpiresAt: expiresAt }, "data_access_expired"],
+  ] as const) {
+    const graph = mockGraph(overrides);
+    const transport = new FacebookPrivateReplyTransport({
+      ...config(graph.fetchImpl),
+      now: () => new Date("2026-09-27T00:00:00.000Z"),
+    });
+    assert.deepEqual(await transport.inspectPermissions(), { verified: false, reason });
+  }
 });
