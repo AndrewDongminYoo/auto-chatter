@@ -169,7 +169,7 @@ test("the worker loop processes a job and stops when cancelled", async () => {
   const controller = new AbortController();
   let sends = 0;
   await runPrivateReplyWorker(pool, {
-    verify: verified,
+    verify: async () => ({ commentCreatedAt: new Date(Date.now() - 60_000), authorizationVerified: true, mediaOwned: true }),
     send: async () => {
       sends++;
       controller.abort();
@@ -178,6 +178,30 @@ test("the worker loop processes a job and stops when cancelled", async () => {
   }, controller.signal, 10);
   assert.equal(sends, 1);
   assert.equal((await outbox()).status, "sent");
+});
+
+test("a running worker recovers another interrupted attempt on its connection", async () => {
+  await queueReply();
+  const controller = new AbortController();
+  let currentTime = new Date();
+  await runPrivateReplyWorker(pool, {
+    verify: async () => ({ commentCreatedAt: new Date(currentTime.getTime() - 60_000), authorizationVerified: true, mediaOwned: true }),
+    send: async () => {
+      await ingestComments(pool, [{ accountId: "account-1", commentId: "comment-2", postId: "post-1", senderId: "sender-2", text: "자료" }]);
+      await pool.query(
+        "UPDATE private_reply_outbox SET status = 'sending', attempt_id = $1, attempt_started_at = now() - interval '11 minutes' WHERE comment_id = 'comment-2'",
+        ["77777777-7777-4777-8777-777777777777"],
+      );
+      currentTime = new Date(currentTime.getTime() + 60_000);
+      setTimeout(() => controller.abort(), 100);
+      return { messageId: "mid-1" };
+    },
+  }, controller.signal, 5, connectionId, { recoveryIntervalMs: 10, now: () => currentTime });
+  const result = await pool.query<{ status: string; failure_code: string }>(
+    "SELECT status, failure_code FROM private_reply_outbox WHERE comment_id = 'comment-2'",
+  );
+  assert.equal(result.rows[0]?.status, "unknown");
+  assert.equal(result.rows[0]?.failure_code, "worker_interrupted");
 });
 
 test("a connection-scoped worker leaves another connection's reply pending", async () => {

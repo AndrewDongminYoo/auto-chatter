@@ -156,11 +156,21 @@ export async function runPrivateReplyWorker(
   signal: AbortSignal,
   pollIntervalMs = 1000,
   connectionId?: string,
+  options: { recoveryIntervalMs?: number; now?: () => Date } = {},
 ): Promise<void> {
   if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 1) throw new Error("pollIntervalMs must be a positive integer");
-  await recoverStalePrivateReplies(pool, new Date(Date.now() - 10 * 60_000), connectionId);
+  const recoveryIntervalMs = options.recoveryIntervalMs ?? 60_000;
+  if (!Number.isInteger(recoveryIntervalMs) || recoveryIntervalMs < 1) throw new Error("recoveryIntervalMs must be a positive integer");
+  const now = options.now ?? (() => new Date());
+  await recoverStalePrivateReplies(pool, new Date(now().getTime() - 10 * 60_000), connectionId);
+  let nextRecoveryAt = now().getTime() + recoveryIntervalMs;
   while (!signal.aborted) {
-    if (await processNextPrivateReply(pool, transport, () => new Date(), connectionId)) continue;
+    const currentTime = now().getTime();
+    if (currentTime >= nextRecoveryAt) {
+      await recoverStalePrivateReplies(pool, new Date(currentTime - 10 * 60_000), connectionId);
+      nextRecoveryAt = currentTime + recoveryIntervalMs;
+    }
+    if (await processNextPrivateReply(pool, transport, now, connectionId)) continue;
     try {
       await sleep(pollIntervalMs, undefined, { signal });
     } catch (error) {
