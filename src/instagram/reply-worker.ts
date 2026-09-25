@@ -48,12 +48,14 @@ export async function processNextPrivateReply(
   pool: Pool,
   transport: PrivateReplyTransport,
   now: () => Date = () => new Date(),
+  connectionId?: string,
 ): Promise<boolean> {
   const attemptId = randomUUID();
   const claimed = await pool.query<ClaimedRow>(
     `WITH candidate AS (
        SELECT id FROM private_reply_outbox
        WHERE status = 'pending' AND next_attempt_at <= now()
+         AND ($2::uuid IS NULL OR connection_id = $2)
        ORDER BY created_at, id
        FOR UPDATE SKIP LOCKED
        LIMIT 1
@@ -64,7 +66,7 @@ export async function processNextPrivateReply(
      WHERE reply.id = candidate.id
      RETURNING reply.id, reply.workspace_id, reply.connection_id, reply.comment_id,
        reply.media_id, reply.sender_id, reply.private_reply_text`,
-    [attemptId],
+    [attemptId, connectionId ?? null],
   );
   const row = claimed.rows[0];
   if (!row) return false;
@@ -140,10 +142,10 @@ export async function processNextPrivateReply(
   return true;
 }
 
-export async function recoverStalePrivateReplies(pool: Pool, olderThan: Date): Promise<number> {
+export async function recoverStalePrivateReplies(pool: Pool, olderThan: Date, connectionId?: string): Promise<number> {
   const result = await pool.query(
-    "UPDATE private_reply_outbox SET status = 'unknown', failure_code = 'worker_interrupted' WHERE status = 'sending' AND attempt_started_at < $1",
-    [olderThan],
+    "UPDATE private_reply_outbox SET status = 'unknown', failure_code = 'worker_interrupted' WHERE status = 'sending' AND attempt_started_at < $1 AND ($2::uuid IS NULL OR connection_id = $2)",
+    [olderThan, connectionId ?? null],
   );
   return result.rowCount ?? 0;
 }
@@ -153,11 +155,12 @@ export async function runPrivateReplyWorker(
   transport: PrivateReplyTransport,
   signal: AbortSignal,
   pollIntervalMs = 1000,
+  connectionId?: string,
 ): Promise<void> {
   if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 1) throw new Error("pollIntervalMs must be a positive integer");
-  await recoverStalePrivateReplies(pool, new Date(Date.now() - 10 * 60_000));
+  await recoverStalePrivateReplies(pool, new Date(Date.now() - 10 * 60_000), connectionId);
   while (!signal.aborted) {
-    if (await processNextPrivateReply(pool, transport)) continue;
+    if (await processNextPrivateReply(pool, transport, () => new Date(), connectionId)) continue;
     try {
       await sleep(pollIntervalMs, undefined, { signal });
     } catch (error) {

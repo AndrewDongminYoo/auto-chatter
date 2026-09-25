@@ -179,3 +179,38 @@ test("the worker loop processes a job and stops when cancelled", async () => {
   assert.equal(sends, 1);
   assert.equal((await outbox()).status, "sent");
 });
+
+test("a connection-scoped worker leaves another connection's reply pending", async () => {
+  const otherWorkspaceId = "44444444-4444-4444-8444-444444444444";
+  const otherConnectionId = "55555555-5555-4555-8555-555555555555";
+  const otherRuleId = "66666666-6666-4666-8666-666666666666";
+  await pool.query("INSERT INTO workspaces (id) VALUES ($1)", [otherWorkspaceId]);
+  await pool.query("INSERT INTO instagram_connections (id, workspace_id, account_id, active) VALUES ($1, $2, $3, true)", [otherConnectionId, otherWorkspaceId, "account-2"]);
+  await pool.query("INSERT INTO instagram_comment_rules (id, workspace_id, connection_id, media_id, keyword, private_reply_text, enabled) VALUES ($1, $2, $3, $4, $5, $6, true)", [otherRuleId, otherWorkspaceId, otherConnectionId, "post-2", "자료", "다른 계정 답장"]);
+  await ingestComments(pool, [{ accountId: "account-2", commentId: "comment-2", postId: "post-2", senderId: "sender-2", text: "자료" }]);
+  await queueReply();
+
+  const sentConnectionIds: string[] = [];
+  await processNextPrivateReply(pool, {
+    verify: verified,
+    send: async (request) => {
+      sentConnectionIds.push(request.connectionId);
+      return { messageId: "mid-scoped" };
+    },
+  }, () => now, connectionId);
+
+  assert.deepEqual(sentConnectionIds, [connectionId]);
+  const rows = await pool.query<{ connection_id: string; status: string }>("SELECT connection_id, status FROM private_reply_outbox ORDER BY connection_id");
+  assert.deepEqual(rows.rows, [
+    { connection_id: connectionId, status: "sent" },
+    { connection_id: otherConnectionId, status: "pending" },
+  ]);
+
+  await pool.query(
+    "UPDATE private_reply_outbox SET status = 'sending', attempt_id = $1, attempt_started_at = now() - interval '10 minutes' WHERE connection_id = $2",
+    ["77777777-7777-4777-8777-777777777777", otherConnectionId],
+  );
+  assert.equal(await recoverStalePrivateReplies(pool, new Date(Date.now() - 5 * 60_000), connectionId), 0);
+  const other = await pool.query<{ status: string }>("SELECT status FROM private_reply_outbox WHERE connection_id = $1", [otherConnectionId]);
+  assert.equal(other.rows[0]?.status, "sending");
+});
