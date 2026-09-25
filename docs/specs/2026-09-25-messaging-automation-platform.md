@@ -59,7 +59,7 @@ ChatbotX Community Edition을 [고정 커밋에서 검증](../notes/2026-09-25-c
 후보 저장소는 [Next.js·TypeScript 프런트엔드, PostgreSQL·pgvector, Redis·BullMQ 워커, S3 호환 저장소](https://github.com/ChatbotXIO/ChatbotX)를 사용하며, Instagram·WhatsApp·TikTok 어댑터와 자동화 테스트를 포함합니다.
 직접 구현에서는 TypeScript와 PostgreSQL을 사용합니다.
 현재 코드는 Node.js 24의 타입 제거 실행 기능을 사용해 웹훅 수신 서버와 PostgreSQL 이벤트·outbox 저장, 발송 정책과 워커 모듈을 구현했습니다.
-Facebook Login용 발송 어댑터와 별도 워커 명령은 구현했지만 실계정 발송은 아직 검증하지 않았습니다.
+Facebook Login과 Instagram Login용 발송 어댑터와 별도 워커 명령은 구현했지만 실계정 발송은 아직 검증하지 않았습니다.
 OAuth 계정 연결과 사용자 화면은 아직 구현하지 않았습니다.
 
 | 계층 | 선택 | 이유와 도입 조건 |
@@ -102,6 +102,7 @@ flowchart LR
 `provider + account + event_id`의 고유 키로 중복을 막고, 이벤트 ID가 없는 공급자는 안정적인 대체 키를 정의해 채널 계약 테스트로 검증합니다.
 현재 워커 모듈은 보관된 개인 답장 요청을 선점하고 발송 정책을 검사합니다.
 Facebook Login 어댑터는 Meta 토큰 권한과 Page 연결, 댓글·미디어 정보를 조회하고 허용된 개인 답장을 요청합니다.
+Instagram Login 어댑터는 Instagram 사용자 토큰의 전문 계정 ID와 댓글·미디어 소유를 조회하고 허용된 개인 답장을 요청합니다.
 실제 계정에서 앱 승인과 발송 결과를 검증해야 합니다.
 이후 워커는 이벤트를 정규화하고 저장된 플로 버전을 실행합니다.
 현재 개인 답장 발송은 정책 검사를 통과해야 합니다.

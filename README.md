@@ -2,8 +2,8 @@
 
 ManyChat 유료 기능에 대응하는 자체 운영형 메시징 자동화 서비스를 만드는 저장소입니다.
 현재는 Instagram 웹훅 수신, PostgreSQL 이벤트 저장, 댓글 키워드에 따른 개인 답장 요청 보관, 발송 정책과 워커 모듈까지 구현했습니다.
-Facebook Login용 Meta Graph 어댑터와 별도 발송 워커 명령이 있습니다.
-Meta 앱과 테스트 계정은 아직 준비되지 않아 실제 발송은 검증하지 않았습니다.
+Instagram Login과 Facebook Login용 Meta Graph 어댑터와 별도 발송 워커 명령이 있습니다.
+Meta 앱은 생성됐지만 전문 계정 연결과 실제 발송은 아직 검증하지 않았습니다.
 
 ## 문서
 
@@ -21,6 +21,7 @@ ChatbotX Community Edition의 현재 고정 커밋은 채택을 보류하고 최
 현재 수신기는 구독 확인과 원본 본문 서명을 검증하고, 활성 연결의 댓글만 저장합니다.
 같은 댓글은 하나의 이벤트로 기록하고 같은 계정·게시물·발신자에게는 개인 답장 요청을 하나만 보관합니다.
 Facebook Login 어댑터는 토큰 권한, Page와 Instagram 계정 연결, 댓글 생성 시각과 미디어 소유를 발송 직전에 확인합니다.
+Instagram Login 어댑터는 Instagram 사용자 토큰의 계정 ID와 댓글·미디어 소유를 확인하고 `graph.instagram.com`에 개인 답장을 요청합니다.
 `corepack pnpm start`는 웹훅 수신기만 시작합니다.
 `corepack pnpm worker:instagram`은 설정된 단일 연결에 대해 실제 발송을 수행하므로 Meta 앱과 테스트 계정에서 권한을 확인한 뒤에 실행해야 합니다.
 
@@ -62,16 +63,19 @@ corepack pnpm start
 
 | 변수 | 용도 |
 | --- | --- |
+| `META_LOGIN_MODE` | `instagram`은 현재 앱의 Instagram Login 경로입니다. 생략하면 기존 `facebook` 경로를 사용합니다. |
 | `META_GRAPH_VERSION` | 앱에서 사용할 명시적 Graph API 버전입니다. |
-| `META_APP_ID`, `META_APP_ACCESS_TOKEN` | 사용자 토큰의 앱과 권한을 읽기 전용으로 확인합니다. |
-| `META_USER_ACCESS_TOKEN` | Page 목록, 댓글, 미디어를 조회합니다. |
-| `META_PAGE_ID`, `META_INSTAGRAM_ACCOUNT_ID` | Page와 Instagram 전문 계정의 연결을 확인합니다. |
-| `META_INSTAGRAM_CONNECTION_ID` | 워커가 처리할 DB 연결 하나를 지정합니다. |
+| `META_INSTAGRAM_ACCESS_TOKEN` | Instagram Login 경로의 Instagram 사용자 토큰입니다. |
+| `META_APP_ID`, `META_APP_ACCESS_TOKEN`, `META_USER_ACCESS_TOKEN`, `META_PAGE_ID` | Facebook Login 경로에서만 앱 권한과 Page 연결을 확인합니다. |
+| `META_INSTAGRAM_ACCOUNT_ID` | 전문 계정의 `user_id`입니다. Meta 앱 ID나 Instagram 앱 ID와 다릅니다. |
+| `META_INSTAGRAM_CONNECTION_ID` | 발송 워커가 처리할 DB 연결 하나입니다. Instagram Login의 읽기 전용 계정 확인에는 필요하지 않습니다. |
 | `DATABASE_URL` | 발송 워커가 outbox에 접근할 때 필요합니다. |
 
-`corepack pnpm meta:check`는 토큰 범위, Page와 계정 연결, Page의 `MESSAGING` 작업 권한을 읽기 전용으로 검사합니다.
-Meta App Review 승인과 Human Agent 기능 활성화, 실제 발송 성공은 이 명령으로 확인되지 않습니다.
-앱과 테스트 계정이 준비된 뒤 해당 항목을 확인하고 `corepack pnpm worker:instagram`을 실행합니다.
+현재 앱은 Instagram Login 사용 사례를 설정했으므로 `META_LOGIN_MODE=instagram`을 지정합니다.
+이 경로에서 `corepack pnpm meta:check`는 토큰의 전문 계정 ID만 읽기 전용으로 확인하며, 부여된 권한 범위와 실제 발송 가능 여부는 증명하지 않습니다.
+Facebook Login 경로에서는 토큰 범위, Page 연결과 `MESSAGING` 작업을 확인합니다.
+앱 검수와 실제 발송 성공은 어느 경로에서도 별도 확인이 필요합니다.
+전문 계정과 토큰을 준비하고 권한을 확인한 뒤 `corepack pnpm worker:instagram`을 실행합니다.
 발송 결과가 불명확한 요청은 `unknown`으로 남기며 자동으로 재발송하지 않습니다.
 
 ## 로컬 확인
