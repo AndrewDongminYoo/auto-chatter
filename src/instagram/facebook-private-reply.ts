@@ -1,11 +1,6 @@
-import {
-  PreSendVerificationError,
-  ProviderRejectedError,
-  type PrivateReplyRequest,
-  type PrivateReplyTransport,
-} from "./reply-worker.ts";
+import { PreSendVerificationError, type PrivateReplyRequest, type PrivateReplyTransport } from "./reply-worker.ts";
 import { evaluatePrivateReply } from "./reply-policy.ts";
-import { readMetaGraphError } from "./meta-graph-error.ts";
+import { classifyMetaGraphFailure } from "./meta-graph-error.ts";
 
 const requiredPermissions = [
   "pages_show_list",
@@ -95,13 +90,10 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
     } catch {
       throw new Error("Meta Graph request failed");
     }
-    if (response.status === 429 || response.status >= 500) throw new Error(`Meta Graph HTTP ${response.status}`);
+    if (response.status >= 500) throw new Error(`Meta Graph HTTP ${response.status}`);
     if (!response.ok) {
-      const error = await readMetaGraphError(response);
-      if (error?.transient)
-        throw new Error(`Meta Graph transient error${error.code === null ? "" : ` code ${error.code}`}`);
-      if (method === "POST" && error?.code !== null && error?.code !== undefined)
-        throw new ProviderRejectedError(error.code);
+      const failure = await classifyMetaGraphFailure(response, method, this.now());
+      if (failure) throw failure;
       return { status: response.status, data: null };
     }
     try {

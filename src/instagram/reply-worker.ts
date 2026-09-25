@@ -47,8 +47,25 @@ export class ProviderRejectedError extends Error {
   }
 }
 
+// Meta refused the send with a throttle code; nothing was delivered, so the reply may be retried later.
+export class ProviderRateLimitedError extends Error {
+  readonly failureCode: string;
+  readonly retryAfterSeconds: number | null;
+
+  constructor(metaCode: number, retryAfterSeconds: number | null = null) {
+    super("Meta Graph send rate limited");
+    this.name = "ProviderRateLimitedError";
+    this.failureCode = `meta_error_${metaCode}`;
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+// One entry per allowed retry after a rate-limited send; the reply fails once these are used up.
+const rateLimitRetryDelaysSeconds = [15 * 60, 60 * 60, 4 * 60 * 60] as const;
+
 interface ClaimedRow {
   id: string;
+  rate_limit_retries: number;
   workspace_id: string;
   connection_id: string;
   comment_id: string;
@@ -80,6 +97,10 @@ export async function processNextPrivateReply(
        SELECT id FROM private_reply_outbox
        WHERE status = 'pending' AND next_attempt_at <= now()
          AND connection_id = $2
+         AND NOT EXISTS (
+           SELECT 1 FROM instagram_connections AS connection
+           WHERE connection.id = $2 AND connection.send_paused_until > now()
+         )
        ORDER BY created_at, id
        FOR UPDATE SKIP LOCKED
        LIMIT 1
@@ -89,7 +110,7 @@ export async function processNextPrivateReply(
      FROM candidate
      WHERE reply.id = candidate.id
      RETURNING reply.id, reply.workspace_id, reply.connection_id, reply.comment_id,
-       reply.media_id, reply.sender_id, reply.private_reply_text`,
+       reply.media_id, reply.sender_id, reply.private_reply_text, reply.rate_limit_retries`,
     [attemptId, connectionId],
   );
   const row = claimed.rows[0];
@@ -174,6 +195,30 @@ export async function processNextPrivateReply(
           [row.id, attemptId, error.failureCode],
         );
       }
+      return true;
+    }
+    if (error instanceof ProviderRateLimitedError) {
+      const retries = row.rate_limit_retries;
+      const tier = rateLimitRetryDelaysSeconds[Math.min(retries, rateLimitRetryDelaysSeconds.length - 1)]!;
+      const delaySeconds = Math.max(tier, error.retryAfterSeconds ?? 0);
+      if (retries < rateLimitRetryDelaysSeconds.length) {
+        await updateClaim(
+          pool,
+          "UPDATE private_reply_outbox SET status = 'pending', attempt_id = NULL, attempt_started_at = NULL, next_attempt_at = now() + make_interval(secs => $4), rate_limit_retries = rate_limit_retries + 1, failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
+          [row.id, attemptId, error.failureCode, delaySeconds],
+        );
+      } else {
+        await updateClaim(
+          pool,
+          "UPDATE private_reply_outbox SET status = 'failed', failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
+          [row.id, attemptId, error.failureCode],
+        );
+      }
+      // The limit applies to the connection, so hold its other replies instead of letting each spend its own retries.
+      await pool.query(
+        "UPDATE instagram_connections SET send_paused_until = GREATEST(send_paused_until, now() + make_interval(secs => $2)) WHERE id = $1",
+        [row.connection_id, delaySeconds],
+      );
       return true;
     }
     if (error instanceof ProviderRejectedError) {

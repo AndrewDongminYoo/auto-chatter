@@ -5,6 +5,7 @@ import { Pool } from "pg";
 import { ingestComments } from "./store.ts";
 import {
   PreSendVerificationError,
+  ProviderRateLimitedError,
   ProviderRejectedError,
   processNextPrivateReply,
   recoverStalePrivateReplies,
@@ -250,6 +251,170 @@ test("a definite provider rejection is failed with its Meta code and not retried
   assert.equal((await outbox()).failure_code, "meta_error_100");
   assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), false);
   assert.equal(sends, 1);
+});
+
+async function rateLimitState(senderId = "sender-1"): Promise<{
+  status: string;
+  failure_code: string | null;
+  rate_limit_retries: number;
+  delay_seconds: number;
+  pause_seconds: number | null;
+}> {
+  const result = await pool.query<{
+    status: string;
+    failure_code: string | null;
+    rate_limit_retries: number;
+    delay_seconds: number;
+    pause_seconds: number | null;
+  }>(
+    `SELECT reply.status, reply.failure_code, reply.rate_limit_retries,
+       extract(epoch FROM reply.next_attempt_at - now())::float AS delay_seconds,
+       extract(epoch FROM connection.send_paused_until - now())::float AS pause_seconds
+     FROM private_reply_outbox AS reply
+     JOIN instagram_connections AS connection ON connection.id = reply.connection_id
+     WHERE reply.sender_id = $1`,
+    [senderId],
+  );
+  return result.rows[0]!;
+}
+
+function assertAbout(actual: number | null, expected: number): void {
+  assert.ok(actual !== null && Math.abs(actual - expected) < 60, `expected about ${expected}s, got ${actual}`);
+}
+
+async function elapseRateLimit(): Promise<void> {
+  await pool.query("UPDATE private_reply_outbox SET next_attempt_at = now() - interval '1 second'");
+  await pool.query("UPDATE instagram_connections SET send_paused_until = now() - interval '1 second'");
+}
+
+function rateLimitedTransport(
+  codes: readonly number[],
+  retryAfterSeconds: number | null = null,
+): PrivateReplyTransport & { sends: () => number } {
+  let sends = 0;
+  return {
+    verify: verified,
+    send: async () => {
+      const code = codes[Math.min(sends, codes.length - 1)]!;
+      sends++;
+      throw new ProviderRateLimitedError(code, retryAfterSeconds);
+    },
+    sends: () => sends,
+  };
+}
+
+test("a rate-limited send returns to pending after the first backoff and pauses the connection", async () => {
+  await queueReply();
+  const transport = rateLimitedTransport([4]);
+  assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), true);
+  const state = await rateLimitState();
+  assert.equal(state.status, "pending");
+  assert.equal(state.failure_code, "meta_error_4");
+  assert.equal(state.rate_limit_retries, 1);
+  assertAbout(state.delay_seconds, 15 * 60);
+  assertAbout(state.pause_seconds, 15 * 60);
+  assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), false);
+  assert.equal(transport.sends(), 1);
+});
+
+test("a longer Retry-After replaces the backoff and a shorter one is ignored", async () => {
+  for (const [retryAfterSeconds, expected] of [
+    [7200, 7200],
+    [60, 15 * 60],
+  ] as const) {
+    await pool.query("TRUNCATE private_reply_outbox, instagram_comment_events");
+    await pool.query("UPDATE instagram_connections SET send_paused_until = NULL");
+    await queueReply();
+    await processNextPrivateReply(pool, rateLimitedTransport([17], retryAfterSeconds), () => now, connectionId);
+    const state = await rateLimitState();
+    assertAbout(state.delay_seconds, expected);
+    assertAbout(state.pause_seconds, expected);
+  }
+});
+
+test("rate-limit retries follow the backoff tiers and then fail with the last Meta code", async () => {
+  await queueReply();
+  const transport = rateLimitedTransport([4, 17, 32, 613]);
+  for (const [retries, delay] of [
+    [1, 15 * 60],
+    [2, 60 * 60],
+    [3, 4 * 60 * 60],
+  ] as const) {
+    assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), true);
+    const state = await rateLimitState();
+    assert.equal(state.status, "pending");
+    assert.equal(state.rate_limit_retries, retries);
+    assertAbout(state.delay_seconds, delay);
+    await elapseRateLimit();
+  }
+  assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), true);
+  const state = await rateLimitState();
+  assert.equal(state.status, "failed");
+  assert.equal(state.failure_code, "meta_error_613");
+  assert.equal(state.rate_limit_retries, 3);
+  assertAbout(state.pause_seconds, 4 * 60 * 60);
+
+  await elapseRateLimit();
+  assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), false);
+  assert.equal(transport.sends(), 4);
+});
+
+test("a paused connection holds its other replies, including ones queued during the pause", async () => {
+  await queueReply();
+  await processNextPrivateReply(pool, rateLimitedTransport([4]), () => now, connectionId);
+  await ingestComments(pool, [
+    { accountId: "account-1", commentId: "comment-2", postId: "post-1", senderId: "sender-2", text: "자료 주세요" },
+  ]);
+  let sends = 0;
+  const transport: PrivateReplyTransport = {
+    verify: verified,
+    send: async () => {
+      sends++;
+      return { messageId: "mid-2" };
+    },
+  };
+  assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), false);
+  assert.equal(sends, 0);
+  assert.equal((await rateLimitState("sender-2")).status, "pending");
+
+  await pool.query("UPDATE instagram_connections SET send_paused_until = now() - interval '1 second'");
+  assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), true);
+  assert.equal(sends, 1);
+  assert.equal((await rateLimitState("sender-2")).status, "sent");
+  assert.equal((await rateLimitState("sender-1")).status, "pending");
+});
+
+test("a rate-limited reply is re-verified and blocked once its comment has expired", async () => {
+  await queueReply();
+  const limited = rateLimitedTransport([4]);
+  await processNextPrivateReply(pool, limited, () => now, connectionId);
+  await elapseRateLimit();
+  let sends = 0;
+  let verifications = 0;
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: async () => {
+        verifications++;
+        return {
+          commentCreatedAt: new Date("2026-09-17T00:00:00.000Z"),
+          authorizationVerified: true,
+          mediaOwned: true,
+        };
+      },
+      send: async () => {
+        sends++;
+        return { messageId: "unexpected" };
+      },
+    },
+    () => now,
+    connectionId,
+  );
+  assert.equal(verifications, 1);
+  assert.equal(sends, 0);
+  assert.equal((await outbox()).status, "blocked");
+  assert.equal((await outbox()).failure_code, "comment_expired");
+  assert.equal(limited.sends(), 1);
 });
 
 test("invalid reply input is blocked before a provider POST", async () => {

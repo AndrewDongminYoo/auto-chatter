@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { FacebookPrivateReplyTransport, type FacebookPrivateReplyConfig } from "./facebook-private-reply.ts";
-import { PreSendVerificationError } from "./reply-worker.ts";
+import { PreSendVerificationError, ProviderRateLimitedError } from "./reply-worker.ts";
 import type { PrivateReplyRequest } from "./reply-worker.ts";
 
 const connectionId = "22222222-2222-4222-8222-222222222222";
@@ -36,6 +36,8 @@ function mockGraph(
     sendStatus?: number;
     commentErrorCode?: number;
     sendErrorCode?: number;
+    commentResponse?: () => Response;
+    sendResponse?: () => Response;
     expiresAt?: number;
     dataAccessExpiresAt?: number;
     failSecondDebug?: boolean;
@@ -83,6 +85,7 @@ function mockGraph(
     }
     if (url.pathname === "/v25.0/111") {
       assert.equal(url.searchParams.get("fields"), "id,from,media,timestamp");
+      if (overrides.commentResponse) return overrides.commentResponse();
       if (overrides.commentErrorCode !== undefined)
         return graphResponse({ error: { code: overrides.commentErrorCode } }, 400);
       return graphResponse({
@@ -103,6 +106,7 @@ function mockGraph(
         recipient: { comment_id: "111" },
         message: { text: "자료 링크입니다" },
       });
+      if (overrides.sendResponse) return overrides.sendResponse();
       if (overrides.sendErrorCode !== undefined)
         return graphResponse({ error: { code: overrides.sendErrorCode } }, 400);
       return graphResponse({ message_id: "mid-123" }, overrides.sendStatus ?? 200);
@@ -263,6 +267,70 @@ test("a clear Graph POST rejection retains its Meta error code", async () => {
       error.failureCode === "meta_error_100",
   );
   assert.equal(graph.calls.filter(({ url }) => url.pathname.endsWith("/messages")).length, 1);
+});
+
+test("a throttle code in a 4xx POST body is a retryable rate limit with its Retry-After", async () => {
+  for (const status of [400, 429]) {
+    for (const code of [4, 17, 32, 613]) {
+      const graph = mockGraph({
+        sendResponse: () =>
+          new Response(JSON.stringify({ error: { code } }), {
+            status,
+            headers: { "content-type": "application/json", "retry-after": "5400" },
+          }),
+      });
+      const transport = new FacebookPrivateReplyTransport(config(graph.fetchImpl));
+      await assert.rejects(
+        transport.send(request),
+        (error: unknown) =>
+          error instanceof ProviderRateLimitedError &&
+          error.failureCode === `meta_error_${code}` &&
+          error.retryAfterSeconds === 5400,
+      );
+      assert.equal(graph.calls.filter(({ url }) => url.pathname.endsWith("/messages")).length, 1);
+    }
+  }
+});
+
+test("an ambiguous POST failure stays outcome unknown rather than rate limited", async () => {
+  for (const [sendResponse, message] of [
+    [() => graphResponse({ error: { code: 100, is_transient: true } }, 400), "Meta Graph transient error code 100"],
+    [() => new Response(null, { status: 429 }), "Meta Graph HTTP 429"],
+    [() => graphResponse({ error: { code: 100 } }, 429), "Meta Graph HTTP 429"],
+    [() => graphResponse({ error: { code: 4 } }, 503), "Meta Graph HTTP 503"],
+    [
+      () => {
+        throw new DOMException("The operation timed out.", "TimeoutError");
+      },
+      "Meta Graph request failed",
+    ],
+    [
+      () => new Response("not json", { status: 200, headers: { "content-type": "application/json" } }),
+      "Meta Graph response was invalid",
+    ],
+  ] as const) {
+    const graph = mockGraph({ sendResponse });
+    const transport = new FacebookPrivateReplyTransport(config(graph.fetchImpl));
+    await assert.rejects(
+      transport.send(request),
+      (error: unknown) => error instanceof Error && error.constructor === Error && error.message === message,
+    );
+    assert.equal(graph.calls.filter(({ url }) => url.pathname.endsWith("/messages")).length, 1);
+  }
+});
+
+test("an empty-body 429 on a lookup keeps the reply retryable before any POST", async () => {
+  const graph = mockGraph({ commentResponse: () => new Response(null, { status: 429 }) });
+  const transport = new FacebookPrivateReplyTransport(config(graph.fetchImpl));
+  await assert.rejects(transport.verify(request), /Meta Graph HTTP 429/);
+  await assert.rejects(
+    transport.send(request),
+    (error: unknown) => error instanceof PreSendVerificationError && error.disposition === "retry",
+  );
+  assert.equal(
+    graph.calls.some(({ url }) => url.pathname.endsWith("/messages")),
+    false,
+  );
 });
 
 test("token expiration uses the injected policy clock", async () => {

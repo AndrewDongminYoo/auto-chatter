@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS instagram_connections (
   workspace_id uuid NOT NULL REFERENCES workspaces (id),
   account_id text NOT NULL UNIQUE CHECK (length(btrim(account_id)) > 0),
   active boolean NOT NULL DEFAULT false,
+  send_paused_until timestamptz,
   UNIQUE (id, workspace_id)
 );
 
@@ -55,6 +56,7 @@ CREATE TABLE IF NOT EXISTS private_reply_outbox (
   provider_message_id text,
   failure_code text,
   sent_at timestamptz,
+  rate_limit_retries integer NOT NULL DEFAULT 0 CHECK (rate_limit_retries >= 0),
   CONSTRAINT private_reply_outbox_sending_attempt_check CHECK (status <> 'sending' OR (attempt_id IS NOT NULL AND attempt_started_at IS NOT NULL)),
   FOREIGN KEY (connection_id, workspace_id) REFERENCES instagram_connections (id, workspace_id),
   FOREIGN KEY (event_id, connection_id, workspace_id) REFERENCES instagram_comment_events (id, connection_id, workspace_id),

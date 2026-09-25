@@ -37,10 +37,11 @@ docker run --rm -d --name automations-postgres -p 127.0.0.1:5433:5432 -e POSTGRE
 docker exec -i automations-postgres psql -U postgres -d automations < db/schema.sql
 ```
 
-기존 스키마로 만든 DB에는 워커를 사용하기 전에 다음 마이그레이션을 적용합니다.
+기존 스키마로 만든 DB에는 워커를 사용하기 전에 아직 적용하지 않은 마이그레이션을 번호 순서대로 적용합니다.
 
 ```bash
 docker exec -i automations-postgres psql -v ON_ERROR_STOP=1 -U postgres -d automations < db/migrations/001_reply_worker.sql
+docker exec -i automations-postgres psql -v ON_ERROR_STOP=1 -U postgres -d automations < db/migrations/002_rate_limit_backoff.sql
 ```
 
 활성 Instagram 연결과 키워드 규칙은 `db/schema.sql`의 테이블에 별도로 등록해야 합니다.
