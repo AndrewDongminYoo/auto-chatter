@@ -3,6 +3,7 @@
 상태: ChatbotX 채택 검증을 수행하고 Instagram 웹훅 수신·이벤트 저장·개인 답장 요청 보관·발송 정책·워커 모듈을 구현했습니다.
 Facebook Login과 Instagram Login용 발송 어댑터와 실행 명령은 모의 Graph 응답으로 검증했습니다.
 Meta 앱의 Instagram Login 설정을 확인했고, 운영자는 Instagram API 설정에서 발급한 토큰으로 개발자 대시보드의 일반 DM 발송에 성공했다고 보고했습니다.
+운영자가 실행한 `meta:check`는 토큰의 Instagram 계정 ID와 설정값이 일치한다고 확인했습니다.
 댓글 관리 권한과 이 저장소의 댓글 비공개 답장 발송은 아직 검증하지 않았습니다.
 검증 결과와 남은 조건은 [채택 검증 기록](../notes/2026-09-25-chatbotx-validation.md)에 있습니다.
 제품 경계는 [명세](../specs/2026-09-25-messaging-automation-platform.md), 외부 사실과 후보 비교는 [조사 보고서](../notes/2026-09-25-manychat-research.md)를 따릅니다.
