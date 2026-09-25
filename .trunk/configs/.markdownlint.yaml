@@ -1,0 +1,2 @@
+# Content-focused Markdown rules; formatting is intentionally outside this gate.
+extends: markdownlint/style/prettier
