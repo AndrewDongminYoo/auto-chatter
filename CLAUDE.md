@@ -57,12 +57,14 @@ Each worker process serves exactly one connection (`META_INSTAGRAM_CONNECTION_ID
 The sequence is: transport `verify()` (read-only Graph checks) → `evaluatePrivateReply` in `reply-policy.ts` (connection active, authorization, media ownership, not own comment, 7-day comment window) → transport `send()`.
 Outbox status semantics matter for correctness:
 
-- `pending` + `next_attempt_at` pushed 1 minute: verification failed, or `PreSendVerificationError` with `retry`.
+- `pending` + `next_attempt_at` pushed 1 minute: verification failed (including transient Graph errors on read calls), or `PreSendVerificationError` with `retry`.
 - `blocked` + `failure_code`: the policy rejected it, or `PreSendVerificationError` with `block`.
+- `failed` + `failure_code = meta_error_<code>`: `ProviderRejectedError`, i.e. Meta answered the send `POST` with a non-transient error carrying a code.
 - `unknown`: `send()` threw anything else, or a `sending` row outlived 10 minutes (`recoverStalePrivateReplies`). These are never retried automatically, to avoid double-sending.
 - `sent` + `provider_message_id`.
 
-A transport may throw `PreSendVerificationError` only before it issues the provider send request; any other error from `send()` is treated as an ambiguous outcome.
+A transport may throw `PreSendVerificationError` only before it issues the provider send request, and `ProviderRejectedError` only for a definite rejection of that request; any other error from `send()` is treated as an ambiguous outcome.
+Besides HTTP 429 and 5xx, `meta-graph-error.ts` owns which Meta error bodies count as transient.
 
 **Transports** (selected by `META_LOGIN_MODE`, default `facebook`; the configured Meta app uses `instagram`):
 
