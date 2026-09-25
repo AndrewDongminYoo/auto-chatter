@@ -10,15 +10,15 @@ export interface PrivateReplyPolicyInput {
 export type PrivateReplyPolicyResult =
   | { eligible: true }
   | {
-    eligible: false;
-    reason:
-      | "inactive_connection"
-      | "authorization_unverified"
-      | "media_unverified"
-      | "own_comment"
-      | "comment_time_unverified"
-      | "comment_expired";
-  };
+      eligible: false;
+      reason:
+        | "inactive_connection"
+        | "authorization_unverified"
+        | "media_unverified"
+        | "own_comment"
+        | "comment_time_unverified"
+        | "comment_expired";
+    };
 
 const replyWindowMs = 7 * 24 * 60 * 60 * 1000;
 

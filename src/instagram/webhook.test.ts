@@ -86,19 +86,18 @@ test("comment events normalize both supported webhook shapes without changing te
 test("a recognized comment missing its post identifier is rejected", () => {
   const payload = {
     object: "instagram",
-    entry: [{
-      id: "account-1",
-      field: "comments",
-      value: { id: "comment-1", text: "자료", from: { id: "sender-1" } },
-    }],
+    entry: [
+      {
+        id: "account-1",
+        field: "comments",
+        value: { id: "comment-1", text: "자료", from: { id: "sender-1" } },
+      },
+    ],
   };
 
   assert.throws(() => parseCommentEvents(Buffer.from(JSON.stringify(payload))), /comment event/i);
 });
 
 test("non-Instagram payloads are rejected", () => {
-  assert.throws(
-    () => parseCommentEvents(Buffer.from('{"object":"page","entry":[]}')),
-    /Instagram webhook/i,
-  );
+  assert.throws(() => parseCommentEvents(Buffer.from('{"object":"page","entry":[]}')), /Instagram webhook/i);
 });

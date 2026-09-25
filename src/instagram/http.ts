@@ -23,7 +23,11 @@ async function readBody(request: IncomingMessage): Promise<Buffer | null> {
   return Buffer.concat(chunks, size);
 }
 
-async function handleRequest(request: IncomingMessage, response: ServerResponse, config: InstagramWebhookServerConfig): Promise<void> {
+async function handleRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  config: InstagramWebhookServerConfig,
+): Promise<void> {
   const url = new URL(request.url ?? "/", "http://localhost");
   if (url.pathname !== "/webhooks/instagram") {
     response.writeHead(404).end();

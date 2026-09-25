@@ -54,7 +54,16 @@ export async function ingestComments(pool: Pool, comments: readonly InstagramCom
           (workspace_id, connection_id, event_id, rule_id, comment_id, media_id, sender_id, private_reply_text)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT DO NOTHING`,
-        [connection.workspace_id, connection.id, event.id, rule.id, comment.commentId, comment.postId, comment.senderId, rule.private_reply_text],
+        [
+          connection.workspace_id,
+          connection.id,
+          event.id,
+          rule.id,
+          comment.commentId,
+          comment.postId,
+          comment.senderId,
+          rule.private_reply_text,
+        ],
       );
     }
     await client.query("COMMIT");

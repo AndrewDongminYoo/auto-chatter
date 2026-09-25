@@ -29,10 +29,7 @@ export class PreSendVerificationError extends Error {
   readonly disposition: "retry" | "block";
   readonly failureCode: string;
 
-  constructor(
-    disposition: "retry" | "block" = "retry",
-    failureCode = "verification_failed",
-  ) {
+  constructor(disposition: "retry" | "block" = "retry", failureCode = "verification_failed") {
     super("Private reply pre-send verification failed");
     this.name = "PreSendVerificationError";
     this.disposition = disposition;
@@ -106,9 +103,11 @@ export async function processNextPrivateReply(
   };
 
   if (!connection.active) {
-    await updateClaim(pool,
+    await updateClaim(
+      pool,
       "UPDATE private_reply_outbox SET status = 'blocked', failure_code = 'inactive_connection' WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-      [row.id, attemptId]);
+      [row.id, attemptId],
+    );
     return true;
   }
 
@@ -116,9 +115,11 @@ export async function processNextPrivateReply(
   try {
     verification = await transport.verify(request);
   } catch {
-    await updateClaim(pool,
+    await updateClaim(
+      pool,
       "UPDATE private_reply_outbox SET status = 'pending', attempt_id = NULL, attempt_started_at = NULL, next_attempt_at = now() + interval '1 minute', failure_code = 'verification_failed' WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-      [row.id, attemptId]);
+      [row.id, attemptId],
+    );
     return true;
   }
 
@@ -135,9 +136,11 @@ export async function processNextPrivateReply(
     isOwnComment: request.senderId === request.accountId,
   });
   if (!policy.eligible) {
-    await updateClaim(pool,
+    await updateClaim(
+      pool,
       "UPDATE private_reply_outbox SET status = 'blocked', failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-      [row.id, attemptId, policy.reason]);
+      [row.id, attemptId, policy.reason],
+    );
     return true;
   }
 
@@ -149,25 +152,33 @@ export async function processNextPrivateReply(
   } catch (error) {
     if (error instanceof PreSendVerificationError) {
       if (error.disposition === "retry") {
-        await updateClaim(pool,
+        await updateClaim(
+          pool,
           "UPDATE private_reply_outbox SET status = 'pending', attempt_id = NULL, attempt_started_at = NULL, next_attempt_at = now() + interval '1 minute', failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-          [row.id, attemptId, error.failureCode]);
+          [row.id, attemptId, error.failureCode],
+        );
       } else {
-        await updateClaim(pool,
+        await updateClaim(
+          pool,
           "UPDATE private_reply_outbox SET status = 'blocked', failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-          [row.id, attemptId, error.failureCode]);
+          [row.id, attemptId, error.failureCode],
+        );
       }
       return true;
     }
-    await updateClaim(pool,
+    await updateClaim(
+      pool,
       "UPDATE private_reply_outbox SET status = 'unknown', failure_code = 'send_outcome_unknown' WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-      [row.id, attemptId]);
+      [row.id, attemptId],
+    );
     return true;
   }
 
-  await updateClaim(pool,
+  await updateClaim(
+    pool,
     "UPDATE private_reply_outbox SET status = 'sent', provider_message_id = $3, sent_at = now(), failure_code = NULL WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-    [row.id, attemptId, messageId]);
+    [row.id, attemptId, messageId],
+  );
   return true;
 }
 
@@ -189,9 +200,11 @@ export async function runPrivateReplyWorker(
   options: { recoveryIntervalMs?: number; now?: () => Date } = {},
 ): Promise<void> {
   if (!connectionId) throw new Error("Instagram connection ID is required");
-  if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 1) throw new Error("pollIntervalMs must be a positive integer");
+  if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 1)
+    throw new Error("pollIntervalMs must be a positive integer");
   const recoveryIntervalMs = options.recoveryIntervalMs ?? 60_000;
-  if (!Number.isInteger(recoveryIntervalMs) || recoveryIntervalMs < 1) throw new Error("recoveryIntervalMs must be a positive integer");
+  if (!Number.isInteger(recoveryIntervalMs) || recoveryIntervalMs < 1)
+    throw new Error("recoveryIntervalMs must be a positive integer");
   const now = options.now ?? (() => new Date());
   await recoverStalePrivateReplies(pool, new Date(now().getTime() - 10 * 60_000), connectionId);
   let nextRecoveryAt = now().getTime() + recoveryIntervalMs;

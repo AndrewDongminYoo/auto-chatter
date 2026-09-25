@@ -3,7 +3,13 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { ingestComments } from "./store.ts";
-import { PreSendVerificationError, processNextPrivateReply, recoverStalePrivateReplies, runPrivateReplyWorker, type PrivateReplyTransport } from "./reply-worker.ts";
+import {
+  PreSendVerificationError,
+  processNextPrivateReply,
+  recoverStalePrivateReplies,
+  runPrivateReplyWorker,
+  type PrivateReplyTransport,
+} from "./reply-worker.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
@@ -25,32 +31,52 @@ const verified: PrivateReplyTransport["verify"] = async () => ({
 });
 
 async function queueReply(): Promise<void> {
-  await ingestComments(pool, [{
-    accountId: "account-1",
-    commentId: "comment-1",
-    postId: "post-1",
-    senderId: "sender-1",
-    text: "자료 부탁해요",
-  }]);
+  await ingestComments(pool, [
+    {
+      accountId: "account-1",
+      commentId: "comment-1",
+      postId: "post-1",
+      senderId: "sender-1",
+      text: "자료 부탁해요",
+    },
+  ]);
 }
 
-async function outbox(): Promise<{ status: string; provider_message_id: string | null; failure_code: string | null; next_attempt_at: Date }> {
-  const result = await pool.query<{ status: string; provider_message_id: string | null; failure_code: string | null; next_attempt_at: Date }>(
-    "SELECT status, provider_message_id, failure_code, next_attempt_at FROM private_reply_outbox",
-  );
+async function outbox(): Promise<{
+  status: string;
+  provider_message_id: string | null;
+  failure_code: string | null;
+  next_attempt_at: Date;
+}> {
+  const result = await pool.query<{
+    status: string;
+    provider_message_id: string | null;
+    failure_code: string | null;
+    next_attempt_at: Date;
+  }>("SELECT status, provider_message_id, failure_code, next_attempt_at FROM private_reply_outbox");
   return result.rows[0]!;
 }
 
 before(async () => {
-  await pool.query("DROP TABLE IF EXISTS private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE");
+  await pool.query(
+    "DROP TABLE IF EXISTS private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+  );
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
 });
 
 beforeEach(async () => {
-  await pool.query("TRUNCATE private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE");
+  await pool.query(
+    "TRUNCATE private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+  );
   await pool.query("INSERT INTO workspaces (id) VALUES ($1)", [workspaceId]);
-  await pool.query("INSERT INTO instagram_connections (id, workspace_id, account_id, active) VALUES ($1, $2, $3, true)", [connectionId, workspaceId, "account-1"]);
-  await pool.query("INSERT INTO instagram_comment_rules (id, workspace_id, connection_id, media_id, keyword, private_reply_text, enabled) VALUES ($1, $2, $3, $4, $5, $6, true)", [ruleId, workspaceId, connectionId, "post-1", "자료", "자료 링크입니다"]);
+  await pool.query(
+    "INSERT INTO instagram_connections (id, workspace_id, account_id, active) VALUES ($1, $2, $3, true)",
+    [connectionId, workspaceId, "account-1"],
+  );
+  await pool.query(
+    "INSERT INTO instagram_comment_rules (id, workspace_id, connection_id, media_id, keyword, private_reply_text, enabled) VALUES ($1, $2, $3, $4, $5, $6, true)",
+    [ruleId, workspaceId, connectionId, "post-1", "자료", "자료 링크입니다"],
+  );
 });
 
 after(async () => {
@@ -82,10 +108,22 @@ test("two workers claim one reply and record one provider message", async () => 
 test("an expired comment is blocked before the send callback", async () => {
   await queueReply();
   let sends = 0;
-  await processNextPrivateReply(pool, {
-    verify: async () => ({ commentCreatedAt: new Date("2026-09-18T00:00:00.000Z"), authorizationVerified: true, mediaOwned: true }),
-    send: async () => { sends++; return { messageId: "unexpected" }; },
-  }, () => now, connectionId);
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: async () => ({
+        commentCreatedAt: new Date("2026-09-18T00:00:00.000Z"),
+        authorizationVerified: true,
+        mediaOwned: true,
+      }),
+      send: async () => {
+        sends++;
+        return { messageId: "unexpected" };
+      },
+    },
+    () => now,
+    connectionId,
+  );
   assert.equal(sends, 0);
   assert.equal((await outbox()).status, "blocked");
   assert.equal((await outbox()).failure_code, "comment_expired");
@@ -95,10 +133,18 @@ test("an inactive connection is blocked even with otherwise valid metadata", asy
   await queueReply();
   await pool.query("UPDATE instagram_connections SET active = false WHERE id = $1", [connectionId]);
   let sends = 0;
-  await processNextPrivateReply(pool, {
-    verify: verified,
-    send: async () => { sends++; return { messageId: "unexpected" }; },
-  }, () => now, connectionId);
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: verified,
+      send: async () => {
+        sends++;
+        return { messageId: "unexpected" };
+      },
+    },
+    () => now,
+    connectionId,
+  );
   assert.equal(sends, 0);
   assert.equal((await outbox()).failure_code, "inactive_connection");
 });
@@ -106,21 +152,43 @@ test("an inactive connection is blocked even with otherwise valid metadata", asy
 test("unverified Meta authorization blocks the send callback", async () => {
   await queueReply();
   let sends = 0;
-  await processNextPrivateReply(pool, {
-    verify: async () => ({ commentCreatedAt: new Date("2026-09-24T00:00:00.000Z"), authorizationVerified: false, mediaOwned: true }),
-    send: async () => { sends++; return { messageId: "unexpected" }; },
-  }, () => now, connectionId);
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: async () => ({
+        commentCreatedAt: new Date("2026-09-24T00:00:00.000Z"),
+        authorizationVerified: false,
+        mediaOwned: true,
+      }),
+      send: async () => {
+        sends++;
+        return { messageId: "unexpected" };
+      },
+    },
+    () => now,
+    connectionId,
+  );
   assert.equal(sends, 0);
   assert.equal((await outbox()).failure_code, "authorization_unverified");
 });
 
 test("the account's own comment cannot trigger a private reply", async () => {
-  await ingestComments(pool, [{ accountId: "account-1", commentId: "comment-1", postId: "post-1", senderId: "account-1", text: "자료" }]);
+  await ingestComments(pool, [
+    { accountId: "account-1", commentId: "comment-1", postId: "post-1", senderId: "account-1", text: "자료" },
+  ]);
   let sends = 0;
-  await processNextPrivateReply(pool, {
-    verify: verified,
-    send: async () => { sends++; return { messageId: "unexpected" }; },
-  }, () => now, connectionId);
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: verified,
+      send: async () => {
+        sends++;
+        return { messageId: "unexpected" };
+      },
+    },
+    () => now,
+    connectionId,
+  );
   assert.equal(sends, 0);
   assert.equal((await outbox()).failure_code, "own_comment");
 });
@@ -128,10 +196,20 @@ test("the account's own comment cannot trigger a private reply", async () => {
 test("a failed read-only verification returns the job to pending with a delay", async () => {
   await queueReply();
   let sends = 0;
-  await processNextPrivateReply(pool, {
-    verify: async () => { throw new Error("temporary lookup failure"); },
-    send: async () => { sends++; return { messageId: "unexpected" }; },
-  }, () => now, connectionId);
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: async () => {
+        throw new Error("temporary lookup failure");
+      },
+      send: async () => {
+        sends++;
+        return { messageId: "unexpected" };
+      },
+    },
+    () => now,
+    connectionId,
+  );
   const result = await outbox();
   assert.equal(sends, 0);
   assert.equal(result.status, "pending");
@@ -144,7 +222,10 @@ test("an uncertain send is never automatically retried", async () => {
   let sends = 0;
   const transport: PrivateReplyTransport = {
     verify: verified,
-    send: async () => { sends++; throw new Error("connection lost after request"); },
+    send: async () => {
+      sends++;
+      throw new Error("connection lost after request");
+    },
   };
   assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), true);
   assert.equal((await outbox()).status, "unknown");
@@ -155,10 +236,17 @@ test("an uncertain send is never automatically retried", async () => {
 
 test("a failed read-only check inside send returns to pending before a POST", async () => {
   await queueReply();
-  await processNextPrivateReply(pool, {
-    verify: verified,
-    send: async () => { throw new PreSendVerificationError(); },
-  }, () => now, connectionId);
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: verified,
+      send: async () => {
+        throw new PreSendVerificationError();
+      },
+    },
+    () => now,
+    connectionId,
+  );
   const result = await outbox();
   assert.equal(result.status, "pending");
   assert.equal(result.failure_code, "verification_failed");
@@ -180,14 +268,24 @@ test("the worker loop processes a job and stops when cancelled", async () => {
   await queueReply();
   const controller = new AbortController();
   let sends = 0;
-  await runPrivateReplyWorker(pool, {
-    verify: async () => ({ commentCreatedAt: new Date(Date.now() - 60_000), authorizationVerified: true, mediaOwned: true }),
-    send: async () => {
-      sends++;
-      controller.abort();
-      return { messageId: "mid-loop" };
+  await runPrivateReplyWorker(
+    pool,
+    {
+      verify: async () => ({
+        commentCreatedAt: new Date(Date.now() - 60_000),
+        authorizationVerified: true,
+        mediaOwned: true,
+      }),
+      send: async () => {
+        sends++;
+        controller.abort();
+        return { messageId: "mid-loop" };
+      },
     },
-  }, controller.signal, 10, connectionId);
+    controller.signal,
+    10,
+    connectionId,
+  );
   assert.equal(sends, 1);
   assert.equal((await outbox()).status, "sent");
 });
@@ -196,19 +294,32 @@ test("a running worker recovers another interrupted attempt on its connection", 
   await queueReply();
   const controller = new AbortController();
   let currentTime = new Date();
-  await runPrivateReplyWorker(pool, {
-    verify: async () => ({ commentCreatedAt: new Date(currentTime.getTime() - 60_000), authorizationVerified: true, mediaOwned: true }),
-    send: async () => {
-      await ingestComments(pool, [{ accountId: "account-1", commentId: "comment-2", postId: "post-1", senderId: "sender-2", text: "자료" }]);
-      await pool.query(
-        "UPDATE private_reply_outbox SET status = 'sending', attempt_id = $1, attempt_started_at = now() - interval '11 minutes' WHERE comment_id = 'comment-2'",
-        ["77777777-7777-4777-8777-777777777777"],
-      );
-      currentTime = new Date(currentTime.getTime() + 60_000);
-      setTimeout(() => controller.abort(), 100);
-      return { messageId: "mid-1" };
+  await runPrivateReplyWorker(
+    pool,
+    {
+      verify: async () => ({
+        commentCreatedAt: new Date(currentTime.getTime() - 60_000),
+        authorizationVerified: true,
+        mediaOwned: true,
+      }),
+      send: async () => {
+        await ingestComments(pool, [
+          { accountId: "account-1", commentId: "comment-2", postId: "post-1", senderId: "sender-2", text: "자료" },
+        ]);
+        await pool.query(
+          "UPDATE private_reply_outbox SET status = 'sending', attempt_id = $1, attempt_started_at = now() - interval '11 minutes' WHERE comment_id = 'comment-2'",
+          ["77777777-7777-4777-8777-777777777777"],
+        );
+        currentTime = new Date(currentTime.getTime() + 60_000);
+        setTimeout(() => controller.abort(), 100);
+        return { messageId: "mid-1" };
+      },
     },
-  }, controller.signal, 5, connectionId, { recoveryIntervalMs: 10, now: () => currentTime });
+    controller.signal,
+    5,
+    connectionId,
+    { recoveryIntervalMs: 10, now: () => currentTime },
+  );
   const result = await pool.query<{ status: string; failure_code: string }>(
     "SELECT status, failure_code FROM private_reply_outbox WHERE comment_id = 'comment-2'",
   );
@@ -221,29 +332,54 @@ test("a connection-scoped worker leaves another connection's reply pending", asy
   const otherConnectionId = "55555555-5555-4555-8555-555555555555";
   const otherRuleId = "66666666-6666-4666-8666-666666666666";
   await pool.query("INSERT INTO workspaces (id) VALUES ($1)", [otherWorkspaceId]);
-  await pool.query("INSERT INTO instagram_connections (id, workspace_id, account_id, active) VALUES ($1, $2, $3, true)", [otherConnectionId, otherWorkspaceId, "account-2"]);
-  await pool.query("INSERT INTO instagram_comment_rules (id, workspace_id, connection_id, media_id, keyword, private_reply_text, enabled) VALUES ($1, $2, $3, $4, $5, $6, true)", [otherRuleId, otherWorkspaceId, otherConnectionId, "post-2", "자료", "다른 계정 답장"]);
-  await ingestComments(pool, [{ accountId: "account-2", commentId: "comment-2", postId: "post-2", senderId: "sender-2", text: "자료" }]);
+  await pool.query(
+    "INSERT INTO instagram_connections (id, workspace_id, account_id, active) VALUES ($1, $2, $3, true)",
+    [otherConnectionId, otherWorkspaceId, "account-2"],
+  );
+  await pool.query(
+    "INSERT INTO instagram_comment_rules (id, workspace_id, connection_id, media_id, keyword, private_reply_text, enabled) VALUES ($1, $2, $3, $4, $5, $6, true)",
+    [otherRuleId, otherWorkspaceId, otherConnectionId, "post-2", "자료", "다른 계정 답장"],
+  );
+  await ingestComments(pool, [
+    { accountId: "account-2", commentId: "comment-2", postId: "post-2", senderId: "sender-2", text: "자료" },
+  ]);
   await queueReply();
 
   await assert.rejects(
-    processNextPrivateReply(pool, { verify: verified, send: async () => ({ messageId: "unexpected" }) }, () => now, undefined as unknown as string),
+    processNextPrivateReply(
+      pool,
+      { verify: verified, send: async () => ({ messageId: "unexpected" }) },
+      () => now,
+      undefined as unknown as string,
+    ),
     /Instagram connection ID is required/,
   );
-  const untouched = await pool.query<{ status: string }>("SELECT status FROM private_reply_outbox ORDER BY connection_id");
-  assert.deepEqual(untouched.rows.map((row) => row.status), ["pending", "pending"]);
+  const untouched = await pool.query<{ status: string }>(
+    "SELECT status FROM private_reply_outbox ORDER BY connection_id",
+  );
+  assert.deepEqual(
+    untouched.rows.map((row) => row.status),
+    ["pending", "pending"],
+  );
 
   const sentConnectionIds: string[] = [];
-  await processNextPrivateReply(pool, {
-    verify: verified,
-    send: async (request) => {
-      sentConnectionIds.push(request.connectionId);
-      return { messageId: "mid-scoped" };
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: verified,
+      send: async (request) => {
+        sentConnectionIds.push(request.connectionId);
+        return { messageId: "mid-scoped" };
+      },
     },
-  }, () => now, connectionId);
+    () => now,
+    connectionId,
+  );
 
   assert.deepEqual(sentConnectionIds, [connectionId]);
-  const rows = await pool.query<{ connection_id: string; status: string }>("SELECT connection_id, status FROM private_reply_outbox ORDER BY connection_id");
+  const rows = await pool.query<{ connection_id: string; status: string }>(
+    "SELECT connection_id, status FROM private_reply_outbox ORDER BY connection_id",
+  );
   assert.deepEqual(rows.rows, [
     { connection_id: connectionId, status: "sent" },
     { connection_id: otherConnectionId, status: "pending" },
@@ -254,6 +390,9 @@ test("a connection-scoped worker leaves another connection's reply pending", asy
     ["77777777-7777-4777-8777-777777777777", otherConnectionId],
   );
   assert.equal(await recoverStalePrivateReplies(pool, new Date(Date.now() - 5 * 60_000), connectionId), 0);
-  const other = await pool.query<{ status: string }>("SELECT status FROM private_reply_outbox WHERE connection_id = $1", [otherConnectionId]);
+  const other = await pool.query<{ status: string }>(
+    "SELECT status FROM private_reply_outbox WHERE connection_id = $1",
+    [otherConnectionId],
+  );
   assert.equal(other.rows[0]?.status, "sending");
 });

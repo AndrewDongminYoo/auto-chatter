@@ -24,12 +24,10 @@ export interface FacebookPrivateReplyConfig {
 }
 
 export type PermissionInspection =
-  | { verified: true }
-  | { verified: false; reason: string; missingPermissions?: string[] };
+  { verified: true } | { verified: false; reason: string; missingPermissions?: string[] };
 
 type PageAccess =
-  | { verified: true; accessToken: string }
-  | { verified: false; reason: string; missingPermissions?: string[] };
+  { verified: true; accessToken: string } | { verified: false; reason: string; missingPermissions?: string[] };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -52,7 +50,8 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
 
   constructor(config: FacebookPrivateReplyConfig) {
     if (!/^v\d+\.\d+$/.test(config.graphVersion)) throw new Error("Invalid Meta Graph version");
-    if (![config.appId, config.pageId, config.accountId].every((id) => /^\d+$/.test(id))) throw new Error("Invalid Meta account ID");
+    if (![config.appId, config.pageId, config.accountId].every((id) => /^\d+$/.test(id)))
+      throw new Error("Invalid Meta account ID");
     if (!validConnectionId(config.connectionId)) throw new Error("Invalid Instagram connection ID");
     if (!config.appAccessToken || !config.userAccessToken) throw new Error("Meta access tokens are required");
     const timeoutMs = config.timeoutMs ?? 10_000;
@@ -69,7 +68,12 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
     return url;
   }
 
-  private async graphRequest(url: URL, token: string, method = "GET", body?: unknown): Promise<{ status: number; data: unknown }> {
+  private async graphRequest(
+    url: URL,
+    token: string,
+    method = "GET",
+    body?: unknown,
+  ): Promise<{ status: number; data: unknown }> {
     let response: Response;
     try {
       response = await this.fetchImpl(url, {
@@ -88,7 +92,7 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
     if (response.status === 429 || response.status >= 500) throw new Error(`Meta Graph HTTP ${response.status}`);
     if (!response.ok) return { status: response.status, data: null };
     try {
-      return { status: response.status, data: await response.json() as unknown };
+      return { status: response.status, data: (await response.json()) as unknown };
     } catch {
       throw new Error("Meta Graph response was invalid");
     }
@@ -106,8 +110,11 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
     if (typeof details.expires_at === "number" && details.expires_at > 0 && details.expires_at * 1000 <= Date.now()) {
       return { verified: false, reason: "user_token_expired" };
     }
-    if (typeof details.data_access_expires_at === "number" && details.data_access_expires_at > 0
-      && details.data_access_expires_at * 1000 <= Date.now()) {
+    if (
+      typeof details.data_access_expires_at === "number" &&
+      details.data_access_expires_at > 0 &&
+      details.data_access_expires_at * 1000 <= Date.now()
+    ) {
       return { verified: false, reason: "data_access_expired" };
     }
     const scopes = Array.isArray(details.scopes) ? details.scopes : [];
@@ -130,7 +137,10 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
       }
       for (const item of pages.data.data) {
         if (!isRecord(item) || item.id !== this.config.pageId) continue;
-        if (!isRecord(item.instagram_business_account) || item.instagram_business_account.id !== this.config.accountId) {
+        if (
+          !isRecord(item.instagram_business_account) ||
+          item.instagram_business_account.id !== this.config.accountId
+        ) {
           return { verified: false, reason: "page_not_linked_to_account" };
         }
         if (!Array.isArray(item.tasks) || !item.tasks.includes("MESSAGING")) {
@@ -175,22 +185,29 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
     );
     if (!isRecord(comment.data) || comment.data.id !== request.commentId) return denied;
     const createdAt = typeof comment.data.timestamp === "string" ? new Date(comment.data.timestamp) : null;
-    const commentMatches = isRecord(comment.data.from) && comment.data.from.id === request.senderId
-      && isRecord(comment.data.media) && comment.data.media.id === request.mediaId;
+    const commentMatches =
+      isRecord(comment.data.from) &&
+      comment.data.from.id === request.senderId &&
+      isRecord(comment.data.media) &&
+      comment.data.media.id === request.mediaId;
     if (!commentMatches) return { commentCreatedAt: createdAt, authorizationVerified: true, mediaOwned: false };
 
     const media = await this.graphRequest(
       this.graphUrl(encodeURIComponent(request.mediaId), { fields: "id,owner,media_product_type" }),
       this.config.userAccessToken,
     );
-    const mediaOwned = isRecord(media.data) && media.data.id === request.mediaId
-      && isRecord(media.data.owner) && recordId(media.data.owner.id) === request.accountId
-      && supportedSurfaces.has(media.data.media_product_type as string);
+    const mediaOwned =
+      isRecord(media.data) &&
+      media.data.id === request.mediaId &&
+      isRecord(media.data.owner) &&
+      recordId(media.data.owner.id) === request.accountId &&
+      supportedSurfaces.has(media.data.media_product_type as string);
     return { commentCreatedAt: createdAt, authorizationVerified: true, mediaOwned };
   }
 
   async send(request: PrivateReplyRequest): ReturnType<PrivateReplyTransport["send"]> {
-    if (!this.matchesConnection(request) || !request.text.trim()) throw new Error("Private reply connection or text is invalid");
+    if (!this.matchesConnection(request) || !request.text.trim())
+      throw new Error("Private reply connection or text is invalid");
     let verification;
     try {
       verification = await this.verify(request);
@@ -213,12 +230,10 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
       throw new PreSendVerificationError();
     }
     if (!page.verified) throw new PreSendVerificationError("block", "authorization_unverified");
-    const result = await this.graphRequest(
-      this.graphUrl(`${this.config.pageId}/messages`),
-      page.accessToken,
-      "POST",
-      { recipient: { comment_id: request.commentId }, message: { text: request.text } },
-    );
+    const result = await this.graphRequest(this.graphUrl(`${this.config.pageId}/messages`), page.accessToken, "POST", {
+      recipient: { comment_id: request.commentId },
+      message: { text: request.text },
+    });
     if (!isRecord(result.data) || typeof result.data.message_id !== "string" || !result.data.message_id.trim()) {
       throw new Error("Meta private reply outcome is unknown");
     }

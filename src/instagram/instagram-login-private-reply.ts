@@ -30,7 +30,8 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
   constructor(config: InstagramLoginPrivateReplyConfig) {
     if (!/^v\d+\.\d+$/.test(config.graphVersion)) throw new Error("Invalid Meta Graph version");
     if (!/^\d+$/.test(config.accountId)) throw new Error("Invalid Instagram account ID");
-    if (config.connectionId !== undefined && !validConnectionId(config.connectionId)) throw new Error("Invalid Instagram connection ID");
+    if (config.connectionId !== undefined && !validConnectionId(config.connectionId))
+      throw new Error("Invalid Instagram connection ID");
     if (!config.accessToken) throw new Error("Instagram access token is required");
     const timeoutMs = config.timeoutMs ?? 10_000;
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1) throw new Error("Invalid Meta request timeout");
@@ -65,7 +66,7 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
     if (response.status === 429 || response.status >= 500) throw new Error(`Meta Graph HTTP ${response.status}`);
     if (!response.ok) return null;
     try {
-      return await response.json() as unknown;
+      return (await response.json()) as unknown;
     } catch {
       throw new Error("Meta Graph response was invalid");
     }
@@ -96,20 +97,22 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
     );
     if (!isRecord(comment) || comment.id !== request.commentId) return denied;
     const createdAt = typeof comment.timestamp === "string" ? new Date(comment.timestamp) : null;
-    const commentMatches = isRecord(comment.from) && comment.from.id === request.senderId
-      && isRecord(comment.media) && comment.media.id === request.mediaId;
+    const commentMatches =
+      isRecord(comment.from) &&
+      comment.from.id === request.senderId &&
+      isRecord(comment.media) &&
+      comment.media.id === request.mediaId;
     if (!commentMatches) return { commentCreatedAt: createdAt, authorizationVerified: true, mediaOwned: false };
 
-    const media = await this.graphRequest(
-      this.graphUrl(encodeURIComponent(request.mediaId), { fields: "id,owner" }),
-    );
-    const mediaOwned = isRecord(media) && media.id === request.mediaId
-      && isRecord(media.owner) && media.owner.id === request.accountId;
+    const media = await this.graphRequest(this.graphUrl(encodeURIComponent(request.mediaId), { fields: "id,owner" }));
+    const mediaOwned =
+      isRecord(media) && media.id === request.mediaId && isRecord(media.owner) && media.owner.id === request.accountId;
     return { commentCreatedAt: createdAt, authorizationVerified: true, mediaOwned };
   }
 
   async send(request: PrivateReplyRequest): ReturnType<PrivateReplyTransport["send"]> {
-    if (!this.matchesConnection(request) || !request.text.trim()) throw new Error("Private reply connection or text is invalid");
+    if (!this.matchesConnection(request) || !request.text.trim())
+      throw new Error("Private reply connection or text is invalid");
     let verification;
     try {
       verification = await this.verify(request);
@@ -126,11 +129,10 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
     });
     if (!policy.eligible) throw new PreSendVerificationError("block", policy.reason);
 
-    const result = await this.graphRequest(
-      this.graphUrl(`${this.config.accountId}/messages`),
-      "POST",
-      { recipient: { comment_id: request.commentId }, message: { text: request.text } },
-    );
+    const result = await this.graphRequest(this.graphUrl(`${this.config.accountId}/messages`), "POST", {
+      recipient: { comment_id: request.commentId },
+      message: { text: request.text },
+    });
     if (!isRecord(result) || typeof result.message_id !== "string" || !result.message_id.trim()) {
       throw new Error("Meta private reply outcome is unknown");
     }
