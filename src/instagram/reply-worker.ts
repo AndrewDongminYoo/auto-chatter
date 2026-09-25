@@ -64,14 +64,15 @@ export async function processNextPrivateReply(
   pool: Pool,
   transport: PrivateReplyTransport,
   now: () => Date = () => new Date(),
-  connectionId?: string,
+  connectionId: string,
 ): Promise<boolean> {
+  if (!connectionId) throw new Error("Instagram connection ID is required");
   const attemptId = randomUUID();
   const claimed = await pool.query<ClaimedRow>(
     `WITH candidate AS (
        SELECT id FROM private_reply_outbox
        WHERE status = 'pending' AND next_attempt_at <= now()
-         AND ($2::uuid IS NULL OR connection_id = $2)
+         AND connection_id = $2
        ORDER BY created_at, id
        FOR UPDATE SKIP LOCKED
        LIMIT 1
@@ -82,7 +83,7 @@ export async function processNextPrivateReply(
      WHERE reply.id = candidate.id
      RETURNING reply.id, reply.workspace_id, reply.connection_id, reply.comment_id,
        reply.media_id, reply.sender_id, reply.private_reply_text`,
-    [attemptId, connectionId ?? null],
+    [attemptId, connectionId],
   );
   const row = claimed.rows[0];
   if (!row) return false;
@@ -170,10 +171,11 @@ export async function processNextPrivateReply(
   return true;
 }
 
-export async function recoverStalePrivateReplies(pool: Pool, olderThan: Date, connectionId?: string): Promise<number> {
+export async function recoverStalePrivateReplies(pool: Pool, olderThan: Date, connectionId: string): Promise<number> {
+  if (!connectionId) throw new Error("Instagram connection ID is required");
   const result = await pool.query(
-    "UPDATE private_reply_outbox SET status = 'unknown', failure_code = 'worker_interrupted' WHERE status = 'sending' AND attempt_started_at < $1 AND ($2::uuid IS NULL OR connection_id = $2)",
-    [olderThan, connectionId ?? null],
+    "UPDATE private_reply_outbox SET status = 'unknown', failure_code = 'worker_interrupted' WHERE status = 'sending' AND attempt_started_at < $1 AND connection_id = $2",
+    [olderThan, connectionId],
   );
   return result.rowCount ?? 0;
 }
@@ -183,9 +185,10 @@ export async function runPrivateReplyWorker(
   transport: PrivateReplyTransport,
   signal: AbortSignal,
   pollIntervalMs = 1000,
-  connectionId?: string,
+  connectionId: string,
   options: { recoveryIntervalMs?: number; now?: () => Date } = {},
 ): Promise<void> {
+  if (!connectionId) throw new Error("Instagram connection ID is required");
   if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 1) throw new Error("pollIntervalMs must be a positive integer");
   const recoveryIntervalMs = options.recoveryIntervalMs ?? 60_000;
   if (!Number.isInteger(recoveryIntervalMs) || recoveryIntervalMs < 1) throw new Error("recoveryIntervalMs must be a positive integer");

@@ -70,8 +70,8 @@ test("two workers claim one reply and record one provider message", async () => 
     },
   };
   const results = await Promise.all([
-    processNextPrivateReply(pool, transport, () => now),
-    processNextPrivateReply(pool, transport, () => now),
+    processNextPrivateReply(pool, transport, () => now, connectionId),
+    processNextPrivateReply(pool, transport, () => now, connectionId),
   ]);
   assert.deepEqual(results.sort(), [false, true]);
   assert.equal(sends, 1);
@@ -85,7 +85,7 @@ test("an expired comment is blocked before the send callback", async () => {
   await processNextPrivateReply(pool, {
     verify: async () => ({ commentCreatedAt: new Date("2026-09-18T00:00:00.000Z"), authorizationVerified: true, mediaOwned: true }),
     send: async () => { sends++; return { messageId: "unexpected" }; },
-  }, () => now);
+  }, () => now, connectionId);
   assert.equal(sends, 0);
   assert.equal((await outbox()).status, "blocked");
   assert.equal((await outbox()).failure_code, "comment_expired");
@@ -98,7 +98,7 @@ test("an inactive connection is blocked even with otherwise valid metadata", asy
   await processNextPrivateReply(pool, {
     verify: verified,
     send: async () => { sends++; return { messageId: "unexpected" }; },
-  }, () => now);
+  }, () => now, connectionId);
   assert.equal(sends, 0);
   assert.equal((await outbox()).failure_code, "inactive_connection");
 });
@@ -109,7 +109,7 @@ test("unverified Meta authorization blocks the send callback", async () => {
   await processNextPrivateReply(pool, {
     verify: async () => ({ commentCreatedAt: new Date("2026-09-24T00:00:00.000Z"), authorizationVerified: false, mediaOwned: true }),
     send: async () => { sends++; return { messageId: "unexpected" }; },
-  }, () => now);
+  }, () => now, connectionId);
   assert.equal(sends, 0);
   assert.equal((await outbox()).failure_code, "authorization_unverified");
 });
@@ -120,7 +120,7 @@ test("the account's own comment cannot trigger a private reply", async () => {
   await processNextPrivateReply(pool, {
     verify: verified,
     send: async () => { sends++; return { messageId: "unexpected" }; },
-  }, () => now);
+  }, () => now, connectionId);
   assert.equal(sends, 0);
   assert.equal((await outbox()).failure_code, "own_comment");
 });
@@ -131,7 +131,7 @@ test("a failed read-only verification returns the job to pending with a delay", 
   await processNextPrivateReply(pool, {
     verify: async () => { throw new Error("temporary lookup failure"); },
     send: async () => { sends++; return { messageId: "unexpected" }; },
-  }, () => now);
+  }, () => now, connectionId);
   const result = await outbox();
   assert.equal(sends, 0);
   assert.equal(result.status, "pending");
@@ -146,10 +146,10 @@ test("an uncertain send is never automatically retried", async () => {
     verify: verified,
     send: async () => { sends++; throw new Error("connection lost after request"); },
   };
-  assert.equal(await processNextPrivateReply(pool, transport, () => now), true);
+  assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), true);
   assert.equal((await outbox()).status, "unknown");
   assert.equal((await outbox()).failure_code, "send_outcome_unknown");
-  assert.equal(await processNextPrivateReply(pool, transport, () => now), false);
+  assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), false);
   assert.equal(sends, 1);
 });
 
@@ -171,7 +171,7 @@ test("stale in-flight work becomes unknown rather than pending", async () => {
     "UPDATE private_reply_outbox SET status = 'sending', attempt_id = $1, attempt_started_at = now() - interval '10 minutes'",
     ["77777777-7777-4777-8777-777777777777"],
   );
-  assert.equal(await recoverStalePrivateReplies(pool, new Date(Date.now() - 5 * 60_000)), 1);
+  assert.equal(await recoverStalePrivateReplies(pool, new Date(Date.now() - 5 * 60_000), connectionId), 1);
   assert.equal((await outbox()).status, "unknown");
   assert.equal((await outbox()).failure_code, "worker_interrupted");
 });
@@ -187,7 +187,7 @@ test("the worker loop processes a job and stops when cancelled", async () => {
       controller.abort();
       return { messageId: "mid-loop" };
     },
-  }, controller.signal, 10);
+  }, controller.signal, 10, connectionId);
   assert.equal(sends, 1);
   assert.equal((await outbox()).status, "sent");
 });
@@ -225,6 +225,13 @@ test("a connection-scoped worker leaves another connection's reply pending", asy
   await pool.query("INSERT INTO instagram_comment_rules (id, workspace_id, connection_id, media_id, keyword, private_reply_text, enabled) VALUES ($1, $2, $3, $4, $5, $6, true)", [otherRuleId, otherWorkspaceId, otherConnectionId, "post-2", "자료", "다른 계정 답장"]);
   await ingestComments(pool, [{ accountId: "account-2", commentId: "comment-2", postId: "post-2", senderId: "sender-2", text: "자료" }]);
   await queueReply();
+
+  await assert.rejects(
+    processNextPrivateReply(pool, { verify: verified, send: async () => ({ messageId: "unexpected" }) }, () => now, undefined as unknown as string),
+    /Instagram connection ID is required/,
+  );
+  const untouched = await pool.query<{ status: string }>("SELECT status FROM private_reply_outbox ORDER BY connection_id");
+  assert.deepEqual(untouched.rows.map((row) => row.status), ["pending", "pending"]);
 
   const sentConnectionIds: string[] = [];
   await processNextPrivateReply(pool, {
