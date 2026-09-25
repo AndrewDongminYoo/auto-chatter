@@ -201,23 +201,22 @@ export async function processNextPrivateReply(
       const retries = row.rate_limit_retries;
       const tier = rateLimitRetryDelaysSeconds[Math.min(retries, rateLimitRetryDelaysSeconds.length - 1)]!;
       const delaySeconds = Math.max(tier, error.retryAfterSeconds ?? 0);
-      if (retries < rateLimitRetryDelaysSeconds.length) {
-        await updateClaim(
-          pool,
-          "UPDATE private_reply_outbox SET status = 'pending', attempt_id = NULL, attempt_started_at = NULL, next_attempt_at = now() + make_interval(secs => $4), rate_limit_retries = rate_limit_retries + 1, failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-          [row.id, attemptId, error.failureCode, delaySeconds],
-        );
-      } else {
-        await updateClaim(
-          pool,
-          "UPDATE private_reply_outbox SET status = 'failed', failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-          [row.id, attemptId, error.failureCode],
-        );
-      }
+      const replyUpdate =
+        retries < rateLimitRetryDelaysSeconds.length
+          ? "UPDATE private_reply_outbox SET status = 'pending', attempt_id = NULL, attempt_started_at = NULL, next_attempt_at = now() + make_interval(secs => $4), rate_limit_retries = rate_limit_retries + 1, failure_code = $3"
+          : "UPDATE private_reply_outbox SET status = 'failed', failure_code = $3";
       // The limit applies to the connection, so hold its other replies instead of letting each spend its own retries.
-      await pool.query(
-        "UPDATE instagram_connections SET send_paused_until = GREATEST(send_paused_until, now() + make_interval(secs => $2)) WHERE id = $1",
-        [row.connection_id, delaySeconds],
+      // One statement keeps the reply state and the connection pause atomic.
+      await updateClaim(
+        pool,
+        `WITH reply AS (
+           ${replyUpdate} WHERE id = $1 AND status = 'sending' AND attempt_id = $2 RETURNING connection_id
+         ), paused AS (
+           UPDATE instagram_connections SET send_paused_until = GREATEST(send_paused_until, now() + make_interval(secs => $4))
+           WHERE id IN (SELECT connection_id FROM reply)
+         )
+         SELECT 1 FROM reply`,
+        [row.id, attemptId, error.failureCode, delaySeconds],
       );
       return true;
     }
