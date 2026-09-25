@@ -7,8 +7,10 @@
     "node": ">=24"
   },
   "scripts": {
+    "start": "node src/instagram/main.ts",
     "check-types": "tsc --noEmit",
-    "test": "node --test src/instagram/webhook.test.ts"
+    "test": "node --test src/instagram/webhook.test.ts",
+    "test:db": "node --test src/instagram/http.db.test.ts"
   },
   "devDependencies": {
     "@types/node": "24.13.1",
