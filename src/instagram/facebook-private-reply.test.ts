@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { FacebookPrivateReplyTransport, type FacebookPrivateReplyConfig } from "./facebook-private-reply.ts";
+import { PreSendVerificationError } from "./reply-worker.ts";
 import type { PrivateReplyRequest } from "./reply-worker.ts";
 
 const connectionId = "22222222-2222-4222-8222-222222222222";
@@ -32,6 +33,7 @@ function mockGraph(overrides: {
   mediaOwnerId?: string;
   commentTimestamp?: string;
   sendStatus?: number;
+  failSecondDebug?: boolean;
 } = {}): MockGraph {
   const calls: MockGraph["calls"] = [];
   const fetchImpl = async (input: Parameters<typeof fetch>[0], init: RequestInit = {}): Promise<Response> => {
@@ -39,6 +41,9 @@ function mockGraph(overrides: {
     calls.push({ url, init });
     assert.equal(url.hostname, "graph.facebook.com");
     if (url.pathname === "/v25.0/debug_token") {
+      if (overrides.failSecondDebug && calls.filter((call) => call.url.pathname === url.pathname).length === 2) {
+        return graphResponse({ error: { message: "temporary" } }, 503);
+      }
       assert.equal(url.searchParams.get("input_token"), "user-token");
       assert.equal(new Headers(init.headers).get("authorization"), "Bearer app-token");
       return graphResponse({ data: {
@@ -125,7 +130,8 @@ test("a mismatched comment or media owner cannot pass verification", async () =>
     const graph = mockGraph(overrides);
     const transport = new FacebookPrivateReplyTransport(config(graph.fetchImpl));
     assert.equal((await transport.verify(request)).mediaOwned, false);
-    await assert.rejects(transport.send(request), /Private reply blocked/);
+    await assert.rejects(transport.send(request), (error: unknown) =>
+      error instanceof PreSendVerificationError && error.disposition === "block" && error.failureCode === "media_unverified");
     assert.equal(graph.calls.some(({ url }) => url.pathname.endsWith("/messages")), false);
   }
 });
@@ -133,7 +139,8 @@ test("a mismatched comment or media owner cannot pass verification", async () =>
 test("a direct send cannot bypass the seven-day comment window", async () => {
   const graph = mockGraph({ commentTimestamp: "2026-09-18T00:00:00+0000" });
   const transport = new FacebookPrivateReplyTransport(config(graph.fetchImpl));
-  await assert.rejects(transport.send(request), /comment_expired/);
+  await assert.rejects(transport.send(request), (error: unknown) =>
+    error instanceof PreSendVerificationError && error.disposition === "block" && error.failureCode === "comment_expired");
   assert.equal(graph.calls.some(({ url }) => url.pathname.endsWith("/messages")), false);
 });
 
@@ -141,4 +148,12 @@ test("an uncertain Graph send does not produce a success result", async () => {
   const graph = mockGraph({ sendStatus: 503 });
   const transport = new FacebookPrivateReplyTransport(config(graph.fetchImpl));
   await assert.rejects(transport.send(request), /Meta Graph HTTP 503/);
+});
+
+test("a Graph lookup failure inside send is identified as pre-send", async () => {
+  const graph = mockGraph({ failSecondDebug: true });
+  const transport = new FacebookPrivateReplyTransport(config(graph.fetchImpl));
+  assert.equal((await transport.verify(request)).authorizationVerified, true);
+  await assert.rejects(transport.send(request), PreSendVerificationError);
+  assert.equal(graph.calls.some(({ url }) => url.pathname.endsWith("/messages")), false);
 });

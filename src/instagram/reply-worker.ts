@@ -21,7 +21,23 @@ export interface PrivateReplyTransport {
     authorizationVerified: boolean;
     mediaOwned: boolean;
   }>;
+  // Throw PreSendVerificationError only before making a provider send request.
   send(request: PrivateReplyRequest): Promise<{ messageId: string }>;
+}
+
+export class PreSendVerificationError extends Error {
+  readonly disposition: "retry" | "block";
+  readonly failureCode: string;
+
+  constructor(
+    disposition: "retry" | "block" = "retry",
+    failureCode = "verification_failed",
+  ) {
+    super("Private reply pre-send verification failed");
+    this.name = "PreSendVerificationError";
+    this.disposition = disposition;
+    this.failureCode = failureCode;
+  }
 }
 
 interface ClaimedRow {
@@ -129,7 +145,19 @@ export async function processNextPrivateReply(
     const sent = await transport.send(request);
     if (typeof sent.messageId !== "string" || !sent.messageId.trim()) throw new Error("Provider message ID missing");
     messageId = sent.messageId;
-  } catch {
+  } catch (error) {
+    if (error instanceof PreSendVerificationError) {
+      if (error.disposition === "retry") {
+        await updateClaim(pool,
+          "UPDATE private_reply_outbox SET status = 'pending', attempt_id = NULL, attempt_started_at = NULL, next_attempt_at = now() + interval '1 minute', failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
+          [row.id, attemptId, error.failureCode]);
+      } else {
+        await updateClaim(pool,
+          "UPDATE private_reply_outbox SET status = 'blocked', failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
+          [row.id, attemptId, error.failureCode]);
+      }
+      return true;
+    }
     await updateClaim(pool,
       "UPDATE private_reply_outbox SET status = 'unknown', failure_code = 'send_outcome_unknown' WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
       [row.id, attemptId]);

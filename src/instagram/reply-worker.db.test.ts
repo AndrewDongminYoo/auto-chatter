@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { ingestComments } from "./store.ts";
-import { processNextPrivateReply, recoverStalePrivateReplies, runPrivateReplyWorker, type PrivateReplyTransport } from "./reply-worker.ts";
+import { PreSendVerificationError, processNextPrivateReply, recoverStalePrivateReplies, runPrivateReplyWorker, type PrivateReplyTransport } from "./reply-worker.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
@@ -151,6 +151,18 @@ test("an uncertain send is never automatically retried", async () => {
   assert.equal((await outbox()).failure_code, "send_outcome_unknown");
   assert.equal(await processNextPrivateReply(pool, transport, () => now), false);
   assert.equal(sends, 1);
+});
+
+test("a failed read-only check inside send returns to pending before a POST", async () => {
+  await queueReply();
+  await processNextPrivateReply(pool, {
+    verify: verified,
+    send: async () => { throw new PreSendVerificationError(); },
+  }, () => now, connectionId);
+  const result = await outbox();
+  assert.equal(result.status, "pending");
+  assert.equal(result.failure_code, "verification_failed");
+  assert.ok(result.next_attempt_at.getTime() > Date.now());
 });
 
 test("stale in-flight work becomes unknown rather than pending", async () => {

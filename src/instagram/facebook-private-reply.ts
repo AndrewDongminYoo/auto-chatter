@@ -1,4 +1,4 @@
-import type { PrivateReplyRequest, PrivateReplyTransport } from "./reply-worker.ts";
+import { PreSendVerificationError, type PrivateReplyRequest, type PrivateReplyTransport } from "./reply-worker.ts";
 import { evaluatePrivateReply } from "./reply-policy.ts";
 
 const requiredPermissions = [
@@ -191,7 +191,12 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
 
   async send(request: PrivateReplyRequest): ReturnType<PrivateReplyTransport["send"]> {
     if (!this.matchesConnection(request) || !request.text.trim()) throw new Error("Private reply connection or text is invalid");
-    const verification = await this.verify(request);
+    let verification;
+    try {
+      verification = await this.verify(request);
+    } catch {
+      throw new PreSendVerificationError();
+    }
     const policy = evaluatePrivateReply({
       now: this.now(),
       commentCreatedAt: verification.commentCreatedAt,
@@ -200,9 +205,14 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
       mediaOwned: verification.mediaOwned,
       isOwnComment: request.senderId === request.accountId,
     });
-    if (!policy.eligible) throw new Error(`Private reply blocked: ${policy.reason}`);
-    const page = await this.pageAccess();
-    if (!page.verified) throw new Error(`Meta permissions unavailable: ${page.reason}`);
+    if (!policy.eligible) throw new PreSendVerificationError("block", policy.reason);
+    let page;
+    try {
+      page = await this.pageAccess();
+    } catch {
+      throw new PreSendVerificationError();
+    }
+    if (!page.verified) throw new PreSendVerificationError("block", "authorization_unverified");
     const result = await this.graphRequest(
       this.graphUrl(`${this.config.pageId}/messages`),
       page.accessToken,
