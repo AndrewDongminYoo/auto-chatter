@@ -42,3 +42,19 @@ test("an unsupported login mode is rejected before any Meta call", () => {
   assert.equal(result.status, 2);
   assert.match(result.stderr, /META_LOGIN_MODE must be facebook or instagram/);
 });
+
+test("an invalid Instagram account ID reports the configuration error", () => {
+  const result = spawnSync(process.execPath, [entrypoint.pathname, "--check-permissions"], {
+    env: {
+      META_LOGIN_MODE: "instagram",
+      META_GRAPH_VERSION: "v25.0",
+      META_INSTAGRAM_ACCOUNT_ID: "not-an-id",
+      META_INSTAGRAM_ACCESS_TOKEN: "synthetic-token",
+    },
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Invalid Instagram account ID/);
+  assert.doesNotMatch(result.stderr, /synthetic-token/);
+});

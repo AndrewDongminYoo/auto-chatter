@@ -80,7 +80,7 @@ if (mode !== "--check-permissions" && mode !== "--run") {
         }
       }
     } catch (error) {
-      const message = error instanceof Error && /^(Invalid Meta|Meta Graph)/.test(error.message)
+      const message = error instanceof Error && (/^(Invalid Meta|Meta Graph)/.test(error.message) || error.message === "Invalid Instagram account ID")
         ? error.message : "Instagram worker failed";
       process.stderr.write(`${message}\n`);
       process.exitCode = 1;
