@@ -1,0 +1,49 @@
+# ChatbotX 채택 검증과 첫 구현 기록
+
+검증일: 2026-09-25.
+검증 대상: [ChatbotX 저장소](https://github.com/ChatbotXIO/ChatbotX)의 `8c973a89cf51c1e12a9177a420e50531430fdea7` 커밋.
+
+## 채택 가설
+
+현재 저장소에는 메시징 서비스 코드가 없으므로, Instagram 댓글 자동화와 공유 인박스를 직접 만드는 데 필요한 코드와 운영 범위를 줄일 수 있다면 ChatbotX Community Edition을 채택할 가치가 있습니다.
+첫 변경은 기존 기능을 검증한 다음 필요한 MIT 영역만 점진적으로 도입할 수 있어야 합니다.
+상용 라이선스 영역을 분리할 수 없거나 워커가 검증 환경에서 안정적으로 실행되지 않으면 채택하지 않습니다.
+운영자와 ChatbotX 유지관리자의 관계는 확인하지 않았습니다.
+
+## 검사 결과
+
+| 항목 | 결과 | 확인 범위 |
+| --- | --- | --- |
+| 고정 커밋 | 확인 | 공개 `main`의 위 커밋을 별도 평가 디렉터리에 얕게 복제하고 Git 상태를 확인했습니다. |
+| 라이선스 | 추가 검토 필요 | [루트 라이선스](https://github.com/ChatbotXIO/ChatbotX/blob/8c973a89cf51c1e12a9177a420e50531430fdea7/LICENSE)는 MIT 적용 범위에서 `apps/builder/src/enterprise`를 제외합니다. [해당 디렉터리](https://github.com/ChatbotXIO/ChatbotX/blob/8c973a89cf51c1e12a9177a420e50531430fdea7/apps/builder/src/enterprise/LICENSE)와 [데이터베이스 스키마의 별도 파일](https://github.com/ChatbotXIO/ChatbotX/blob/8c973a89cf51c1e12a9177a420e50531430fdea7/packages/database/src/schema/enterprise/LICENSE)에 상용 라이선스가 있습니다. 일반 경로의 모듈도 이 영역을 import하므로 파일을 단순 삭제해 CE를 분리할 수 있다고 가정하지 않습니다. |
+| 의존성 설치 | 통과 | `corepack pnpm install --frozen-lockfile`이 63개 워크스페이스의 잠금 파일로 완료됐습니다. Node.js 24.20.0과 pnpm 10.34.5를 사용했습니다. |
+| Instagram 연동 타입 검사 | 통과 | `corepack pnpm --filter @chatbotx.io/integration-instagram check-types`가 통과했습니다. |
+| Instagram 연동 테스트 | 통과 | `corepack pnpm --filter @chatbotx.io/integration-instagram test`에서 21개 파일, 91개 테스트가 통과했습니다. 이 테스트는 공식 계정에서의 권한 승인을 검증하지 않습니다. |
+| 댓글 자동화 워커 테스트 | 통과 | `corepack pnpm --filter worker exec vitest run __tests__/comment-automation.test.ts`에서 148개 테스트가 통과했습니다. 외부 API와 저장소를 모의하므로 실제 DB 중복 제약과 Meta 전달을 증명하지 않습니다. |
+| 워커 타입 검사 | 실패 | `corepack pnpm --filter worker check-types`가 `packages/ai/src/server/factory.ts:218`의 `fetch` 반환 타입에 `preconnect` 속성이 없다는 TS2741 오류로 종료됐습니다. 원인과 upstream 수정 여부는 확인하지 않았습니다. |
+| 개발 서버·웹훅 왕복 | 미검증 | 인증 정보와 공식 Instagram 테스트 계정이 없고, 워커 타입 검사가 실패한 상태입니다. 댓글 웹훅 중복 입력부터 실제 발송·전달 콜백까지의 통합 실행은 완료하지 않았습니다. |
+| 워커 메모리 | 미검증 | [공개 이슈 #1255](https://github.com/ChatbotXIO/ChatbotX/issues/1255)는 빈 큐에서도 워커 메모리가 증가한다고 보고하며 검증 당시 열린 상태였습니다. 로컬 Docker의 할당 메모리는 약 8GB여서 다중 워커 전체 기동 실험을 실행하지 않았습니다. 해당 이슈가 이 커밋에도 재현되는지는 확인되지 않았습니다. |
+
+## 채택 결정
+
+이 커밋의 ChatbotX CE를 현재 제품 저장소로 가져오지 않습니다.
+MIT 영역의 정확한 빌드 경계, 워커 타입 검사, 장시간 메모리 안정성, 실제 Instagram 권한과 웹훅 왕복이 채택 조건을 충족하지 못했습니다.
+이 판단은 ChatbotX의 기능이 부족하다는 뜻이 아니라, 현재 검증에서 안전한 첫 포크 범위와 운영 가능성을 입증하지 못했다는 뜻입니다.
+기존 [구현 계획의 대체 경로](../plans/2026-09-25-delivery-plan.md)에 따라 TypeScript로 최소 기능을 직접 구현합니다.
+이번 변경에는 ChatbotX 코드를 복사하지 않았습니다.
+
+## 첫 구현의 경계
+
+`src/instagram/webhook.ts`는 Instagram 구독 확인 요청의 토큰을 비교하고, 원문 본문의 SHA-256 HMAC 서명을 확인하며, 댓글 이벤트를 정규화합니다.
+테스트는 올바른 서명, 본문 변조, 잘못된 서명 헤더, 두 종류의 댓글 웹훅 형식, 불완전한 댓글, 다른 객체 형식을 확인합니다.
+현재는 HTTP 수신기, 계정 연결, 영속 중복 제거, 작업 큐, 실제 발송, 전달 콜백을 구현하지 않았습니다.
+서명 검증 함수를 통과하지 않은 본문을 이벤트 파서에 전달하거나, 영속 중복 제거 없이 외부 발송을 연결해서는 안 됩니다.
+
+## 다음 검증 조건
+
+1. Instagram 계정 연결과 토큰 보관 경계를 정의하고 공식 테스트 계정의 권한을 확인합니다.
+2. PostgreSQL에 작업 공간별 채널 연결, 원본 이벤트 식별자, 발송 요청의 고유 제약을 둡니다.
+3. 동일 댓글 웹훅을 두 번 재생해도 발송 요청이 한 번만 생성되는 통합 테스트를 실행합니다.
+4. 발송 정책과 단일 private reply를 공식 테스트 계정에서 확인한 뒤 전달·실패 콜백을 연결합니다.
+
+실제 플랫폼에서 권한을 확인하지 못하면 공개 서비스가 Instagram 자동 DM을 지원한다고 표시하지 않습니다.
