@@ -348,3 +348,23 @@ test("token expiration uses the injected policy clock", async () => {
     assert.deepEqual(await transport.inspectPermissions(), { verified: false, reason });
   }
 });
+
+test("final delivery guard runs after Graph verification and prevents POST", async () => {
+  const graph = mockGraph();
+  let checked = false;
+  const transport = new FacebookPrivateReplyTransport({
+    ...config(graph.fetchImpl),
+    beforeSend: async (current) => {
+      checked = true;
+      assert.equal(current, request);
+      assert.ok(graph.calls.some(({ url }) => url.pathname.endsWith("/222")));
+      throw new PreSendVerificationError("block", "delivery_not_permitted");
+    },
+  });
+  await assert.rejects(() => transport.send(request), { failureCode: "delivery_not_permitted" });
+  assert.equal(checked, true);
+  assert.equal(
+    graph.calls.some(({ init }) => init.method === "POST"),
+    false,
+  );
+});

@@ -22,6 +22,7 @@ export interface FacebookPrivateReplyConfig {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   now?: () => Date;
+  beforeSend?: (request: PrivateReplyRequest) => Promise<void>;
 }
 
 export type PermissionInspection =
@@ -44,6 +45,7 @@ function validConnectionId(value: string): boolean {
 }
 
 export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
+  readonly supportsFollowReplies = false;
   private readonly config: FacebookPrivateReplyConfig;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
@@ -239,6 +241,7 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
       throw new PreSendVerificationError();
     }
     if (!page.verified) throw new PreSendVerificationError("block", "authorization_unverified");
+    await this.config.beforeSend?.(request);
     const result = await this.graphRequest(this.graphUrl(`${this.config.pageId}/messages`), page.accessToken, "POST", {
       recipient: { comment_id: request.commentId },
       message: { text: request.text },

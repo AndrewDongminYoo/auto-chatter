@@ -58,8 +58,12 @@ One rule exists per `(connection_id, media_id)`; empty `keywords` falls back to 
 Apply `003_comment_rule_matching.sql` before deploying the expanded rule reader to an existing database.
 
 **Worker** (`worker-main.ts` → `reply-worker.ts` → a `PrivateReplyTransport`):
-The Node worker serves one connection (`META_INSTAGRAM_CONNECTION_ID`); the Cloudflare adapter reads encrypted credentials and send switches per queued connection from the database.
+The Node worker serves one active, send-enabled, environment-managed connection (`META_INSTAGRAM_CONNECTION_ID`, with no encrypted OAuth credential); the Cloudflare adapter reads encrypted credentials and send switches per queued connection from the database.
 `processNextPrivateReply` claims a `pending` outbox row with `FOR UPDATE SKIP LOCKED` and a fresh `attempt_id`; every later state change is conditional on `status = 'sending' AND attempt_id = $n` and throws if the claim was lost.
+In Instagram Login mode, each Node polling cycle processes a confirmed follow reply and a private reply, with startup and periodic stale-claim recovery scoped to that connection.
+Follow delivery uses the environment account binding instead of the Cloudflare stored-token check; Cloudflare retains its encrypted-token and expiry requirements.
+Both Node send paths recheck the claim, connection, rule, send switch and environment ownership immediately before POST; follow sends also recheck the 24-hour window.
+OAuth-managed connections must use the Cloudflare adapter, and Facebook Login blocks follow-gated rules before the first DM (`follow_requires_instagram_login`).
 The sequence is: transport `verify()` (read-only Graph checks) → `evaluatePrivateReply` in `reply-policy.ts` (connection active, authorization, media ownership, not own comment, 7-day comment window) → transport `send()`.
 Outbox status semantics matter for correctness:
 

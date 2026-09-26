@@ -10,6 +10,7 @@ export interface InstagramLoginPrivateReplyConfig {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   now?: () => Date;
+  beforeSend?: (request: PrivateReplyRequest) => Promise<void>;
 }
 
 type AccountInspection = { verified: true } | { verified: false; reason: string };
@@ -135,6 +136,7 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
     });
     if (!policy.eligible) throw new PreSendVerificationError("block", policy.reason);
 
+    await this.config.beforeSend?.(request);
     const result = await this.graphRequest(this.graphUrl(`${this.config.accountId}/messages`), "POST", {
       recipient: { comment_id: request.commentId },
       message: { text: request.text },

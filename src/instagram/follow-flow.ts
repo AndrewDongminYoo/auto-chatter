@@ -63,7 +63,10 @@ export async function processNextFollowReply(
   connectionId: string,
   transport: FollowTransport,
   now: () => Date = () => new Date(),
+  environmentAccountId?: string,
 ): Promise<boolean> {
+  if (environmentAccountId !== undefined && !/^\d+$/.test(environmentAccountId))
+    throw new Error("Invalid Instagram account ID");
   const attempt = randomUUID();
   const claimed = await pool.query(
     `WITH candidate AS (
@@ -101,9 +104,11 @@ export async function processNextFollowReply(
    JOIN instagram_connections c ON c.id=flow.connection_id
    JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
    WHERE flow.reply_id=$1 AND flow.status='sending' AND flow.attempt_id=$2 AND reply.status='sent'
-     AND c.active AND c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>now()
+     AND c.active AND c.send_enabled
+     AND (($3::text IS NULL AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>now())
+       OR ($3::text IS NOT NULL AND c.account_id=$3 AND c.access_token_encrypted IS NULL))
      AND rule.enabled`,
-      [row.reply_id, attempt],
+      [row.reply_id, attempt, environmentAccountId ?? null],
     );
     return result.rowCount === 1;
   };
@@ -180,9 +185,9 @@ export async function processNextFollowReply(
   return true;
 }
 
-export async function recoverStaleFollowReplies(pool: Pool, olderThan: Date): Promise<void> {
+export async function recoverStaleFollowReplies(pool: Pool, olderThan: Date, connectionId?: string): Promise<void> {
   await pool.query(
-    "UPDATE instagram_follow_conversations SET status='unknown',failure_code='worker_interrupted' WHERE status='sending' AND attempt_started_at<$1",
-    [olderThan],
+    "UPDATE instagram_follow_conversations SET status='unknown',failure_code='worker_interrupted' WHERE status='sending' AND attempt_started_at<$1 AND ($2::uuid IS NULL OR connection_id=$2)",
+    [olderThan, connectionId ?? null],
   );
 }

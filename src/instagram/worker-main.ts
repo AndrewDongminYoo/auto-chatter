@@ -4,7 +4,8 @@ import {
   InstagramLoginPrivateReplyTransport,
   type InstagramLoginPrivateReplyConfig,
 } from "./instagram-login-private-reply.ts";
-import { runPrivateReplyWorker } from "./reply-worker.ts";
+import { createNodeFollowTransport, assertNodePrivateReplyAllowed } from "./node-delivery.ts";
+import { runPrivateReplyWorker, type PrivateReplyRequest } from "./reply-worker.ts";
 
 const mode = process.argv[2];
 const loginMode = process.env.META_LOGIN_MODE ?? "facebook";
@@ -36,15 +37,29 @@ if (mode !== "--check-permissions" && mode !== "--run") {
     process.exitCode = 2;
   } else {
     try {
+      let workerPool: Pool | undefined;
+      const beforeSend = async (request: PrivateReplyRequest) => {
+        if (!workerPool) throw new Error("Worker database is unavailable");
+        await assertNodePrivateReplyAllowed(
+          workerPool,
+          {
+            connectionId: process.env.META_INSTAGRAM_CONNECTION_ID!,
+            accountId: process.env.META_INSTAGRAM_ACCOUNT_ID!,
+          },
+          request,
+        );
+      };
       const transport =
         loginMode === "instagram"
           ? new InstagramLoginPrivateReplyTransport({
+              beforeSend,
               graphVersion: process.env.META_GRAPH_VERSION!,
               accessToken: process.env.META_INSTAGRAM_ACCESS_TOKEN!,
               accountId: process.env.META_INSTAGRAM_ACCOUNT_ID!,
               ...(mode === "--run" ? { connectionId: process.env.META_INSTAGRAM_CONNECTION_ID! } : {}),
             } satisfies InstagramLoginPrivateReplyConfig)
           : new FacebookPrivateReplyTransport({
+              beforeSend,
               graphVersion: process.env.META_GRAPH_VERSION!,
               appId: process.env.META_APP_ID!,
               appAccessToken: process.env.META_APP_ACCESS_TOKEN!,
@@ -74,16 +89,19 @@ if (mode !== "--check-permissions" && mode !== "--run") {
         );
       } else {
         const pool = new Pool({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 10_000 });
+        workerPool = pool;
         try {
           const connection = await pool.query<{ account_id: string; active: boolean }>(
-            "SELECT account_id, active FROM instagram_connections WHERE id = $1",
+            "SELECT account_id, active FROM instagram_connections WHERE id = $1 AND send_enabled AND access_token_encrypted IS NULL",
             [process.env.META_INSTAGRAM_CONNECTION_ID],
           );
           if (
             connection.rows[0]?.account_id !== process.env.META_INSTAGRAM_ACCOUNT_ID ||
             connection.rows[0].active !== true
           ) {
-            process.stderr.write("Configured Instagram connection is inactive or mismatched\n");
+            process.stderr.write(
+              "Configured Instagram connection must be active, send-enabled, account-matched and environment-managed\n",
+            );
             process.exitCode = 1;
           } else {
             const controller = new AbortController();
@@ -100,6 +118,19 @@ if (mode !== "--check-permissions" && mode !== "--run") {
                 controller.signal,
                 1000,
                 process.env.META_INSTAGRAM_CONNECTION_ID!,
+                loginMode === "instagram"
+                  ? {
+                      follow: {
+                        accountId: process.env.META_INSTAGRAM_ACCOUNT_ID!,
+                        transport: createNodeFollowTransport(pool, {
+                          accountId: process.env.META_INSTAGRAM_ACCOUNT_ID!,
+                          connectionId: process.env.META_INSTAGRAM_CONNECTION_ID!,
+                          accessToken: process.env.META_INSTAGRAM_ACCESS_TOKEN!,
+                          graphVersion: process.env.META_GRAPH_VERSION!,
+                        }),
+                      },
+                    }
+                  : {},
               );
             } finally {
               process.off("SIGINT", stop);
