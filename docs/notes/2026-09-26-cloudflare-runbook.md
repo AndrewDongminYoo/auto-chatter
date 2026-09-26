@@ -5,7 +5,8 @@
 Cloudflare 어댑터와 로컬 검증 경로를 구현했습니다.
 2026-09-26 승인된 개인 계정에서 Supabase 프로젝트와 Cloudflare 리소스를 생성하고 workers.dev에 배포했습니다.
 발송은 `SEND_ENABLED=false`로 유지합니다.
-Meta secrets 등록과 실제 웹훅 수신·발송 검증은 남아 있습니다.
+`INSTAGRAM_APP_SECRET`과 `INSTAGRAM_VERIFY_TOKEN`의 등록을 확인했습니다.
+Meta 대시보드의 구독 확인과 실제 댓글 수신·발송 검증은 남아 있습니다.
 아래 신규 DB 초기화와 리소스 생성 절차는 다른 환경을 준비할 때 사용하는 절차이며, 이미 생성한 환경에 다시 실행하지 않습니다.
 
 | 리소스            | 현재 값                                                       |
@@ -21,7 +22,8 @@ Meta secrets 등록과 실제 웹훅 수신·발송 검증은 남아 있습니�
 | 최초 Worker 버전  | `b4760d1d-4b21-4207-96da-52e0e4a881d7`                        |
 
 웹훅 주소는 `https://auto-chatter.auto-chatter-ydm2790.workers.dev/webhooks/instagram`입니다.
-Meta secrets가 없으면 웹훅 경로는 503을 반환하므로 아직 Meta 콜백 등록을 완료할 수 없습니다.
+두 웹훅 secrets 등록 후 검증 매개변수 누락·잘못된 Verify token·서명 없는 POST 요청이 모두 403으로 거부되는 것을 확인했습니다.
+정상 구독 확인은 Meta 대시보드에 같은 Verify token을 입력하고 Verify and Save를 실행해 확인합니다.
 관리자·서버 DB 비밀번호는 새로 생성했으며 로컬 `deploy/secrets/supabase-provisioning.json`에만 저장했습니다.
 디렉터리는 0700, 파일은 0600으로 생성했고 전체 디렉터리를 Git에서 제외했습니다.
 운영자가 비밀번호 관리 도구에 보관하기 전까지 이 파일을 삭제하지 않습니다.
@@ -93,6 +95,9 @@ Wrangler의 대응 옵션은 `--caching-disabled`, `--sslmode verify-full`이며
 ## 3. Workers 환경 값
 
 비밀값은 Worker secrets에 대화형으로 입력합니다.
+`INSTAGRAM_VERIFY_TOKEN`은 Meta에서 발급받는 값이 아니라 운영자가 생성하는 임의의 비밀 문자열입니다.
+Worker secret과 Meta 대시보드의 Verify token에 같은 값을 저장합니다.
+등록된 secret 이름을 조회하는 것으로 값이 올바르다는 사실까지 확인할 수는 없습니다.
 
 ```bash
 corepack pnpm exec wrangler secret put INSTAGRAM_APP_SECRET --env-file /dev/null
@@ -171,7 +176,9 @@ Graph 응답은 테스트용이며 외부 네트워크 호출을 대신 처리�
 실제 Hyperdrive 생성 시 Supabase Direct 연결과 서버 역할 인증에 성공했고, 반환된 설정에서 캐시 비활성화와 `verify-full`을 확인했습니다.
 Supabase에서 제품 테이블 5개의 RLS, 서버 역할의 SELECT·INSERT·UPDATE 허용 및 DELETE 차단, API 역할 3개의 SELECT 차단을 조회했습니다.
 Worker 배포 명령은 Queue 생산자·소비자와 매분 Cron 등록을 확인했습니다.
-공개 HTTPS 요청에서 루트의 404와 secrets 미등록 상태인 웹훅 경로의 503을 확인했습니다.
+공개 HTTPS 요청에서 루트의 404를 확인했습니다.
+웹훅은 최초 secrets 미등록 상태에서 503을 반환했고, 두 secrets 등록 후 잘못된 검증 토큰과 서명 없는 요청을 403으로 거부했습니다.
+이는 거부 동작의 검증이며 정상 토큰으로 구독 확인에 성공했거나 실제 Meta 서명을 검증했다는 증거는 아닙니다.
 발송을 꺼 둔 상태이므로 실제 Cron 복구 실행, Worker를 통한 DB 처리, Meta 권한과 실발송은 아직 검증하지 않았습니다.
 
 2026-09-26 로컬에서 타입 검사, 기존 단위 테스트 46건, 기존 PostgreSQL 테스트 36건, Cloudflare 관련 테스트 15건, Docker 이미지 빌드를 통과했습니다.
