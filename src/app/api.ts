@@ -7,9 +7,11 @@ import {
   listConnections,
   listRules,
   saveRule,
+  parseRule,
   updateConnection,
 } from "./settings.ts";
 import { beginInstagramOAuth, finishInstagramOAuth, type InstagramOAuthEnv } from "./instagram-oauth.ts";
+import { connectionMedia } from "./instagram-media.ts";
 
 export async function appApi(
   request: Request,
@@ -44,8 +46,29 @@ export async function appApi(
         return json({ activity: await listActivity(pool, user) });
       if (url.pathname === "/api/rules" && request.method === "GET")
         return json({ rules: await listRules(pool, user) });
-      if (url.pathname === "/api/rules" && request.method === "PUT")
-        return json(await saveRule(pool, user, await readJson(request)));
+      if (url.pathname === "/api/rules" && request.method === "PUT") {
+        const input = await readJson(request);
+        const rule = parseRule(input);
+        if (!rule.id) await connectionMedia(pool, user, rule.connection_id, env, { mediaId: rule.media_id }, fetchImpl);
+        return json(await saveRule(pool, user, input));
+      }
+      const media = /^\/api\/connections\/([a-f0-9-]+)\/media(?:\/(\d{1,40}))?$/.exec(url.pathname);
+      if (media && request.method === "GET") {
+        if (url.searchParams.getAll("after").length > 1) throw new ApiError(400, "invalid_media_request");
+        return json(
+          await connectionMedia(
+            pool,
+            user,
+            media[1]!,
+            env,
+            {
+              ...(url.searchParams.has("after") ? { after: url.searchParams.get("after")! } : {}),
+              ...(media[2] ? { mediaId: media[2] } : {}),
+            },
+            fetchImpl,
+          ),
+        );
+      }
       const connection = /^\/api\/connections\/([a-f0-9-]+)$/.exec(url.pathname);
       if (connection && request.method === "DELETE")
         return json(await disconnectConnection(pool, user, connection[1]!));
