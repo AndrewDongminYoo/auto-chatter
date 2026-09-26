@@ -90,6 +90,8 @@ Never print resolved configuration with secrets; use `config --quiet`.
 Fresh DB volumes initialize the current schema and a separate DML-only `automations_app` role.
 Existing volumes require explicit migrations as described in `docs/notes/2026-09-26-deployment-runbook.md`.
 Deployment smoke checks must use synthetic credentials, a separate Compose project and loopback ports, with no live Meta calls.
+`.github/workflows/ci.yaml` runs type checks, unit and PostgreSQL integration tests, Trunk, and a container deployment smoke check on PRs and pushes to `main`.
+The deployment job verifies signed-event persistence, replay protection, restricted DB privileges and HTTPS with a local Caddy CA; it never starts a sending worker.
 
 ## Verification boundaries
 
