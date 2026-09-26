@@ -129,7 +129,10 @@ Wrangler and Miniflare are pinned to the tested v4 runtime pair; upgrade them to
 Never enable sends, create cloud resources, or publish as part of tests.
 See `docs/notes/2026-09-26-cloudflare-runbook.md` for the deployed baseline and `docs/notes/2026-09-26-multi-user-cutover.md` for the new migration and configuration procedure.
 The multi-user code and migrations 003–006 were deployed on 2026-09-26 with sends disabled.
-The deployed code tag is `2a5403e`; the subsequent OAuth secret registration deployed Worker version `9c327413-8e4d-4506-8010-e7b2a4aca773`.
+The deployed code tag is `b15b3d0`, Worker version `7bfd9b14-f325-486f-84d5-09b4c2c44d2b`.
+The auth client wraps injected fetch in a standalone call because workerd rejects a native fetch invoked with the client object as its receiver.
+The workerd auth regression test verifies synthetic signup success and rejected login; production rejected login returns 401 after previously returning 503.
+Actual signup and confirmation email delivery remain unverified; see `docs/notes/2026-09-26-auth-fetch-runtime-fix.md`.
 All five Worker secrets are registered, and the deployed Instagram OAuth app ID is `1822350878757042` with `SEND_ENABLED=false`.
 External Auth/OAuth configuration checks, legacy workspace ownership assignment, and live OAuth/send verification remain pending.
 Run `psql -f deploy/migrate-multi-user.sql` with an administrator connection before deploying this code.

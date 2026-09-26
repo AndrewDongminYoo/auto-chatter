@@ -17,9 +17,12 @@
 
 ### 운영 배포 기록
 
-- 코드 태그: `2a5403e`.
+- 최초 다중 사용자 코드 태그: `2a5403e`.
 - 최초 다중 사용자 코드 배포 버전: `0073b9ec-2141-420f-9b7d-52e0fd2ece8d`.
   이후 OAuth 앱 secret 등록으로 배포된 버전은 `9c327413-8e4d-4506-8010-e7b2a4aca773`입니다.
+- 현재 코드 태그: `b15b3d0`, Worker 버전: `7bfd9b14-f325-486f-84d5-09b4c2c44d2b`.
+  인증 native fetch 호출 수정으로 운영 로그인 요청의 503 해소를 확인했습니다.
+  실제 회원가입·인증 메일 수신은 미검증이며, [인증 런타임 수정 기록](2026-09-26-auth-fetch-runtime-fix.md)에 상세 결과가 있습니다.
 - Supabase 프로젝트: `asjjftrioaxzspkbtebf`.
 - 서비스의 public 스키마·데이터 백업: Git에서 제외된 `deploy/secrets/backups/2026-09-26T08-51-06.150Z/public-before-multi-user.dump`.
   디렉터리는 0700, 백업은 0600이며 `pg_restore --list`에서 기존 제품 테이블 다섯 개의 데이터 항목을 확인했습니다.
