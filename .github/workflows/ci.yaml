@@ -39,6 +39,10 @@ jobs:
       - run: corepack pnpm test:db
         env:
           TEST_DATABASE_URL: postgres://postgres:local-dev@127.0.0.1:5433/automations_test
+      - run: corepack pnpm test:cloudflare
+        env:
+          TEST_DATABASE_URL: postgres://postgres:local-dev@127.0.0.1:5433/automations_test
+          WRANGLER_SEND_METRICS: "false"
 
   lint:
     runs-on: ubuntu-latest
