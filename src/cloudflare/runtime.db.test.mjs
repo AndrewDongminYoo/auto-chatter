@@ -85,8 +85,8 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
         sends++;
         return Response.json({ message_id: "runtime-message" });
       }
-      if (graphUrl.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
-      if (graphUrl.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
+      if (graphUrl.pathname.endsWith("/me")) return Response.json({ id: "987", user_id: "123" });
+      if (graphUrl.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "987" } });
       return Response.json({
         id: "comment-1",
         from: { id: "sender-1" },

@@ -195,6 +195,30 @@ test("the account's own comment cannot trigger a private reply", async () => {
   assert.equal((await outbox()).failure_code, "own_comment");
 });
 
+test("a verified scoped account's own comment is blocked without calling send", async () => {
+  await queueReply();
+  let sends = 0;
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: async () => ({
+        commentCreatedAt: new Date("2026-09-24T00:00:00.000Z"),
+        authorizationVerified: true,
+        mediaOwned: true,
+        isOwnComment: true,
+      }),
+      send: async () => {
+        sends++;
+        return { messageId: "unexpected" };
+      },
+    },
+    () => now,
+    connectionId,
+  );
+  assert.equal(sends, 0);
+  assert.equal((await outbox()).failure_code, "own_comment");
+});
+
 test("a failed read-only verification returns the job to pending with a delay", async () => {
   await queueReply();
   let sends = 0;
