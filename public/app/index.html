@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>자동화 설정 | auto-chatter</title>
+    <link rel="icon" href="/icons/auto-chatter.png" type="image/png" />
+    <link rel="stylesheet" href="/app/styles.css" />
+    <script src="/app/app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <div class="brand"><img src="/icons/auto-chatter.png" width="40" height="40" alt="" />auto-chatter</div>
+      <button id="logout" hidden>로그아웃</button>
+    </header>
+    <main>
+      <p class="eyebrow">INSTAGRAM AUTOMATION</p>
+      <h1>댓글에서 대화로.</h1>
+      <p class="intro">계정을 연결하고, 어떤 댓글에 어떤 메시지를 보낼지 설정하세요.</p>
+      <p id="notice" role="status" aria-live="polite"></p>
+      <section id="auth" class="card narrow">
+        <h2>로그인</h2>
+        <p>이메일로 로그인하면 내 계정과 자동화만 관리할 수 있습니다.</p>
+        <form id="login-form">
+          <label>이메일<input name="email" type="email" autocomplete="username" required maxlength="254" /></label>
+          <label
+            >비밀번호<input
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              required
+              minlength="8"
+              maxlength="256"
+          /></label>
+          <div class="actions">
+            <button type="submit">로그인</button
+            ><button type="button" id="signup" class="secondary">이메일로 가입</button>
+          </div>
+        </form>
+        <p class="hint">처음 가입하면 이메일 인증을 완료한 뒤 로그인하세요.</p>
+      </section>
+      <div id="workspace" hidden>
+        <section class="card">
+          <div class="section-heading">
+            <h2>Instagram 계정</h2>
+            <button id="connect">계정 연결</button>
+          </div>
+          <p id="delivery-status" class="hint"></p>
+          <div id="connections"></div>
+        </section>
+        <section class="card">
+          <div class="section-heading">
+            <h2>최근 처리 상태</h2>
+            <button id="refresh-activity" class="secondary">새로고침</button>
+          </div>
+          <p class="hint">최근 50건입니다. 결과 불명확 상태는 자동 재발송하지 않습니다.</p>
+          <div id="activity"></div>
+        </section>
+        <div class="columns">
+          <section class="card">
+            <h2>댓글 자동화</h2>
+            <div id="rules"></div>
+            <button class="secondary" id="new-rule">새 규칙</button>
+          </section>
+          <section class="card">
+            <h2>규칙 설정</h2>
+            <form id="rule-form">
+              <label>Instagram 계정<select name="connection_id" required></select></label>
+              <label
+                >게시물 ID<input
+                  name="media_id"
+                  inputmode="numeric"
+                  pattern="[0-9]{1,40}"
+                  required
+                  placeholder="Instagram 게시물의 숫자 ID"
+              /></label>
+              <label
+                >댓글 조건<select name="match_mode">
+                  <option value="contains">키워드 포함</option>
+                  <option value="exact">키워드와 정확히 일치</option>
+                  <option value="all">모든 댓글</option>
+                </select></label
+              >
+              <label
+                >포함 키워드<textarea name="keywords" rows="3" placeholder="한 줄에 하나씩 입력하세요"></textarea>
+              </label>
+              <p class="hint">최대 20개. 하나라도 일치하면 시작합니다. 대소문자는 구분하지 않습니다.</p>
+              <label
+                >제외 키워드<textarea
+                  name="excluded_keywords"
+                  rows="2"
+                  placeholder="이 단어가 있으면 시작하지 않습니다"
+                ></textarea>
+              </label>
+              <label
+                >첫 DM<textarea
+                  name="private_reply_text"
+                  rows="4"
+                  required
+                  maxlength="1000"
+                  placeholder="요청한 자료 또는 다음 안내를 입력하세요"
+                ></textarea>
+              </label>
+              <label class="toggle"
+                ><input name="follow_gate_enabled" type="checkbox" />팔로우를 확인한 뒤 후속 메시지 보내기</label
+              >
+              <div id="follow-settings" hidden>
+                <p class="hint">
+                  상대방이 첫 DM에 응답한 뒤 팔로우를 확인합니다. 첫 DM에 아래 확인 단어로 응답하도록 안내하세요.
+                </p>
+                <label>확인 단어<input name="confirmation_keyword" value="확인" maxlength="100" /></label>
+                <label
+                  >팔로우한 사람에게<textarea
+                    name="follower_reply_text"
+                    rows="3"
+                    maxlength="1000"
+                    placeholder="최종 링크나 안내를 입력하세요"
+                  ></textarea>
+                </label>
+                <label
+                  >팔로우하지 않은 사람에게<textarea
+                    name="non_follower_reply_text"
+                    rows="3"
+                    maxlength="1000"
+                    placeholder="팔로우 후 확인 단어로 다시 응답하도록 안내하세요"
+                  ></textarea>
+                </label>
+                <p class="hint">상태를 확인할 수 없으면 완료 메시지를 보내지 않습니다.</p>
+              </div>
+              <label class="toggle"><input name="enabled" type="checkbox" />규칙 활성화</label>
+              <button type="submit">규칙 저장</button>
+              <p class="hint">
+                계정 발송과 규칙이 모두 켜져 있어야 발송됩니다. 같은 사람이 같은 게시물에 다시 댓글을 남겨도 첫 DM은
+                반복하지 않습니다.
+              </p>
+            </form>
+          </section>
+        </div>
+      </div>
+    </main>
+    <footer>
+      <a href="/privacy">개인정보처리방침</a><a href="/service">이용약관</a><a href="/data-deletion">데이터 삭제</a>
+    </footer>
+  </body>
+</html>
