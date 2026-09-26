@@ -28,7 +28,7 @@ DECLARE
   product_table text;
   api_role text;
 BEGIN
-  FOREACH product_table IN ARRAY ARRAY['workspaces', 'instagram_connections', 'instagram_comment_rules', 'instagram_comment_events', 'private_reply_outbox'] LOOP
+  FOREACH product_table IN ARRAY ARRAY['workspaces', 'workspace_members', 'instagram_follow_conversations', 'instagram_message_receipts', 'instagram_oauth_states', 'instagram_connections', 'instagram_comment_rules', 'instagram_comment_events', 'private_reply_outbox'] LOOP
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', product_table);
     EXECUTE format('REVOKE ALL ON public.%I FROM PUBLIC, auto_chatter_server', product_table);
     FOREACH api_role IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP

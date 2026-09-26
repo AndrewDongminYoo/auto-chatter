@@ -13,7 +13,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
   const client = await pool.connect();
   try {
     await client.query(
-      "DROP TABLE IF EXISTS private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await client.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await client.query(
@@ -27,7 +27,18 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await client.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8"));
     for (const role of ["anon", "authenticated", "service_role"]) {
       await client.query(`SET ROLE ${role}`);
-      await assert.rejects(client.query("SELECT * FROM private_reply_outbox"), { code: "42501" });
+      for (const table of [
+        "workspaces",
+        "workspace_members",
+        "instagram_oauth_states",
+        "instagram_connections",
+        "instagram_comment_rules",
+        "instagram_comment_events",
+        "private_reply_outbox",
+        "instagram_follow_conversations",
+        "instagram_message_receipts",
+      ])
+        await assert.rejects(client.query(`SELECT * FROM ${table}`), { code: "42501" });
       await client.query("RESET ROLE");
     }
     await client.query("SET ROLE auto_chatter_server");
@@ -38,9 +49,9 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("CREATE TABLE public.forbidden(id int)"), { code: "42501" });
     await client.query("RESET ROLE");
     const protectedTables = await client.query(
-      "SELECT relname FROM pg_class WHERE relnamespace='public'::regnamespace AND relrowsecurity AND relname IN ('workspaces','instagram_connections','instagram_comment_rules','instagram_comment_events','private_reply_outbox')",
+      "SELECT relname FROM pg_class WHERE relnamespace='public'::regnamespace AND relrowsecurity AND relname IN ('workspaces','workspace_members','instagram_oauth_states','instagram_follow_conversations','instagram_message_receipts','instagram_connections','instagram_comment_rules','instagram_comment_events','private_reply_outbox')",
     );
-    assert.equal(protectedTables.rowCount, 5);
+    assert.equal(protectedTables.rowCount, 9);
     // Exercise RLS independently of table grants: an accidental future grant must not expose rows.
     await client.query("GRANT SELECT ON workspaces TO anon");
     await client.query("SET ROLE anon");

@@ -61,7 +61,7 @@ async function outbox(): Promise<{
 
 before(async () => {
   await pool.query(
-    "DROP TABLE IF EXISTS private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+    "DROP TABLE IF EXISTS instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
   );
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
 });
@@ -322,7 +322,7 @@ test("a longer Retry-After replaces the backoff and a shorter one is ignored", a
     [7200, 7200],
     [60, 15 * 60],
   ] as const) {
-    await pool.query("TRUNCATE private_reply_outbox, instagram_comment_events");
+    await pool.query("TRUNCATE private_reply_outbox, instagram_comment_events CASCADE");
     await pool.query("UPDATE instagram_connections SET send_paused_until = NULL");
     await queueReply();
     await processNextPrivateReply(pool, rateLimitedTransport([17], retryAfterSeconds), () => now, connectionId);

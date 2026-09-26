@@ -55,7 +55,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
   });
   try {
     await pool.query(
-      "DROP TABLE IF EXISTS private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
