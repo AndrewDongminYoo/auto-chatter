@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 import type { InstagramComment } from "./webhook.ts";
+import { matchesCommentRule, type CommentRuleMatch } from "./comment-rule.ts";
 
 interface ConnectionRow {
   id: string;
@@ -10,7 +11,7 @@ interface EventRow {
   id: string;
 }
 
-interface RuleRow {
+interface RuleRow extends CommentRuleMatch {
   id: string;
   keyword: string;
   private_reply_text: string;
@@ -42,12 +43,12 @@ export async function ingestComments(pool: Pool, comments: readonly InstagramCom
       if (!event) continue;
 
       const rules = await client.query<RuleRow>(
-        `SELECT id, keyword, private_reply_text FROM instagram_comment_rules
+        `SELECT id, keyword, keywords, match_mode, excluded_keywords, private_reply_text FROM instagram_comment_rules
          WHERE workspace_id = $1 AND connection_id = $2 AND media_id = $3 AND enabled = true`,
         [connection.workspace_id, connection.id, comment.postId],
       );
       const rule = rules.rows[0];
-      if (!rule || !comment.text.toLowerCase().includes(rule.keyword.toLowerCase())) continue;
+      if (!rule || !matchesCommentRule(comment.text, rule)) continue;
 
       await client.query(
         `INSERT INTO private_reply_outbox

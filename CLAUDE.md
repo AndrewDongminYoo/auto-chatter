@@ -52,7 +52,9 @@ Two processes share one PostgreSQL database (`db/schema.sql`; existing databases
 `GET/POST /webhooks/instagram` verifies the subscription challenge and the `x-hub-signature-256` HMAC over the raw body, parses comment events, and `ingestComments` writes them in one transaction.
 Only comments on an `active` `instagram_connections` row are stored.
 Deduplication is enforced by unique constraints, not application logic: one event per `(connection_id, comment_id)` and one outbox row per `(connection_id, media_id, sender_id)`, both inserted with `ON CONFLICT DO NOTHING`.
-A rule matches by case-insensitive substring of its `keyword`, one rule per `(connection_id, media_id)`.
+A rule matches normalized keywords with `contains`, `exact`, or `all` mode; excluded substrings take precedence.
+One rule exists per `(connection_id, media_id)`; empty `keywords` falls back to the legacy `keyword`.
+Apply `003_comment_rule_matching.sql` before deploying the expanded rule reader to an existing database.
 
 **Worker** (`worker-main.ts` → `reply-worker.ts` → a `PrivateReplyTransport`):
 Each worker process serves exactly one connection (`META_INSTAGRAM_CONNECTION_ID`).
@@ -100,7 +102,8 @@ Wrangler serves `public/` as static assets before Worker routing; keep only publ
 The generated app icon at `public/icons/auto-chatter.png` appears in the public page header and favicon.
 A dashboard webhook test returned 200 with no logged errors or exceptions.
 That test ran before an Instagram connection was registered and did not persist a comment.
-The production database now has one active receive-only connection and no reply rules; real comment persistence and sending remain unverified.
+The production database has one active receive-only connection and no reply rules.
+A real test comment was persisted on 2026-09-26; live private-reply sending remains unverified.
 Generated provisioning credentials stay in the ignored `deploy/secrets/` directory; never log or commit them.
 Hyperdrive query caching MUST be disabled to keep authorization and active-state reads fresh.
 Apply `db/schema.sql` and `deploy/supabase-access.sql` in a single administrator transaction on a dedicated Supabase project.
