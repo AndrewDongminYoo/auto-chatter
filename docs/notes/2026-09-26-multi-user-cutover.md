@@ -4,7 +4,8 @@
 
 다중 사용자 코드와 003–006 DB 마이그레이션은 2026-09-26에 운영 배포했습니다.
 운영 발송은 `SEND_ENABLED=false`를 유지합니다.
-실제 Instagram 발송·OAuth 로그인 성공이나 타인 계정의 Advanced Access 승인 완료는 검증하지 않았습니다.
+운영자의 실제 Instagram OAuth 연결과 저장된 토큰의 프로필 조회를 확인했습니다.
+실제 Instagram 발송이나 타인 계정의 Advanced Access 승인 완료는 검증하지 않았습니다.
 
 설정 화면은 `/app/`입니다.
 첫 버전은 기존 Worker의 정적 자산과 vanilla JavaScript를 사용해 프레임워크·런타임 의존성을 추가하지 않았습니다.
@@ -40,11 +41,16 @@
   이 점검은 실제 이메일 인증·Instagram OAuth·서명된 댓글의 신규 배포 수신·실발송 검증을 대신하지 않습니다.
 
 `INSTAGRAM_OAUTH_APP_SECRET`을 포함한 secrets 다섯 개의 등록과 배포된 앱 ID `1822350878757042`, 전역 `SEND_ENABLED=false`를 확인했습니다.
-이는 secret 값이 해당 앱과 일치하거나 OAuth 코드 교환에 성공했다는 검증은 아닙니다.
+secret 등록만으로 OAuth 코드 교환 성공을 증명하지는 않으며, 실제 연결 확인 결과는 아래에 별도로 기록합니다.
 운영자가 `ydm2790@gmail.com`의 회원가입 완료를 보고했고, DB에서 `email_confirmed_at`과 `last_sign_in_at`이 있는 사용자를 확인했습니다.
 `deploy/assign-workspace-owner.sql`을 명시적인 사용자·기존 작업 공간 ID로 실행해 COMMIT을 확인했습니다.
-재조회에서 해당 사용자가 기존 수신 계정의 작업 공간을 소유하며 `send_enabled=false`, OAuth 암호화 토큰 없음 상태를 확인했습니다.
-남은 전환 작업은 Supabase Auth Site URL·이메일 확인 링크와 Meta redirect URI 확인, 실제 OAuth 연결 검증입니다.
+소유권 배정 직후 재조회에서 해당 사용자가 기존 수신 계정의 작업 공간을 소유하며 `send_enabled=false`, OAuth 암호화 토큰 없음 상태를 확인했습니다.
+이후 운영자가 실제 OAuth 연결 완료를 보고했습니다.
+운영 DB에서 `ai.you.wanted`의 암호화 토큰 저장·수신 활성화·발송 비활성화를 확인했고, 저장된 토큰으로 Meta 프로필을 조회해 동일한 계정임을 확인했습니다.
+Meta의 `subscribed_apps` 조회에서 `comments`·`messages` 구독을 확인했습니다.
+토큰 만료는 `2026-11-24T12:20:10.423Z`이며 확인 시점에 규칙 0개·outbox 0개·기존 댓글 2개입니다.
+프로필·구독 확인은 GET 요청만 사용했고 토큰 값은 출력하지 않았습니다.
+남은 전환 작업은 이메일 확인 링크 복귀, OAuth 연결 이후 실제 댓글 수신, 여러 실제 사용자 간 격리, Advanced Access 및 제한된 실발송 검증입니다.
 아래 배포 순서의 DB 백업·마이그레이션·Worker 배포는 완료했으며 나머지 작업은 완료로 간주하지 않습니다.
 
 ## 검증
