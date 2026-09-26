@@ -96,6 +96,8 @@ Only Instagram Login with one configured connection is supported in this adapter
 The Worker is deployed on workers.dev with both webhook secrets registered; incorrect verification tokens and unsigned requests return 403.
 Public GET/HEAD routes `/privacy`, `/data-deletion`, and `/service` serve static Korean privacy policy, manual deletion instructions, and service terms without accessing secrets or database bindings.
 Their approved text lives in `src/cloudflare/public-pages.ts`; no automatic deletion or unauthenticated deletion API is provided.
+Wrangler serves `public/` as static assets before Worker routing; keep only public files in that directory.
+The generated app icon at `public/icons/auto-chatter.png` appears in the public page header and favicon.
 A dashboard webhook test returned 200 with no logged errors or exceptions.
 That test ran before an Instagram connection was registered and did not persist a comment.
 The production database now has one active receive-only connection and no reply rules; real comment persistence and sending remain unverified.

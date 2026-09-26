@@ -87,15 +87,18 @@ function document(title: string, content: string): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title} | auto-chatter</title>
+<link rel="icon" type="image/png" href="/icons/auto-chatter.png">
+<link rel="apple-touch-icon" href="/icons/auto-chatter.png">
 <style>
 body{margin:0;background:#f6f7f9;color:#202634;font:16px/1.8 system-ui,sans-serif;word-break:keep-all;overflow-wrap:anywhere}
 main{max-width:760px;margin:40px auto;padding:32px;background:#fff;border:1px solid #e0e4eb;border-radius:12px}
 nav{display:flex;gap:20px;flex-wrap:wrap;font-size:14px}h1{font-size:30px;line-height:1.4}h2{font-size:21px;margin-top:32px}
+.brand{display:flex;align-items:center;gap:12px;margin-bottom:24px;font-weight:700}.brand img{border-radius:12px}
 a{color:#174ba3;text-underline-offset:3px}.meta{color:#596475}li{margin:10px 0}
 @media(max-width:600px){main{margin:0;padding:24px;border:0;border-radius:0}h1{font-size:26px}ul,ol{padding-left:24px}}
 </style>
 </head>
-<body><main><nav aria-label="문서 안내"><a href="/privacy">개인정보처리방침</a><a href="/data-deletion">데이터 삭제 안내</a><a href="/service">서비스 이용약관</a></nav>${content}</main></body>
+<body><main><div class="brand"><img src="/icons/auto-chatter.png" width="48" height="48" alt="">auto-chatter</div><nav aria-label="문서 안내"><a href="/privacy">개인정보처리방침</a><a href="/data-deletion">데이터 삭제 안내</a><a href="/service">서비스 이용약관</a></nav>${content}</main></body>
 </html>`;
 }
 
@@ -111,7 +114,7 @@ export function publicPage(request: Request): Response | null {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
       "Content-Security-Policy":
-        "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+        "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
       "Cache-Control": "public, max-age=300",
