@@ -136,18 +136,19 @@
                   <fieldset class="form-section">
                     <legend>댓글 조건</legend>
                     <label>Instagram 계정<select name="connection_id" required></select></label>
-                    <label
-                      >게시물 ID<input
-                        name="media_id"
-                        inputmode="numeric"
-                        pattern="[0-9]{1,40}"
-                        required
-                        placeholder="예: 18012345678901234"
-                        aria-describedby="media-help"
-                    /></label>
+                    <input name="media_id" type="hidden" />
+                    <section class="media-picker" aria-labelledby="media-title">
+                      <div class="section-heading">
+                        <h4 id="media-title" tabindex="-1">어떤 게시물에 답장할까요?</h4>
+                        <button type="button" class="secondary" id="media-reload">새로고침</button>
+                      </div>
+                      <div id="selected-media" class="selected-media" hidden></div>
+                      <p id="media-status" class="hint" role="status" aria-live="polite"></p>
+                      <div id="media-list" class="media-list" role="group" aria-label="게시물 선택"></div>
+                      <button type="button" class="secondary" id="media-more" hidden>이전 게시물 더 보기</button>
+                    </section>
                     <p class="hint" id="media-help">
-                      게시물 링크가 아닌 Instagram의 숫자 ID를 입력하세요. 저장한 규칙의 계정과 게시물은 바꿀 수
-                      없습니다.
+                      사진과 내용을 보고 게시물을 고르세요. 저장한 규칙의 계정과 게시물은 바꿀 수 없습니다.
                     </p>
                     <label
                       >댓글 조건<select name="match_mode">
