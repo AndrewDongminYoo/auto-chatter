@@ -39,4 +39,8 @@ Queue 알림 소실·중복 자체가 메시지 상태를 결정하지 않으므
 - [Hyperdrive 조회 캐시](https://developers.cloudflare.com/hyperdrive/concepts/query-caching/): 캐시는 기본 활성화이므로 배포 때 명시적으로 끕니다.
 - [Queues 제한](https://developers.cloudflare.com/queues/platform/limits/): 소비자 실행은 유한하므로 무한 폴링 루프를 실행하지 않습니다.
 
-Oracle 선례 확인은 `[PARTIAL]`입니다. 개인 wiki에서 저장소의 정식 프로젝트 ID가 확인되지 않아 다른 프로젝트의 선례를 적용하지 않았습니다.
+운영자가 개인 LLM Wiki의 프로젝트 ID를 `auto-chatter`로 확인했습니다.
+Oracle 런처는 `tomllib` 모듈 오류로 MCP 조회 전에 실패했으며, 개인 Wiki의 `wiki/entities/auto-chatter.md`와 `wiki/sources/auto-chatter--claude.md`를 로컬에서 직접 확인했습니다.
+해당 기록은 `origin/main`의 `271c5dd` 기준으로, PostgreSQL outbox를 발송 상태의 기준으로 삼고 `unknown`을 자동 재발송하지 않으며 실계정 검증과 모의 테스트를 구분한다는 기존 결정을 확인합니다.
+이 세 원칙을 전환 설계에도 유지합니다.
+Wiki의 단일 서버 배포 설명은 이전 상태이므로 현재 승인된 Cloudflare + Supabase 방향을 대체하지 않습니다.
