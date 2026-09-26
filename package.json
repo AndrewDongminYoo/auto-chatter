@@ -11,7 +11,7 @@
     "worker:instagram": "node src/instagram/worker-main.ts --run",
     "meta:check": "node src/instagram/worker-main.ts --check-permissions",
     "check-types": "tsc --noEmit",
-    "test": "node --test src/instagram/webhook.test.ts src/instagram/reply-policy.test.ts src/instagram/facebook-private-reply.test.ts src/instagram/instagram-login-private-reply.test.ts src/instagram/worker-main.test.ts",
+    "test": "node --test src/instagram/webhook.test.ts src/instagram/reply-policy.test.ts src/instagram/facebook-private-reply.test.ts src/instagram/instagram-login-private-reply.test.ts src/instagram/worker-main.test.ts src/cloudflare/public-pages.test.ts",
     "test:db": "node --test --test-concurrency=1 src/instagram/http.db.test.ts src/instagram/reply-worker.db.test.ts",
     "build:cloudflare": "wrangler deploy --dry-run --env-file /dev/null --outdir .wrangler/build",
     "test:cloudflare": "pnpm build:cloudflare && node --test --test-concurrency=1 src/cloudflare/worker.db.test.ts src/cloudflare/access.db.test.ts src/cloudflare/runtime.db.test.mjs"

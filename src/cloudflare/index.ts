@@ -62,6 +62,8 @@ async function readBody(request: Request): Promise<Uint8Array | null> {
 }
 
 async function receive(request: Request, env: Env): Promise<Response> {
+  const page = publicPage(request);
+  if (page) return page;
   const url = new URL(request.url);
   if (url.pathname !== "/webhooks/instagram") return new Response(null, { status: 404 });
   if (!env.INSTAGRAM_APP_SECRET || !env.INSTAGRAM_VERIFY_TOKEN) throw new Error("Webhook secrets missing");
@@ -166,3 +168,4 @@ import { ingestComments } from "../instagram/store.ts";
 import { parseCommentEvents, verifySignature, verifySubscription } from "../instagram/webhook.ts";
 import { processNextPrivateReply, recoverStalePrivateReplies } from "../instagram/reply-worker.ts";
 import { InstagramLoginPrivateReplyTransport } from "../instagram/instagram-login-private-reply.ts";
+import { publicPage } from "./public-pages.ts";
