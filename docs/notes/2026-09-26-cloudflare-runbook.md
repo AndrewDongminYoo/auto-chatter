@@ -4,15 +4,34 @@
 
 Cloudflare 어댑터와 로컬 검증 경로를 구현했습니다.
 2026-09-26 승인된 개인 계정에서 Supabase 프로젝트와 Cloudflare 리소스를 생성하고 workers.dev에 배포했습니다.
-발송은 `SEND_ENABLED=false`로 유지합니다.
+기본 배포 설정은 `SEND_ENABLED=false`입니다.
+승인된 단일 게시물의 첫 DM 테스트에서 실제 수신과 DB의 `sent` 행·공급자 메시지 ID를 확인한 뒤 전역·계정·규칙 발송을 모두 중지했습니다.
+테스트 승인 범위와 중지 절차는 [첫 실발송 테스트 기록](2026-09-26-first-live-reply-test.md)에 있습니다.
+이후 승인된 새 게시물에서 미팔로우 안내와 팔로우 후 완료 DM의 수신·DB 상태를 확인하고 전역·계정·규칙 발송을 다시 중지했습니다.
+검증 결과와 중지 절차는 [팔로우 분기 실발송 테스트](2026-09-26-live-follow-test.md)에 있습니다.
 `INSTAGRAM_APP_SECRET`과 `INSTAGRAM_VERIFY_TOKEN`의 등록을 확인했습니다.
 Instagram Login 제품 설정에서 `comments` 구독이 활성화된 화면을 확인했고, 대시보드 테스트 직후 수신된 POST의 HTTP 200 응답을 Worker 로그로 확인했습니다.
 첫 대시보드 테스트 당시에는 workspace·Instagram 연결·규칙이 없어 이벤트와 outbox도 0건이었습니다.
 이후 운영자가 지정한 `ai.you.wanted`의 수신 연결을 등록했습니다.
-실제 댓글 저장·발송 검증은 남아 있습니다.
+실제 테스트 댓글 저장과 비공개 답장 1건의 발송·수신은 2026-09-26에 확인했습니다.
+다중 사용자 코드와 003–006 DB 마이그레이션은 2026-09-26에 발송을 비활성화한 상태로 운영 배포했습니다.
+현재 Worker 버전은 `dfa763f7-742d-497a-8e58-6eeb737837bd`이며 배포 코드 태그는 `6d71ef7`입니다.
+팔로우 조건 테스트를 마친 뒤 전역 `SEND_ENABLED=false`를 배포하고 실제 버전 조회로 확인했습니다.
+실행 코드 변경 없이 이전에 검증한 소유권 수정 버전을 사용합니다.
+운영 로그인 요청의 503 해소를 확인했고, 운영자가 회원가입 완료를 보고한 뒤 DB에서 이메일 인증·로그인 완료를 확인했습니다.
+관리자 스크립트로 확인된 운영자를 기존 수신 전용 작업 공간에 배정했습니다.
+메일 수신 화면과 확인 링크의 복귀는 직접 관찰하지 않았습니다.
+재현과 검증 결과는 [인증 런타임 수정 기록](2026-09-26-auth-fetch-runtime-fix.md)에 있습니다.
+배포된 앱 ID `1822350878757042`와 secrets 다섯 개의 등록을 확인했습니다.
+이후 운영자가 Instagram OAuth 연결을 완료했고, 저장된 암호화 토큰을 복호화해 조회한 Meta 프로필이 `ai.you.wanted`와 일치함을 확인했습니다.
+Meta 구독 조회에서 `comments`·`messages`를 확인했으며 토큰 만료는 `2026-11-24T12:20:10.423Z`입니다.
+OAuth 연결 확인 시점에는 계정 수신 활성화·발송 비활성화·규칙과 outbox 0개였습니다.
+이후 실제 OAuth 수신 테스트 댓글을 DB에서 확인했습니다.
+이메일 확인 링크 복귀·여러 실제 사용자 간 격리·Advanced Access·팔로우 조회 불가와 실제 중복 이벤트 검증은 남아 있습니다.
+아래 운영 구성 안내는 현재 코드 기준이며, 완료한 DB·Worker 전환·소유권 배정과 남은 Auth·OAuth 검증은 [다중 사용자 배포 전환](2026-09-26-multi-user-cutover.md)에 기록합니다.
 아래 신규 DB 초기화와 리소스 생성 절차는 다른 환경을 준비할 때 사용하는 절차이며, 이미 생성한 환경에 다시 실행하지 않습니다.
 
-| 리소스            | 현재 값                                                       |
+| 리소스            | 최초 배포 시 확인한 값                                        |
 | ----------------- | ------------------------------------------------------------- |
 | Supabase 조직     | `hvpqangvavstdhyqkfww` (`second projects`, 생성 시 Free 확인) |
 | Supabase 프로젝트 | `auto-chatter`, `asjjftrioaxzspkbtebf`, 서울 `ap-northeast-2` |
@@ -39,7 +58,8 @@ Instagram Login 경로는 공통 Webhooks 메뉴 대신 **Instagram 로그인이
 workspace ID는 `eedede37-b94a-4afe-b072-c728932e7c04`, connection ID는 `a5df4215-fb1e-46d4-93f4-13c0176fb031`입니다.
 연결의 `active=true`는 댓글 저장을 허용하며, 실제 메시지 발송은 별도 `SEND_ENABLED=false`로 차단합니다.
 등록 직후 조회에서 연결 한 개와 발송 규칙·outbox 0건을 확인했습니다.
-수신 계정 ID와 연결 ID를 Worker 설정에 반영하고 Graph 버전은 제품 화면의 구독 버전과 같은 `v26.0`으로 지정합니다.
+현재 코드에서는 계정 ID와 연결 ID를 DB의 연결 행에서 읽으며 Worker 전역 환경 변수로 지정하지 않습니다.
+Graph 버전은 `wrangler.json`의 `META_GRAPH_VERSION=v26.0`으로 지정되어 있습니다.
 대시보드 예제의 계정 ID가 등록 계정과 다르면 HTTP 200이어도 저장 대상이 아니므로, 실제 댓글 저장 검증과 구분합니다.
 
 ### 개인정보 안내와 Meta 게시
@@ -56,17 +76,20 @@ Meta의 개인정보처리방침 URL에는 `https://auto-chatter.auto-chatter-yd
 
 ## 구성
 
-| 구성 요소                    | 역할                                                        |
-| ---------------------------- | ----------------------------------------------------------- |
-| Workers `fetch`              | `/webhooks/instagram` 구독 확인, 원문 서명 검사, DB 저장    |
-| Queue `auto-chatter-replies` | 연결 ID만 담는 처리 알림                                    |
-| Workers `queue`              | 알림당 한 행 claim, 기존 정책 검사·발송, 다음 due 작업 알림 |
-| 매분 Cron                    | 중단된 발송을 `unknown`으로 정리하고 due 작업 알림 복구     |
-| Supabase PostgreSQL          | 이벤트·규칙·outbox·연결 cooldown의 영속 상태                |
-| Hyperdrive                   | 이벤트별 DB 연결 중개, 조회 캐시는 비활성화                 |
+| 구성 요소                    | 역할                                                                                     |
+| ---------------------------- | ---------------------------------------------------------------------------------------- |
+| Workers `fetch`              | 웹훅 구독 확인·원문 서명 검사·댓글과 DM 이벤트 처리, 인증된 `/api/` 요청 처리            |
+| 정적 자산 `/app/`            | Supabase Auth 로그인, Instagram OAuth 연결, 계정별 규칙 설정                             |
+| Queue `auto-chatter-replies` | 연결 ID만 담는 처리 알림                                                                 |
+| Workers `queue`              | 연결별 확인 응답 우선 처리, 알림당 최대 한 행 claim·발송, 같은 연결의 다음 due 작업 알림 |
+| 매분 Cron                    | 중단된 발송을 `unknown`으로 정리하고 due 작업 알림 복구                                  |
+| Supabase PostgreSQL          | 작업 공간·소유권·암호화 토큰·이벤트·규칙·outbox·팔로우 대화·cooldown 저장                |
+| Hyperdrive                   | 이벤트별 DB 연결 중개, 조회 캐시는 비활성화                                              |
 
-Cloudflare 경로는 Instagram Login 연결 하나를 처리합니다.
-다른 연결을 DB에 등록해도 해당 연결의 발송 소비자가 자동으로 생기지 않습니다.
+Cloudflare 경로는 여러 사용자의 Instagram Login 연결을 처리합니다.
+Queue의 연결 ID로 DB에서 해당 계정의 암호화 토큰과 만료 시각·발송 스위치를 확인하며 `TOKEN_ENCRYPTION_KEY`로 토큰을 복호화합니다.
+웹훅은 수신 이벤트에 포함된 계정만, 소비자는 처리 중인 연결만 깨우며 Cron은 전체 연결의 due 작업을 찾습니다.
+전역 `SEND_ENABLED=true` 외에도 계정별 `send_enabled`, 유효한 저장 토큰과 연결·규칙의 활성 상태가 필요합니다.
 Facebook Login은 기존 Node 워커 경로에서만 지원합니다.
 기존 `pg`를 재사용하며 ORM이나 Supabase JavaScript SDK를 추가하지 않습니다.
 
@@ -82,9 +105,9 @@ PGSERVICE="$SUPABASE_ADMIN_SERVICE" psql -X --set ON_ERROR_STOP=1 --single-trans
   --file db/schema.sql --file deploy/supabase-access.sql
 ```
 
-제품 테이블 다섯 개에 RLS를 켜고 `PUBLIC`, `anon`, `authenticated`, `service_role`의 접근 권한을 회수합니다.
-`auto_chatter_server`에만 SELECT·INSERT·UPDATE 정책과 필요한 sequence 접근을 허용합니다.
-이 역할은 전체 서비스 데이터를 처리하는 신뢰된 서버 역할이며 클라이언트 사용자별 격리를 제공하지 않습니다.
+현재 제품 테이블 아홉 개에 RLS를 켜고 `PUBLIC`, `anon`, `authenticated`, `service_role`의 접근 권한을 회수합니다.
+`auto_chatter_server`와 기존 Compose 역할 `automations_app`이 있으면 해당 역할에 SELECT·INSERT·UPDATE 정책과 필요한 sequence 접근을 허용합니다.
+이 역할들은 전체 서비스 데이터를 처리하는 신뢰된 서버 역할이며 사용자별 격리는 서버의 세션·workspace 검사로 수행합니다.
 `PUBLIC`의 public 스키마 CREATE도 회수하므로 공유 프로젝트에는 그대로 적용하지 않습니다.
 새 테이블은 이 권한 파일에도 등록해야 합니다.
 기존에 같은 이름의 역할에 관리자 속성, 다른 역할 membership, DB·스키마·테이블·시퀀스 소유권이 있으면 SQL은 중단합니다.
@@ -96,8 +119,11 @@ PGSERVICE="$SUPABASE_ADMIN_SERVICE" psql -X --set ON_ERROR_STOP=1 --single-trans
 ALTER ROLE auto_chatter_server LOGIN;
 ```
 
-연결·규칙의 `active`와 `enabled`는 테스트 준비가 끝날 때까지 false로 유지합니다.
-기존 DB 이전에는 별도의 백업·복원이 필요하며 현재 구현은 기존 데이터를 자동 복사하지 않습니다.
+연결의 `active`는 수신 허용 여부입니다.
+발송 준비 전에는 연결의 `send_enabled`, 규칙의 `enabled`와 전역 `SEND_ENABLED`를 false로 유지합니다.
+기존 DB에는 신규 초기화 명령 대신 백업 후 `deploy/migrate-multi-user.sql`을 관리자 연결로 실행합니다.
+이 실행 스크립트가 003–006 마이그레이션과 접근 권한 갱신을 한 트랜잭션으로 처리하며, 자세한 순서는 [다중 사용자 배포 전환](2026-09-26-multi-user-cutover.md)을 따릅니다.
+다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
 
 ## 2. Cloudflare 준비
 
@@ -128,20 +154,36 @@ Worker secret과 Meta 대시보드의 Verify token에 같은 값을 저장합니
 ```bash
 corepack pnpm exec wrangler secret put INSTAGRAM_APP_SECRET --env-file /dev/null
 corepack pnpm exec wrangler secret put INSTAGRAM_VERIFY_TOKEN --env-file /dev/null
-corepack pnpm exec wrangler secret put META_INSTAGRAM_ACCESS_TOKEN --env-file /dev/null
+corepack pnpm exec wrangler secret put SUPABASE_PUBLISHABLE_KEY --env-file /dev/null
+corepack pnpm exec wrangler secret put INSTAGRAM_OAUTH_APP_SECRET --env-file /dev/null
+corepack pnpm exec wrangler secret put TOKEN_ENCRYPTION_KEY --env-file /dev/null
 ```
 
-| 값                             | 설정                                  |
-| ------------------------------ | ------------------------------------- |
-| `META_GRAPH_VERSION`           | 실제 앱에서 사용할 Graph 버전         |
-| `META_INSTAGRAM_ACCOUNT_ID`    | 토큰에 대응하는 전문 계정의 `user_id` |
-| `META_INSTAGRAM_CONNECTION_ID` | 해당 계정의 DB 연결 UUID              |
-| `SEND_ENABLED`                 | 최초 배포는 문자열 `false`            |
+| 이름                         | 위치                     | 용도                                                    |
+| ---------------------------- | ------------------------ | ------------------------------------------------------- |
+| `APP_ORIGIN`                 | `wrangler.json`의 `vars` | 경로·끝 슬래시 없는 정확한 HTTPS 서비스 origin          |
+| `SUPABASE_URL`               | `wrangler.json`의 `vars` | Supabase 프로젝트 URL                                   |
+| `INSTAGRAM_OAUTH_APP_ID`     | `wrangler.json`의 `vars` | Instagram 비즈니스 로그인 앱 ID, 메인 Meta 앱 ID와 구별 |
+| `META_GRAPH_VERSION`         | `wrangler.json`의 `vars` | 실제 앱에서 사용할 Graph 버전                           |
+| `SEND_ENABLED`               | `wrangler.json`의 `vars` | 전역 발송 스위치, 최초 배포는 문자열 `false`            |
+| `SUPABASE_PUBLISHABLE_KEY`   | Worker secret            | Supabase Auth 호출용 공개 키                            |
+| `INSTAGRAM_OAUTH_APP_SECRET` | Worker secret            | Instagram OAuth 앱 secret                               |
+| `TOKEN_ENCRYPTION_KEY`       | Worker secret            | 32바이트 무작위 키의 canonical base64                   |
+| `INSTAGRAM_APP_SECRET`       | Worker secret            | 웹훅 서명 검증                                          |
+| `INSTAGRAM_VERIFY_TOKEN`     | Worker secret            | 웹훅 URL 구독 확인                                      |
 
-비밀이 아닌 Meta 설정 세 개는 `wrangler.json`의 `vars`에 추가합니다.
-`META_LOGIN_MODE`는 이 어댑터에서 사용하지 않습니다.
-Node 명령과 Docker는 기존 환경 설정을 유지합니다.
-빌드는 `--env-file /dev/null`로 로컬 비밀 파일 자동 로드를 피합니다.
+`TOKEN_ENCRYPTION_KEY`는 `openssl rand -base64 32`로 생성하고 안전하게 백업합니다.
+키를 잃거나 교체하면 기존 계정 토큰을 복호화할 수 없어 재연결 또는 별도 키 이전이 필요합니다.
+Instagram 계정 토큰은 OAuth 연결을 통해 암호화하여 DB에 저장합니다.
+Cloudflare는 `META_INSTAGRAM_ACCESS_TOKEN`, `META_INSTAGRAM_ACCOUNT_ID`, `META_INSTAGRAM_CONNECTION_ID`, `META_LOGIN_MODE`를 런타임 설정으로 사용하지 않습니다.
+DB 연결은 `HYPERDRIVE`, 작업 알림은 `REPLY_QUEUE` 바인딩을 사용하므로 `DATABASE_URL`도 Worker secret으로 등록하지 않습니다.
+
+저장소 루트의 `.env.example`은 Node 환경 변수와 위 Cloudflare 설정을 구분한 참고 템플릿입니다.
+Node package scripts는 환경 파일을 자동으로 읽지 않으므로 필요한 값을 shell에 export하거나 Node의 `--env-file`로 명시적으로 불러옵니다.
+Node 단일 계정 워커는 환경 변수 토큰을 계속 사용하며 Cloudflare 전용 `SEND_ENABLED=false`로 중지되지 않습니다.
+Compose는 `deploy/environment.example`을 `deploy/runtime.env`로 복사하고 `--env-file deploy/runtime.env`로 전달합니다.
+Cloudflare의 비밀이 아닌 값은 `wrangler.json`, secrets는 위 명령으로 설정하며 루트 템플릿을 그대로 배포하지 않습니다.
+Wrangler 빌드·배포 명령은 `--env-file /dev/null`로 로컬 비밀 파일 자동 로드를 피합니다.
 
 ## 4. 검증과 배포
 
@@ -166,7 +208,7 @@ override 주석에 관련 공지를 기록했으며 도구 업데이트 시 제�
 Workers가 지원하지 않는 Fetch `redirect: error`는 어댑터에서 `manual` 요청과 3xx 거부로 대체합니다.
 토큰을 다른 호스트로 전달하지 않는 transport 계약을 유지합니다.
 
-실제 바인딩과 운영 승인을 확인하고 배포합니다.
+실제 바인딩과 운영 승인을 확인하고 [다중 사용자 배포 전환](2026-09-26-multi-user-cutover.md)의 DB 마이그레이션·Auth·OAuth 설정을 마친 뒤 배포합니다.
 
 ```bash
 corepack pnpm exec wrangler deploy --env-file /dev/null
@@ -178,15 +220,17 @@ DB 커밋 뒤 Queue 발행 실패는 200을 반환하고 고정 오류 문구를
 
 ## 5. 발송 전환과 복구
 
-댓글 관리 권한과 실제 비공개 답장 발송은 아직 검증되지 않았습니다.
+실제 댓글 조회와 승인된 첫 비공개 답장 발송·수신 1건을 확인했습니다.
 첫 발송을 별도로 승인한 뒤 기존 Compose 발송 워커를 중지하고 `SEND_ENABLED=true`로 전환합니다.
+OAuth로 연결한 계정의 유효한 토큰, `active=true`, `send_enabled=true`와 대상 규칙의 `enabled=true`도 확인합니다.
 Cron은 기존 pending 행도 처리하므로 활성화 전에 backlog를 검토합니다.
 
 기존 발송 상태와 속도 제한 backoff를 유지합니다.
 Queue 알림 재시도와 Meta 발송 재시도는 별개입니다.
 소비자 오류로 다시 전달된 알림도 DB의 `sending`·완료 행을 다시 claim하지 않습니다.
 알림 소실과 Queue 재시도 소진은 Cron이 복구하며 `unknown`은 수동 검토 대상으로 남습니다.
-비활성 연결의 due 작업도 기존 워커 정책을 거쳐 `blocked`로 정리됩니다.
+계정 발송이 켜져 있고 유효한 저장 토큰이 있는 연결은 수신이 비활성이어도 기존 워커 정책을 거쳐 due 작업이 `blocked`로 정리됩니다.
+발송 중지·토큰 누락·만료 연결은 소비자가 건너뛰므로 이 정리를 보장하지 않습니다.
 연결 cooldown이 있으면 기존 claim 정책대로 만료 후 처리합니다.
 Queue 동시 실행 수는 1이며 이미 발송에 들어간 요청은 설정 변경으로 취소되지 않습니다.
 
@@ -196,6 +240,11 @@ DB 상태와 고정 오류 로그를 확인하고 `unknown`을 일괄 pending으
 백업·복구 옵션과 요금은 선택한 Supabase 프로젝트 플랜에서 별도 확인합니다.
 
 ## 검증 경계
+
+### 최초 배포 당시 확인
+
+아래 리소스·권한 조회와 테스트 건수는 다중 사용자 전환 이전의 최초 배포 기록입니다.
+현재 스키마의 권한과 OAuth·사용자 격리는 배포 전환 절차에서 다시 확인해야 합니다.
 
 로컬 workerd 테스트는 pg TCP 연결, 서명, Queue·Cron 호출, 전용 서버 역할의 로그인과 RLS 적용을 확인합니다.
 Graph 응답은 테스트용이며 외부 네트워크 호출을 대신 처리합니다.
@@ -208,7 +257,8 @@ Worker 배포 명령은 Queue 생산자·소비자와 매분 Cron 등록을 확�
 이후 운영자가 대시보드 테스트를 전송한 직후 웹훅 POST 한 건이 HTTP 200으로 처리됐고 오류 로그·예외는 없었습니다.
 이 요청은 서버의 서명 검사와 파서를 통과했지만, 원문을 기록하지 않았으므로 댓글 포함 여부와 DB 처리 경로는 이 로그만으로 단정하지 않습니다.
 별도 DB 조회에서 workspace·연결·규칙·이벤트·outbox가 모두 0건임을 확인했으며, 이 테스트로 댓글 저장을 검증했다고 간주하지 않습니다.
-발송을 꺼 둔 상태이므로 실제 Cron 복구 실행, 댓글 저장, Meta 발송 권한과 실발송은 아직 검증하지 않았습니다.
+이후 수신 연결을 등록하고 실제 테스트 댓글 저장을 2026-09-26에 확인했습니다.
+실제 Cron 복구 실행, Meta 발송 권한과 실발송은 아직 검증하지 않았습니다.
 
 2026-09-26 로컬에서 타입 검사, 기존 단위 테스트 46건, 기존 PostgreSQL 테스트 36건, Cloudflare 관련 테스트 15건, Docker 이미지 빌드를 통과했습니다.
 발송 안전성과 DB 접근 권한에 대한 독립적 정적 리뷰를 수행했고, 비활성 연결의 정체·API 역할 권한 잔존·기존 역할 소유권 우회를 수정한 뒤 두 리뷰 모두 승인됐습니다.

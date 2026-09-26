@@ -14,6 +14,7 @@ export interface InstagramLoginPrivateReplyConfig {
 }
 
 type AccountInspection = { verified: true } | { verified: false; reason: string };
+type AccountIdentity = AccountInspection & { ownerId?: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -79,14 +80,20 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
     }
   }
 
-  async inspectAccount(): Promise<AccountInspection> {
-    const result = await this.graphRequest(this.graphUrl("me", { fields: "user_id,username" }));
+  private async inspectIdentity(): Promise<AccountIdentity> {
+    const result = await this.graphRequest(this.graphUrl("me", { fields: "id,user_id,username" }));
     const profile = isRecord(result) && Array.isArray(result.data) ? result.data[0] : result;
     if (!isRecord(profile) || typeof profile.user_id !== "string") {
       return { verified: false, reason: "account_unverified" };
     }
     if (profile.user_id !== this.config.accountId) return { verified: false, reason: "account_mismatch" };
-    return { verified: true };
+    const ownerId = typeof profile.id === "string" && /^\d+$/.test(profile.id) ? profile.id : profile.user_id;
+    return { verified: true, ownerId };
+  }
+
+  async inspectAccount(): Promise<AccountInspection> {
+    const identity = await this.inspectIdentity();
+    return identity.verified ? { verified: true } : identity;
   }
 
   private matchesConnection(request: PrivateReplyRequest): boolean {
@@ -96,7 +103,7 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
   async verify(request: PrivateReplyRequest): ReturnType<PrivateReplyTransport["verify"]> {
     const denied = { commentCreatedAt: null, authorizationVerified: false, mediaOwned: false };
     if (!this.matchesConnection(request)) return denied;
-    const account = await this.inspectAccount();
+    const account = await this.inspectIdentity();
     if (!account.verified) return denied;
 
     const comment = await this.graphRequest(
@@ -113,8 +120,16 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
 
     const media = await this.graphRequest(this.graphUrl(encodeURIComponent(request.mediaId), { fields: "id,owner" }));
     const mediaOwned =
-      isRecord(media) && media.id === request.mediaId && isRecord(media.owner) && media.owner.id === request.accountId;
-    return { commentCreatedAt: createdAt, authorizationVerified: true, mediaOwned };
+      isRecord(media) &&
+      media.id === request.mediaId &&
+      isRecord(media.owner) &&
+      (media.owner.id === request.accountId || media.owner.id === account.ownerId);
+    return {
+      commentCreatedAt: createdAt,
+      authorizationVerified: true,
+      mediaOwned,
+      ...(request.senderId === account.ownerId ? { isOwnComment: true } : {}),
+    };
   }
 
   async send(request: PrivateReplyRequest): ReturnType<PrivateReplyTransport["send"]> {
@@ -132,7 +147,7 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
       connectionActive: true,
       authorizationVerified: verification.authorizationVerified,
       mediaOwned: verification.mediaOwned,
-      isOwnComment: request.senderId === request.accountId,
+      isOwnComment: verification.isOwnComment === true || request.senderId === request.accountId,
     });
     if (!policy.eligible) throw new PreSendVerificationError("block", policy.reason);
 

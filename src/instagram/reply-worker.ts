@@ -24,6 +24,7 @@ export interface PrivateReplyTransport {
     commentCreatedAt: Date | null;
     authorizationVerified: boolean;
     mediaOwned: boolean;
+    isOwnComment?: boolean;
   }>;
   // Throw PreSendVerificationError only before making a provider send request.
   send(request: PrivateReplyRequest): Promise<{ messageId: string; recipientId?: string }>;
@@ -178,7 +179,7 @@ export async function processNextPrivateReply(
     connectionActive: currentConnection.rows[0]?.active === true,
     authorizationVerified: verification.authorizationVerified,
     mediaOwned: verification.mediaOwned,
-    isOwnComment: request.senderId === request.accountId,
+    isOwnComment: verification.isOwnComment === true || request.senderId === request.accountId,
   });
   if (!policy.eligible) {
     await updateClaim(

@@ -25,6 +25,8 @@ function graphResponse(body: unknown, status = 200): Response {
 function mockGraph(
   overrides: {
     userId?: string;
+    scopedUserId?: string;
+    commentSenderId?: string;
     profileAsData?: boolean;
     commentMediaId?: string;
     mediaOwnerId?: string;
@@ -47,11 +49,15 @@ function mockGraph(
     assert.equal(url.hostname, "graph.instagram.com");
     assert.equal(new Headers(init.headers).get("authorization"), "Bearer instagram-token");
     if (url.pathname === "/v25.0/me") {
-      assert.equal(url.searchParams.get("fields"), "user_id,username");
+      assert.equal(url.searchParams.get("fields"), "id,user_id,username");
       if (overrides.failSecondProfile && calls.filter((call) => call.url.pathname === url.pathname).length === 2) {
         return graphResponse({ error: { message: "temporary" } }, 503);
       }
-      const profile = { user_id: overrides.userId ?? "789", username: "test-account" };
+      const profile = {
+        user_id: overrides.userId ?? "789",
+        ...(overrides.scopedUserId === undefined ? {} : { id: overrides.scopedUserId }),
+        username: "test-account",
+      };
       return graphResponse(overrides.profileAsData ? { data: [profile] } : profile);
     }
     if (url.pathname === "/v25.0/111") {
@@ -64,7 +70,7 @@ function mockGraph(
         );
       return graphResponse({
         id: "111",
-        from: { id: "333" },
+        from: { id: overrides.commentSenderId ?? "333" },
         media: { id: overrides.commentMediaId ?? "222" },
         timestamp: overrides.commentTimestamp ?? "2026-09-24T00:00:00+0000",
       });
@@ -128,6 +134,41 @@ test("a token for another Instagram account cannot authorize a send", async () =
     graph.calls.some(({ url }) => url.pathname.endsWith("/messages")),
     false,
   );
+});
+
+test("media ownership accepts the verified profile's scoped ID", async () => {
+  const graph = mockGraph({ scopedUserId: "456", mediaOwnerId: "456" });
+  const transport = new InstagramLoginPrivateReplyTransport(config(graph.fetchImpl));
+  assert.deepEqual(await transport.inspectAccount(), { verified: true });
+  assert.equal((await transport.verify(request)).mediaOwned, true);
+  assert.deepEqual(await transport.send(request), { messageId: "mid-instagram" });
+  assert.equal(graph.calls.filter(({ init }) => init.method === "POST").length, 1);
+});
+
+test("scoped ownership cannot authorize another token account or an unrelated media owner", async () => {
+  for (const overrides of [
+    { userId: "999", scopedUserId: "456", mediaOwnerId: "456" },
+    { scopedUserId: "456", mediaOwnerId: "999" },
+    { scopedUserId: "invalid", mediaOwnerId: "invalid" },
+  ]) {
+    const graph = mockGraph(overrides);
+    const transport = new InstagramLoginPrivateReplyTransport(config(graph.fetchImpl));
+    assert.equal((await transport.verify(request)).mediaOwned, false);
+    await assert.rejects(transport.send(request), PreSendVerificationError);
+    assert.equal(graph.calls.filter(({ init }) => init.method === "POST").length, 0);
+  }
+});
+
+test("the verified scoped account's own comment is blocked before POST", async () => {
+  const graph = mockGraph({ scopedUserId: "456", mediaOwnerId: "456", commentSenderId: "456" });
+  const transport = new InstagramLoginPrivateReplyTransport(config(graph.fetchImpl));
+  const ownRequest = { ...request, senderId: "456" };
+  assert.equal((await transport.verify(ownRequest)).isOwnComment, true);
+  await assert.rejects(
+    transport.send(ownRequest),
+    (error: unknown) => error instanceof PreSendVerificationError && error.failureCode === "own_comment",
+  );
+  assert.equal(graph.calls.filter(({ init }) => init.method === "POST").length, 0);
 });
 
 test("the documented data-wrapped profile response identifies the same account", async () => {

@@ -2,9 +2,15 @@
 
 ## 현재 상태
 
-다중 사용자 기능은 로컬 구현과 합성 데이터 검증을 마쳤으며 아직 운영에 배포하지 않았습니다.
-운영 발송은 `SEND_ENABLED=false`를 유지합니다.
-실제 Instagram 발송·OAuth 로그인 성공이나 타인 계정의 Advanced Access 승인 완료는 검증하지 않았습니다.
+다중 사용자 코드와 003–006 DB 마이그레이션은 2026-09-26에 운영 배포했습니다.
+기본 배포 설정은 `SEND_ENABLED=false`입니다.
+승인된 단일 게시물의 첫 DM 발송·수신을 확인한 뒤 전역·계정·규칙 발송을 다시 중지했습니다.
+승인 범위·현재 스위치·중지 절차는 [첫 실발송 테스트 기록](2026-09-26-first-live-reply-test.md)에 있습니다.
+이후 승인된 새 게시물에서 미팔로우 안내와 팔로우 후 완료 DM을 검증하고 전역·계정·해당 규칙 발송을 다시 중지했습니다.
+후속 테스트의 현재 상태는 [팔로우 분기 실발송 테스트](2026-09-26-live-follow-test.md)에 기록합니다.
+운영자의 실제 Instagram OAuth 연결과 저장된 토큰의 프로필 조회를 확인했습니다.
+첫 댓글 비공개 답장 1건은 실제 발송·수신을 확인했습니다.
+미팔로우·팔로워 후속 DM의 실제 수신과 DB 상태를 대조했으며 타인 계정의 Advanced Access 승인 완료는 검증하지 않았습니다.
 
 설정 화면은 `/app/`입니다.
 첫 버전은 기존 Worker의 정적 자산과 vanilla JavaScript를 사용해 프레임워크·런타임 의존성을 추가하지 않았습니다.
@@ -14,6 +20,57 @@
 진행 중인 대화는 시작 시점의 문구를 사용하며 현재 계정·규칙 중지는 최종 발송 조건에 반영합니다.
 설정 중지와 외부 POST는 하나의 원자적 작업이 아니므로 최종 확인 후 이미 시작한 요청까지 취소하지는 못합니다.
 여러 게시물의 첫 DM을 받은 같은 사용자가 응답하면 가장 최근에 보낸 응답 대기 중인 대화 하나를 선택합니다.
+
+### 운영 배포 기록
+
+- 최초 다중 사용자 코드 태그: `2a5403e`.
+- 최초 다중 사용자 코드 배포 버전: `0073b9ec-2141-420f-9b7d-52e0fd2ece8d`.
+  이후 OAuth 앱 secret 등록으로 배포된 버전은 `9c327413-8e4d-4506-8010-e7b2a4aca773`입니다.
+- 인증 수정 코드 태그: `b15b3d0`, Worker 버전: `7bfd9b14-f325-486f-84d5-09b4c2c44d2b`.
+  인증 native fetch 호출 수정으로 운영 로그인 요청의 503 해소를 확인했습니다.
+  이후 운영자의 회원가입 보고와 DB의 이메일 인증·로그인 완료를 확인했으며, [인증 런타임 수정 기록](2026-09-26-auth-fetch-runtime-fix.md)에 상세 결과가 있습니다.
+- 소유권 수정·테스트 활성화 코드 태그: `2e76925`, Worker 버전: `7b37391d-8893-4ecd-8ee3-9b21ee9eb2c7`.
+  실계정에서 발견한 프로필 ID 별칭의 게시물 소유권 검사를 수정하고 승인된 첫 DM 테스트를 위해 `SEND_ENABLED=true`로 배포했습니다.
+- 첫 DM 테스트 중지 Worker 버전: `979de5bb-bc68-4af9-a9f8-5ec82e95c56f`, 코드 태그: `2e76925`.
+  첫 DM의 DB 상태 `sent` 1개·공급자 메시지 ID 저장과 운영자의 수신·답장 완료 보고를 대조한 뒤 발송을 중지했습니다.
+- 팔로우 테스트 활성화 Worker 버전: `18141dc0-a1c6-49be-a50c-5b4bfe18fde6`, 코드 태그: `6d71ef7`.
+  실행 코드 변경 없이 승인된 새 게시물 `17909444478471816`의 팔로우 조건 테스트를 위해 전역 발송을 활성화했습니다.
+- 현재 Worker 버전: `dfa763f7-742d-497a-8e58-6eeb737837bd`, 코드 태그: `6d71ef7`.
+  첫 DM → 미팔로우 안내 → 팔로워 완료 DM의 실제 수신과 DB의 `sent / following`·확인 receipt 2건을 확인한 뒤 전역·계정·규칙 발송을 중지했습니다.
+- Supabase 프로젝트: `asjjftrioaxzspkbtebf`.
+- 서비스의 public 스키마·데이터 백업: Git에서 제외된 `deploy/secrets/backups/2026-09-26T08-51-06.150Z/public-before-multi-user.dump`.
+  디렉터리는 0700, 백업은 0600이며 `pg_restore --list`에서 기존 제품 테이블 다섯 개의 데이터 항목을 확인했습니다.
+  Supabase Auth와 전체 클러스터 역할을 포함한 백업은 아닙니다.
+- `psql -f deploy/migrate-multi-user.sql`을 TLS `verify-full`을 사용하는 Session pooler 관리자 연결로 실행했습니다.
+  로컬에서 Direct endpoint의 IPv6 연결을 사용할 수 없어 관리자 작업에 Session pooler를 사용했으며 Worker의 Hyperdrive 바인딩은 유지했습니다.
+- 전환 전후 기존 연결 1개·댓글 이벤트 2개·발송 행 0개가 보존됐습니다.
+- 제품 테이블 아홉 개의 RLS, `anon`·`authenticated`·`service_role`의 SELECT/INSERT/UPDATE/DELETE 차단, 서버 역할의 관리자 속성 부재를 확인했습니다.
+  실제 `auto_chatter_server` 로그인으로 새 작업 공간·OAuth·팔로우 테이블 조회도 확인했습니다.
+- 계정별 `send_enabled=true`인 연결은 0개입니다.
+- 기존 웹훅 secrets에 `SUPABASE_PUBLISHABLE_KEY`와 `TOKEN_ENCRYPTION_KEY`를 추가했습니다.
+  암호화 키는 Git에서 제외된 `deploy/secrets/cloudflare-multi-user.json`에 0600으로 보관하며 안전하게 백업해야 합니다.
+- `/app/`, `/privacy`, `/service`, `/data-deletion`은 HTTP 200, 로그인 없는 `/api/me`는 401, 잘못된 구독 확인·서명 없는 웹훅은 403이었습니다.
+  공개 JavaScript·CSS 응답이 배포한 checkout의 파일과 같은 것을 확인했습니다.
+  이 점검은 실제 이메일 인증·Instagram OAuth·서명된 댓글의 신규 배포 수신·실발송 검증을 대신하지 않습니다.
+
+`INSTAGRAM_OAUTH_APP_SECRET`을 포함한 secrets 다섯 개의 등록과 배포된 앱 ID `1822350878757042`, 전역 `SEND_ENABLED=false`를 확인했습니다.
+secret 등록만으로 OAuth 코드 교환 성공을 증명하지는 않으며, 실제 연결 확인 결과는 아래에 별도로 기록합니다.
+운영자가 `ydm2790@gmail.com`의 회원가입 완료를 보고했고, DB에서 `email_confirmed_at`과 `last_sign_in_at`이 있는 사용자를 확인했습니다.
+`deploy/assign-workspace-owner.sql`을 명시적인 사용자·기존 작업 공간 ID로 실행해 COMMIT을 확인했습니다.
+소유권 배정 직후 재조회에서 해당 사용자가 기존 수신 계정의 작업 공간을 소유하며 `send_enabled=false`, OAuth 암호화 토큰 없음 상태를 확인했습니다.
+이후 운영자가 실제 OAuth 연결 완료를 보고했습니다.
+운영 DB에서 `ai.you.wanted`의 암호화 토큰 저장·수신 활성화·발송 비활성화를 확인했고, 저장된 토큰으로 Meta 프로필을 조회해 동일한 계정임을 확인했습니다.
+Meta의 `subscribed_apps` 조회에서 `comments`·`messages` 구독을 확인했습니다.
+토큰 만료는 `2026-11-24T12:20:10.423Z`이며 확인 시점에 규칙 0개·outbox 0개·기존 댓글 2개입니다.
+프로필·구독 확인은 GET 요청만 사용했고 토큰 값은 출력하지 않았습니다.
+OAuth 연결 이후 `auto-chatter OAuth 수신 테스트` 댓글이 `2026-09-26T09:47:50.487Z`에 저장됐습니다.
+게시물은 `18178820404442752`이며 해당 작업 공간의 댓글은 3개, 규칙·outbox는 0개였습니다.
+이후 정확 일치 키워드 규칙으로 첫 DM 1건의 발송·수신을 확인했습니다.
+첫 DM 테스트 중지 직후 발송 활성 계정·규칙과 미완료 outbox는 0개였습니다.
+팔로우 조건 테스트 활성화 직전에도 미완료 outbox·팔로우 대화가 없는 것을 확인했고 이전 첫 DM 테스트 규칙은 비활성화 상태를 유지합니다.
+팔로우 테스트 중지 후에도 발송 활성 계정·규칙과 미완료 outbox·팔로우 대화는 모두 0개였습니다.
+남은 전환 작업은 이메일 확인 링크 복귀, 여러 실제 사용자 간 격리, Advanced Access 및 팔로우 조회 불가·실제 중복 이벤트 검증입니다.
+아래 배포 순서의 DB 백업·마이그레이션·Worker 배포는 완료했으며 나머지 작업은 완료로 간주하지 않습니다.
 
 ## 검증
 
