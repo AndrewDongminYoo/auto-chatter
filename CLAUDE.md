@@ -132,9 +132,11 @@ The multi-user code and migrations 003–006 were deployed on 2026-09-26 with se
 The deployed code tag is `b15b3d0`, Worker version `7bfd9b14-f325-486f-84d5-09b4c2c44d2b`.
 The auth client wraps injected fetch in a standalone call because workerd rejects a native fetch invoked with the client object as its receiver.
 The workerd auth regression test verifies synthetic signup success and rejected login; production rejected login returns 401 after previously returning 503.
-Actual signup and confirmation email delivery remain unverified; see `docs/notes/2026-09-26-auth-fetch-runtime-fix.md`.
+The operator reported signup completion; the production database confirms the operator's email-confirmed user and a completed sign-in.
+The administrator assignment script attached that user to the existing receive-only workspace; its Instagram connection still has no OAuth credential.
+Email delivery and confirmation-link behavior were not directly observed; see `docs/notes/2026-09-26-auth-fetch-runtime-fix.md`.
 All five Worker secrets are registered, and the deployed Instagram OAuth app ID is `1822350878757042` with `SEND_ENABLED=false`.
-External Auth/OAuth configuration checks, legacy workspace ownership assignment, and live OAuth/send verification remain pending.
+External Auth/OAuth configuration checks and live OAuth/send verification remain pending.
 Run `psql -f deploy/migrate-multi-user.sql` with an administrator connection before deploying this code.
 This runner owns the transaction for migrations 003–006 and the access script, stops on the first error, and rolls back on failure.
 Do not apply these migration files individually without that transaction.

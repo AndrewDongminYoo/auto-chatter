@@ -22,7 +22,7 @@
   이후 OAuth 앱 secret 등록으로 배포된 버전은 `9c327413-8e4d-4506-8010-e7b2a4aca773`입니다.
 - 현재 코드 태그: `b15b3d0`, Worker 버전: `7bfd9b14-f325-486f-84d5-09b4c2c44d2b`.
   인증 native fetch 호출 수정으로 운영 로그인 요청의 503 해소를 확인했습니다.
-  실제 회원가입·인증 메일 수신은 미검증이며, [인증 런타임 수정 기록](2026-09-26-auth-fetch-runtime-fix.md)에 상세 결과가 있습니다.
+  이후 운영자의 회원가입 보고와 DB의 이메일 인증·로그인 완료를 확인했으며, [인증 런타임 수정 기록](2026-09-26-auth-fetch-runtime-fix.md)에 상세 결과가 있습니다.
 - Supabase 프로젝트: `asjjftrioaxzspkbtebf`.
 - 서비스의 public 스키마·데이터 백업: Git에서 제외된 `deploy/secrets/backups/2026-09-26T08-51-06.150Z/public-before-multi-user.dump`.
   디렉터리는 0700, 백업은 0600이며 `pg_restore --list`에서 기존 제품 테이블 다섯 개의 데이터 항목을 확인했습니다.
@@ -41,7 +41,10 @@
 
 `INSTAGRAM_OAUTH_APP_SECRET`을 포함한 secrets 다섯 개의 등록과 배포된 앱 ID `1822350878757042`, 전역 `SEND_ENABLED=false`를 확인했습니다.
 이는 secret 값이 해당 앱과 일치하거나 OAuth 코드 교환에 성공했다는 검증은 아닙니다.
-남은 전환 작업은 Supabase Auth Site URL·이메일 확인 링크와 Meta redirect URI 확인, 확인된 운영자의 기존 작업 공간 소유권 배정, 실제 OAuth 연결 검증입니다.
+운영자가 `ydm2790@gmail.com`의 회원가입 완료를 보고했고, DB에서 `email_confirmed_at`과 `last_sign_in_at`이 있는 사용자를 확인했습니다.
+`deploy/assign-workspace-owner.sql`을 명시적인 사용자·기존 작업 공간 ID로 실행해 COMMIT을 확인했습니다.
+재조회에서 해당 사용자가 기존 수신 계정의 작업 공간을 소유하며 `send_enabled=false`, OAuth 암호화 토큰 없음 상태를 확인했습니다.
+남은 전환 작업은 Supabase Auth Site URL·이메일 확인 링크와 Meta redirect URI 확인, 실제 OAuth 연결 검증입니다.
 아래 배포 순서의 DB 백업·마이그레이션·Worker 배포는 완료했으며 나머지 작업은 완료로 간주하지 않습니다.
 
 ## 검증
