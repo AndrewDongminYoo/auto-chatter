@@ -40,7 +40,8 @@ Instagram Login 어댑터는 Instagram 사용자 토큰의 계정 ID와 댓글·
 운영 배포 방향은 **Cloudflare Workers + Queues + Supabase PostgreSQL**입니다.
 Hyperdrive를 통해 DB에 연결하며, 매분 예약 실행으로 누락된 처리 알림과 지연 작업을 복구합니다.
 현재 구현은 여러 Instagram Login 연결의 암호화 토큰을 DB에서 읽고 계정별로 처리하며 발송은 기본 비활성화입니다.
-`/app/`에서 사용자별 계정 연결, 게시물 ID·키워드·답장·팔로우 조건과 최근 처리 상태를 관리합니다.
+`/app/`에서 사용자별 계정을 연결하고 게시물을 사진·본문·날짜로 선택해 키워드·답장·팔로우 조건과 최근 처리 상태를 관리합니다.
+게시물 선택기의 검증 범위와 남은 확인은 [사용성 검증 기록](docs/notes/2026-09-26-media-picker-usability.md)에 정리했습니다.
 Supabase Auth 및 OAuth secrets와 마이그레이션은 아래 배포 전환 문서에 따라 설정해야 합니다.
 설정과 전환 순서는 [Cloudflare 배포 절차](docs/notes/2026-09-26-cloudflare-runbook.md), 구현 범위는 [전환 계획](docs/plans/2026-09-26-cloudflare-supabase.md)을 따릅니다.
 2026-09-26 Supabase 서울 리전 프로젝트와 Cloudflare Queue·Hyperdrive를 생성하고 Worker를 workers.dev에 배포했습니다.
