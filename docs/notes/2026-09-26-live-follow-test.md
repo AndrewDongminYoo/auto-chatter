@@ -40,8 +40,11 @@ Worker 버전은 `18141dc0-a1c6-49be-a50c-5b4bfe18fde6`, 배포 태그는 `6d71e
 실행 코드 변경 없이 앞선 검증을 통과한 코드로 배포했고 기존 secrets를 유지했습니다.
 Worker 버전 조회에서 `SEND_ENABLED`의 실제 값 `true`를 확인했습니다.
 저장소의 기본값은 `false`입니다.
+아래 명령은 당시 실행 기록이며 재활성화 절차가 아닙니다.
+`--tag`는 Worker 버전 라벨이며 Git 커밋을 선택하지 않습니다.
+Wrangler는 현재 checkout의 소스를 배포하므로 재활성화 전에는 별도 발송 승인, `git status --porcelain`의 빈 결과, `git rev-parse HEAD`와 검증한 커밋의 일치 및 해당 소스의 검증 결과를 확인해야 합니다.
 
-```bash
+```log
 corepack pnpm exec wrangler deploy --env-file /dev/null --var SEND_ENABLED:true --tag 6d71ef7 --message 'Approved follow-gate DM test on media 17909444478471816'
 ```
 

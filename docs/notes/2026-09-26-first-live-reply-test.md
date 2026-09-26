@@ -72,8 +72,11 @@ TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:5433/automations_test 
 테스트 활성화 Worker 버전은 `7b37391d-8893-4ecd-8ee3-9b21ee9eb2c7`입니다.
 기존 secrets를 유지하고 CLI override로 `SEND_ENABLED=true`를 배포했습니다.
 저장소 `wrangler.json`의 기본값은 `false`이므로 평소 배포 명령은 전역 발송을 다시 중지합니다.
+아래 명령은 당시 실행 기록이며 재활성화 절차가 아닙니다.
+`--tag`는 Worker 버전 라벨이며 Git 커밋을 선택하지 않습니다.
+Wrangler는 현재 checkout의 소스를 배포하므로 재활성화 전에는 별도 발송 승인, `git status --porcelain`의 빈 결과, `git rev-parse HEAD`와 검증한 커밋의 일치 및 해당 소스의 검증 결과를 확인해야 합니다.
 
-```bash
+```log
 corepack pnpm exec wrangler deploy --env-file /dev/null --var SEND_ENABLED:true --tag 2e76925 --message 'Approved first private DM test on media 18178820404442752'
 ```
 
