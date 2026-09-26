@@ -2,7 +2,7 @@
 
 ## 현재 상태
 
-다중 사용자 기능은 로컬 구현과 합성 데이터 검증을 마쳤으며 아직 운영에 배포하지 않았습니다.
+다중 사용자 코드와 003–006 DB 마이그레이션은 2026-09-26에 운영 배포했습니다.
 운영 발송은 `SEND_ENABLED=false`를 유지합니다.
 실제 Instagram 발송·OAuth 로그인 성공이나 타인 계정의 Advanced Access 승인 완료는 검증하지 않았습니다.
 
@@ -14,6 +14,30 @@
 진행 중인 대화는 시작 시점의 문구를 사용하며 현재 계정·규칙 중지는 최종 발송 조건에 반영합니다.
 설정 중지와 외부 POST는 하나의 원자적 작업이 아니므로 최종 확인 후 이미 시작한 요청까지 취소하지는 못합니다.
 여러 게시물의 첫 DM을 받은 같은 사용자가 응답하면 가장 최근에 보낸 응답 대기 중인 대화 하나를 선택합니다.
+
+### 운영 배포 기록
+
+- 코드 태그: `2a5403e`.
+- Worker 버전: `0073b9ec-2141-420f-9b7d-52e0fd2ece8d`.
+- Supabase 프로젝트: `asjjftrioaxzspkbtebf`.
+- 서비스의 public 스키마·데이터 백업: Git에서 제외된 `deploy/secrets/backups/2026-09-26T08-51-06.150Z/public-before-multi-user.dump`.
+  디렉터리는 0700, 백업은 0600이며 `pg_restore --list`에서 기존 제품 테이블 다섯 개의 데이터 항목을 확인했습니다.
+  Supabase Auth와 전체 클러스터 역할을 포함한 백업은 아닙니다.
+- `psql -f deploy/migrate-multi-user.sql`을 TLS `verify-full`을 사용하는 Session pooler 관리자 연결로 실행했습니다.
+  로컬에서 Direct endpoint의 IPv6 연결을 사용할 수 없어 관리자 작업에 Session pooler를 사용했으며 Worker의 Hyperdrive 바인딩은 유지했습니다.
+- 전환 전후 기존 연결 1개·댓글 이벤트 2개·발송 행 0개가 보존됐습니다.
+- 제품 테이블 아홉 개의 RLS, `anon`·`authenticated`·`service_role`의 SELECT/INSERT/UPDATE/DELETE 차단, 서버 역할의 관리자 속성 부재를 확인했습니다.
+  실제 `auto_chatter_server` 로그인으로 새 작업 공간·OAuth·팔로우 테이블 조회도 확인했습니다.
+- 계정별 `send_enabled=true`인 연결은 0개입니다.
+- 기존 웹훅 secrets에 `SUPABASE_PUBLISHABLE_KEY`와 `TOKEN_ENCRYPTION_KEY`를 추가했습니다.
+  암호화 키는 Git에서 제외된 `deploy/secrets/cloudflare-multi-user.json`에 0600으로 보관하며 안전하게 백업해야 합니다.
+- `/app/`, `/privacy`, `/service`, `/data-deletion`은 HTTP 200, 로그인 없는 `/api/me`는 401, 잘못된 구독 확인·서명 없는 웹훅은 403이었습니다.
+  공개 JavaScript·CSS 응답이 배포한 checkout의 파일과 같은 것을 확인했습니다.
+  이 점검은 실제 이메일 인증·Instagram OAuth·서명된 댓글의 신규 배포 수신·실발송 검증을 대신하지 않습니다.
+
+남은 전환 작업은 `INSTAGRAM_OAUTH_APP_SECRET` 등록, Supabase Auth Site URL·이메일 확인 링크와 Meta redirect URI 확인, 확인된 운영자의 기존 작업 공간 소유권 배정, 실제 OAuth 연결 검증입니다.
+OAuth 앱 secret이 없는 상태에서는 Instagram 연결이 준비되지 않았다는 오류를 반환합니다.
+아래 배포 순서의 DB 백업·마이그레이션·Worker 배포는 완료했으며 나머지 작업은 완료로 간주하지 않습니다.
 
 ## 검증
 

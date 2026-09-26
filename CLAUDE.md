@@ -128,7 +128,9 @@ The `.mjs` workerd harness avoids Miniflare's incomplete published TypeScript de
 Wrangler and Miniflare are pinned to the tested v4 runtime pair; upgrade them together and run `test:cloudflare`.
 Never enable sends, create cloud resources, or publish as part of tests.
 See `docs/notes/2026-09-26-cloudflare-runbook.md` for the deployed baseline and `docs/notes/2026-09-26-multi-user-cutover.md` for the new migration and configuration procedure.
-This multi-user implementation is local until that cutover is explicitly performed.
+The multi-user code and migrations 003–006 were deployed on 2026-09-26 with sends disabled.
+The deployed code tag is `2a5403e`, Worker version `0073b9ec-2141-420f-9b7d-52e0fd2ece8d`.
+The OAuth app secret, external Auth/OAuth configuration checks, legacy workspace ownership assignment, and live OAuth/send verification remain pending.
 Run `psql -f deploy/migrate-multi-user.sql` with an administrator connection before deploying this code.
 This runner owns the transaction for migrations 003–006 and the access script, stops on the first error, and rolls back on failure.
 Do not apply these migration files individually without that transaction.
