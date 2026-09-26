@@ -185,7 +185,7 @@ export async function finishInstagramOAuth(
     {
       method: "POST",
       headers: { Authorization: `Bearer ${long.access_token}`, "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ subscribed_fields: "comments,messages" }).toString(),
+      body: new URLSearchParams({ subscribed_fields: "comments,messages,messaging_postbacks" }).toString(),
     },
   );
   if (!isRecord(subscribed) || subscribed.success !== true) throw new ApiError(502, "instagram_subscription_failed");

@@ -15,6 +15,7 @@ export interface PrivateReplyRequest {
   mediaId: string;
   senderId: string;
   text: string;
+  confirmationButtonTitle?: string;
 }
 
 export interface PrivateReplyTransport {
@@ -146,6 +147,12 @@ export async function processNextPrivateReply(
     mediaId: row.media_id,
     senderId: row.sender_id,
     text: row.private_reply_text,
+    ...(row.follow_config &&
+    typeof row.follow_config === "object" &&
+    "confirmation_button_title" in row.follow_config &&
+    typeof row.follow_config.confirmation_button_title === "string"
+      ? { confirmationButtonTitle: row.follow_config.confirmation_button_title }
+      : {}),
   };
 
   if (!connection.active) {
@@ -287,8 +294,8 @@ export async function processNextPrivateReply(
       UPDATE private_reply_outbox SET status='sent',provider_message_id=$3,recipient_id=$4,sent_at=now(),failure_code=CASE WHEN follow_config IS NOT NULL AND $4::text IS NULL THEN 'follow_recipient_unavailable' ELSE NULL END
       WHERE id=$1 AND status='sending' AND attempt_id=$2 RETURNING *
     ), conversations AS (
-      INSERT INTO instagram_follow_conversations(reply_id,connection_id,recipient_id,confirmation_keyword,follower_reply_text,non_follower_reply_text)
-      SELECT id,connection_id,recipient_id,follow_config->>'confirmation_keyword',follow_config->>'follower_reply_text',follow_config->>'non_follower_reply_text'
+      INSERT INTO instagram_follow_conversations(reply_id,connection_id,recipient_id,confirmation_keyword,follower_reply_text,non_follower_reply_text,confirmation_button_title)
+      SELECT id,connection_id,recipient_id,follow_config->>'confirmation_keyword',follow_config->>'follower_reply_text',follow_config->>'non_follower_reply_text',COALESCE(follow_config->>'confirmation_button_title','')
       FROM sent WHERE follow_config IS NOT NULL AND recipient_id IS NOT NULL
       ON CONFLICT DO NOTHING
     ) SELECT id FROM sent`,

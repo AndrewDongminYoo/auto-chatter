@@ -1,3 +1,4 @@
+import { confirmationMessage } from "./confirmation-button.ts";
 import { PreSendVerificationError, type PrivateReplyRequest, type PrivateReplyTransport } from "./reply-worker.ts";
 import { evaluatePrivateReply } from "./reply-policy.ts";
 import { classifyMetaGraphFailure } from "./meta-graph-error.ts";
@@ -135,6 +136,7 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
   async send(request: PrivateReplyRequest): ReturnType<PrivateReplyTransport["send"]> {
     if (!this.matchesConnection(request) || !request.text.trim())
       throw new PreSendVerificationError("block", "invalid_request");
+    const message = confirmationMessage(request.text, request.confirmationButtonTitle, request.id);
     let verification;
     try {
       verification = await this.verify(request);
@@ -154,7 +156,7 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
     await this.config.beforeSend?.(request);
     const result = await this.graphRequest(this.graphUrl(`${this.config.accountId}/messages`), "POST", {
       recipient: { comment_id: request.commentId },
-      message: { text: request.text },
+      message,
     });
     if (!isRecord(result) || typeof result.message_id !== "string" || !result.message_id.trim()) {
       throw new Error("Meta private reply outcome is unknown");

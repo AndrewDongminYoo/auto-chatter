@@ -6,5 +6,6 @@ BEGIN;
 \ir ../db/migrations/004_workspace_settings.sql
 \ir ../db/migrations/005_instagram_oauth.sql
 \ir ../db/migrations/006_follow_conversations.sql
+\ir ../db/migrations/007_confirmation_button.sql
 \ir supabase-access.sql
 COMMIT;

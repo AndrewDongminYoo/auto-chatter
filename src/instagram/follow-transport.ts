@@ -1,9 +1,11 @@
+import { confirmationMessage } from "./confirmation-button.ts";
 import { isRecord } from "../app/auth.ts";
 import { classifyMetaGraphFailure } from "./meta-graph-error.ts";
 import { PreSendVerificationError } from "./reply-worker.ts";
 export interface FollowSendContext {
   replyId: string;
   attemptId: string;
+  confirmationButtonTitle?: string;
 }
 export interface FollowTransport {
   followStatus(recipientId: string): Promise<boolean | null>;
@@ -55,13 +57,14 @@ export class InstagramFollowTransport implements FollowTransport {
   async send(recipientId: string, text: string, context?: FollowSendContext): Promise<{ messageId: string }> {
     if (!/^\d+$/.test(recipientId) || recipientId === this.config.accountId || !text.trim() || text.length > 1000)
       throw new PreSendVerificationError("block", "invalid_request");
+    const message = confirmationMessage(text, context?.confirmationButtonTitle, context?.replyId);
     if (this.config.beforeSend) {
       if (!context) throw new PreSendVerificationError("block", "missing_send_context");
       await this.config.beforeSend(context);
     }
     const result = await this.request(`${this.config.accountId}/messages`, {
       recipient: { id: recipientId },
-      message: { text },
+      message,
     });
     if (!isRecord(result) || typeof result.message_id !== "string" || !result.message_id.trim())
       throw new Error("Meta send outcome unknown");
