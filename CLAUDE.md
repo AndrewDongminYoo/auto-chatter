@@ -129,7 +129,7 @@ Wrangler and Miniflare are pinned to the tested v4 runtime pair; upgrade them to
 Never enable sends, create cloud resources, or publish as part of tests.
 See `docs/notes/2026-09-26-cloudflare-runbook.md` for the deployed baseline and `docs/notes/2026-09-26-multi-user-cutover.md` for the new migration and configuration procedure.
 The multi-user code and migrations 003–006 were deployed on 2026-09-26 with sends disabled.
-The deployed code tag is `6d71ef7`, Worker version `18141dc0-a1c6-49be-a50c-5b4bfe18fde6`.
+The deployed code tag is `6d71ef7`, Worker version `dfa763f7-742d-497a-8e58-6eeb737837bd`.
 The auth client wraps injected fetch in a standalone call because workerd rejects a native fetch invoked with the client object as its receiver.
 The workerd auth regression test verifies synthetic signup success and rejected login; production rejected login returns 401 after previously returning 503.
 The operator reported signup completion; the production database confirms the operator's email-confirmed user and a completed sign-in.
@@ -142,9 +142,10 @@ All five Worker secrets are registered, and the deployed Instagram OAuth app ID 
 The approved first-DM test produced one sent outbox row with a provider message ID, and the operator confirmed receipt and a reply.
 The first-DM test rule was disabled after verification.
 The target media is `18178820404442752`; see `docs/notes/2026-09-26-first-live-reply-test.md` for authorization, message text and shutdown steps.
-The operator approved a follow-gated test on media `17909444478471816`: the current Worker uses `SEND_ENABLED=true` through a CLI override, with only that rule and its account enabled.
-The committed default remains false; see `docs/notes/2026-09-26-live-follow-test.md` for the approved texts, current stage and shutdown procedure.
-Live conditional follow replies, email confirmation-link behavior, multi-user live isolation and Advanced Access remain unverified.
+The approved follow-gated test on media `17909444478471816` verified the first DM, nonfollower guidance and follower completion against the operator's screenshots and database acknowledgements.
+The conversation finished as `sent / following` with two confirmation receipts and no error; the rule, account and global send switches are now false, with no unfinished replies or conversations.
+See `docs/notes/2026-09-26-live-follow-test.md` for the approved texts, evidence and shutdown procedure.
+Email confirmation-link behavior, multi-user live isolation, live unavailable-follow and duplicate-event cases, and Advanced Access remain unverified.
 Run `psql -f deploy/migrate-multi-user.sql` with an administrator connection before deploying this code.
 This runner owns the transaction for migrations 003–006 and the access script, stops on the first error, and rolls back on failure.
 Do not apply these migration files individually without that transaction.
