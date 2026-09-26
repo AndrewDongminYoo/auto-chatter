@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "auto-chatter",
+  "account_id": "dd47bef237425c1e64a1bc9a2aa64310",
+  "main": "src/cloudflare/index.ts",
+  "compatibility_date": "2026-07-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": { "directory": "./public" },
+  "vars": {
+    "SEND_ENABLED": "false",
+    "APP_ORIGIN": "https://auto-chatter.auto-chatter-ydm2790.workers.dev",
+    "SUPABASE_URL": "https://asjjftrioaxzspkbtebf.supabase.co",
+    "INSTAGRAM_OAUTH_APP_ID": "1822350878757042",
+    "META_GRAPH_VERSION": "v26.0"
+  },
+  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "026b7ba593a24852bbfd182456ff1c03" }],
+  "queues": {
+    "producers": [{ "binding": "REPLY_QUEUE", "queue": "auto-chatter-replies" }],
+    "consumers": [
+      {
+        "queue": "auto-chatter-replies",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_concurrency": 1,
+        "max_retries": 3,
+        "retry_delay": 60
+      }
+    ]
+  },
+  "triggers": { "crons": ["* * * * *"] }
+}

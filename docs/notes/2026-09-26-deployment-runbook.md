@@ -1,5 +1,8 @@
 # 단일 서버 배포 운영 절차
 
+운영 기본 경로는 [Cloudflare + Supabase](2026-09-26-cloudflare-runbook.md)로 변경했습니다.
+이 문서는 로컬 검증과 단일 서버 대체 배포용으로 유지합니다.
+
 ## 구성
 
 `compose.yaml`의 기본 서비스는 `db`와 `ingress`입니다.
@@ -7,6 +10,11 @@
 프로필 없이 다시 실행해도 이미 켜진 워커나 프록시는 중지되지 않으므로, 중지할 때는 해당 서비스를 명시합니다.
 수신기는 호스트의 `127.0.0.1`에만 바인딩하고 DB 포트는 호스트에 공개하지 않습니다.
 워커 프로세스 하나는 Instagram 연결 하나만 처리하며 이 구성은 Instagram Login 전용입니다.
+해당 연결은 `active=true`, `send_enabled=true`, `access_token_encrypted IS NULL`이어야 하며, 환경 변수의 계정 ID와 일치해야 합니다.
+OAuth로 토큰을 저장한 연결은 Cloudflare 워커에서 처리합니다.
+Node 워커는 확인 응답을 받은 팔로우 대화와 첫 비공개 답장을 함께 처리하고, 시작 시점과 실행 중에 오래된 발송 시도를 해당 연결에 한해 `unknown`으로 전환합니다.
+발송 직전에 규칙·연결·발송 설정을 다시 확인하며, 후속 DM은 사용자 응답 후 24시간 안에서만 보냅니다.
+Facebook Login으로 직접 실행하는 경우 팔로우 조건이 있는 규칙은 첫 DM 전에 `follow_requires_instagram_login`으로 차단됩니다.
 운영 DB는 관리용 `postgres`와 읽기·쓰기 전용 `automations_app` 역할을 분리합니다.
 앱 역할에는 조회·삽입·갱신만 허용하며, 삭제와 스키마 변경은 허용하지 않습니다.
 DB는 내부 `data` 네트워크에만 연결하고, 프록시는 `edge` 네트워크에서 수신기에 접근합니다.
@@ -152,6 +160,8 @@ docker compose --env-file deploy/runtime.env --profile send ps worker
 
 백업과 복원 확인 후 수신기와 워커를 중지하고, 새 코드에서 적용할 마이그레이션을 번호 순서대로 실행합니다.
 현재 `001`과 `002`는 재실행 가능하며, 빈 볼륨의 최신 스키마에도 다시 적용할 수 있습니다.
+003–006은 접근 정책과 함께 전용 실행 파일로 한 트랜잭션에서 적용합니다.
+접근 정책은 기존 `automations_app` 역할에도 SELECT·INSERT·UPDATE RLS 정책을 제공하며, DELETE·DDL과 Supabase API 역할의 접근은 허용하지 않습니다.
 자동 마이그레이션 원장은 아직 없으므로 릴리스 기록에 DB 식별자, SQL 파일명·Git SHA, 적용 시각과 종료 결과를 남깁니다.
 이후 추가되는 마이그레이션은 해당 기록과 개별 릴리스 지침으로 적용 여부를 결정하며 재실행 가능하다고 가정하지 않습니다.
 중지 기간에는 웹훅 수신이 불가능하므로 유지보수 시간을 정하고 이후 이벤트 수신을 확인합니다.
@@ -161,6 +171,11 @@ docker compose --env-file deploy/runtime.env --profile send ps worker
 docker compose --env-file deploy/runtime.env --profile send stop worker ingress
 docker compose --env-file deploy/runtime.env exec -T db psql -U postgres -d automations -v ON_ERROR_STOP=1 -f /migrations/001_reply_worker.sql
 docker compose --env-file deploy/runtime.env exec -T db psql -U postgres -d automations -v ON_ERROR_STOP=1 -f /migrations/002_rate_limit_backoff.sql
+docker compose --env-file deploy/runtime.env exec -T db mkdir -p /tmp/auto-chatter/db/migrations /tmp/auto-chatter/deploy
+docker compose --env-file deploy/runtime.env cp db/migrations/. db:/tmp/auto-chatter/db/migrations
+docker compose --env-file deploy/runtime.env cp deploy/migrate-multi-user.sql db:/tmp/auto-chatter/deploy/migrate-multi-user.sql
+docker compose --env-file deploy/runtime.env cp deploy/supabase-access.sql db:/tmp/auto-chatter/deploy/supabase-access.sql
+docker compose --env-file deploy/runtime.env exec -T db psql -U postgres -d automations -f /tmp/auto-chatter/deploy/migrate-multi-user.sql
 ```
 
 마이그레이션 실패 시 기동하지 않고 원인을 해결합니다.

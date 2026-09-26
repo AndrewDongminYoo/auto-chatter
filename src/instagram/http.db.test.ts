@@ -60,7 +60,7 @@ async function rowCount(table: "instagram_comment_events" | "private_reply_outbo
 before(async () => {
   const schema = await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8");
   await pool.query(
-    "DROP TABLE IF EXISTS private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+    "DROP TABLE IF EXISTS instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
   );
   await pool.query(schema);
   server = createInstagramWebhookServer({ pool, appSecret: "test-app-secret", verifyToken: "test-verify-token" });
@@ -89,6 +89,57 @@ after(async () => {
   if (server)
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   await pool.end();
+});
+
+test("configured keyword modes queue only matching comments and never replay stored comments", async () => {
+  await pool.query(
+    "UPDATE instagram_comment_rules SET keywords = $1, match_mode = 'exact', excluded_keywords = $2 WHERE id = $3",
+    [["LINK", "자료"], ["거절"], ruleId],
+  );
+  assert.equal((await signedPost(commentBody({ text: "send link" }))).status, 200);
+  assert.equal(await rowCount("private_reply_outbox"), 0);
+  await pool.query("UPDATE instagram_comment_rules SET match_mode='contains' WHERE id=$1", [ruleId]);
+  // An already stored event is not re-evaluated when settings change.
+  assert.equal((await signedPost(commentBody({ text: "send link" }))).status, 200);
+  assert.equal(await rowCount("private_reply_outbox"), 0);
+  assert.equal((await signedPost(commentBody({ commentId: "comment-2", text: "자료 거절" }))).status, 200);
+  assert.equal(await rowCount("private_reply_outbox"), 0);
+  assert.equal((await signedPost(commentBody({ commentId: "comment-3", text: "Send LINK" }))).status, 200);
+  assert.equal(await rowCount("private_reply_outbox"), 1);
+  assert.equal((await signedPost(commentBody({ commentId: "comment-3", text: "Send LINK" }))).status, 200);
+  assert.equal(await rowCount("private_reply_outbox"), 1);
+});
+
+test("all-comment rules still apply exclusions", async () => {
+  await pool.query("UPDATE instagram_comment_rules SET match_mode='all', excluded_keywords=$1 WHERE id=$2", [
+    ["skip"],
+    ruleId,
+  ]);
+  await signedPost(commentBody({ text: "please SKIP" }));
+  assert.equal(await rowCount("private_reply_outbox"), 0);
+  await signedPost(commentBody({ commentId: "other", text: "unrelated comment" }));
+  assert.equal(await rowCount("private_reply_outbox"), 1);
+});
+
+test("rule migration preserves legacy data and can be applied twice", async () => {
+  await pool.query(
+    "ALTER TABLE instagram_comment_rules DROP COLUMN keywords, DROP COLUMN match_mode, DROP COLUMN excluded_keywords",
+  );
+  const migration = await readFile(
+    new URL("../../db/migrations/003_comment_rule_matching.sql", import.meta.url),
+    "utf8",
+  );
+  await pool.query(migration);
+  await pool.query(migration);
+  const rule = (
+    await pool.query(
+      "SELECT keyword, keywords, match_mode, excluded_keywords FROM instagram_comment_rules WHERE id=$1",
+      [ruleId],
+    )
+  ).rows[0];
+  assert.deepEqual(rule, { keyword: "자료", keywords: [], match_mode: "contains", excluded_keywords: [] });
+  await signedPost(commentBody());
+  assert.equal(await rowCount("private_reply_outbox"), 1);
 });
 
 test("subscription challenge accepts the configured token and rejects another", async () => {

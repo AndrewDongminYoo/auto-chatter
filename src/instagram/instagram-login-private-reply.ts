@@ -10,6 +10,7 @@ export interface InstagramLoginPrivateReplyConfig {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   now?: () => Date;
+  beforeSend?: (request: PrivateReplyRequest) => Promise<void>;
 }
 
 type AccountInspection = { verified: true } | { verified: false; reason: string };
@@ -61,7 +62,8 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
         signal: AbortSignal.timeout(this.timeoutMs),
         redirect: "error",
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof PreSendVerificationError) throw error;
       throw new Error("Meta Graph request failed");
     }
     if (response.status >= 500) throw new Error(`Meta Graph HTTP ${response.status}`);
@@ -134,6 +136,7 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
     });
     if (!policy.eligible) throw new PreSendVerificationError("block", policy.reason);
 
+    await this.config.beforeSend?.(request);
     const result = await this.graphRequest(this.graphUrl(`${this.config.accountId}/messages`), "POST", {
       recipient: { comment_id: request.commentId },
       message: { text: request.text },
@@ -141,6 +144,9 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
     if (!isRecord(result) || typeof result.message_id !== "string" || !result.message_id.trim()) {
       throw new Error("Meta private reply outcome is unknown");
     }
-    return { messageId: result.message_id };
+    return {
+      messageId: result.message_id,
+      ...(typeof result.recipient_id === "string" ? { recipientId: result.recipient_id } : {}),
+    };
   }
 }

@@ -2,4 +2,10 @@ node_modules/
 .env
 coverage/
 deploy/runtime.env
+deploy/secrets/
 backups/
+.wrangler/
+.dev.vars
+.dev.vars.*
+.env.*
+!.env.example

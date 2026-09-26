@@ -1,0 +1,6 @@
+overrides:
+  # GHSA-rgj7-g3m4-5g8c; remove when Miniflare upgrades its pinned dependency.
+  "sharp@>=0.35.0 <0.36.0": ~0.35.4
+  # GHSA-4cwx-7wf7-3272, GHSA-8xcm-r25x-g524, GHSA-jr45-8vmc-qm54,
+  # GHSA-m8rv-5g2x-5cg5, GHSA-v3r7-h72x-cjcm; keep the installed major.
+  "undici@>=7 <8": ^7.29.0

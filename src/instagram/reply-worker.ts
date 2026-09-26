@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Pool } from "pg";
+import { processNextFollowReply, recoverStaleFollowReplies } from "./follow-flow.ts";
+import type { FollowTransport } from "./follow-transport.ts";
 import { evaluatePrivateReply } from "./reply-policy.ts";
 
 export interface PrivateReplyRequest {
+  attemptId?: string;
   id: string;
   workspaceId: string;
   connectionId: string;
@@ -15,6 +18,7 @@ export interface PrivateReplyRequest {
 }
 
 export interface PrivateReplyTransport {
+  readonly supportsFollowReplies?: boolean;
   // Read-only verification must check current Meta authorization, comment creation time, and media ownership.
   verify(request: PrivateReplyRequest): Promise<{
     commentCreatedAt: Date | null;
@@ -22,7 +26,7 @@ export interface PrivateReplyTransport {
     mediaOwned: boolean;
   }>;
   // Throw PreSendVerificationError only before making a provider send request.
-  send(request: PrivateReplyRequest): Promise<{ messageId: string }>;
+  send(request: PrivateReplyRequest): Promise<{ messageId: string; recipientId?: string }>;
 }
 
 export class PreSendVerificationError extends Error {
@@ -64,6 +68,7 @@ export class ProviderRateLimitedError extends Error {
 const rateLimitRetryDelaysSeconds = [15 * 60, 60 * 60, 4 * 60 * 60] as const;
 
 interface ClaimedRow {
+  follow_config: unknown;
   id: string;
   rate_limit_retries: number;
   workspace_id: string;
@@ -110,11 +115,19 @@ export async function processNextPrivateReply(
      FROM candidate
      WHERE reply.id = candidate.id
      RETURNING reply.id, reply.workspace_id, reply.connection_id, reply.comment_id,
-       reply.media_id, reply.sender_id, reply.private_reply_text, reply.rate_limit_retries`,
+       reply.media_id, reply.sender_id, reply.private_reply_text, reply.rate_limit_retries, reply.follow_config`,
     [attemptId, connectionId],
   );
   const row = claimed.rows[0];
   if (!row) return false;
+  if (row.follow_config && transport.supportsFollowReplies === false) {
+    await updateClaim(
+      pool,
+      "UPDATE private_reply_outbox SET status='blocked',failure_code='follow_requires_instagram_login' WHERE id=$1 AND status='sending' AND attempt_id=$2",
+      [row.id, attemptId],
+    );
+    return true;
+  }
 
   const connectionResult = await pool.query<ConnectionRow>(
     "SELECT account_id, active FROM instagram_connections WHERE id = $1 AND workspace_id = $2",
@@ -123,6 +136,7 @@ export async function processNextPrivateReply(
   const connection = connectionResult.rows[0];
   if (!connection) throw new Error("Claimed reply has no connection");
   const request: PrivateReplyRequest = {
+    attemptId,
     id: row.id,
     workspaceId: row.workspace_id,
     connectionId: row.connection_id,
@@ -190,11 +204,26 @@ export async function processNextPrivateReply(
   );
   if (deferred.rowCount === 1) return true;
 
+  const ruleEnabled = await pool.query(
+    `SELECT rule.enabled FROM instagram_comment_rules rule
+    JOIN private_reply_outbox reply ON reply.rule_id=rule.id WHERE reply.id=$1`,
+    [row.id],
+  );
+  if (ruleEnabled.rows[0]?.enabled !== true) {
+    await updateClaim(
+      pool,
+      "UPDATE private_reply_outbox SET status='blocked',failure_code='inactive_rule' WHERE id=$1 AND status='sending' AND attempt_id=$2",
+      [row.id, attemptId],
+    );
+    return true;
+  }
   let messageId: string;
+  let recipientId: string | null = null;
   try {
     const sent = await transport.send(request);
     if (typeof sent.messageId !== "string" || !sent.messageId.trim()) throw new Error("Provider message ID missing");
     messageId = sent.messageId;
+    if (typeof sent.recipientId === "string" && /^\d+$/.test(sent.recipientId)) recipientId = sent.recipientId;
   } catch (error) {
     if (error instanceof PreSendVerificationError) {
       if (error.disposition === "retry") {
@@ -253,8 +282,16 @@ export async function processNextPrivateReply(
 
   await updateClaim(
     pool,
-    "UPDATE private_reply_outbox SET status = 'sent', provider_message_id = $3, sent_at = now(), failure_code = NULL WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-    [row.id, attemptId, messageId],
+    `WITH sent AS (
+      UPDATE private_reply_outbox SET status='sent',provider_message_id=$3,recipient_id=$4,sent_at=now(),failure_code=CASE WHEN follow_config IS NOT NULL AND $4::text IS NULL THEN 'follow_recipient_unavailable' ELSE NULL END
+      WHERE id=$1 AND status='sending' AND attempt_id=$2 RETURNING *
+    ), conversations AS (
+      INSERT INTO instagram_follow_conversations(reply_id,connection_id,recipient_id,confirmation_keyword,follower_reply_text,non_follower_reply_text)
+      SELECT id,connection_id,recipient_id,follow_config->>'confirmation_keyword',follow_config->>'follower_reply_text',follow_config->>'non_follower_reply_text'
+      FROM sent WHERE follow_config IS NOT NULL AND recipient_id IS NOT NULL
+      ON CONFLICT DO NOTHING
+    ) SELECT id FROM sent`,
+    [row.id, attemptId, messageId, recipientId],
   );
   return true;
 }
@@ -274,7 +311,11 @@ export async function runPrivateReplyWorker(
   signal: AbortSignal,
   pollIntervalMs = 1000,
   connectionId: string,
-  options: { recoveryIntervalMs?: number; now?: () => Date } = {},
+  options: {
+    recoveryIntervalMs?: number;
+    now?: () => Date;
+    follow?: { accountId: string; transport: FollowTransport };
+  } = {},
 ): Promise<void> {
   if (!connectionId) throw new Error("Instagram connection ID is required");
   if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 1)
@@ -283,15 +324,24 @@ export async function runPrivateReplyWorker(
   if (!Number.isInteger(recoveryIntervalMs) || recoveryIntervalMs < 1)
     throw new Error("recoveryIntervalMs must be a positive integer");
   const now = options.now ?? (() => new Date());
-  await recoverStalePrivateReplies(pool, new Date(now().getTime() - 10 * 60_000), connectionId);
+  const recover = async (at: Date) => {
+    await recoverStalePrivateReplies(pool, at, connectionId);
+    if (options.follow) await recoverStaleFollowReplies(pool, at, connectionId);
+  };
+  await recover(new Date(now().getTime() - 10 * 60_000));
   let nextRecoveryAt = now().getTime() + recoveryIntervalMs;
   while (!signal.aborted) {
     const currentTime = now().getTime();
     if (currentTime >= nextRecoveryAt) {
-      await recoverStalePrivateReplies(pool, new Date(currentTime - 10 * 60_000), connectionId);
+      await recover(new Date(currentTime - 10 * 60_000));
       nextRecoveryAt = currentTime + recoveryIntervalMs;
     }
-    if (await processNextPrivateReply(pool, transport, now, connectionId)) continue;
+    const followed = options.follow
+      ? await processNextFollowReply(pool, connectionId, options.follow.transport, now, options.follow.accountId)
+      : false;
+    if (signal.aborted) break;
+    const replied = await processNextPrivateReply(pool, transport, now, connectionId);
+    if (followed || replied) continue;
     try {
       await sleep(pollIntervalMs, undefined, { signal });
     } catch (error) {

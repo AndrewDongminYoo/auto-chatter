@@ -1,6 +1,8 @@
 **
 !package.json
 !pnpm-lock.yaml
+!pnpm-workspace.yaml
 !src/
 !src/**
 src/**/*.test.ts
+src/**/*.test.mjs

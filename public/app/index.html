@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>자동화 설정 | auto-chatter</title>
+    <link rel="icon" href="../icons/auto-chatter.png" type="image/png" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">본문으로 이동</a>
+    <header>
+      <a class="brand" href="./" aria-label="auto-chatter 홈"
+        ><img src="../icons/auto-chatter.png" width="36" height="36" alt="" />auto-chatter</a
+      >
+      <div class="header-actions">
+        <span class="product-label">Instagram 자동화</span
+        ><button id="logout" class="secondary" hidden>로그아웃</button>
+      </div>
+    </header>
+    <main id="main" tabindex="-1">
+      <div class="page-heading">
+        <h1>자동화 작업실</h1>
+        <p class="intro">댓글 조건부터 마지막 답장까지, 한곳에서 설정하세요.</p>
+      </div>
+      <div id="notice" role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></div>
+      <section id="startup" class="card loading-state" aria-label="로그인 상태 확인">
+        <p>로그인 상태를 확인하고 있습니다…</p>
+      </section>
+      <button id="retry-load" class="secondary" hidden>다시 불러오기</button>
+      <section id="auth" class="card auth-card" aria-labelledby="auth-title" hidden>
+        <div class="auth-copy">
+          <img class="auth-mark" src="../icons/auto-chatter.png" width="64" height="64" alt="" />
+          <h1 id="auth-title">내 계정으로 로그인</h1>
+          <p>계정과 자동화 설정은 로그인한 사용자에게만 표시됩니다.</p>
+          <ol class="onboarding">
+            <li>
+              <span aria-hidden="true">↳</span>
+              <div>
+                <strong>Instagram 연결</strong>
+                <p>관리하는 전문 계정을 연결하세요.</p>
+              </div>
+            </li>
+            <li>
+              <span aria-hidden="true">↳</span>
+              <div>
+                <strong>댓글 조건 설정</strong>
+                <p>키워드와 보낼 메시지를 정하세요.</p>
+              </div>
+            </li>
+            <li>
+              <span aria-hidden="true">↳</span>
+              <div>
+                <strong>확인 후 시작</strong>
+                <p>계정 발송과 규칙을 켜면 시작됩니다.</p>
+              </div>
+            </li>
+          </ol>
+        </div>
+        <form id="login-form">
+          <label for="email">이메일</label
+          ><input
+            id="email"
+            name="email"
+            type="email"
+            autocomplete="username"
+            required
+            maxlength="254"
+            placeholder="you@example.com"
+          />
+          <label for="password">비밀번호</label
+          ><input
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+            minlength="8"
+            maxlength="256"
+            aria-describedby="password-help"
+          />
+          <p id="password-help" class="hint">8자 이상 입력하세요.</p>
+          <div class="auth-actions">
+            <button type="submit" data-loading-label="로그인 중…">로그인</button
+            ><button type="button" id="signup" class="secondary" data-loading-label="가입 요청 중…">
+              이메일로 가입
+            </button>
+          </div>
+          <p class="hint">처음 가입하면 이메일 인증을 완료한 뒤 로그인하세요.</p>
+        </form>
+      </section>
+      <div id="workspace" hidden>
+        <nav class="workspace-nav" aria-label="설정 구역">
+          <a href="#accounts-section">연결 계정</a><a href="#automation-section">자동화 규칙</a
+          ><a href="#activity-section">처리 내역</a>
+        </nav>
+        <div id="delivery-banner" class="delivery-banner">
+          <strong id="delivery-title">발송 상태</strong>
+          <p id="delivery-status"></p>
+        </div>
+        <section id="accounts-section" class="card" aria-labelledby="accounts-title">
+          <div class="section-heading">
+            <div>
+              <h2 id="accounts-title">Instagram 계정 <span id="account-count" class="count">0</span></h2>
+            </div>
+            <button id="connect" data-loading-label="연결 준비 중…">계정 연결</button>
+          </div>
+          <div id="connections" class="account-list"></div>
+        </section>
+        <section id="automation-section" aria-labelledby="automation-title">
+          <div class="section-heading section-intro">
+            <div>
+              <h2 id="automation-title">댓글 자동화</h2>
+            </div>
+          </div>
+          <div class="columns">
+            <section class="card rule-list-card" aria-labelledby="rules-title">
+              <div class="section-heading">
+                <h3 id="rules-title">내 규칙 <span id="rule-count" class="count">0</span></h3>
+                <button class="secondary" id="new-rule">새 규칙</button>
+              </div>
+              <div id="rules"></div>
+            </section>
+            <section class="card editor" aria-labelledby="editor-title">
+              <div class="section-heading">
+                <h3 id="editor-title">새 규칙 만들기</h3>
+                <span id="edit-state" class="badge">작성 전</span>
+              </div>
+              <p id="editor-help" class="hint">게시물 하나에 규칙 하나. 입력한 답장은 미리보기에서 확인하세요.</p>
+              <p id="editor-empty" class="inline-note" hidden>
+                Instagram 계정을 먼저 연결하면 규칙을 만들 수 있습니다.
+              </p>
+              <form id="rule-form">
+                <fieldset id="rule-fields">
+                  <fieldset class="form-section">
+                    <legend>댓글 조건</legend>
+                    <label>Instagram 계정<select name="connection_id" required></select></label>
+                    <label
+                      >게시물 ID<input
+                        name="media_id"
+                        inputmode="numeric"
+                        pattern="[0-9]{1,40}"
+                        required
+                        placeholder="예: 18012345678901234"
+                        aria-describedby="media-help"
+                    /></label>
+                    <p class="hint" id="media-help">
+                      게시물 링크가 아닌 Instagram의 숫자 ID를 입력하세요. 저장한 규칙의 계정과 게시물은 바꿀 수
+                      없습니다.
+                    </p>
+                    <label
+                      >댓글 조건<select name="match_mode">
+                        <option value="contains">키워드가 포함된 댓글</option>
+                        <option value="exact">키워드와 정확히 일치하는 댓글</option>
+                        <option value="all">모든 댓글</option>
+                      </select></label
+                    >
+                    <div id="include-keywords">
+                      <label
+                        >포함 키워드<textarea
+                          name="keywords"
+                          rows="3"
+                          placeholder="예: 자료, 링크를 한 줄에 하나씩"
+                          aria-describedby="keyword-help"
+                        ></textarea>
+                      </label>
+                      <p class="hint" id="keyword-help">
+                        한 줄에 하나씩, 최대 20개. 하나라도 일치하면 시작하며 대소문자는 구분하지 않습니다.
+                      </p>
+                    </div>
+                    <label
+                      >제외 키워드 <span class="optional">선택</span
+                      ><textarea
+                        name="excluded_keywords"
+                        rows="2"
+                        placeholder="이 단어가 있으면 답장을 보내지 않습니다"
+                        aria-describedby="exclude-help"
+                      ></textarea>
+                    </label>
+                    <p class="hint" id="exclude-help">제외 키워드는 모든 댓글 조건보다 우선합니다.</p>
+                  </fieldset>
+                  <fieldset class="form-section">
+                    <legend>첫 DM</legend>
+                    <label
+                      >첫 메시지<textarea
+                        name="private_reply_text"
+                        rows="4"
+                        required
+                        maxlength="1000"
+                        placeholder="안녕하세요! 요청하신 내용을 안내해 드릴게요."
+                        aria-describedby="message-help"
+                      ></textarea>
+                    </label>
+                    <div class="field-meta">
+                      <p id="message-help" class="hint">
+                        같은 사람이 같은 게시물에 다시 댓글을 남겨도 한 번만 보냅니다.
+                      </p>
+                      <output id="message-count" class="hint" aria-label="첫 메시지 글자 수">0 / 1,000</output>
+                    </div>
+                  </fieldset>
+                  <fieldset class="form-section">
+                    <legend>팔로우에 따른 답장</legend>
+                    <label class="toggle"
+                      ><input name="follow_gate_enabled" type="checkbox" aria-controls="follow-settings" /><span
+                        >응답을 받은 뒤 팔로우 확인<small>팔로우 여부에 따라 다른 후속 메시지를 보냅니다.</small></span
+                      ></label
+                    >
+                    <div id="follow-settings" class="nested-panel" hidden>
+                      <p class="flow-summary">
+                        첫 DM <span aria-hidden="true">→</span> 확인 응답 <span aria-hidden="true">→</span> 팔로우 확인
+                      </p>
+                      <p class="hint">첫 메시지에 아래 확인 단어로 답장하도록 안내하세요.</p>
+                      <label>확인 단어<input name="confirmation_keyword" value="확인" maxlength="100" /></label>
+                      <label
+                        >팔로우한 사람에게<textarea
+                          name="follower_reply_text"
+                          rows="3"
+                          maxlength="1000"
+                          placeholder="요청하신 자료 링크입니다."
+                        ></textarea>
+                      </label>
+                      <label
+                        >팔로우하지 않은 사람에게<textarea
+                          name="non_follower_reply_text"
+                          rows="3"
+                          maxlength="1000"
+                          placeholder="팔로우한 뒤 ‘확인’이라고 다시 답장해 주세요."
+                        ></textarea>
+                      </label>
+                      <p class="hint">상태를 확인할 수 없으면 후속 메시지를 보내지 않습니다.</p>
+                    </div>
+                  </fieldset>
+                  <label class="toggle enable-rule"
+                    ><input name="enabled" type="checkbox" /><span
+                      >이 규칙 활성화<small>계정 발송도 켜져 있어야 메시지가 전송됩니다.</small></span
+                    ></label
+                  >
+                </fieldset>
+                <div class="save-bar">
+                  <p id="save-status" class="hint" role="status" aria-live="polite">
+                    설정을 저장한 뒤 언제든 수정할 수 있습니다.
+                  </p>
+                  <button type="submit" id="save-rule" data-loading-label="저장 중…">규칙 저장</button>
+                </div>
+              </form>
+            </section>
+            <aside class="conversation-preview" aria-labelledby="preview-title">
+              <div class="preview-heading">
+                <h3 id="preview-title">대화 미리보기</h3>
+                <span>예시</span>
+              </div>
+              <p class="hint">입력한 내용으로 보는 흐름입니다. 실제 발송 화면과 다를 수 있습니다.</p>
+              <div class="conversation">
+                <div class="conversation-account">
+                  <img src="../icons/auto-chatter.png" width="28" height="28" alt="" /><strong id="preview-account"
+                    >연결할 계정</strong
+                  >
+                </div>
+                <p class="conversation-label">게시물에 댓글이 달리면</p>
+                <p id="preview-comment" class="bubble incoming">키워드를 입력하세요</p>
+                <p class="conversation-label">첫 DM</p>
+                <p id="preview-message" class="bubble outgoing">작성한 첫 메시지가 여기에 표시됩니다.</p>
+                <div id="preview-follow" hidden>
+                  <p class="conversation-label">상대가 확인 단어로 답장하면</p>
+                  <p id="preview-confirmation" class="bubble incoming">확인</p>
+                  <div class="preview-branch">
+                    <span>팔로우한 경우</span>
+                    <p id="preview-follower" class="bubble outgoing"></p>
+                  </div>
+                  <div class="preview-branch">
+                    <span>팔로우하지 않은 경우</span>
+                    <p id="preview-non-follower" class="bubble outgoing"></p>
+                  </div>
+                  <p class="hint">팔로우 상태를 확인할 수 없으면 후속 DM을 보내지 않습니다.</p>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </section>
+        <section id="activity-section" class="card" aria-labelledby="activity-title">
+          <div class="section-heading">
+            <div>
+              <h2 id="activity-title">최근 처리 내역</h2>
+            </div>
+            <button id="refresh-activity" class="secondary" data-loading-label="불러오는 중…">새로고침</button>
+          </div>
+          <p class="hint">최근 50건입니다. 결과가 불명확한 메시지는 자동으로 다시 보내지 않습니다.</p>
+          <div id="activity"></div>
+        </section>
+      </div>
+    </main>
+    <footer>
+      <span>auto-chatter</span>
+      <nav aria-label="서비스 안내">
+        <a href="/privacy">개인정보처리방침</a><a href="/service">이용약관</a><a href="/data-deletion">데이터 삭제</a>
+      </nav>
+    </footer>
+  </body>
+</html>

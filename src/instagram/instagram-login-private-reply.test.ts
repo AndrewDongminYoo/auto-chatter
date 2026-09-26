@@ -377,3 +377,23 @@ test("an empty-body 429 on a lookup keeps the reply retryable before any POST", 
     false,
   );
 });
+
+test("final delivery guard runs after Graph verification and prevents POST", async () => {
+  const graph = mockGraph();
+  let checked = false;
+  const transport = new InstagramLoginPrivateReplyTransport({
+    ...config(graph.fetchImpl),
+    beforeSend: async (current) => {
+      checked = true;
+      assert.equal(current, request);
+      assert.ok(graph.calls.some(({ url }) => url.pathname.endsWith("/222")));
+      throw new PreSendVerificationError("block", "delivery_not_permitted");
+    },
+  });
+  await assert.rejects(() => transport.send(request), { failureCode: "delivery_not_permitted" });
+  assert.equal(checked, true);
+  assert.equal(
+    graph.calls.some(({ init }) => init.method === "POST"),
+    false,
+  );
+});

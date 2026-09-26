@@ -39,6 +39,10 @@ jobs:
       - run: corepack pnpm test:db
         env:
           TEST_DATABASE_URL: postgres://postgres:local-dev@127.0.0.1:5433/automations_test
+      - run: corepack pnpm test:cloudflare
+        env:
+          TEST_DATABASE_URL: postgres://postgres:local-dev@127.0.0.1:5433/automations_test
+          WRANGLER_SEND_METRICS: "false"
 
   lint:
     runs-on: ubuntu-latest
@@ -75,6 +79,13 @@ jobs:
         run: |
           docker compose --env-file /dev/null up -d --wait db ingress
           test -z "$(docker compose --env-file /dev/null --profile send ps -q worker)"
+      - name: Migrate an existing Compose database with the application role retained
+        run: |
+          docker compose --env-file /dev/null exec -T db mkdir -p /tmp/auto-chatter/db/migrations /tmp/auto-chatter/deploy
+          docker compose --env-file /dev/null cp db/migrations/. db:/tmp/auto-chatter/db/migrations
+          docker compose --env-file /dev/null cp deploy/migrate-multi-user.sql db:/tmp/auto-chatter/deploy/migrate-multi-user.sql
+          docker compose --env-file /dev/null cp deploy/supabase-access.sql db:/tmp/auto-chatter/deploy/supabase-access.sql
+          docker compose --env-file /dev/null exec -T db psql -U postgres -d automations -f /tmp/auto-chatter/deploy/migrate-multi-user.sql
       - name: Verify signed event persistence and replay protection
         run: |
           docker compose --env-file /dev/null exec -T ingress node --input-type=module <<'JS'
