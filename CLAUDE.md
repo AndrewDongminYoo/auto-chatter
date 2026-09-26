@@ -119,7 +119,8 @@ A real test comment was persisted on 2026-09-26; live private-reply sending rema
 Generated provisioning credentials stay in the ignored `deploy/secrets/` directory; never log or commit them.
 Hyperdrive query caching MUST be disabled to keep authorization and active-state reads fresh.
 Apply `db/schema.sql` and `deploy/supabase-access.sql` in a single administrator transaction on a dedicated Supabase project.
-The access script enables RLS, revokes API-role table access, and grants only SELECT/INSERT/UPDATE to the server role.
+The access script enables RLS, revokes API-role table access, and grants only SELECT/INSERT/UPDATE to the server role and the existing Compose `automations_app` role when present.
+Both server roles must be unprivileged, have no memberships, and own no database objects.
 It also revokes PUBLIC schema CREATE, so do not apply it to a shared project without reviewing that impact.
 `test:cloudflare` requires a disposable local PostgreSQL cluster: it creates roles and modifies public schema grants in `automations_test`.
 The `.mjs` workerd harness avoids Miniflare's incomplete published TypeScript declarations; application TypeScript remains strict.

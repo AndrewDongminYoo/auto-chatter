@@ -160,6 +160,8 @@ docker compose --env-file deploy/runtime.env --profile send ps worker
 
 백업과 복원 확인 후 수신기와 워커를 중지하고, 새 코드에서 적용할 마이그레이션을 번호 순서대로 실행합니다.
 현재 `001`과 `002`는 재실행 가능하며, 빈 볼륨의 최신 스키마에도 다시 적용할 수 있습니다.
+003–006은 접근 정책과 함께 전용 실행 파일로 한 트랜잭션에서 적용합니다.
+접근 정책은 기존 `automations_app` 역할에도 SELECT·INSERT·UPDATE RLS 정책을 제공하며, DELETE·DDL과 Supabase API 역할의 접근은 허용하지 않습니다.
 자동 마이그레이션 원장은 아직 없으므로 릴리스 기록에 DB 식별자, SQL 파일명·Git SHA, 적용 시각과 종료 결과를 남깁니다.
 이후 추가되는 마이그레이션은 해당 기록과 개별 릴리스 지침으로 적용 여부를 결정하며 재실행 가능하다고 가정하지 않습니다.
 중지 기간에는 웹훅 수신이 불가능하므로 유지보수 시간을 정하고 이후 이벤트 수신을 확인합니다.
@@ -169,6 +171,11 @@ docker compose --env-file deploy/runtime.env --profile send ps worker
 docker compose --env-file deploy/runtime.env --profile send stop worker ingress
 docker compose --env-file deploy/runtime.env exec -T db psql -U postgres -d automations -v ON_ERROR_STOP=1 -f /migrations/001_reply_worker.sql
 docker compose --env-file deploy/runtime.env exec -T db psql -U postgres -d automations -v ON_ERROR_STOP=1 -f /migrations/002_rate_limit_backoff.sql
+docker compose --env-file deploy/runtime.env exec -T db mkdir -p /tmp/auto-chatter/db/migrations /tmp/auto-chatter/deploy
+docker compose --env-file deploy/runtime.env cp db/migrations/. db:/tmp/auto-chatter/db/migrations
+docker compose --env-file deploy/runtime.env cp deploy/migrate-multi-user.sql db:/tmp/auto-chatter/deploy/migrate-multi-user.sql
+docker compose --env-file deploy/runtime.env cp deploy/supabase-access.sql db:/tmp/auto-chatter/deploy/supabase-access.sql
+docker compose --env-file deploy/runtime.env exec -T db psql -U postgres -d automations -f /tmp/auto-chatter/deploy/migrate-multi-user.sql
 ```
 
 마이그레이션 실패 시 기동하지 않고 원인을 해결합니다.
