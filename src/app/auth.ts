@@ -91,7 +91,7 @@ export class AuthClient {
       throw new ApiError(503, "auth_not_configured");
     this.origin = new URL(env.SUPABASE_URL).origin;
     this.key = env.SUPABASE_PUBLISHABLE_KEY;
-    this.fetchImpl = fetchImpl;
+    this.fetchImpl = (input, init) => fetchImpl(input, init);
   }
 
   private async call(path: string, method: string, body?: unknown, accessToken?: string): Promise<unknown> {

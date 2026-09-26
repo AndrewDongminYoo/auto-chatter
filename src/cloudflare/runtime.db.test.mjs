@@ -6,6 +6,46 @@ import { test } from "node:test";
 import { Pool } from "pg";
 import { Miniflare } from "miniflare";
 
+test("workerd auth routes call the provider with the native fetch receiver", async () => {
+  const config = JSON.parse(await readFile(new URL("../../wrangler.json", import.meta.url), "utf8"));
+  const runtime = new Miniflare({
+    modules: true,
+    scriptPath: ".wrangler/build/index.js",
+    compatibilityDate: config.compatibility_date,
+    compatibilityFlags: config.compatibility_flags,
+    bindings: {
+      SUPABASE_URL: "https://auth-test.supabase.co",
+      SUPABASE_PUBLISHABLE_KEY: "synthetic-public-key",
+    },
+    outboundService: async (request) => {
+      const url = new URL(request.url);
+      assert.equal(url.origin, "https://auth-test.supabase.co");
+      assert.equal(request.method, "POST");
+      assert.equal(request.headers.get("apikey"), "synthetic-public-key");
+      assert.deepEqual(await request.json(), { email: "owner@example.test", password: "example-password" });
+      if (url.pathname === "/auth/v1/signup") return Response.json({ user: { id: "synthetic-user" } });
+      assert.equal(url.pathname + url.search, "/auth/v1/token?grant_type=password");
+      return Response.json({ error_code: "invalid_credentials" }, { status: 400 });
+    },
+  });
+  try {
+    for (const [route, status, body] of [
+      ["signup", 200, { confirmation_required: true }],
+      ["login", 401, { error: "authentication_failed" }],
+    ]) {
+      const response = await runtime.dispatchFetch(`https://app.test/api/auth/${route}`, {
+        method: "POST",
+        headers: { Origin: "https://app.test", "Content-Type": "application/json" },
+        body: JSON.stringify({ email: "owner@example.test", password: "example-password" }),
+      });
+      assert.equal(response.status, status, `${route}: ${await response.clone().text()}`);
+      assert.deepEqual(await response.json(), body);
+    }
+  } finally {
+    await runtime.dispose();
+  }
+});
+
 test("workerd verifies signed bytes, persists via Hyperdrive, and consumes duplicate notifications", async () => {
   const databaseUrl = process.env.TEST_DATABASE_URL;
   if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
