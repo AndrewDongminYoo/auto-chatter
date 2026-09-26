@@ -47,7 +47,7 @@ export class ProviderRejectedError extends Error {
   }
 }
 
-// Meta refused the send with a throttle code; nothing was delivered, so the reply may be retried later.
+// The transport treats a structured 4xx throttle response as a retryable refusal.
 export class ProviderRateLimitedError extends Error {
   readonly failureCode: string;
   readonly retryAfterSeconds: number | null;
@@ -174,6 +174,21 @@ export async function processNextPrivateReply(
     );
     return true;
   }
+
+  // Another worker may have paused this connection while this reply was being verified.
+  // Defer work that has not entered send(); requests already in progress cannot be recalled.
+  const deferred = await pool.query(
+    `UPDATE private_reply_outbox AS reply
+     SET status = 'pending', attempt_id = NULL, attempt_started_at = NULL,
+       next_attempt_at = GREATEST(reply.next_attempt_at, connection.send_paused_until),
+       failure_code = 'connection_paused'
+     FROM instagram_connections AS connection
+     WHERE reply.id = $1 AND reply.status = 'sending' AND reply.attempt_id = $2
+       AND connection.id = reply.connection_id AND connection.workspace_id = reply.workspace_id
+       AND connection.send_paused_until > now()`,
+    [row.id, attemptId],
+  );
+  if (deferred.rowCount === 1) return true;
 
   let messageId: string;
   try {

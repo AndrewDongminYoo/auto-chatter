@@ -1,0 +1,127 @@
+name: automations
+
+x-app: &app
+  image: automations:${APP_IMAGE_TAG:-local}
+  build: .
+  init: true
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  stop_grace_period: 3m
+  networks:
+    - edge
+    - data
+  logging:
+    driver: local
+    options:
+      max-size: 10m
+      max-file: "3"
+  depends_on:
+    db:
+      condition: service_healthy
+
+x-database-environment: &database-environment
+  DATABASE_URL: postgres://automations_app@db:5432/automations
+  PGPASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in the deployment env file}
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    networks:
+      - data
+    environment:
+      POSTGRES_DB: automations
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the deployment env file}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in the deployment env file}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./deploy/init-app-user.sh:/docker-entrypoint-initdb.d/02-app-user.sh:ro
+      - ./db/migrations:/migrations:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -h 127.0.0.1 -U postgres -d automations
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  ingress:
+    <<: *app
+    environment:
+      <<: *database-environment
+      HOST: 0.0.0.0
+      PORT: "3000"
+      INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET:?Set INSTAGRAM_APP_SECRET in the deployment env file}
+      INSTAGRAM_VERIFY_TOKEN: ${INSTAGRAM_VERIFY_TOKEN:?Set INSTAGRAM_VERIFY_TOKEN in the deployment env file}
+    ports:
+      - "127.0.0.1:${INGRESS_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - --input-type=module
+        - -e
+        - "const r = await fetch('http://127.0.0.1:3000/webhooks/instagram', {signal: AbortSignal.timeout(2000)}); process.exit(r.status === 403 ? 0 : 1)"
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+
+  worker:
+    <<: *app
+    profiles: [send]
+    command: [node, src/instagram/worker-main.ts, --run]
+    environment:
+      <<: *database-environment
+      META_LOGIN_MODE: instagram
+      META_GRAPH_VERSION: ${META_GRAPH_VERSION:-}
+      META_INSTAGRAM_ACCOUNT_ID: ${META_INSTAGRAM_ACCOUNT_ID:-}
+      META_INSTAGRAM_ACCESS_TOKEN: ${META_INSTAGRAM_ACCESS_TOKEN:-}
+      META_INSTAGRAM_CONNECTION_ID: ${META_INSTAGRAM_CONNECTION_ID:-}
+
+  proxy:
+    image: caddy:2-alpine
+    profiles: [public]
+    restart: unless-stopped
+    networks:
+      - edge
+    environment:
+      WEBHOOK_DOMAIN: ${WEBHOOK_DOMAIN:-localhost}
+    ports:
+      - "${PROXY_BIND:-0.0.0.0}:${HTTP_PORT:-80}:80"
+      - "${PROXY_BIND:-0.0.0.0}:${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      ingress:
+        condition: service_healthy
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  edge:
+  data:
+    internal: true

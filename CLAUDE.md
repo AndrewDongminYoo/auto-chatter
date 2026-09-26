@@ -60,12 +60,18 @@ Outbox status semantics matter for correctness:
 - `pending` + `next_attempt_at` pushed 1 minute: verification failed (including transient Graph errors on read calls), or `PreSendVerificationError` with `retry`.
 - `blocked` + `failure_code`: the policy rejected it, or `PreSendVerificationError` with `block`.
 - `pending` + `rate_limit_retries` incremented: `ProviderRateLimitedError`, i.e. Meta refused the send `POST` with a throttle code in a 4xx body. The delay comes from the backoff tiers in `reply-worker.ts`, or from a longer `Retry-After`. The connection's `send_paused_until` is pushed out by the same delay, and the claim query skips every reply of a paused connection, so the other replies do not spend their own retries.
+- `pending` + `failure_code = connection_paused`: a pause became visible after the reply was claimed and verified. The worker clears the attempt and defers the reply to the connection pause without consuming a rate-limit retry.
 - `failed` + `failure_code = meta_error_<code>`: `ProviderRejectedError` (a non-transient error code on the send `POST`), or a rate limit after the backoff tiers are used up.
 - `unknown`: `send()` threw anything else, or a `sending` row outlived 10 minutes (`recoverStalePrivateReplies`). These are never retried automatically, to avoid double-sending.
 - `sent` + `provider_message_id`.
 
 A transport may throw `PreSendVerificationError` only before it issues the provider send request, and `ProviderRejectedError` or `ProviderRateLimitedError` only for a definite rejection of that request; any other error from `send()` is treated as an ambiguous outcome.
 `classifyMetaGraphFailure` in `meta-graph-error.ts` is the single place both transports use to classify a non-2xx, non-5xx Graph response.
+It classifies provider refusals only for HTTP 4xx.
+The service accepts `Retry-After` delays from zero through seven days; malformed or larger values fall back to the retry tier.
+This bound is a service policy, not a Meta-specified maximum.
+The worker checks the connection pause again before entering `transport.send()`; the check and the external POST are not atomic, and requests already admitted to `send()` can continue if a pause is recorded later.
+Cooldown is scoped to one stored connection; an app-wide quota shared by multiple connections is not coordinated yet.
 
 **Transports** (selected by `META_LOGIN_MODE`, default `facebook`; the configured Meta app uses `instagram`):
 
@@ -74,6 +80,18 @@ A transport may throw `PreSendVerificationError` only before it issues the provi
 
 Both accept an injectable `fetchImpl`, which is how the unit tests mock Graph responses.
 `worker-main.ts` only surfaces error messages that start with `Invalid Meta`/`Meta Graph` (or the account ID error); anything else prints a generic message so tokens never reach logs.
+
+## Deployment
+
+`Dockerfile` runs the sources as the non-root `node` user with production dependencies only.
+`compose.yaml` starts PostgreSQL and ingress by default; profiles `send` and `public` enable the real worker and Caddy proxy respectively.
+Use `--env-file deploy/runtime.env` explicitly; `deploy/environment.example` is the empty template.
+Never print resolved configuration with secrets; use `config --quiet`.
+Fresh DB volumes initialize the current schema and a separate DML-only `automations_app` role.
+Existing volumes require explicit migrations as described in `docs/notes/2026-09-26-deployment-runbook.md`.
+Deployment smoke checks must use synthetic credentials, a separate Compose project and loopback ports, with no live Meta calls.
+`.github/workflows/ci.yaml` runs type checks, unit and PostgreSQL integration tests, Trunk, and a container deployment smoke check on PRs and pushes to `main`.
+The deployment job verifies signed-event persistence, replay protection, restricted DB privileges and HTTPS with a local Caddy CA; it never starts a sending worker.
 
 ## Verification boundaries
 
