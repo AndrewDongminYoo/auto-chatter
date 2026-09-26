@@ -4,7 +4,8 @@ ManyChat 유료 기능에 대응하는 자체 운영형 메시징 자동화 서�
 Instagram 댓글·DM 웹훅 수신, 사용자별 로그인·계정 연결·규칙 설정, 댓글 키워드별 첫 DM과 응답 후 팔로우 조건별 후속 DM을 구현했습니다.
 다중 사용자 코드와 DB 마이그레이션은 2026-09-26에 운영 배포했으며 발송은 비활성화했습니다.
 운영자의 이메일 인증·작업 공간 소유권 배정·Instagram OAuth 연결과 실제 첫 비공개 답장 1건의 발송·수신을 확인했습니다.
-테스트 후 발송은 다시 중지했으며 팔로우 조건별 후속 DM·여러 실제 사용자 간 격리·Advanced Access 검증은 남아 있습니다.
+첫 DM 테스트 후 발송을 다시 중지했고, 이후 승인된 새 게시물의 팔로우 분기 테스트만 발송을 활성화했습니다.
+팔로우 조건별 후속 DM·여러 실제 사용자 간 격리·Advanced Access 검증은 남아 있습니다.
 Instagram Login과 Facebook Login용 Meta Graph 어댑터와 별도 발송 워커 명령이 있습니다.
 운영자는 Meta 개발자 대시보드에서 일반 DM 발송에 성공했다고 보고했습니다.
 운영자가 실행한 `meta:check`에서 토큰의 Instagram 계정 ID와 설정값이 일치하는 것도 확인했습니다.
@@ -20,6 +21,7 @@ Instagram Login과 Facebook Login용 Meta Graph 어댑터와 별도 발송 워�
 - [다중 사용자 자동화](docs/specs/2026-09-26-multi-user-automations.md): 사용자별 계정 연결과 응답 후 팔로우 확인 흐름입니다.
 - [다중 사용자 배포 전환](docs/notes/2026-09-26-multi-user-cutover.md): 검증 결과, 외부 설정, 마이그레이션과 수동 삭제 절차입니다.
 - [첫 실발송 테스트](docs/notes/2026-09-26-first-live-reply-test.md): 실제 수신·공급자 응답 대조, 소유권 ID 수정과 테스트 후 발송 중지 결과입니다.
+- [팔로우 분기 실발송 테스트](docs/notes/2026-09-26-live-follow-test.md): 승인한 문구, 대상 게시물, 진행 단계와 종료 후 중지 절차입니다.
 - [구현 계획](docs/plans/2026-09-25-delivery-plan.md): 검증 순서, 단계별 완료 조건, 개발 에이전트 워크플로를 기록했습니다.
 
 ## 현재 결정
@@ -42,7 +44,8 @@ Hyperdrive를 통해 DB에 연결하며, 매분 예약 실행으로 누락된 �
 Supabase Auth 및 OAuth secrets와 마이그레이션은 아래 배포 전환 문서에 따라 설정해야 합니다.
 설정과 전환 순서는 [Cloudflare 배포 절차](docs/notes/2026-09-26-cloudflare-runbook.md), 구현 범위는 [전환 계획](docs/plans/2026-09-26-cloudflare-supabase.md)을 따릅니다.
 2026-09-26 Supabase 서울 리전 프로젝트와 Cloudflare Queue·Hyperdrive를 생성하고 Worker를 workers.dev에 배포했습니다.
-발송은 비활성화 상태이며, 웹훅 secrets 두 개의 등록과 잘못된 검증 토큰·서명 없는 요청의 거부를 확인했습니다.
+발송 기본값은 비활성화이며, 현재는 승인된 팔로우 분기 테스트를 위해 해당 규칙·계정·전역 스위치를 활성화했습니다.
+웹훅 secrets 두 개의 등록과 잘못된 검증 토큰·서명 없는 요청의 거부를 확인했습니다.
 Meta 대시보드에서 전송한 테스트 웹훅의 HTTP 200 응답도 확인했습니다.
 운영 DB에는 승인된 Instagram 계정의 수신 연결과 첫 실발송 테스트 규칙이 있으며, 해당 규칙과 계정의 발송은 다시 중지했습니다.
 실제 테스트 댓글 저장과 비공개 답장 1건의 수신은 2026-09-26에 확인했으며, 팔로우 분기 실발송 검증은 남아 있습니다.
