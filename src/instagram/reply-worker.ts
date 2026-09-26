@@ -22,7 +22,7 @@ export interface PrivateReplyTransport {
     mediaOwned: boolean;
   }>;
   // Throw PreSendVerificationError only before making a provider send request.
-  send(request: PrivateReplyRequest): Promise<{ messageId: string }>;
+  send(request: PrivateReplyRequest): Promise<{ messageId: string; recipientId?: string }>;
 }
 
 export class PreSendVerificationError extends Error {
@@ -190,11 +190,26 @@ export async function processNextPrivateReply(
   );
   if (deferred.rowCount === 1) return true;
 
+  const ruleEnabled = await pool.query(
+    `SELECT rule.enabled FROM instagram_comment_rules rule
+    JOIN private_reply_outbox reply ON reply.rule_id=rule.id WHERE reply.id=$1`,
+    [row.id],
+  );
+  if (ruleEnabled.rows[0]?.enabled !== true) {
+    await updateClaim(
+      pool,
+      "UPDATE private_reply_outbox SET status='blocked',failure_code='inactive_rule' WHERE id=$1 AND status='sending' AND attempt_id=$2",
+      [row.id, attemptId],
+    );
+    return true;
+  }
   let messageId: string;
+  let recipientId: string | null = null;
   try {
     const sent = await transport.send(request);
     if (typeof sent.messageId !== "string" || !sent.messageId.trim()) throw new Error("Provider message ID missing");
     messageId = sent.messageId;
+    if (typeof sent.recipientId === "string" && /^\d+$/.test(sent.recipientId)) recipientId = sent.recipientId;
   } catch (error) {
     if (error instanceof PreSendVerificationError) {
       if (error.disposition === "retry") {
@@ -253,8 +268,16 @@ export async function processNextPrivateReply(
 
   await updateClaim(
     pool,
-    "UPDATE private_reply_outbox SET status = 'sent', provider_message_id = $3, sent_at = now(), failure_code = NULL WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-    [row.id, attemptId, messageId],
+    `WITH sent AS (
+      UPDATE private_reply_outbox SET status='sent',provider_message_id=$3,recipient_id=$4,sent_at=now(),failure_code=CASE WHEN follow_config IS NOT NULL AND $4::text IS NULL THEN 'follow_recipient_unavailable' ELSE NULL END
+      WHERE id=$1 AND status='sending' AND attempt_id=$2 RETURNING *
+    ), conversations AS (
+      INSERT INTO instagram_follow_conversations(reply_id,connection_id,recipient_id,confirmation_keyword,follower_reply_text,non_follower_reply_text)
+      SELECT id,connection_id,recipient_id,follow_config->>'confirmation_keyword',follow_config->>'follower_reply_text',follow_config->>'non_follower_reply_text'
+      FROM sent WHERE follow_config IS NOT NULL AND recipient_id IS NOT NULL
+      ON CONFLICT DO NOTHING
+    ) SELECT id FROM sent`,
+    [row.id, attemptId, messageId, recipientId],
   );
   return true;
 }

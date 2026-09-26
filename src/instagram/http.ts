@@ -1,3 +1,5 @@
+import { parseMessageEvents } from "./message-events.ts";
+import { ingestMessages } from "./follow-flow.ts";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Pool } from "pg";
 import { ingestComments } from "./store.ts";
@@ -57,14 +59,17 @@ async function handleRequest(
   }
 
   let comments;
+  let messages;
   try {
     comments = parseCommentEvents(body);
+    messages = parseMessageEvents(body);
   } catch {
     response.writeHead(400).end();
     return;
   }
 
   await ingestComments(config.pool, comments);
+  await ingestMessages(config.pool, messages);
   response.writeHead(200).end();
 }
 
