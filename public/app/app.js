@@ -4,6 +4,11 @@ let connections = [];
 let refreshPromise;
 let editingRuleId;
 let dirty = false;
+let mediaGeneration = 0;
+let mediaAfter = null;
+let mediaBusy = false;
+let mediaSession = 0;
+const mediaCache = new Map();
 function editorState(
   message = dirty ? "저장하지 않은 변경 사항이 있습니다." : "새 댓글부터 저장한 설정이 적용됩니다.",
 ) {
@@ -16,10 +21,9 @@ function canDiscard() {
   return !dirty || confirm("저장하지 않은 변경 사항을 버릴까요?");
 }
 function focusEditor() {
-  const target =
-    form.elements[
-      editingRuleId ? (form.elements.match_mode.value === "all" ? "private_reply_text" : "keywords") : "media_id"
-    ];
+  const target = editingRuleId
+    ? form.elements[form.elements.match_mode.value === "all" ? "private_reply_text" : "keywords"]
+    : byId("media-title");
   target.focus({ preventScroll: true });
   target.scrollIntoView({
     behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
@@ -82,12 +86,16 @@ window.addEventListener("beforeunload", (event) => {
 });
 function resetSession() {
   connections = [];
+  mediaCache.clear();
+  mediaSession++;
+  ruleMediaObserver.disconnect();
   dirty = false;
   byId("startup").hidden = true;
   editingRuleId = undefined;
   form.reset();
+  form.elements.media_id.value = "";
   form.elements.connection_id.disabled = false;
-  form.elements.media_id.readOnly = false;
+  resetMedia();
   form.elements.connection_id.replaceChildren();
   byId("connections").replaceChildren();
   byId("rules").replaceChildren();
@@ -115,7 +123,12 @@ const errors = {
   connection_unavailable: "계정 연결 상태와 토큰 유효기간을 확인해 주세요.",
   keywords_required: "키워드를 하나 이상 입력해 주세요.",
   invalid_keywords: "키워드는 최대 20개, 각각 100자까지 입력할 수 있습니다.",
-  invalid_rule: "게시물 ID, 답장 문구와 팔로우 조건을 확인해 주세요.",
+  invalid_rule: "게시물 선택, 답장 문구와 팔로우 조건을 확인해 주세요.",
+  invalid_media_request: "게시물 목록을 새로고침한 뒤 다시 선택해 주세요.",
+  media_reconnect_required: "계정을 다시 연결한 뒤 게시물을 불러와 주세요.",
+  media_unavailable: "게시물을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.",
+  media_not_owned: "선택한 계정의 게시물만 사용할 수 있습니다. 게시물을 다시 선택해 주세요.",
+  media_unsupported: "이 게시물은 댓글 자동화를 지원하지 않습니다. 피드 게시물이나 릴스를 선택해 주세요.",
   remote_logout_unconfirmed:
     "브라우저에서 로그아웃했습니다. 서버 세션 종료를 확인하지 못했으니 다시 로그인해 로그아웃하거나 운영자에게 문의해 주세요.",
   instagram_not_configured: "Instagram 연결 서비스를 준비 중입니다.",
@@ -294,7 +307,10 @@ async function loadWorkspace() {
     item.className = "item";
     item.dataset.ruleId = rule.id;
     item.classList.toggle("active-rule", rule.id === editingRuleId);
-    item.append(node("strong", `게시물 ${rule.media_id}`));
+    const target = node("div", "", "rule-target");
+    target.append(node("strong", "게시물 정보를 불러오는 중…"));
+    item.append(target);
+    observeRuleMedia(target, rule);
     const state = node("div", "", "badges");
     state.append(
       badge(rule.enabled ? "활성" : "중지", rule.enabled ? "success" : ""),
@@ -317,7 +333,7 @@ async function loadWorkspace() {
       dirty = false;
       editingRuleId = rule.id;
       form.elements.connection_id.disabled = true;
-      form.elements.media_id.readOnly = true;
+
       for (const name of [
         "connection_id",
         "media_id",
@@ -336,12 +352,14 @@ async function loadWorkspace() {
       editorState("계정과 게시물은 고정됩니다. 댓글 조건과 문구를 수정하세요.");
       for (const element of byId("rules").children)
         element.classList.toggle("active-rule", element.dataset.ruleId === rule.id);
+      void loadMedia();
       focusEditor();
     });
     item.append(button);
     byId("rules").append(item);
   }
   formConditions();
+  void loadMedia();
   try {
     await loadActivity();
   } catch (error) {
@@ -354,6 +372,174 @@ async function loadWorkspace() {
     );
   }
 }
+
+function mediaKey(connectionId, mediaId) {
+  return `${connectionId}:${mediaId}`;
+}
+function mediaTitle(media) {
+  return media.caption.trim() || (media.media_type === "VIDEO" ? "내용 없는 릴스·동영상" : "내용 없는 게시물");
+}
+function mediaSummary(media) {
+  const content = node("div", "", "media-copy");
+  content.append(node("strong", mediaTitle(media)));
+  const date = media.timestamp ? new Date(media.timestamp).toLocaleDateString("ko-KR") : "날짜 정보 없음";
+  const kind = { IMAGE: "사진", VIDEO: "동영상", CAROUSEL_ALBUM: "여러 장" }[media.media_type];
+  content.append(node("span", `${date} · ${kind || "게시물"}`));
+  return content;
+}
+function mediaImage(media) {
+  if (!media.image_url) return node("span", "사진 없음", "media-placeholder");
+  const image = document.createElement("img");
+  image.src = media.image_url;
+  image.alt = "";
+  image.loading = "lazy";
+  image.referrerPolicy = "no-referrer";
+  image.addEventListener("error", () => image.replaceWith(node("span", "사진 없음", "media-placeholder")), {
+    once: true,
+  });
+  return image;
+}
+function showSelected(media) {
+  const target = byId("selected-media");
+  target.replaceChildren(mediaImage(media), mediaSummary(media));
+  if (media.permalink) {
+    const link = node("a", "Instagram에서 보기");
+    link.href = media.permalink;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    target.append(link);
+  }
+  target.hidden = false;
+}
+function resetMedia() {
+  mediaGeneration++;
+  mediaAfter = null;
+  mediaBusy = false;
+  byId("media-more").hidden = true;
+  byId("media-more").disabled = false;
+  byId("media-reload").disabled = false;
+  byId("media-list").replaceChildren();
+  byId("selected-media").replaceChildren();
+  byId("selected-media").hidden = true;
+  byId("media-status").textContent = "";
+}
+async function getMedia(connectionId, mediaId, force = false) {
+  const key = mediaKey(connectionId, mediaId);
+  if (!force && mediaCache.has(key)) return mediaCache.get(key);
+  const session = mediaSession;
+  const result = await api(`/api/connections/${connectionId}/media/${mediaId}`);
+  if (session !== mediaSession) throw new Error("로그인 상태가 변경되었습니다.");
+  const media = result.media[0];
+  mediaCache.set(key, media);
+  return media;
+}
+const ruleMediaObserver = new IntersectionObserver(
+  (entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const target = entry.target;
+      ruleMediaObserver.unobserve(target);
+      const rule = target.rule;
+      getMedia(rule.connection_id, rule.media_id)
+        .then((media) => {
+          if (!target.isConnected) return;
+          target.replaceChildren(mediaImage(media), mediaSummary(media));
+        })
+        .catch(() => {
+          if (target.isConnected)
+            target.replaceChildren(
+              node("strong", "게시물 정보를 확인할 수 없습니다"),
+              node("span", "규칙 수정에서 다시 확인하세요."),
+            );
+        });
+    }
+  },
+  { rootMargin: "100px" },
+);
+function observeRuleMedia(target, rule) {
+  target.rule = rule;
+  ruleMediaObserver.observe(target);
+}
+async function loadMedia(more = false, force = false) {
+  if (more && (mediaBusy || !mediaAfter)) return;
+  if (!more) resetMedia();
+  const generation = mediaGeneration;
+  const connectionId = form.elements.connection_id.value;
+  if (!connectionId) return;
+  const previousSelection = mediaCache.get(mediaKey(connectionId, form.elements.media_id.value));
+  if (previousSelection) showSelected(previousSelection);
+  mediaBusy = true;
+  byId("media-reload").disabled = true;
+  byId("media-more").disabled = true;
+  byId("media-status").textContent = "게시물을 불러오고 있습니다…";
+  try {
+    if (editingRuleId) {
+      const selected = await getMedia(connectionId, form.elements.media_id.value, force);
+      if (generation !== mediaGeneration) return;
+      showSelected(selected);
+      byId("media-status").textContent = "이 규칙의 게시물은 고정됩니다.";
+      return;
+    }
+    const page = await api(
+      `/api/connections/${connectionId}/media${more ? `?after=${encodeURIComponent(mediaAfter)}` : ""}`,
+    );
+    if (generation !== mediaGeneration) return;
+    for (const media of page.media) {
+      mediaCache.set(mediaKey(connectionId, media.id), media);
+      if ([...byId("media-list").children].some((element) => element.dataset.mediaId === media.id)) continue;
+      const button = node("button", "", "media-option");
+      button.type = "button";
+      button.dataset.mediaId = media.id;
+      button.setAttribute("aria-pressed", String(form.elements.media_id.value === media.id));
+      button.append(mediaImage(media), mediaSummary(media));
+      button.addEventListener("click", () => {
+        if (editingRuleId || form.elements.connection_id.value !== connectionId) return;
+        form.elements.media_id.value = media.id;
+        for (const option of byId("media-list").children)
+          option.setAttribute("aria-pressed", String(option === button));
+        showSelected(media);
+        byId("media-status").textContent = "게시물을 선택했습니다. 댓글 조건과 메시지를 작성하세요.";
+        markDirty();
+      });
+      byId("media-list").append(button);
+    }
+    mediaAfter = page.after;
+    byId("media-more").hidden = !mediaAfter;
+    byId("media-status").textContent = byId("media-list").children.length
+      ? "답장할 게시물을 선택하세요. 오래된 게시물은 더 불러올 수 있습니다."
+      : mediaAfter
+        ? "이 페이지에는 지원하는 게시물이 없습니다. 이전 게시물을 더 불러와 주세요."
+        : "아직 선택할 게시물이 없습니다. 게시한 뒤 새로고침해 주세요.";
+    const selected = mediaCache.get(mediaKey(connectionId, form.elements.media_id.value));
+    if (selected) showSelected(selected);
+  } catch (error) {
+    if (generation !== mediaGeneration) return;
+    if (editingRuleId && byId("selected-media").hidden) {
+      const target = byId("selected-media");
+      const identity = document.createElement("details");
+      identity.append(node("summary", "게시물 식별정보"), node("code", form.elements.media_id.value));
+      target.replaceChildren(node("strong", "현재 규칙에 저장한 게시물"), identity);
+      target.hidden = false;
+    }
+    byId("media-status").textContent = editingRuleId
+      ? `${error.message} 저장한 대상과 입력 내용은 유지됩니다.`
+      : error.message;
+  } finally {
+    if (generation === mediaGeneration) {
+      mediaBusy = false;
+      byId("media-reload").disabled = false;
+      byId("media-more").disabled = false;
+    }
+  }
+}
+form.elements.connection_id.addEventListener("change", () => {
+  form.elements.media_id.value = "";
+  void loadMedia();
+});
+byId("media-reload").addEventListener("click", () => {
+  void loadMedia(false, true);
+});
+byId("media-more").addEventListener("click", () => void loadMedia(true));
 
 byId("login-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -413,11 +599,13 @@ byId("new-rule").addEventListener("click", () => {
   dirty = false;
   editingRuleId = undefined;
   form.elements.connection_id.disabled = false;
-  form.elements.media_id.readOnly = false;
   form.reset();
+  form.elements.media_id.value = "";
+  resetMedia();
   formConditions();
   editorState("새 규칙을 작성하고 저장하세요.");
   for (const element of byId("rules").children) element.classList.remove("active-rule");
+  void loadMedia();
   focusEditor();
 });
 form.addEventListener("submit", (event) => {
@@ -435,6 +623,11 @@ form.addEventListener("submit", (event) => {
         ? "키워드를 한 줄에 하나씩, 각각 100자 이내로 최대 20개 입력해 주세요."
         : "",
     );
+  }
+  if (!form.elements.media_id.value) {
+    byId("media-status").textContent = "답장할 게시물을 먼저 선택해 주세요.";
+    focusEditor();
+    return;
   }
   if (!form.reportValidity()) return;
   const payload = {
@@ -455,7 +648,7 @@ form.addEventListener("submit", (event) => {
       editingRuleId = saved.id;
       dirty = false;
       form.elements.connection_id.disabled = true;
-      form.elements.media_id.readOnly = true;
+
       editorState("저장했습니다. 새로 수신하는 댓글부터 적용됩니다.");
       notice("규칙을 저장했습니다.");
       try {

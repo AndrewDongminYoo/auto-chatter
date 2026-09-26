@@ -11,6 +11,8 @@ import {
   updateConnection,
 } from "./settings.ts";
 import { ApiError } from "./auth.ts";
+import { connectionMedia } from "./instagram-media.ts";
+import { sealSecret } from "./secrets.ts";
 
 const url = new URL(process.env.TEST_DATABASE_URL ?? "http://invalid");
 if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
@@ -60,6 +62,37 @@ test("connection listings omit credentials and cannot cross workspaces", async (
   assert.equal(owned[0].token_registered, true);
   assert.equal(JSON.stringify(owned).includes("encrypted-test"), false);
   assert.deepEqual(await listConnections(pool, b), []);
+});
+
+test("media retrieval uses real workspace predicates before accessing an encrypted credential", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const key = Buffer.alloc(32, 2).toString("base64");
+  await pool.query("UPDATE instagram_connections SET access_token_encrypted=$1 WHERE id=$2", [
+    sealSecret("media-test-token", key, `${workspace}:123`),
+    connectionId,
+  ]);
+  const fetchImpl = (async (input: string | URL | Request) => {
+    return Response.json(
+      new URL(String(input)).pathname.endsWith("/me")
+        ? { id: "999", user_id: "123" }
+        : { data: [{ id: "12345", owner: { id: "999" }, media_type: "IMAGE", caption: "Owned post" }] },
+    );
+  }) as typeof fetch;
+  const env = { TOKEN_ENCRYPTION_KEY: key, META_GRAPH_VERSION: "v26.0" };
+  assert.equal((await connectionMedia(pool, a, connectionId, env, {}, fetchImpl)).media[0]?.caption, "Owned post");
+  await assert.rejects(
+    connectionMedia(pool, b, connectionId, env, {}, (async () => {
+      throw new Error("Graph must not be reached");
+    }) as typeof fetch),
+    (error: unknown) => error instanceof ApiError && error.status === 404,
+  );
+  await pool.query("UPDATE instagram_connections SET token_expires_at=now()-interval '1 minute' WHERE id=$1", [
+    connectionId,
+  ]);
+  await assert.rejects(
+    connectionMedia(pool, a, connectionId, env, {}, fetchImpl),
+    (error: unknown) => error instanceof ApiError && error.message === "media_reconnect_required",
+  );
 });
 
 test("rules are created and updated only within the verified user's workspace", async () => {

@@ -1,0 +1,74 @@
+# 게시물 선택기 사용성 검증
+
+## 구현 범위
+
+숫자 게시물 ID 입력을 계정별 게시물 선택기로 바꿨습니다.
+사진, 본문 일부, 날짜와 게시물 유형으로 대상을 구분하고 Instagram 원본 링크를 열 수 있습니다.
+목록은 12개씩 조회하며 기존 규칙 목록은 화면에 들어온 대상만 상세 정보를 조회합니다.
+신규 규칙 저장 전에 서버에서 게시물 소유를 확인합니다.
+기존 규칙은 대상을 바꿀 수 없으며 조회 실패 시에도 문구 수정과 비활성화가 가능합니다.
+새 규칙의 활성화 체크박스는 기본으로 꺼져 있습니다.
+
+## 확인한 동작
+
+로컬 HTTP 서버와 `agent-browser`의 독립 세션에서 API 응답을 모의 데이터로 대체했습니다.
+실제 계정 설정이나 메시지는 변경하지 않았습니다.
+썸네일 fixture에는 서비스 아이콘을 사용했습니다.
+
+| 과제                | 관찰 결과                                                                            |
+| ------------------- | ------------------------------------------------------------------------------------ |
+| 게시물 선택         | 숫자 입력 없이 게시물을 선택하고 내부 media ID `456`을 저장 payload로 전달했습니다.  |
+| 다음 페이지         | 목록이 2개에서 3개로 늘었고 선택값을 유지했습니다.                                   |
+| 기본 저장           | 신규 규칙의 enabled 값은 false였습니다.                                              |
+| 계정 변경           | 선택 ID를 비우고 다른 계정의 빈 목록을 표시했습니다.                                 |
+| 늦은 응답           | 첫 계정의 응답이 늦게 도착해도 두 번째 계정의 목록과 선택값을 변경하지 않았습니다.   |
+| 기존 규칙 조회 실패 | 계정 선택을 잠그고 대상 ID와 작성한 문구를 유지했으며 재시도할 수 있었습니다.        |
+| 모바일·키보드       | 390px 화면에서 가로 넘침 없이 Enter로 선택했습니다. 게시물 버튼 높이는 76px였습니다. |
+
+새 규칙 시작 시 미저장 변경을 버릴지 확인하고 이전 선택 ID를 비우는 동작도 확인했습니다.
+로그아웃 시 게시물 캐시, 선택 ID와 목록이 비워졌습니다.
+숨김 입력은 일반 입력과 달리 `form.reset()`만으로 값이 비워지지 않아 명시적으로 초기화했습니다.
+캐시가 없는 기존 규칙의 조회 실패에서도 저장된 대상 식별정보와 문구가 남는 것을 확인했습니다.
+
+## 자동 검증
+
+```bash
+corepack pnpm check-types
+corepack pnpm test
+TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:5433/automations_test corepack pnpm test:db
+TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:5433/automations_test corepack pnpm test:cloudflare
+```
+
+타입 검사와 unit 90건, DB 78건, 로컬 workerd 20건이 통과했습니다.
+unit 테스트는 모의 Graph 응답에 대한 인증, 소유 확인, 커서와 출력 정제를 검사합니다.
+DB 테스트는 실제 PostgreSQL workspace 조건과 토큰 만료 거부를 검사합니다.
+workerd 테스트는 Worker 번들 및 기존 수신·발송 어댑터 회귀를 검사하며 실제 Meta 호출은 하지 않습니다.
+
+## 로컬 리뷰와 보강
+
+API와 화면 상태를 분리해 독립 적대적 리뷰를 실행했습니다.
+이미지 URL fragment와 대소문자가 다른 인증 매개변수가 브라우저 응답에 남는 경로를 재현한 뒤 제거했습니다.
+본문을 조회할 수 없는 기존 규칙에는 저장된 대상의 식별정보를 펼쳐 볼 수 있는 복구 화면을 추가했습니다.
+
+## 남은 확인
+
+- 실제 Meta 게시물 목록 응답과 권한은 배포 전에 확인해야 합니다.
+- 처음 사용하는 사람의 과제 성공률과 완료 시간은 측정하지 않았습니다.
+- 공개 PR의 현재 head CI와 호스팅 리뷰는 별도 관문입니다.
+- 구현 화면에 대한 운영자 승인은 병합 전에 별도로 받습니다.
+
+Meta 개발자 문서는 로그인 요구 또는 429로 조회가 제한됐습니다.
+필드 참고 자료는 [Meta 공식 IGMedia SDK](https://github.com/facebook/facebook-nodejs-business-sdk/blob/main/src/objects/ig-media.js)이며, 이 자료만으로 Instagram Login의 실제 권한을 검증했다고 간주하지 않습니다.
+Oracle 결과는 `[no precedent found]`입니다.
+
+## 호스팅 리뷰의 CSP 보강
+
+PR #4의 코드 리뷰는 `public/_headers`의 기존 `img-src`가 같은 origin만 허용해 provider 썸네일을 차단한다는 점을 발견했습니다.
+초기 Python 정적 서버 점검에는 이 운영 헤더가 적용되지 않았으므로 그 결과로 CDN 이미지 표시를 입증할 수 없었습니다.
+이미지 출처에 한해 서버가 검증하는 HTTPS `cdninstagram.com` 및 `fbcdn.net` 하위 도메인을 허용했습니다.
+다른 출처는 계속 차단하며 script, connect, frame과 form 정책은 그대로 유지했습니다.
+실제 Miniflare 정적 asset 응답을 읽는 회귀 테스트는 수정 전에 provider 출처가 차단되어 실패했고 수정 후 통과했습니다.
+보강 후 타입 검사, 단위 테스트 90개, Cloudflare 런타임 테스트 21개와 변경 파일의 Trunk 검사가 통과했습니다.
+Chromium의 `securitypolicyviolation` 이벤트에서도 provider 이미지 요청은 허용되고 `evil.test` 이미지 요청은 차단되는 것을 확인했습니다.
+이 브라우저 점검은 CSP 허용 여부를 확인하며 실제 Meta 썸네일 디코딩이나 권한을 확인한 것은 아닙니다.
+배포 시 `_headers`가 정적 응답에 적용되는 방식은 [Cloudflare 공식 헤더 문서](https://developers.cloudflare.com/workers/static-assets/headers/)를 참고했습니다.

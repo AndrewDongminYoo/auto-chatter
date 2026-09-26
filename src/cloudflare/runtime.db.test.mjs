@@ -6,6 +6,46 @@ import { test } from "node:test";
 import { Pool } from "pg";
 import { Miniflare } from "miniflare";
 
+test("static dashboard CSP admits validated Instagram thumbnail hosts and rejects other origins", async () => {
+  const runtime = new Miniflare({
+    modules: true,
+    script: "export default { fetch() { return new Response('not found', {status:404}); } }",
+    compatibilityDate: "2026-07-30",
+    assets: { directory: "public" },
+  });
+  try {
+    const response = await runtime.dispatchFetch("https://app.test/app/");
+    assert.equal(response.status, 200);
+    const policy = response.headers.get("content-security-policy");
+    assert.ok(policy, "static asset response must carry the production CSP");
+    const images = policy
+      .split(";")
+      .map((part) => part.trim().split(/\s+/))
+      .find((part) => part[0] === "img-src")
+      .slice(1);
+    const admits = (input) => {
+      const url = new URL(input);
+      return images.some((source) =>
+        source === "'self'"
+          ? url.origin === "https://app.test"
+          : source.startsWith("https://*.") &&
+            url.protocol === "https:" &&
+            !url.port &&
+            url.hostname.endsWith(source.slice(9)),
+      );
+    };
+    assert.equal(admits("https://scontent.cdninstagram.com/post.jpg"), true);
+    assert.equal(admits("https://scontent.xx.fbcdn.net/post.jpg"), true);
+    assert.equal(admits("https://evil.test/post.jpg"), false);
+    assert.equal(admits("http://scontent.cdninstagram.com/post.jpg"), false);
+    assert.equal(admits("https://cdninstagram.com.evil.test/post.jpg"), false);
+    assert.equal(policy.includes("script-src 'self'"), true);
+    assert.equal(policy.includes("connect-src 'self'"), true);
+  } finally {
+    await runtime.dispose();
+  }
+});
+
 test("workerd auth routes call the provider with the native fetch receiver", async () => {
   const config = JSON.parse(await readFile(new URL("../../wrangler.json", import.meta.url), "utf8"));
   const runtime = new Miniflare({
