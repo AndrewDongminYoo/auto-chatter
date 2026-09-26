@@ -29,6 +29,10 @@ Instagram Login 어댑터는 Instagram 사용자 토큰의 계정 ID와 댓글·
 
 ## 로컬 실행
 
+단일 서버 배포에는 `Dockerfile`과 `compose.yaml`을 사용합니다.
+기본 실행은 DB와 수신기만 시작하며, 실제 발송과 공개 HTTPS는 각각 `send`와 `public` 프로필로 활성화합니다.
+환경 설정, 백업·복원과 업데이트 절차는 [배포 운영 절차](docs/notes/2026-09-26-deployment-runbook.md)를 따릅니다.
+
 Node.js 24, pnpm 10, PostgreSQL 17이 필요합니다.
 개발용 일회성 DB는 다음처럼 시작하고 초기 스키마를 적용할 수 있습니다.
 

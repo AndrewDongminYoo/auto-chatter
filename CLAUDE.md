@@ -81,6 +81,16 @@ Cooldown is scoped to one stored connection; an app-wide quota shared by multipl
 Both accept an injectable `fetchImpl`, which is how the unit tests mock Graph responses.
 `worker-main.ts` only surfaces error messages that start with `Invalid Meta`/`Meta Graph` (or the account ID error); anything else prints a generic message so tokens never reach logs.
 
+## Deployment
+
+`Dockerfile` runs the sources as the non-root `node` user with production dependencies only.
+`compose.yaml` starts PostgreSQL and ingress by default; profiles `send` and `public` enable the real worker and Caddy proxy respectively.
+Use `--env-file deploy/runtime.env` explicitly; `deploy/environment.example` is the empty template.
+Never print resolved configuration with secrets; use `config --quiet`.
+Fresh DB volumes initialize the current schema and a separate DML-only `automations_app` role.
+Existing volumes require explicit migrations as described in `docs/notes/2026-09-26-deployment-runbook.md`.
+Deployment smoke checks must use synthetic credentials, a separate Compose project and loopback ports, with no live Meta calls.
+
 ## Verification boundaries
 
 What has and has not been proven against real Meta accounts is tracked in README.md and `docs/notes/2026-09-25-meta-permissions-and-worker.md`.
