@@ -94,7 +94,8 @@ Cron runs each minute to recover stale sends and repair missed notifications or 
 Only Instagram Login with one configured connection is supported in this adapter.
 `SEND_ENABLED` must equal `true` to send; the committed configuration keeps it `false` and pins the provisioned personal Cloudflare account and Hyperdrive ID.
 The Worker is deployed on workers.dev with both webhook secrets registered; incorrect verification tokens and unsigned requests return 403.
-Meta callback verification, signed comment ingestion, and sending remain unverified in this deployment.
+A dashboard webhook test returned 200 with no logged errors or exceptions.
+The production database has no Instagram connections yet, so that test did not persist a comment; real comment persistence and sending remain unverified.
 Generated provisioning credentials stay in the ignored `deploy/secrets/` directory; never log or commit them.
 Hyperdrive query caching MUST be disabled to keep authorization and active-state reads fresh.
 Apply `db/schema.sql` and `deploy/supabase-access.sql` in a single administrator transaction on a dedicated Supabase project.
