@@ -47,6 +47,39 @@ const deletion = `
 <p>Instagram 원본 댓글과 이미 전달된 메시지는 이 서비스의 데이터 삭제와 별개입니다. 외부 제공자의 보안 로그·백업이나 법령상 보관이 필요한 기록은 해당 범위와 제한을 확인해 안내합니다.</p>
 <p><a href="/privacy">개인정보처리방침 보기</a></p>`;
 
+const service = `
+<h1>서비스 이용약관</h1>
+<p class="meta">auto-chatter / AutoMessage - IG · 시행일: 2026년 9월 26일</p>
+<h2>1. 목적과 운영자</h2>
+<p>이 약관은 유동민(Dongmin Yu)이 운영하는 auto-chatter의 Instagram 연동 서비스를 이용하는 계정 관리자와 운영자 사이의 이용 조건을 정합니다. 서비스 문의와 이용 종료 요청은 ${contact}로 접수합니다.</p>
+<h2>2. 이용 대상과 연동</h2>
+<p>서비스를 이용하려면 연동할 Instagram 전문 계정을 관리할 정당한 권한이 있어야 합니다. 운영자는 연동 전에 이 약관을 안내하고 이용 의사를 확인합니다. 이 페이지를 열람하거나 Instagram 게시물에 댓글을 남기는 것만으로 서비스 이용계약이 체결되는 것은 아닙니다.</p>
+<p>계정 관리자는 필요한 Meta 권한을 승인하고 연동 정보와 계정 보안을 관리해야 합니다. 타인의 계정을 허가 없이 연결하거나 인증정보를 부정하게 사용해서는 안 됩니다.</p>
+<h2>3. 제공 기능과 이용 요금</h2>
+<p>서비스는 연결한 계정의 댓글을 수신하고, 설정된 키워드 규칙에 따라 비공개 답장 작업을 처리합니다. 실제 발송은 답장 기능이 활성화되고 계정 권한과 발송 조건을 충족한 경우에만 이루어집니다. Meta API의 제한, 계정 상태, 네트워크 장애 등에 따라 처리가 지연되거나 발송되지 않을 수 있습니다.</p>
+<p>현재 서비스에는 유료 구독 신청이나 결제 기능이 없습니다. 유료 서비스를 도입하는 경우에는 요금, 결제 주기, 해지 및 환불 조건을 별도로 안내하고 동의를 받은 뒤 적용합니다.</p>
+<h2>4. 이용자의 의무와 콘텐츠</h2>
+<p>계정 관리자는 적용 법령과 Meta·Instagram의 이용 조건을 준수하고, 답장 내용과 발송 대상이 적절한지 확인해야 합니다. 다음 행위를 금지합니다.</p>
+<ul>
+  <li>스팸, 사칭, 사기, 불법 광고 또는 타인의 권리를 침해하는 메시지를 보내는 행위</li>
+  <li>개인정보를 무단으로 수집하거나 공개하는 행위</li>
+  <li>Meta의 발송 제한이나 서비스의 보안·접근 제한을 우회하는 행위</li>
+  <li>악성 요청 등으로 서비스나 다른 이용자의 계정 운영을 방해하는 행위</li>
+</ul>
+<p>이용자가 제공하는 콘텐츠의 권리는 원래 권리자에게 있습니다. 운영자는 연동 처리와 요청된 답장 제공에 필요한 범위에서만 해당 콘텐츠를 처리합니다.</p>
+<h2>5. 개인정보와 이용 종료</h2>
+<p>개인정보의 처리와 보유·삭제 기준은 <a href="/privacy">개인정보처리방침</a>에 따릅니다. 계정 관리자는 문의 이메일로 연동 종료를 요청하거나 Instagram에서 연동 권한을 해제할 수 있습니다. 운영자는 종료 요청의 권한을 확인한 뒤 추가 수신·발송을 중지하고 필요한 삭제 절차를 진행합니다.</p>
+<p>데이터 삭제는 <a href="/data-deletion">데이터 삭제 안내</a>에 따라 운영자가 수동으로 처리합니다. 이미 Instagram에 게시된 댓글이나 전달된 메시지는 서비스 내부 기록 삭제만으로 삭제되지 않습니다.</p>
+<h2>6. 이용 제한과 서비스 중단</h2>
+<p>운영자는 위법 행위, 이 약관 위반, 계정 침해 또는 서비스 장애가 확인되면 피해 방지에 필요한 범위에서 연동이나 발송을 제한할 수 있습니다. 가능한 경우 사유와 조치 내용을 사전에 알리고, 긴급한 조치가 필요하면 조치 후 안내합니다. 이용자는 문의 이메일로 이의를 제기할 수 있습니다.</p>
+<p>점검, 외부 API 변경 또는 서비스 종료로 이용에 영향이 예상되면 사유와 일정을 사전에 안내합니다. 예측하기 어려운 장애는 확인 후 안내하며, 서비스 종료 시 개인정보는 개인정보처리방침에 따라 처리합니다.</p>
+<h2>7. 책임</h2>
+<p>운영자와 이용자는 각자의 귀책사유로 발생한 손해에 대해 적용 법령에 따른 책임을 집니다. 외부 서비스의 장애나 제한이 발생하면 운영자는 확인된 상황과 가능한 조치를 안내합니다. 이 약관은 운영자의 고의 또는 중대한 과실에 따른 책임이나 법령이 보장하는 이용자의 권리를 배제하지 않습니다.</p>
+<h2>8. 약관 변경</h2>
+<p>약관을 변경하면 변경 내용, 사유와 시행일을 이 페이지에 알리고, 기존 이용자에게는 적용 전에 안내합니다. 이용자에게 불리한 변경이나 별도 동의가 필요한 변경은 관련 법령에 따라 안내와 동의 절차를 거칩니다. 이용자는 변경에 동의하지 않으면 이용 종료를 요청할 수 있습니다.</p>
+<h2>9. 문의와 분쟁 해결</h2>
+<p>이용 관련 문의나 분쟁은 ${contact}로 알려 주세요. 운영자와 이용자는 원만한 해결을 위해 협의하며, 해결되지 않는 분쟁에는 적용 법령과 그에 따른 관할 규정을 따릅니다.</p>`;
+
 function document(title: string, content: string): string {
   return `<!doctype html>
 <html lang="ko">
@@ -62,27 +95,26 @@ a{color:#174ba3;text-underline-offset:3px}.meta{color:#596475}li{margin:10px 0}
 @media(max-width:600px){main{margin:0;padding:24px;border:0;border-radius:0}h1{font-size:26px}ul,ol{padding-left:24px}}
 </style>
 </head>
-<body><main><nav aria-label="문서 안내"><a href="/privacy">개인정보처리방침</a><a href="/data-deletion">데이터 삭제 안내</a></nav>${content}</main></body>
+<body><main><nav aria-label="문서 안내"><a href="/privacy">개인정보처리방침</a><a href="/data-deletion">데이터 삭제 안내</a><a href="/service">서비스 이용약관</a></nav>${content}</main></body>
 </html>`;
 }
 
 export function publicPage(request: Request): Response | null {
   const pathname = new URL(request.url).pathname;
-  if (pathname !== "/privacy" && pathname !== "/data-deletion") return null;
+  if (pathname !== "/privacy" && pathname !== "/data-deletion" && pathname !== "/service") return null;
   if (request.method !== "GET" && request.method !== "HEAD")
     return new Response(null, { status: 405, headers: { Allow: "GET, HEAD" } });
-  const title = pathname === "/privacy" ? "개인정보처리방침" : "데이터 삭제 안내";
-  return new Response(
-    request.method === "HEAD" ? null : document(title, pathname === "/privacy" ? privacy : deletion),
-    {
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        "Content-Security-Policy":
-          "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
-        "Referrer-Policy": "no-referrer",
-        "X-Content-Type-Options": "nosniff",
-        "Cache-Control": "public, max-age=300",
-      },
+  const title =
+    pathname === "/privacy" ? "개인정보처리방침" : pathname === "/service" ? "서비스 이용약관" : "데이터 삭제 안내";
+  const content = pathname === "/privacy" ? privacy : pathname === "/service" ? service : deletion;
+  return new Response(request.method === "HEAD" ? null : document(title, content), {
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy":
+        "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff",
+      "Cache-Control": "public, max-age=300",
     },
-  );
+  });
 }

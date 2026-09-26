@@ -8,7 +8,11 @@ const unavailableEnv = new Proxy({} as Env, {
   },
 });
 
-for (const pathname of ["/privacy", "/data-deletion"]) {
+for (const [pathname, title] of [
+  ["/privacy", "개인정보처리방침"],
+  ["/data-deletion", "데이터 삭제 안내"],
+  ["/service", "서비스 이용약관"],
+]) {
   test(`${pathname} serves a public HTML document without runtime credentials`, async () => {
     const response = await worker.fetch(
       new Request(`https://example.test${pathname}?token=never-reflect-this-value`),
@@ -19,7 +23,8 @@ for (const pathname of ["/privacy", "/data-deletion"]) {
     assert.equal(response.headers.get("set-cookie"), null);
     const html = await response.text();
     assert.match(html, /<html lang="ko">/);
-    assert.match(html, /<h1>[^<]+<\/h1>/);
+    assert.ok(html.includes(`<h1>${title}</h1>`));
+    assert.match(html, /href="\/service"/);
     assert.match(html, /href="mailto:ydm2790@gmail.com"/);
     assert.doesNotMatch(html, /never-reflect-this-value/);
   });
