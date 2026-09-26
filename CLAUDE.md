@@ -94,6 +94,8 @@ Cron runs each minute to recover stale sends and repair missed notifications or 
 Only Instagram Login with one configured connection is supported in this adapter.
 `SEND_ENABLED` must equal `true` to send; the committed configuration keeps it `false` and pins the provisioned personal Cloudflare account and Hyperdrive ID.
 The Worker is deployed on workers.dev with both webhook secrets registered; incorrect verification tokens and unsigned requests return 403.
+Public GET/HEAD routes `/privacy` and `/data-deletion` serve static Korean policy and manual deletion instructions without accessing secrets or database bindings.
+Their approved text lives in `src/cloudflare/public-pages.ts`; no automatic deletion or unauthenticated deletion API is provided.
 A dashboard webhook test returned 200 with no logged errors or exceptions.
 That test ran before an Instagram connection was registered and did not persist a comment.
 The production database now has one active receive-only connection and no reply rules; real comment persistence and sending remain unverified.

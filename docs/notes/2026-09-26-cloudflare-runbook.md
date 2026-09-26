@@ -42,6 +42,16 @@ workspace ID는 `eedede37-b94a-4afe-b072-c728932e7c04`, connection ID는 `a5df42
 수신 계정 ID와 연결 ID를 Worker 설정에 반영하고 Graph 버전은 제품 화면의 구독 버전과 같은 `v26.0`으로 지정합니다.
 대시보드 예제의 계정 ID가 등록 계정과 다르면 HTTP 200이어도 저장 대상이 아니므로, 실제 댓글 저장 검증과 구분합니다.
 
+### 개인정보 안내와 Meta 게시
+
+운영자가 Meta 앱은 아직 개발·미게시 상태이며 개인정보처리방침 URL 누락으로 게시가 막혔다고 확인했습니다.
+Meta의 개인정보처리방침 URL에는 `https://auto-chatter.auto-chatter-ydm2790.workers.dev/privacy`를 사용합니다.
+사용자 데이터 삭제 안내 URL을 요구하는 항목에는 `https://auto-chatter.auto-chatter-ydm2790.workers.dev/data-deletion`을 사용합니다.
+삭제 안내 페이지는 이메일 기반 수동 요청 절차이며 자동 삭제 콜백 URL이 아닙니다.
+두 페이지는 로그인·DB·Meta secrets 없이 열리고, 승인된 운영자 연락처와 보관·삭제 정책을 안내합니다.
+구현 범위와 수동 삭제 절차는 [개인정보 안내 페이지 계획](../plans/2026-09-26-public-privacy-pages.md)에 기록합니다.
+이 URL 준비만으로 앱이 공개되거나 다른 Meta 심사 요건을 충족한 것으로 간주하지 않습니다.
+
 ## 구성
 
 | 구성 요소                    | 역할                                                        |
