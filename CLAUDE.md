@@ -151,6 +151,11 @@ This runner owns the transaction for migrations 003–006 and the access script,
 Do not apply these migration files individually without that transaction.
 Assign the existing workspace to a confirmed operator with `deploy/assign-workspace-owner.sql`; never claim legacy data automatically by email.
 Token renewal currently requires reconnecting the Instagram account before the displayed expiry.
+Optional `confirmation_button_title` adds a single postback template button to the first DM and nonfollower response; empty defaults preserve text-only delivery.
+Apply migration 007 before deploying this feature; the existing administrator migration runner includes it.
+Button clicks are bound to the queued reply ID and validated against account, recipient and waiting flow; typed confirmation still works.
+OAuth subscribes `messaging_postbacks` as well as comments/messages, so existing accounts must reconnect and the app must subscribe that webhook field.
+The service caps button labels at 20 and button-message text at 640; actual private-reply template support and client rendering require a separate approved live test.
 
 `Dockerfile` runs the sources as the non-root `node` user with production dependencies only.
 `compose.yaml` starts PostgreSQL and ingress by default; profiles `send` and `public` enable the real worker and Caddy proxy respectively.
