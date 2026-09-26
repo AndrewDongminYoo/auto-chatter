@@ -3,3 +3,8 @@ node_modules/
 coverage/
 deploy/runtime.env
 backups/
+.wrangler/
+.dev.vars
+.dev.vars.*
+.env.*
+!.env.example
