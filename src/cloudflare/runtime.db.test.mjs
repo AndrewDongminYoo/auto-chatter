@@ -1,3 +1,4 @@
+import { sealSecret } from "../app/secrets.ts";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -28,6 +29,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
     queueConsumers: { "auto-chatter-replies": { maxBatchSize: 1, maxBatchTimeout: 0 } },
     bindings: {
       SEND_ENABLED: "true",
+      TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
       INSTAGRAM_APP_SECRET: "runtime-secret",
       INSTAGRAM_VERIFY_TOKEN: "runtime-verify",
       META_INSTAGRAM_CONNECTION_ID: "22222222-2222-4222-8222-222222222222",
@@ -61,6 +63,10 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
     await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
     await pool.query(
       "INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES ('22222222-2222-4222-8222-222222222222','11111111-1111-4111-8111-111111111111','123',true)",
+    );
+    await pool.query(
+      "UPDATE instagram_connections SET send_enabled=true,token_expires_at=now()+interval '1 day',access_token_encrypted=$1",
+      [sealSecret("synthetic", Buffer.alloc(32, 1).toString("base64"), "11111111-1111-4111-8111-111111111111:123")],
     );
     await pool.query(
       "INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES ('33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','media-1','hello','reply',true)",

@@ -10,8 +10,9 @@
   "assets": { "directory": "./public" },
   "vars": {
     "SEND_ENABLED": "false",
-    "META_INSTAGRAM_ACCOUNT_ID": "17841437471464257",
-    "META_INSTAGRAM_CONNECTION_ID": "a5df4215-fb1e-46d4-93f4-13c0176fb031",
+    "APP_ORIGIN": "https://auto-chatter.auto-chatter-ydm2790.workers.dev",
+    "SUPABASE_URL": "https://asjjftrioaxzspkbtebf.supabase.co",
+    "INSTAGRAM_OAUTH_APP_ID": "1822350878757042",
     "META_GRAPH_VERSION": "v26.0"
   },
   "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "026b7ba593a24852bbfd182456ff1c03" }],

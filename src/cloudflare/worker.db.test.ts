@@ -1,3 +1,4 @@
+import { sealSecret } from "../app/secrets.ts";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -90,6 +91,7 @@ beforeEach(async () => {
     META_GRAPH_VERSION: "v24.0",
     META_INSTAGRAM_ACCESS_TOKEN: "synthetic",
     SEND_ENABLED: "true",
+    TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
   };
   await pool.query(
     "TRUNCATE private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
@@ -98,6 +100,10 @@ beforeEach(async () => {
   await pool.query(
     "INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES ($1,'11111111-1111-4111-8111-111111111111','123',true)",
     [connectionId],
+  );
+  await pool.query(
+    "UPDATE instagram_connections SET send_enabled=true,token_expires_at=now()+interval '1 day',access_token_encrypted=$1",
+    [sealSecret("synthetic", Buffer.alloc(32, 1).toString("base64"), "11111111-1111-4111-8111-111111111111:123")],
   );
   await pool.query(
     "INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES ('33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111',$1,'media-1','hello','reply',true)",
@@ -288,4 +294,132 @@ test("cron wakes a missed notification for an inactive connection so its reply b
   assert.equal(await consume(), "ack");
   assert.deepEqual(await rows(), [{ status: "blocked", failure_code: "inactive_connection", rate_limit_retries: 0 }]);
   assert.equal(sends, 0);
+});
+
+test("signed comment and confirmation webhooks complete the conditional DM flow once", async () => {
+  await pool.query(
+    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final link',non_follower_reply_text='Follow and confirm again'",
+  );
+  let follows = false;
+  const delivered: string[] = [];
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (init?.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      delivered.push(body.message.text);
+      return Response.json({ message_id: "message-" + delivered.length, recipient_id: "456" });
+    }
+    if (url.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (url.pathname.endsWith("/456")) return Response.json({ is_user_follow_business: follows });
+    if (url.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
+    return Response.json({
+      id: "comment-1",
+      from: { id: "456" },
+      media: { id: "media-1" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  await worker.fetch(request("comment-1", "456"), env);
+  assert.equal(await consume(), "ack");
+  assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "waiting");
+  const confirmation = (id: string) => {
+    const body = JSON.stringify({
+      object: "instagram",
+      entry: [
+        {
+          id: "123",
+          messaging: [
+            {
+              sender: { id: "456" },
+              recipient: { id: "123" },
+              timestamp: Date.now(),
+              message: { mid: id, text: "확인" },
+            },
+          ],
+        },
+      ],
+    });
+    return new Request("https://example.test/webhooks/instagram", {
+      method: "POST",
+      body,
+      headers: { "x-hub-signature-256": "sha256=" + createHmac("sha256", "test-secret").update(body).digest("hex") },
+    });
+  };
+  assert.equal((await worker.fetch(confirmation("confirm-1"), env)).status, 200);
+  await consume();
+  assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "waiting");
+  follows = true;
+  await worker.fetch(confirmation("confirm-2"), env);
+  await consume();
+  await consume();
+  assert.deepEqual(delivered, ["reply", "Follow and confirm again", "Final link"]);
+  assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "sent");
+});
+
+test("each connection uses its own encrypted token and send switch", async () => {
+  const other = "44444444-4444-4444-8444-444444444444";
+  await pool.query(
+    "INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,access_token_encrypted,token_expires_at) VALUES($1,'11111111-1111-4111-8111-111111111111','999',true,true,$2,now()+interval '1 day')",
+    [other, sealSecret("other-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:999")],
+  );
+  await pool.query(
+    "INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES('55555555-5555-4555-8555-555555555555','11111111-1111-4111-8111-111111111111',$1,'other-media','hello','other reply',true)",
+    [other],
+  );
+  const body = JSON.stringify({
+    object: "instagram",
+    entry: [
+      {
+        id: "999",
+        field: "comments",
+        value: { id: "other-comment", from: { id: "777" }, media: { id: "other-media" }, text: "hello" },
+      },
+    ],
+  });
+  const signed = new Request("https://example.test/webhooks/instagram", {
+    method: "POST",
+    body,
+    headers: { "x-hub-signature-256": "sha256=" + createHmac("sha256", "test-secret").update(body).digest("hex") },
+  });
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer other-token");
+    const path = new URL(String(input)).pathname;
+    if (init?.method === "POST") {
+      assert.ok(path.endsWith("/999/messages"));
+      sends++;
+      return Response.json({ message_id: "other-sent" });
+    }
+    if (path.endsWith("/me")) return Response.json({ user_id: "999" });
+    if (path.endsWith("/other-media")) return Response.json({ id: "other-media", owner: { id: "999" } });
+    return Response.json({
+      id: "other-comment",
+      from: { id: "777" },
+      media: { id: "other-media" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  assert.equal((await worker.fetch(signed, env)).status, 200);
+  assert.ok(published.some((value) => (value as { connectionId: string }).connectionId === other));
+  await pool.query("UPDATE instagram_connections SET send_enabled=false WHERE id=$1", [other]);
+  await consume({ connectionId: other });
+  assert.equal(sends, 0);
+  await pool.query("UPDATE instagram_connections SET send_enabled=true WHERE id=$1", [other]);
+  await consume({ connectionId: other });
+  assert.equal(sends, 1);
+});
+
+test("a successful first DM without recipient ID exposes a terminal follow failure and never resends", async () => {
+  await pool.query(
+    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,follower_reply_text='Final',non_follower_reply_text='Follow'",
+  );
+  await worker.fetch(request(), env);
+  await consume();
+  await consume();
+  assert.equal(sends, 1);
+  assert.deepEqual((await rows())[0], {
+    status: "sent",
+    failure_code: "follow_recipient_unavailable",
+    rate_limit_retries: 0,
+  });
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_follow_conversations")).rows[0].count, "0");
 });

@@ -1,4 +1,6 @@
-export interface Env {
+import { parseMessageEvents } from "../instagram/message-events.ts";
+import { ingestMessages, processNextFollowReply, recoverStaleFollowReplies } from "../instagram/follow-flow.ts";
+export interface Env extends AuthEnv, InstagramOAuthEnv {
   HYPERDRIVE: { connectionString: string };
   REPLY_QUEUE: { send(body: { connectionId: string }): Promise<void> };
   INSTAGRAM_APP_SECRET: string;
@@ -28,15 +30,15 @@ function openPool(env: Env): Pool {
 
 async function wakeDueReplies(pool: Pool, env: Env): Promise<void> {
   if (env.SEND_ENABLED !== "true") return;
-  const due = await pool.query(
-    `SELECT 1 FROM private_reply_outbox AS reply
-     JOIN instagram_connections AS connection ON connection.id = reply.connection_id
-     WHERE reply.connection_id = $1 AND reply.status = 'pending' AND reply.next_attempt_at <= now()
-       AND (connection.send_paused_until IS NULL OR connection.send_paused_until <= now())
-     LIMIT 1`,
-    [env.META_INSTAGRAM_CONNECTION_ID],
+  const due = await pool.query<{ id: string }>(
+    `SELECT c.id FROM instagram_connections c
+     WHERE c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>now()
+       AND (c.send_paused_until IS NULL OR c.send_paused_until<=now())
+       AND (EXISTS(SELECT 1 FROM private_reply_outbox reply WHERE reply.connection_id=c.id AND reply.status='pending' AND reply.next_attempt_at<=now())
+       OR EXISTS(SELECT 1 FROM instagram_follow_conversations flow WHERE flow.connection_id=c.id AND flow.status='pending' AND flow.next_attempt_at<=now()))
+     ORDER BY c.id LIMIT 100`,
   );
-  if (due.rowCount) await env.REPLY_QUEUE.send({ connectionId: env.META_INSTAGRAM_CONNECTION_ID });
+  for (const row of due.rows) await env.REPLY_QUEUE.send({ connectionId: row.id });
 }
 
 async function readBody(request: Request): Promise<Uint8Array | null> {
@@ -65,6 +67,7 @@ async function receive(request: Request, env: Env): Promise<Response> {
   const page = publicPage(request);
   if (page) return page;
   const url = new URL(request.url);
+  if (url.pathname.startsWith("/api/")) return appApi(request, env, () => openPool(env));
   if (url.pathname !== "/webhooks/instagram") return new Response(null, { status: 404 });
   if (!env.INSTAGRAM_APP_SECRET || !env.INSTAGRAM_VERIFY_TOKEN) throw new Error("Webhook secrets missing");
   if (request.method === "GET") {
@@ -77,14 +80,17 @@ async function receive(request: Request, env: Env): Promise<Response> {
   if (!verifySignature(body, request.headers.get("x-hub-signature-256"), env.INSTAGRAM_APP_SECRET))
     return new Response(null, { status: 403 });
   let comments;
+  let messages;
   try {
     comments = parseCommentEvents(body);
+    messages = parseMessageEvents(body);
   } catch {
     return new Response(null, { status: 400 });
   }
   const pool = openPool(env);
   try {
     await ingestComments(pool, comments);
+    await ingestMessages(pool, messages);
     try {
       await wakeDueReplies(pool, env);
     } catch {
@@ -95,10 +101,6 @@ async function receive(request: Request, env: Env): Promise<Response> {
   } finally {
     await pool.end();
   }
-}
-
-function isWakeForConnection(body: unknown, connectionId: string): boolean {
-  return typeof body === "object" && body !== null && "connectionId" in body && body.connectionId === connectionId;
 }
 
 export default {
@@ -112,31 +114,90 @@ export default {
   },
   async queue(batch: ReplyBatch, env: Env): Promise<void> {
     for (const message of batch.messages) {
-      if (env.SEND_ENABLED !== "true" || !isWakeForConnection(message.body, env.META_INSTAGRAM_CONNECTION_ID)) {
+      if (env.SEND_ENABLED !== "true" || !isRecord(message.body) || !isUuid(message.body.connectionId)) {
         message.ack();
         continue;
       }
       try {
-        // Validate all send configuration before claiming a row.
-        if (!env.META_INSTAGRAM_CONNECTION_ID) throw new Error("Connection ID missing");
-        const transport = new InstagramLoginPrivateReplyTransport({
-          graphVersion: env.META_GRAPH_VERSION,
-          accessToken: env.META_INSTAGRAM_ACCESS_TOKEN,
-          accountId: env.META_INSTAGRAM_ACCOUNT_ID,
-          connectionId: env.META_INSTAGRAM_CONNECTION_ID,
-          // Workers supports manual/follow only. Preserve the transport's redirect refusal.
-          fetchImpl: async (input, init) => {
-            const response = await fetch(input, { ...init, redirect: "manual" });
-            if (response.status >= 300 && response.status < 400) {
-              await response.body?.cancel();
-              throw new Error("Meta Graph redirect refused");
-            }
-            return response;
-          },
-        });
+        const connectionId = (message.body as { connectionId: string }).connectionId;
         const pool = openPool(env);
         try {
-          await processNextPrivateReply(pool, transport, () => new Date(), env.META_INSTAGRAM_CONNECTION_ID);
+          const result = await pool.query(
+            "SELECT id,workspace_id,account_id,access_token_encrypted FROM instagram_connections WHERE id=$1 AND send_enabled AND token_expires_at>now() AND access_token_encrypted IS NOT NULL",
+            [connectionId],
+          );
+          const connection = result.rows[0];
+          if (connection) {
+            if (!env.TOKEN_ENCRYPTION_KEY) throw new Error("Token encryption not configured");
+            const accessToken = openSecret(
+              connection.access_token_encrypted,
+              env.TOKEN_ENCRYPTION_KEY,
+              `${connection.workspace_id}:${connection.account_id}`,
+            );
+            const rawGraphFetch: typeof fetch = async (input, init) => {
+              const response = await fetch(input, { ...init, redirect: "manual" });
+              if (response.status >= 300 && response.status < 400) {
+                await response.body?.cancel();
+                throw new Error("Meta Graph redirect refused");
+              }
+              return response;
+            };
+            const graphFetch: typeof fetch = async (input, init) => {
+              if (init?.method === "POST") {
+                const current = await pool.query(
+                  "SELECT 1 FROM instagram_connections WHERE id=$1 AND active AND send_enabled AND token_expires_at>now() AND access_token_encrypted=$2 AND (send_paused_until IS NULL OR send_paused_until<=now())",
+                  [connectionId, connection.access_token_encrypted],
+                );
+                if (!current.rowCount) throw new PreSendVerificationError("block", "connection_changed");
+                const body = typeof init.body === "string" ? JSON.parse(init.body) : null;
+                if (body?.recipient?.comment_id) {
+                  const rule = await pool.query(
+                    `SELECT 1 FROM private_reply_outbox reply JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
+                    WHERE reply.connection_id=$1 AND reply.comment_id=$2 AND rule.enabled AND reply.status='sending'`,
+                    [connectionId, body.recipient.comment_id],
+                  );
+                  if (!rule.rowCount) throw new PreSendVerificationError("block", "inactive_rule");
+                }
+              }
+              return rawGraphFetch(input, init);
+            };
+            const config = {
+              graphVersion: env.META_GRAPH_VERSION,
+              accessToken,
+              accountId: connection.account_id,
+              connectionId,
+              fetchImpl: graphFetch,
+            };
+            // Follow confirmations have a shorter delivery window than comment private replies.
+            if (
+              !(await processNextFollowReply(
+                pool,
+                connectionId,
+                new InstagramFollowTransport({
+                  ...config,
+                  fetchImpl: rawGraphFetch,
+                  beforeSend: async (context) => {
+                    const permitted = await pool.query(
+                      `SELECT 1 FROM instagram_follow_conversations flow
+                JOIN private_reply_outbox reply ON reply.id=flow.reply_id JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
+                JOIN instagram_connections c ON c.id=flow.connection_id
+                WHERE flow.reply_id=$1 AND flow.attempt_id=$2 AND flow.status='sending' AND flow.confirmed_at>now()-interval '24 hours'
+                  AND rule.enabled AND c.id=$3 AND c.active AND c.send_enabled AND c.token_expires_at>now() AND c.access_token_encrypted=$4
+                  AND (c.send_paused_until IS NULL OR c.send_paused_until<=now())`,
+                      [context.replyId, context.attemptId, connectionId, connection.access_token_encrypted],
+                    );
+                    if (!permitted.rowCount) throw new PreSendVerificationError("block", "delivery_not_permitted");
+                  },
+                }),
+              ))
+            )
+              await processNextPrivateReply(
+                pool,
+                new InstagramLoginPrivateReplyTransport(config),
+                () => new Date(),
+                connectionId,
+              );
+          }
           await wakeDueReplies(pool, env);
         } finally {
           await pool.end();
@@ -153,7 +214,10 @@ export default {
     try {
       const pool = openPool(env);
       try {
-        await recoverStalePrivateReplies(pool, new Date(Date.now() - 10 * 60_000), env.META_INSTAGRAM_CONNECTION_ID);
+        await pool.query(
+          "UPDATE private_reply_outbox SET status='unknown',failure_code='worker_interrupted' WHERE status='sending' AND attempt_started_at<now()-interval '10 minutes'",
+        );
+        await recoverStaleFollowReplies(pool, new Date(Date.now() - 10 * 60_000));
         await wakeDueReplies(pool, env);
       } finally {
         await pool.end();
@@ -166,6 +230,13 @@ export default {
 import { Pool } from "pg";
 import { ingestComments } from "../instagram/store.ts";
 import { parseCommentEvents, verifySignature, verifySubscription } from "../instagram/webhook.ts";
-import { processNextPrivateReply, recoverStalePrivateReplies } from "../instagram/reply-worker.ts";
+import { processNextPrivateReply, PreSendVerificationError } from "../instagram/reply-worker.ts";
 import { InstagramLoginPrivateReplyTransport } from "../instagram/instagram-login-private-reply.ts";
 import { publicPage } from "./public-pages.ts";
+import { appApi } from "../app/api.ts";
+import type { AuthEnv } from "../app/auth.ts";
+import type { InstagramOAuthEnv } from "../app/instagram-oauth.ts";
+
+import { openSecret } from "../app/secrets.ts";
+import { isRecord, isUuid } from "../app/auth.ts";
+import { InstagramFollowTransport } from "../instagram/follow-transport.ts";
