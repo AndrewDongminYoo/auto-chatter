@@ -1,7 +1,8 @@
 # Messaging Automation Platform
 
 ManyChat 유료 기능에 대응하는 자체 운영형 메시징 자동화 서비스를 만드는 저장소입니다.
-현재는 Instagram 웹훅 수신, PostgreSQL 이벤트 저장, 댓글 키워드에 따른 개인 답장 요청 보관, 발송 정책과 워커 모듈까지 구현했습니다.
+Instagram 댓글·DM 웹훅 수신, 사용자별 로그인·계정 연결·규칙 설정, 댓글 키워드별 첫 DM과 응답 후 팔로우 조건별 후속 DM을 구현했습니다.
+다중 사용자 기능은 로컬 검증을 마쳤고 운영 배포 전환은 아직 수행하지 않았습니다.
 Instagram Login과 Facebook Login용 Meta Graph 어댑터와 별도 발송 워커 명령이 있습니다.
 운영자는 Meta 개발자 대시보드에서 일반 DM 발송에 성공했다고 보고했습니다.
 운영자가 실행한 `meta:check`에서 토큰의 Instagram 계정 ID와 설정값이 일치하는 것도 확인했습니다.
@@ -14,6 +15,8 @@ Instagram Login과 Facebook Login용 Meta Graph 어댑터와 별도 발송 워�
 - [Instagram 수신 검증](docs/notes/2026-09-25-ingress-validation.md): 실제 PostgreSQL 통합 테스트와 적대적 검토 결과를 기록했습니다.
 - [Meta 권한과 발송 워커](docs/notes/2026-09-25-meta-permissions-and-worker.md): 공식 권한 조건, 발송 상태, 실제 계정 확인에 남은 조건을 기록했습니다.
 - [제품·기술 명세](docs/specs/2026-09-25-messaging-automation-platform.md): 목표와 비목표, 기술 스택, 아키텍처, 과금과 AI 에이전트 경계를 정의했습니다.
+- [다중 사용자 자동화](docs/specs/2026-09-26-multi-user-automations.md): 사용자별 계정 연결과 응답 후 팔로우 확인 흐름입니다.
+- [다중 사용자 배포 전환](docs/notes/2026-09-26-multi-user-cutover.md): 검증 결과, 외부 설정, 마이그레이션과 수동 삭제 절차입니다.
 - [구현 계획](docs/plans/2026-09-25-delivery-plan.md): 검증 순서, 단계별 완료 조건, 개발 에이전트 워크플로를 기록했습니다.
 
 ## 현재 결정
@@ -31,13 +34,15 @@ Instagram Login 어댑터는 Instagram 사용자 토큰의 계정 ID와 댓글·
 
 운영 배포 방향은 **Cloudflare Workers + Queues + Supabase PostgreSQL**입니다.
 Hyperdrive를 통해 DB에 연결하며, 매분 예약 실행으로 누락된 처리 알림과 지연 작업을 복구합니다.
-초기 Cloudflare 경로는 Instagram Login 연결 하나를 지원하고 발송은 기본 비활성화입니다.
+현재 구현은 여러 Instagram Login 연결의 암호화 토큰을 DB에서 읽고 계정별로 처리하며 발송은 기본 비활성화입니다.
+`/app/`에서 사용자별 계정 연결, 게시물 ID·키워드·답장·팔로우 조건과 최근 처리 상태를 관리합니다.
+Supabase Auth 및 OAuth secrets와 마이그레이션은 아래 배포 전환 문서에 따라 설정해야 합니다.
 설정과 전환 순서는 [Cloudflare 배포 절차](docs/notes/2026-09-26-cloudflare-runbook.md), 구현 범위는 [전환 계획](docs/plans/2026-09-26-cloudflare-supabase.md)을 따릅니다.
 2026-09-26 Supabase 서울 리전 프로젝트와 Cloudflare Queue·Hyperdrive를 생성하고 Worker를 workers.dev에 배포했습니다.
 발송은 비활성화 상태이며, 웹훅 secrets 두 개의 등록과 잘못된 검증 토큰·서명 없는 요청의 거부를 확인했습니다.
 Meta 대시보드에서 전송한 테스트 웹훅의 HTTP 200 응답도 확인했습니다.
 운영 DB에는 승인된 Instagram 계정의 수신 연결을 등록했으며, 발송 규칙은 없습니다.
-실제 댓글 저장·발송 검증은 남아 있습니다.
+실제 테스트 댓글 저장은 2026-09-26에 확인했으며, 실제 비공개 답장·팔로우 분기 발송 검증은 남아 있습니다.
 
 로컬 통합 환경과 단일 서버 대체 배포에는 `Dockerfile`과 `compose.yaml`을 사용합니다.
 기본 실행은 DB와 수신기만 시작하며, 실제 발송과 공개 HTTPS는 각각 `send`와 `public` 프로필로 활성화합니다.
@@ -56,6 +61,10 @@ docker exec -i automations-postgres psql -U postgres -d automations < db/schema.
 ```bash
 docker exec -i automations-postgres psql -v ON_ERROR_STOP=1 -U postgres -d automations < db/migrations/001_reply_worker.sql
 docker exec -i automations-postgres psql -v ON_ERROR_STOP=1 -U postgres -d automations < db/migrations/002_rate_limit_backoff.sql
+docker exec -i automations-postgres psql -v ON_ERROR_STOP=1 -U postgres -d automations < db/migrations/003_comment_rule_matching.sql
+docker exec -i automations-postgres psql -v ON_ERROR_STOP=1 -U postgres -d automations < db/migrations/004_workspace_settings.sql
+docker exec -i automations-postgres psql -v ON_ERROR_STOP=1 -U postgres -d automations < db/migrations/005_instagram_oauth.sql
+docker exec -i automations-postgres psql -v ON_ERROR_STOP=1 -U postgres -d automations < db/migrations/006_follow_conversations.sql
 ```
 
 활성 Instagram 연결과 키워드 규칙은 `db/schema.sql`의 테이블에 별도로 등록해야 합니다.

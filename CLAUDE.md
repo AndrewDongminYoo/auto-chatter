@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project
 
 A self-hosted messaging automation service positioned against ManyChat's paid features.
-The only channel implemented so far is Instagram: comment webhooks are stored in PostgreSQL, keyword rules queue a private reply into an outbox, and a separate worker sends it through the Meta Graph API.
+The implemented channel is Instagram: signed comment and message webhooks feed PostgreSQL, keyword rules queue private replies, and confirmed DM responses trigger conditional follow checks and follow-up messages.
+The `/app/` dashboard uses server-verified Supabase Auth sessions and workspace-scoped APIs to connect accounts through Instagram OAuth and edit rules.
 Product scope, non-goals and the phased roadmap live in `docs/specs/` and `docs/plans/`; README.md, the specs, plans and notes are written in Korean.
 
 ## Commands
@@ -57,7 +58,7 @@ One rule exists per `(connection_id, media_id)`; empty `keywords` falls back to 
 Apply `003_comment_rule_matching.sql` before deploying the expanded rule reader to an existing database.
 
 **Worker** (`worker-main.ts` → `reply-worker.ts` → a `PrivateReplyTransport`):
-Each worker process serves exactly one connection (`META_INSTAGRAM_CONNECTION_ID`).
+The Node worker serves one connection (`META_INSTAGRAM_CONNECTION_ID`); the Cloudflare adapter reads encrypted credentials and send switches per queued connection from the database.
 `processNextPrivateReply` claims a `pending` outbox row with `FOR UPDATE SKIP LOCKED` and a fresh `attempt_id`; every later state change is conditional on `status = 'sending' AND attempt_id = $n` and throws if the claim was lost.
 The sequence is: transport `verify()` (read-only Graph checks) → `evaluatePrivateReply` in `reply-policy.ts` (connection active, authorization, media ownership, not own comment, 7-day comment window) → transport `send()`.
 Outbox status semantics matter for correctness:
@@ -93,7 +94,14 @@ The primary deployment target is Cloudflare Workers + Queues + Supabase PostgreS
 Queue messages contain only a connection ID; database status remains authoritative.
 Each notification processes at most one row, then wakes remaining due work.
 Cron runs each minute to recover stale sends and repair missed notifications or delayed retries.
-Only Instagram Login with one configured connection is supported in this adapter.
+The adapter supports multiple Instagram Login connections.
+`TOKEN_ENCRYPTION_KEY` decrypts workspace/account-bound AES-GCM credentials; the Node worker retains its explicit environment-token path.
+A valid per-account token and `send_enabled` are required in addition to the global switch.
+The adapter prioritizes pending follow confirmations, and rechecks the rule, claim, connection, token version, cooldown and 24-hour window immediately before a normal DM POST.
+There is no atomic transaction spanning PostgreSQL and Meta: a setting change after the final guard cannot recall an in-flight request.
+`instagram_follow_conversations` snapshots the first reply configuration; a nonfollower response returns to waiting, a follower response completes, and ambiguous sends remain unknown.
+A missing recipient ID after a successful first DM records `follow_recipient_unavailable` without resending.
+Inbound DM text is compared in memory and is not persisted; receipt IDs and timestamps deduplicate confirmation events.
 `SEND_ENABLED` must equal `true` to send; the committed configuration keeps it `false` and pins the provisioned personal Cloudflare account and Hyperdrive ID.
 The Worker is deployed on workers.dev with both webhook secrets registered; incorrect verification tokens and unsigned requests return 403.
 Public GET/HEAD routes `/privacy`, `/data-deletion`, and `/service` serve static Korean privacy policy, manual deletion instructions, and service terms without accessing secrets or database bindings.
@@ -113,7 +121,11 @@ It also revokes PUBLIC schema CREATE, so do not apply it to a shared project wit
 The `.mjs` workerd harness avoids Miniflare's incomplete published TypeScript declarations; application TypeScript remains strict.
 Wrangler and Miniflare are pinned to the tested v4 runtime pair; upgrade them together and run `test:cloudflare`.
 Never enable sends, create cloud resources, or publish as part of tests.
-See `docs/notes/2026-09-26-cloudflare-runbook.md` for provisioning and cutover.
+See `docs/notes/2026-09-26-cloudflare-runbook.md` for the deployed baseline and `docs/notes/2026-09-26-multi-user-cutover.md` for the new migration and configuration procedure.
+This multi-user implementation is local until that cutover is explicitly performed.
+Apply migrations 003–006 and the updated access script in one administrator transaction before deploying this code.
+Assign the existing workspace to a confirmed operator with `deploy/assign-workspace-owner.sql`; never claim legacy data automatically by email.
+Token renewal currently requires reconnecting the Instagram account before the displayed expiry.
 
 `Dockerfile` runs the sources as the non-root `node` user with production dependencies only.
 `compose.yaml` starts PostgreSQL and ingress by default; profiles `send` and `public` enable the real worker and Caddy proxy respectively.
