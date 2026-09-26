@@ -1,13 +1,14 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "auto-chatter",
+  "account_id": "dd47bef237425c1e64a1bc9a2aa64310",
   "main": "src/cloudflare/index.ts",
   "compatibility_date": "2026-07-30",
   "compatibility_flags": ["nodejs_compat"],
-  "workers_dev": false,
+  "workers_dev": true,
   "preview_urls": false,
   "vars": { "SEND_ENABLED": "false" },
-  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "00000000000000000000000000000000" }],
+  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "026b7ba593a24852bbfd182456ff1c03" }],
   "queues": {
     "producers": [{ "binding": "REPLY_QUEUE", "queue": "auto-chatter-replies" }],
     "consumers": [
