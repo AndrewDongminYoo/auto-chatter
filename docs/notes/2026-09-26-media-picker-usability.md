@@ -60,3 +60,15 @@ API와 화면 상태를 분리해 독립 적대적 리뷰를 실행했습니다.
 Meta 개발자 문서는 로그인 요구 또는 429로 조회가 제한됐습니다.
 필드 참고 자료는 [Meta 공식 IGMedia SDK](https://github.com/facebook/facebook-nodejs-business-sdk/blob/main/src/objects/ig-media.js)이며, 이 자료만으로 Instagram Login의 실제 권한을 검증했다고 간주하지 않습니다.
 Oracle 결과는 `[no precedent found]`입니다.
+
+## 호스팅 리뷰의 CSP 보강
+
+PR #4의 코드 리뷰는 `public/_headers`의 기존 `img-src`가 같은 origin만 허용해 provider 썸네일을 차단한다는 점을 발견했습니다.
+초기 Python 정적 서버 점검에는 이 운영 헤더가 적용되지 않았으므로 그 결과로 CDN 이미지 표시를 입증할 수 없었습니다.
+이미지 출처에 한해 서버가 검증하는 HTTPS `cdninstagram.com` 및 `fbcdn.net` 하위 도메인을 허용했습니다.
+다른 출처는 계속 차단하며 script, connect, frame과 form 정책은 그대로 유지했습니다.
+실제 Miniflare 정적 asset 응답을 읽는 회귀 테스트는 수정 전에 provider 출처가 차단되어 실패했고 수정 후 통과했습니다.
+보강 후 타입 검사, 단위 테스트 90개, Cloudflare 런타임 테스트 21개와 변경 파일의 Trunk 검사가 통과했습니다.
+Chromium의 `securitypolicyviolation` 이벤트에서도 provider 이미지 요청은 허용되고 `evil.test` 이미지 요청은 차단되는 것을 확인했습니다.
+이 브라우저 점검은 CSP 허용 여부를 확인하며 실제 Meta 썸네일 디코딩이나 권한을 확인한 것은 아닙니다.
+배포 시 `_headers`가 정적 응답에 적용되는 방식은 [Cloudflare 공식 헤더 문서](https://developers.cloudflare.com/workers/static-assets/headers/)를 참고했습니다.
