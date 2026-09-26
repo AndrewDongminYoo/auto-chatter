@@ -3,8 +3,28 @@
 ## 현재 상태
 
 Cloudflare 어댑터와 로컬 검증 경로를 구현했습니다.
-실제 Cloudflare·Supabase 리소스 생성과 공개 배포는 아직 수행하지 않았습니다.
-아래 SQL 적용·리소스 생성·secrets 등록·deploy 명령은 개인 계정의 프로젝트와 공개 주소를 정하고 운영 승인을 받은 뒤 실행합니다.
+2026-09-26 승인된 개인 계정에서 Supabase 프로젝트와 Cloudflare 리소스를 생성하고 workers.dev에 배포했습니다.
+발송은 `SEND_ENABLED=false`로 유지합니다.
+Meta secrets 등록과 실제 웹훅 수신·발송 검증은 남아 있습니다.
+아래 신규 DB 초기화와 리소스 생성 절차는 다른 환경을 준비할 때 사용하는 절차이며, 이미 생성한 환경에 다시 실행하지 않습니다.
+
+| 리소스            | 현재 값                                                       |
+| ----------------- | ------------------------------------------------------------- |
+| Supabase 조직     | `hvpqangvavstdhyqkfww` (`second projects`, 생성 시 Free 확인) |
+| Supabase 프로젝트 | `auto-chatter`, `asjjftrioaxzspkbtebf`, 서울 `ap-northeast-2` |
+| Cloudflare 계정   | `dd47bef237425c1e64a1bc9a2aa64310`                            |
+| Hyperdrive        | `auto-chatter-db`, `026b7ba593a24852bbfd182456ff1c03`         |
+| 원본 DB 연결      | Direct endpoint, `auto_chatter_server`, 최대 5개 연결         |
+| 원본 TLS          | `verify-full`, Supabase Root 2021 CA 등록                     |
+| CA 등록 ID        | `041172f1-77cf-4683-8577-6afc644027e0`                        |
+| Queue             | `auto-chatter-replies`, 메시지 보관 86,400초                  |
+| 최초 Worker 버전  | `b4760d1d-4b21-4207-96da-52e0e4a881d7`                        |
+
+웹훅 주소는 `https://auto-chatter.auto-chatter-ydm2790.workers.dev/webhooks/instagram`입니다.
+Meta secrets가 없으면 웹훅 경로는 503을 반환하므로 아직 Meta 콜백 등록을 완료할 수 없습니다.
+관리자·서버 DB 비밀번호는 새로 생성했으며 로컬 `deploy/secrets/supabase-provisioning.json`에만 저장했습니다.
+디렉터리는 0700, 파일은 0600으로 생성했고 전체 디렉터리를 Git에서 제외했습니다.
+운영자가 비밀번호 관리 도구에 보관하기 전까지 이 파일을 삭제하지 않습니다.
 
 ## 구성
 
@@ -59,14 +79,15 @@ Hyperdrive에는 Supabase의 Direct connection과 `auto_chatter_server` 자격 �
 관리자 `postgres` 역할을 애플리케이션에 연결하지 않습니다.
 
 Hyperdrive 조회 캐시는 반드시 끄고 원본 TLS 검증을 설정합니다.
-Wrangler의 대응 옵션은 `--caching-disabled`, `--sslmode verify-full`입니다.
-배포 전에 대시보드에서 캐시 비활성화를 확인합니다.
+Wrangler의 대응 옵션은 `--caching-disabled`, `--sslmode verify-full`이며, `verify-full`에는 먼저 등록한 CA 인증서 ID도 필요합니다.
+[TLS 설정 문서](https://developers.cloudflare.com/hyperdrive/configuration/tls-ssl-certificates-for-hyperdrive/)에 따라 Supabase 공식 CA를 등록한 뒤 `--ca-certificate-id`로 지정합니다.
+배포 전에 API 또는 대시보드에서 캐시 비활성화와 TLS 설정을 확인합니다.
 로컬 에뮬레이션으로 원격 캐시 설정을 검증할 수는 없습니다.
 [조회 캐시 문서](https://developers.cloudflare.com/hyperdrive/concepts/query-caching/)와 [Wrangler 옵션](https://developers.cloudflare.com/hyperdrive/reference/wrangler-commands/)을 참고합니다.
 
-`wrangler.json`의 all-zero Hyperdrive ID를 실제 ID로 바꿉니다.
-현재 `workers_dev`, `preview_urls`는 false이고 route도 없어 공개 진입점이 없습니다.
-승인 후 `workers_dev: true`를 설정하거나 Cloudflare 관리 도메인의 custom domain을 등록합니다.
+`wrangler.json`에는 현재 개인 계정 ID와 실제 Hyperdrive ID가 반영되어 있습니다.
+`workers_dev`는 true이고 `preview_urls`는 false입니다.
+다른 환경에 배포할 때는 계정 ID, Hyperdrive ID, Queue와 공개 주소를 먼저 교체합니다.
 계정·환경이 다르면 Queue와 DB도 분리합니다.
 
 ## 3. Workers 환경 값
@@ -147,7 +168,11 @@ DB 상태와 고정 오류 로그를 확인하고 `unknown`을 일괄 pending으
 
 로컬 workerd 테스트는 pg TCP 연결, 서명, Queue·Cron 호출, 전용 서버 역할의 로그인과 RLS 적용을 확인합니다.
 Graph 응답은 테스트용이며 외부 네트워크 호출을 대신 처리합니다.
-실제 Hyperdrive TLS·캐시, Supabase 네트워크, Cloudflare Cron 운영, Meta 권한과 실발송은 배포 후 검증해야 합니다.
+실제 Hyperdrive 생성 시 Supabase Direct 연결과 서버 역할 인증에 성공했고, 반환된 설정에서 캐시 비활성화와 `verify-full`을 확인했습니다.
+Supabase에서 제품 테이블 5개의 RLS, 서버 역할의 SELECT·INSERT·UPDATE 허용 및 DELETE 차단, API 역할 3개의 SELECT 차단을 조회했습니다.
+Worker 배포 명령은 Queue 생산자·소비자와 매분 Cron 등록을 확인했습니다.
+공개 HTTPS 요청에서 루트의 404와 secrets 미등록 상태인 웹훅 경로의 503을 확인했습니다.
+발송을 꺼 둔 상태이므로 실제 Cron 복구 실행, Worker를 통한 DB 처리, Meta 권한과 실발송은 아직 검증하지 않았습니다.
 
 2026-09-26 로컬에서 타입 검사, 기존 단위 테스트 46건, 기존 PostgreSQL 테스트 36건, Cloudflare 관련 테스트 15건, Docker 이미지 빌드를 통과했습니다.
 발송 안전성과 DB 접근 권한에 대한 독립적 정적 리뷰를 수행했고, 비활성 연결의 정체·API 역할 권한 잔존·기존 역할 소유권 우회를 수정한 뒤 두 리뷰 모두 승인됐습니다.

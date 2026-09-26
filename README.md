@@ -33,7 +33,8 @@ Instagram Login 어댑터는 Instagram 사용자 토큰의 계정 ID와 댓글·
 Hyperdrive를 통해 DB에 연결하며, 매분 예약 실행으로 누락된 처리 알림과 지연 작업을 복구합니다.
 초기 Cloudflare 경로는 Instagram Login 연결 하나를 지원하고 발송은 기본 비활성화입니다.
 설정과 전환 순서는 [Cloudflare 배포 절차](docs/notes/2026-09-26-cloudflare-runbook.md), 구현 범위는 [전환 계획](docs/plans/2026-09-26-cloudflare-supabase.md)을 따릅니다.
-실제 클라우드 리소스 생성과 공개 배포는 아직 수행하지 않았습니다.
+2026-09-26 Supabase 서울 리전 프로젝트와 Cloudflare Queue·Hyperdrive를 생성하고 Worker를 workers.dev에 배포했습니다.
+발송은 비활성화 상태이며, Meta secrets 등록과 실제 웹훅 수신 검증은 남아 있습니다.
 
 로컬 통합 환경과 단일 서버 대체 배포에는 `Dockerfile`과 `compose.yaml`을 사용합니다.
 기본 실행은 DB와 수신기만 시작하며, 실제 발송과 공개 HTTPS는 각각 `send`와 `public` 프로필로 활성화합니다.

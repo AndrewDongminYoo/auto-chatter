@@ -92,7 +92,9 @@ Queue messages contain only a connection ID; database status remains authoritati
 Each notification processes at most one row, then wakes remaining due work.
 Cron runs each minute to recover stale sends and repair missed notifications or delayed retries.
 Only Instagram Login with one configured connection is supported in this adapter.
-`SEND_ENABLED` must equal `true` to send; the committed configuration defaults to `false` and has a placeholder Hyperdrive ID and no public route.
+`SEND_ENABLED` must equal `true` to send; the committed configuration keeps it `false` and pins the provisioned personal Cloudflare account and Hyperdrive ID.
+The Worker is deployed on workers.dev; Meta secrets and live webhook verification are still pending.
+Generated provisioning credentials stay in the ignored `deploy/secrets/` directory; never log or commit them.
 Hyperdrive query caching MUST be disabled to keep authorization and active-state reads fresh.
 Apply `db/schema.sql` and `deploy/supabase-access.sql` in a single administrator transaction on a dedicated Supabase project.
 The access script enables RLS, revokes API-role table access, and grants only SELECT/INSERT/UPDATE to the server role.

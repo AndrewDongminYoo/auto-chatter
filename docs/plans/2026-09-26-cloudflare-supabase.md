@@ -6,6 +6,10 @@
 이 계획은 로컬 구현과 검증을 다루며, 실제 리소스 생성·공개 배포·Meta 발송은 별도 운영 단계입니다.
 기존 단일 서버 계획은 Compose 기반 로컬 검증과 대체 배포 경로로 유지합니다.
 
+2026-09-26 개인 계정과 Supabase 조직을 확인한 뒤 리소스 생성까지 진행했습니다.
+운영자의 workers.dev 사용 승인에 따라 Worker도 배포했으며 `SEND_ENABLED=false`를 유지합니다.
+실제 리소스와 남은 Meta 연결 작업은 [배포 절차](../notes/2026-09-26-cloudflare-runbook.md)에 기록합니다.
+
 ## 설계
 
 - Workers `fetch`가 원문 서명과 1 MiB 제한을 검사하고 기존 `ingestComments` 트랜잭션을 호출합니다.
