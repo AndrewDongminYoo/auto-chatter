@@ -49,6 +49,11 @@ function updatePreview() {
       : list(fields.keywords.value)[0] || "키워드를 입력하세요";
   byId("preview-message").textContent =
     fields.private_reply_text.value.trim() || "작성한 첫 메시지가 여기에 표시됩니다.";
+  const button = fields.follow_gate_enabled.checked && fields.confirmation_button_enabled.checked;
+  for (const id of ["preview-first-button", "preview-retry-button"]) {
+    byId(id).hidden = !button;
+    byId(id).textContent = fields.confirmation_button_title.value.trim() || "버튼 이름을 입력하세요";
+  }
   byId("preview-follow").hidden = !fields.follow_gate_enabled.checked;
   byId("preview-confirmation").textContent = fields.confirmation_keyword.value.trim() || "확인 단어를 입력하세요";
   byId("preview-follower").textContent = fields.follower_reply_text.value.trim() || "팔로우한 사람에게 보낼 답장";
@@ -60,13 +65,23 @@ function formConditions() {
   byId("follow-settings").hidden = !follow;
   for (const name of ["confirmation_keyword", "follower_reply_text", "non_follower_reply_text"])
     form.elements[name].required = follow;
+  const button = follow && form.elements.confirmation_button_enabled.checked;
+  byId("confirmation-button-settings").hidden = !button;
+  form.elements.confirmation_button_title.required = button;
+  for (const name of ["private_reply_text", "non_follower_reply_text"]) {
+    const field = form.elements[name];
+    field.maxLength = button ? 640 : 1000;
+    field.setCustomValidity(
+      button && field.value.length > 640 ? "버튼이 있는 메시지는 640자 이내로 작성해 주세요." : "",
+    );
+  }
   const all = form.elements.match_mode.value === "all";
   byId("include-keywords").hidden = all;
   form.elements.keywords.required = !all;
   form.elements.keywords.setCustomValidity("");
   form.elements.excluded_keywords.setCustomValidity("");
   byId("message-count").textContent =
-    `${form.elements.private_reply_text.value.length.toLocaleString("ko-KR")} / 1,000`;
+    `${form.elements.private_reply_text.value.length.toLocaleString("ko-KR")} / ${button ? "640" : "1,000"}`;
   updatePreview();
 }
 function markDirty() {
@@ -123,6 +138,7 @@ const errors = {
   connection_unavailable: "계정 연결 상태와 토큰 유효기간을 확인해 주세요.",
   keywords_required: "키워드를 하나 이상 입력해 주세요.",
   invalid_keywords: "키워드는 최대 20개, 각각 100자까지 입력할 수 있습니다.",
+  invalid_confirmation_button: "버튼 이름은 20자, 버튼 메시지는 640자 이내로 작성하고 팔로우 확인을 켜주세요.",
   invalid_rule: "게시물 선택, 답장 문구와 팔로우 조건을 확인해 주세요.",
   invalid_media_request: "게시물 목록을 새로고침한 뒤 다시 선택해 주세요.",
   media_reconnect_required: "계정을 다시 연결한 뒤 게시물을 불러와 주세요.",
@@ -344,6 +360,8 @@ async function loadWorkspace() {
         "confirmation_keyword",
       ])
         form.elements[name].value = rule[name];
+      form.elements.confirmation_button_title.value = rule.confirmation_button_title || "확인";
+      form.elements.confirmation_button_enabled.checked = Boolean(rule.confirmation_button_title);
       form.elements.keywords.value = (rule.keywords.length ? rule.keywords : [rule.keyword]).join("\n");
       form.elements.excluded_keywords.value = rule.excluded_keywords.join("\n");
       form.elements.enabled.checked = rule.enabled;
@@ -639,6 +657,10 @@ form.addEventListener("submit", (event) => {
     enabled: form.elements.enabled.checked,
     follow_gate_enabled: form.elements.follow_gate_enabled.checked,
     confirmation_keyword: form.elements.follow_gate_enabled.checked ? data.confirmation_keyword : "확인",
+    confirmation_button_title:
+      form.elements.follow_gate_enabled.checked && form.elements.confirmation_button_enabled.checked
+        ? data.confirmation_button_title
+        : "",
   };
   action(byId("save-rule"), async () => {
     byId("rule-fields").disabled = true;
