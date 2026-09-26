@@ -21,9 +21,8 @@
     </header>
     <main id="main" tabindex="-1">
       <div class="page-heading">
-        <p class="eyebrow">내 자동화 공간</p>
-        <h1>댓글에 맞는 답장을, 자동으로.</h1>
-        <p class="intro">Instagram 계정을 연결하고 댓글부터 DM까지 이어지는 흐름을 만들어 보세요.</p>
+        <h1>자동화 작업실</h1>
+        <p class="intro">댓글 조건부터 마지막 답장까지, 한곳에서 설정하세요.</p>
       </div>
       <div id="notice" role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></div>
       <section id="startup" class="card loading-state" aria-label="로그인 상태 확인">
@@ -32,26 +31,26 @@
       <button id="retry-load" class="secondary" hidden>다시 불러오기</button>
       <section id="auth" class="card auth-card" aria-labelledby="auth-title" hidden>
         <div class="auth-copy">
-          <p class="eyebrow">시작하기</p>
-          <h2 id="auth-title">내 계정으로 로그인</h2>
+          <img class="auth-mark" src="../icons/auto-chatter.png" width="64" height="64" alt="" />
+          <h1 id="auth-title">내 계정으로 로그인</h1>
           <p>계정과 자동화 설정은 로그인한 사용자에게만 표시됩니다.</p>
           <ol class="onboarding">
             <li>
-              <span>01</span>
+              <span aria-hidden="true">↳</span>
               <div>
                 <strong>Instagram 연결</strong>
                 <p>관리하는 전문 계정을 연결하세요.</p>
               </div>
             </li>
             <li>
-              <span>02</span>
+              <span aria-hidden="true">↳</span>
               <div>
                 <strong>댓글 조건 설정</strong>
                 <p>키워드와 보낼 메시지를 정하세요.</p>
               </div>
             </li>
             <li>
-              <span>03</span>
+              <span aria-hidden="true">↳</span>
               <div>
                 <strong>확인 후 시작</strong>
                 <p>계정 발송과 규칙을 켜면 시작됩니다.</p>
@@ -103,7 +102,6 @@
         <section id="accounts-section" class="card" aria-labelledby="accounts-title">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">01 · 연결</p>
               <h2 id="accounts-title">Instagram 계정 <span id="account-count" class="count">0</span></h2>
             </div>
             <button id="connect" data-loading-label="연결 준비 중…">계정 연결</button>
@@ -113,10 +111,8 @@
         <section id="automation-section" aria-labelledby="automation-title">
           <div class="section-heading section-intro">
             <div>
-              <p class="eyebrow">02 · 자동화</p>
               <h2 id="automation-title">댓글 자동화</h2>
             </div>
-            <p class="hint">게시물 하나당 규칙 하나를 설정합니다.</p>
           </div>
           <div class="columns">
             <section class="card rule-list-card" aria-labelledby="rules-title">
@@ -131,14 +127,14 @@
                 <h3 id="editor-title">새 규칙 만들기</h3>
                 <span id="edit-state" class="badge">작성 전</span>
               </div>
-              <p id="editor-help" class="hint">게시물과 댓글 조건을 정한 뒤 답장을 작성하세요.</p>
+              <p id="editor-help" class="hint">게시물 하나에 규칙 하나. 입력한 답장은 미리보기에서 확인하세요.</p>
               <p id="editor-empty" class="inline-note" hidden>
                 Instagram 계정을 먼저 연결하면 규칙을 만들 수 있습니다.
               </p>
               <form id="rule-form">
                 <fieldset id="rule-fields">
                   <fieldset class="form-section">
-                    <legend>1. 어떤 댓글에 답할까요?</legend>
+                    <legend>댓글 조건</legend>
                     <label>Instagram 계정<select name="connection_id" required></select></label>
                     <label
                       >게시물 ID<input
@@ -185,7 +181,7 @@
                     <p class="hint" id="exclude-help">제외 키워드는 모든 댓글 조건보다 우선합니다.</p>
                   </fieldset>
                   <fieldset class="form-section">
-                    <legend>2. 첫 DM을 작성하세요</legend>
+                    <legend>첫 DM</legend>
                     <label
                       >첫 메시지<textarea
                         name="private_reply_text"
@@ -204,7 +200,7 @@
                     </div>
                   </fieldset>
                   <fieldset class="form-section">
-                    <legend>3. 팔로우 조건을 설정하세요</legend>
+                    <legend>팔로우에 따른 답장</legend>
                     <label class="toggle"
                       ><input name="follow_gate_enabled" type="checkbox" aria-controls="follow-settings" /><span
                         >응답을 받은 뒤 팔로우 확인<small>팔로우 여부에 따라 다른 후속 메시지를 보냅니다.</small></span
@@ -249,12 +245,42 @@
                 </div>
               </form>
             </section>
+            <aside class="conversation-preview" aria-labelledby="preview-title">
+              <div class="preview-heading">
+                <h3 id="preview-title">대화 미리보기</h3>
+                <span>예시</span>
+              </div>
+              <p class="hint">입력한 내용으로 보는 흐름입니다. 실제 발송 화면과 다를 수 있습니다.</p>
+              <div class="conversation">
+                <div class="conversation-account">
+                  <img src="../icons/auto-chatter.png" width="28" height="28" alt="" /><strong id="preview-account"
+                    >연결할 계정</strong
+                  >
+                </div>
+                <p class="conversation-label">게시물에 댓글이 달리면</p>
+                <p id="preview-comment" class="bubble incoming">키워드를 입력하세요</p>
+                <p class="conversation-label">첫 DM</p>
+                <p id="preview-message" class="bubble outgoing">작성한 첫 메시지가 여기에 표시됩니다.</p>
+                <div id="preview-follow" hidden>
+                  <p class="conversation-label">상대가 확인 단어로 답장하면</p>
+                  <p id="preview-confirmation" class="bubble incoming">확인</p>
+                  <div class="preview-branch">
+                    <span>팔로우한 경우</span>
+                    <p id="preview-follower" class="bubble outgoing"></p>
+                  </div>
+                  <div class="preview-branch">
+                    <span>팔로우하지 않은 경우</span>
+                    <p id="preview-non-follower" class="bubble outgoing"></p>
+                  </div>
+                  <p class="hint">팔로우 상태를 확인할 수 없으면 후속 DM을 보내지 않습니다.</p>
+                </div>
+              </div>
+            </aside>
           </div>
         </section>
         <section id="activity-section" class="card" aria-labelledby="activity-title">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">03 · 확인</p>
               <h2 id="activity-title">최근 처리 내역</h2>
             </div>
             <button id="refresh-activity" class="secondary" data-loading-label="불러오는 중…">새로고침</button>

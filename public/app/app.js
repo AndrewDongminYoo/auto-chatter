@@ -35,6 +35,22 @@ function emptyState(title, description) {
 function badge(text, tone = "") {
   return node("span", text, `badge ${tone}`);
 }
+function updatePreview() {
+  const fields = form.elements;
+  const account = fields.connection_id.selectedOptions[0]?.textContent;
+  byId("preview-account").textContent = account || "연결할 계정";
+  byId("preview-comment").textContent =
+    fields.match_mode.value === "all"
+      ? "모든 댓글에 반응합니다"
+      : list(fields.keywords.value)[0] || "키워드를 입력하세요";
+  byId("preview-message").textContent =
+    fields.private_reply_text.value.trim() || "작성한 첫 메시지가 여기에 표시됩니다.";
+  byId("preview-follow").hidden = !fields.follow_gate_enabled.checked;
+  byId("preview-confirmation").textContent = fields.confirmation_keyword.value.trim() || "확인 단어를 입력하세요";
+  byId("preview-follower").textContent = fields.follower_reply_text.value.trim() || "팔로우한 사람에게 보낼 답장";
+  byId("preview-non-follower").textContent =
+    fields.non_follower_reply_text.value.trim() || "팔로우하지 않은 사람에게 보낼 답장";
+}
 function formConditions() {
   const follow = form.elements.follow_gate_enabled.checked;
   byId("follow-settings").hidden = !follow;
@@ -47,6 +63,7 @@ function formConditions() {
   form.elements.excluded_keywords.setCustomValidity("");
   byId("message-count").textContent =
     `${form.elements.private_reply_text.value.length.toLocaleString("ko-KR")} / 1,000`;
+  updatePreview();
 }
 function markDirty() {
   formConditions();
