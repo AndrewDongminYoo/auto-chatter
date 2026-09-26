@@ -7,8 +7,9 @@ Cloudflare 어댑터와 로컬 검증 경로를 구현했습니다.
 발송은 `SEND_ENABLED=false`로 유지합니다.
 `INSTAGRAM_APP_SECRET`과 `INSTAGRAM_VERIFY_TOKEN`의 등록을 확인했습니다.
 Instagram Login 제품 설정에서 `comments` 구독이 활성화된 화면을 확인했고, 대시보드 테스트 직후 수신된 POST의 HTTP 200 응답을 Worker 로그로 확인했습니다.
-새 DB에는 아직 workspace·Instagram 연결·규칙이 없어 이벤트와 outbox도 0건입니다.
-실제 계정 연결 등록과 댓글 저장·발송 검증은 남아 있습니다.
+첫 대시보드 테스트 당시에는 workspace·Instagram 연결·규칙이 없어 이벤트와 outbox도 0건이었습니다.
+이후 운영자가 지정한 `ai.you.wanted`의 수신 연결을 등록했습니다.
+실제 댓글 저장·발송 검증은 남아 있습니다.
 아래 신규 DB 초기화와 리소스 생성 절차는 다른 환경을 준비할 때 사용하는 절차이며, 이미 생성한 환경에 다시 실행하지 않습니다.
 
 | 리소스            | 현재 값                                                       |
@@ -31,6 +32,15 @@ Instagram Login 경로는 공통 Webhooks 메뉴 대신 **Instagram 로그인이
 관리자·서버 DB 비밀번호는 새로 생성했으며 로컬 `deploy/secrets/supabase-provisioning.json`에만 저장했습니다.
 디렉터리는 0700, 파일은 0600으로 생성했고 전체 디렉터리를 Git에서 제외했습니다.
 운영자가 비밀번호 관리 도구에 보관하기 전까지 이 파일을 삭제하지 않습니다.
+
+### 수신 계정
+
+운영자 승인과 Instagram 제품 화면의 계정 ID를 기준으로 `ai.you.wanted` (`17841437471464257`)를 등록했습니다.
+workspace ID는 `eedede37-b94a-4afe-b072-c728932e7c04`, connection ID는 `a5df4215-fb1e-46d4-93f4-13c0176fb031`입니다.
+연결의 `active=true`는 댓글 저장을 허용하며, 실제 메시지 발송은 별도 `SEND_ENABLED=false`로 차단합니다.
+등록 직후 조회에서 연결 한 개와 발송 규칙·outbox 0건을 확인했습니다.
+수신 계정 ID와 연결 ID를 Worker 설정에 반영하고 Graph 버전은 제품 화면의 구독 버전과 같은 `v26.0`으로 지정합니다.
+대시보드 예제의 계정 ID가 등록 계정과 다르면 HTTP 200이어도 저장 대상이 아니므로, 실제 댓글 저장 검증과 구분합니다.
 
 ## 구성
 

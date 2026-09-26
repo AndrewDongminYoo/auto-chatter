@@ -95,7 +95,8 @@ Only Instagram Login with one configured connection is supported in this adapter
 `SEND_ENABLED` must equal `true` to send; the committed configuration keeps it `false` and pins the provisioned personal Cloudflare account and Hyperdrive ID.
 The Worker is deployed on workers.dev with both webhook secrets registered; incorrect verification tokens and unsigned requests return 403.
 A dashboard webhook test returned 200 with no logged errors or exceptions.
-The production database has no Instagram connections yet, so that test did not persist a comment; real comment persistence and sending remain unverified.
+That test ran before an Instagram connection was registered and did not persist a comment.
+The production database now has one active receive-only connection and no reply rules; real comment persistence and sending remain unverified.
 Generated provisioning credentials stay in the ignored `deploy/secrets/` directory; never log or commit them.
 Hyperdrive query caching MUST be disabled to keep authorization and active-state reads fresh.
 Apply `db/schema.sql` and `deploy/supabase-access.sql` in a single administrator transaction on a dedicated Supabase project.

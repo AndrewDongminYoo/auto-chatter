@@ -7,7 +7,12 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": false,
-  "vars": { "SEND_ENABLED": "false" },
+  "vars": {
+    "SEND_ENABLED": "false",
+    "META_INSTAGRAM_ACCOUNT_ID": "17841437471464257",
+    "META_INSTAGRAM_CONNECTION_ID": "a5df4215-fb1e-46d4-93f4-13c0176fb031",
+    "META_GRAPH_VERSION": "v26.0"
+  },
   "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "026b7ba593a24852bbfd182456ff1c03" }],
   "queues": {
     "producers": [{ "binding": "REPLY_QUEUE", "queue": "auto-chatter-replies" }],

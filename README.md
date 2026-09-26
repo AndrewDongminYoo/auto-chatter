@@ -36,7 +36,8 @@ Hyperdrive를 통해 DB에 연결하며, 매분 예약 실행으로 누락된 �
 2026-09-26 Supabase 서울 리전 프로젝트와 Cloudflare Queue·Hyperdrive를 생성하고 Worker를 workers.dev에 배포했습니다.
 발송은 비활성화 상태이며, 웹훅 secrets 두 개의 등록과 잘못된 검증 토큰·서명 없는 요청의 거부를 확인했습니다.
 Meta 대시보드에서 전송한 테스트 웹훅의 HTTP 200 응답도 확인했습니다.
-운영 DB의 Instagram 연결 등록과 실제 댓글 저장·발송 검증은 남아 있습니다.
+운영 DB에는 승인된 Instagram 계정의 수신 연결을 등록했으며, 발송 규칙은 없습니다.
+실제 댓글 저장·발송 검증은 남아 있습니다.
 
 로컬 통합 환경과 단일 서버 대체 배포에는 `Dockerfile`과 `compose.yaml`을 사용합니다.
 기본 실행은 DB와 수신기만 시작하며, 실제 발송과 공개 HTTPS는 각각 `send`와 `public` 프로필로 활성화합니다.
