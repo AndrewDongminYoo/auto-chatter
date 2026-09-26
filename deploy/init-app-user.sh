@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+# Runs after schema creation, only when PostgreSQL initializes an empty volume.
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+  --set=app_password="$APP_DB_PASSWORD" <<'SQL'
+CREATE ROLE automations_app LOGIN PASSWORD :'app_password';
+GRANT CONNECT ON DATABASE automations TO automations_app;
+GRANT USAGE ON SCHEMA public TO automations_app;
+GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO automations_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO automations_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE ON TABLES TO automations_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO automations_app;
+SQL
