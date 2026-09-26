@@ -56,15 +56,15 @@ docker run --rm -d --name automations-postgres -p 127.0.0.1:5433:5432 -e POSTGRE
 docker exec -i automations-postgres psql -U postgres -d automations < db/schema.sql
 ```
 
-기존 스키마로 만든 DB에는 워커를 사용하기 전에 아직 적용하지 않은 마이그레이션을 번호 순서대로 적용합니다.
+기존 스키마로 만든 DB에는 아직 적용하지 않은 001·002 마이그레이션을 먼저 적용합니다.
+이후 003–006과 서버 접근 정책은 전용 실행 파일로 한 트랜잭션에서 적용합니다.
+오류가 나면 전체 트랜잭션이 롤백되며, 성공하기 전에는 새 수신기와 워커를 배포하지 않습니다.
 
 ```bash
 docker exec -i automations-postgres psql -v ON_ERROR_STOP=1 -U postgres -d automations < db/migrations/001_reply_worker.sql
 docker exec -i automations-postgres psql -v ON_ERROR_STOP=1 -U postgres -d automations < db/migrations/002_rate_limit_backoff.sql
-docker exec -i automations-postgres psql -v ON_ERROR_STOP=1 -U postgres -d automations < db/migrations/003_comment_rule_matching.sql
-docker exec -i automations-postgres psql -v ON_ERROR_STOP=1 -U postgres -d automations < db/migrations/004_workspace_settings.sql
-docker exec -i automations-postgres psql -v ON_ERROR_STOP=1 -U postgres -d automations < db/migrations/005_instagram_oauth.sql
-docker exec -i automations-postgres psql -v ON_ERROR_STOP=1 -U postgres -d automations < db/migrations/006_follow_conversations.sql
+# 저장소 루트에서 PostgreSQL 클라이언트(psql)로 실행합니다.
+psql postgres://postgres:local-dev@127.0.0.1:5433/automations -f deploy/migrate-multi-user.sql
 ```
 
 활성 Instagram 연결과 키워드 규칙은 `db/schema.sql`의 테이블에 별도로 등록해야 합니다.
