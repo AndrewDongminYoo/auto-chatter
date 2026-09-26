@@ -423,3 +423,38 @@ test("a successful first DM without recipient ID exposes a terminal follow failu
   });
   assert.equal((await pool.query("SELECT count(*) FROM instagram_follow_conversations")).rows[0].count, "0");
 });
+
+test("consuming one account cannot multiply notifications for another due account", async () => {
+  await worker.fetch(request(), env);
+  await worker.fetch(request("comment-2", "sender-2"), env);
+  const other = "44444444-4444-4444-8444-444444444444";
+  await pool.query(
+    `INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,access_token_encrypted,token_expires_at)
+    SELECT $1,workspace_id,'999',true,true,access_token_encrypted,token_expires_at FROM instagram_connections WHERE id=$2`,
+    [other, connectionId],
+  );
+  await pool.query(
+    `INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled)
+    VALUES ('55555555-5555-4555-8555-555555555555','11111111-1111-4111-8111-111111111111',$1,'other-media','hello','reply',true)`,
+    [other],
+  );
+  await pool.query(
+    `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+    VALUES ('11111111-1111-4111-8111-111111111111',$1,'other-comment','other-media','other-sender','hello')`,
+    [other],
+  );
+  await pool.query(
+    `INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text)
+    SELECT workspace_id,connection_id,id,'55555555-5555-4555-8555-555555555555',comment_id,media_id,sender_id,'reply' FROM instagram_comment_events WHERE connection_id=$1`,
+    [other],
+  );
+  published = [];
+  assert.equal(await consume(), "ack");
+  assert.deepEqual(published, [{ connectionId }]);
+  published = [];
+  await worker.fetch(request("comment-3", "sender-3"), env);
+  assert.deepEqual(published, [{ connectionId }]);
+  published = [];
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, [{ connectionId }, { connectionId: other }]);
+});

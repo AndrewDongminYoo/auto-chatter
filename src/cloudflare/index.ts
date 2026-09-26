@@ -28,15 +28,24 @@ function openPool(env: Env): Pool {
   return pool;
 }
 
-async function wakeDueReplies(pool: Pool, env: Env): Promise<void> {
+async function wakeDueReplies(
+  pool: Pool,
+  env: Env,
+  scope?: { connectionId: string } | { accountIds: string[] },
+): Promise<void> {
   if (env.SEND_ENABLED !== "true") return;
   const due = await pool.query<{ id: string }>(
     `SELECT c.id FROM instagram_connections c
-     WHERE c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>now()
+     WHERE ($1::uuid IS NULL OR c.id=$1) AND ($2::text[] IS NULL OR c.account_id=ANY($2))
+       AND c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>now()
        AND (c.send_paused_until IS NULL OR c.send_paused_until<=now())
        AND (EXISTS(SELECT 1 FROM private_reply_outbox reply WHERE reply.connection_id=c.id AND reply.status='pending' AND reply.next_attempt_at<=now())
        OR EXISTS(SELECT 1 FROM instagram_follow_conversations flow WHERE flow.connection_id=c.id AND flow.status='pending' AND flow.next_attempt_at<=now()))
      ORDER BY c.id LIMIT 100`,
+    [
+      scope && "connectionId" in scope ? scope.connectionId : null,
+      scope && "accountIds" in scope ? scope.accountIds : null,
+    ],
   );
   for (const row of due.rows) await env.REPLY_QUEUE.send({ connectionId: row.id });
 }
@@ -92,7 +101,9 @@ async function receive(request: Request, env: Env): Promise<Response> {
     await ingestComments(pool, comments);
     await ingestMessages(pool, messages);
     try {
-      await wakeDueReplies(pool, env);
+      await wakeDueReplies(pool, env, {
+        accountIds: [...new Set([...comments, ...messages].map((event) => event.accountId))],
+      });
     } catch {
       // The commit is durable. Cron repairs the DB-to-Queue publication gap.
       console.error("Reply notification failed; scheduled recovery required");
@@ -198,7 +209,7 @@ export default {
                 connectionId,
               );
           }
-          await wakeDueReplies(pool, env);
+          await wakeDueReplies(pool, env, { connectionId });
         } finally {
           await pool.end();
         }

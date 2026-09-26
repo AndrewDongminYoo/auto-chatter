@@ -96,7 +96,8 @@ Both accept an injectable `fetchImpl`, which is how the unit tests mock Graph re
 The primary deployment target is Cloudflare Workers + Queues + Supabase PostgreSQL through Hyperdrive.
 `src/cloudflare/index.ts` reuses ingestion and the single-row worker; it does not run the Node polling loop.
 Queue messages contain only a connection ID; database status remains authoritative.
-Each notification processes at most one row, then wakes remaining due work.
+Each notification processes at most one row, then wakes remaining due work only for that connection.
+Webhook notifications are scoped to the account IDs in the received events; only cron discovers due work globally.
 Cron runs each minute to recover stale sends and repair missed notifications or delayed retries.
 The adapter supports multiple Instagram Login connections.
 `TOKEN_ENCRYPTION_KEY` decrypts workspace/account-bound AES-GCM credentials; the Node worker retains its explicit environment-token path.
