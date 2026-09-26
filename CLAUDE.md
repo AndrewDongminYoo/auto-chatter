@@ -115,8 +115,8 @@ Wrangler serves `public/` as static assets before Worker routing; keep only publ
 The generated app icon at `public/icons/auto-chatter.png` appears in the public page header and favicon.
 A dashboard webhook test returned 200 with no logged errors or exceptions.
 That test ran before an Instagram connection was registered and did not persist a comment.
-The production database has one active receive-only connection and no reply rules.
-A real test comment was persisted on 2026-09-26; live private-reply sending remains unverified.
+The initial receive-only production baseline had one active connection and no reply rules.
+A real test comment and one live private reply were verified on 2026-09-26; provider acknowledgement and the operator's DM receipt agree.
 Generated provisioning credentials stay in the ignored `deploy/secrets/` directory; never log or commit them.
 Hyperdrive query caching MUST be disabled to keep authorization and active-state reads fresh.
 Apply `db/schema.sql` and `deploy/supabase-access.sql` in a single administrator transaction on a dedicated Supabase project.
@@ -129,16 +129,20 @@ Wrangler and Miniflare are pinned to the tested v4 runtime pair; upgrade them to
 Never enable sends, create cloud resources, or publish as part of tests.
 See `docs/notes/2026-09-26-cloudflare-runbook.md` for the deployed baseline and `docs/notes/2026-09-26-multi-user-cutover.md` for the new migration and configuration procedure.
 The multi-user code and migrations 003–006 were deployed on 2026-09-26 with sends disabled.
-The deployed code tag is `b15b3d0`, Worker version `7bfd9b14-f325-486f-84d5-09b4c2c44d2b`.
+The deployed code tag is `2e76925`, Worker version `979de5bb-bc68-4af9-a9f8-5ec82e95c56f`.
 The auth client wraps injected fetch in a standalone call because workerd rejects a native fetch invoked with the client object as its receiver.
 The workerd auth regression test verifies synthetic signup success and rejected login; production rejected login returns 401 after previously returning 503.
 The operator reported signup completion; the production database confirms the operator's email-confirmed user and a completed sign-in.
 The administrator assignment script attached that user to the existing receive-only workspace.
 The operator then completed Instagram OAuth; the encrypted token resolves to `ai.you.wanted`, expires at `2026-11-24T12:20:10.423Z`, and the provider reports `comments` and `messages` subscriptions.
-The connection is active with sends disabled; no rules or outbox rows exist at this check.
+A post-OAuth test comment was persisted at `2026-09-26T09:47:50.487Z`; before send activation there were three comments and no rules, outbox rows or follow conversations.
+Media ownership accepts a numeric `profile.id` only after the same profile's `user_id` matches the stored account; both identities remain protected against own-comment replies.
 Email delivery and confirmation-link behavior were not directly observed; see `docs/notes/2026-09-26-auth-fetch-runtime-fix.md`.
-All five Worker secrets are registered, and the deployed Instagram OAuth app ID is `1822350878757042` with `SEND_ENABLED=false`.
-Email confirmation-link behavior, post-OAuth webhook reception, multi-user live isolation, Advanced Access, and live sending remain unverified.
+All five Worker secrets are registered, and the deployed Instagram OAuth app ID is `1822350878757042`.
+The approved first-DM test produced one sent outbox row with a provider message ID, and the operator confirmed receipt and a reply.
+The test rule and account send switch are disabled again; the current Worker and committed configuration both use `SEND_ENABLED=false`.
+The target media is `18178820404442752`; see `docs/notes/2026-09-26-first-live-reply-test.md` for authorization, message text and shutdown steps.
+Live conditional follow replies, email confirmation-link behavior, multi-user live isolation and Advanced Access remain unverified.
 Run `psql -f deploy/migrate-multi-user.sql` with an administrator connection before deploying this code.
 This runner owns the transaction for migrations 003–006 and the access script, stops on the first error, and rolls back on failure.
 Do not apply these migration files individually without that transaction.

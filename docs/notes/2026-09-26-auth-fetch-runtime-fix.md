@@ -53,7 +53,8 @@ trunk check --no-fix src/app/auth.ts src/cloudflare/runtime.db.test.mjs
 기존 관리자 스크립트로 해당 사용자를 기존 수신 작업 공간에 배정했고 COMMIT 후 소유권을 재조회했습니다.
 소유권 배정 시점에는 Instagram OAuth 토큰이 없었습니다.
 이후 운영자의 OAuth 연결과 저장된 토큰의 Meta 프로필·웹훅 구독 조회를 확인했으며 상세 결과는 [다중 사용자 배포 전환](2026-09-26-multi-user-cutover.md)에 기록합니다.
-발송은 비활성화 상태를 유지합니다.
+이 인증 수정 검증 당시 발송은 비활성화 상태였습니다.
+이후 승인된 첫 실발송 테스트의 현재 상태는 [첫 실발송 테스트 기록](2026-09-26-first-live-reply-test.md)에 기록합니다.
 DB 통합 테스트 전체는 실행하지 않았으며 이 수정에는 DB·마이그레이션 변경이 없습니다.
 
 ## Oracle 선례
