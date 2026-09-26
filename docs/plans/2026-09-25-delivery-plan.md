@@ -11,7 +11,9 @@ Meta 앱의 Instagram Login 설정을 확인했고, 운영자는 Instagram API �
 ## 권장 경로
 
 ChatbotX Community Edition의 고정 커밋을 검증했고, 워커 타입 검사 실패와 불명확한 CE 추출 경계 때문에 채택을 보류했습니다.
-TypeScript·PostgreSQL로 최소 기능을 직접 구현하고, 지연 작업의 부하가 확인되면 Redis를 검토합니다.
+TypeScript·PostgreSQL로 최소 기능을 직접 구현합니다.
+운영 배포는 [Cloudflare + Supabase 전환 계획](2026-09-26-cloudflare-supabase.md)에 따라 Workers·Queues·Hyperdrive·Supabase PostgreSQL을 사용합니다.
+DB outbox가 발송 상태를 관리하며 Queue는 처리 알림만 전달합니다.
 첫 구현은 Instagram 웹훅 검증과 댓글 이벤트 정규화·저장입니다.
 PostgreSQL outbox를 처리하는 워커 모듈을 구현했습니다.
 Facebook Login과 Instagram Login 어댑터를 실행 진입점에 연결했습니다.

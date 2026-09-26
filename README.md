@@ -29,7 +29,13 @@ Instagram Login 어댑터는 Instagram 사용자 토큰의 계정 ID와 댓글·
 
 ## 로컬 실행
 
-단일 서버 배포에는 `Dockerfile`과 `compose.yaml`을 사용합니다.
+운영 배포 방향은 **Cloudflare Workers + Queues + Supabase PostgreSQL**입니다.
+Hyperdrive를 통해 DB에 연결하며, 매분 예약 실행으로 누락된 처리 알림과 지연 작업을 복구합니다.
+초기 Cloudflare 경로는 Instagram Login 연결 하나를 지원하고 발송은 기본 비활성화입니다.
+설정과 전환 순서는 [Cloudflare 배포 절차](docs/notes/2026-09-26-cloudflare-runbook.md), 구현 범위는 [전환 계획](docs/plans/2026-09-26-cloudflare-supabase.md)을 따릅니다.
+실제 클라우드 리소스 생성과 공개 배포는 아직 수행하지 않았습니다.
+
+로컬 통합 환경과 단일 서버 대체 배포에는 `Dockerfile`과 `compose.yaml`을 사용합니다.
 기본 실행은 DB와 수신기만 시작하며, 실제 발송과 공개 HTTPS는 각각 `send`와 `public` 프로필로 활성화합니다.
 환경 설정, 백업·복원과 업데이트 절차는 [배포 운영 절차](docs/notes/2026-09-26-deployment-runbook.md)를 따릅니다.
 
@@ -101,4 +107,8 @@ corepack pnpm install --frozen-lockfile
 corepack pnpm check-types
 corepack pnpm test
 TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:5433/automations_test corepack pnpm test:db
+TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:5433/automations_test corepack pnpm test:cloudflare
 ```
+
+`test:cloudflare`는 배포하지 않고 번들을 만든 뒤 로컬 workerd·PostgreSQL·가짜 Graph 응답으로 검증합니다.
+Supabase 권한 SQL 테스트는 격리된 테스트 DB 서버에서만 실행합니다.

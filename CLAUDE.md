@@ -10,7 +10,8 @@ Product scope, non-goals and the phased roadmap live in `docs/specs/` and `docs/
 
 ## Commands
 
-Node.js >= 24 runs the TypeScript sources directly (native type stripping); there is no build step.
+Node.js >= 24 runs the local TypeScript sources directly (native type stripping).
+Cloudflare uses Wrangler to bundle the same modules for Workers.
 Use `corepack pnpm` (pnpm 10, pinned by `packageManager`).
 
 ```bash
@@ -18,6 +19,8 @@ corepack pnpm install --frozen-lockfile
 corepack pnpm check-types          # tsc --noEmit, the only compile check
 corepack pnpm test                 # unit tests, no DB needed
 TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:5433/automations_test corepack pnpm test:db
+TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:5433/automations_test corepack pnpm test:cloudflare
+corepack pnpm build:cloudflare    # bundle only, never deploys
 corepack pnpm start                # webhook receiver only (needs DATABASE_URL, INSTAGRAM_APP_SECRET, INSTAGRAM_VERIFY_TOKEN)
 corepack pnpm meta:check           # read-only Meta token/account check
 corepack pnpm worker:instagram     # sends real private replies — only after Meta permissions are confirmed
@@ -83,6 +86,23 @@ Both accept an injectable `fetchImpl`, which is how the unit tests mock Graph re
 
 ## Deployment
 
+The primary deployment target is Cloudflare Workers + Queues + Supabase PostgreSQL through Hyperdrive.
+`src/cloudflare/index.ts` reuses ingestion and the single-row worker; it does not run the Node polling loop.
+Queue messages contain only a connection ID; database status remains authoritative.
+Each notification processes at most one row, then wakes remaining due work.
+Cron runs each minute to recover stale sends and repair missed notifications or delayed retries.
+Only Instagram Login with one configured connection is supported in this adapter.
+`SEND_ENABLED` must equal `true` to send; the committed configuration defaults to `false` and has a placeholder Hyperdrive ID and no public route.
+Hyperdrive query caching MUST be disabled to keep authorization and active-state reads fresh.
+Apply `db/schema.sql` and `deploy/supabase-access.sql` in a single administrator transaction on a dedicated Supabase project.
+The access script enables RLS, revokes API-role table access, and grants only SELECT/INSERT/UPDATE to the server role.
+It also revokes PUBLIC schema CREATE, so do not apply it to a shared project without reviewing that impact.
+`test:cloudflare` requires a disposable local PostgreSQL cluster: it creates roles and modifies public schema grants in `automations_test`.
+The `.mjs` workerd harness avoids Miniflare's incomplete published TypeScript declarations; application TypeScript remains strict.
+Wrangler and Miniflare are pinned to the tested v4 runtime pair; upgrade them together and run `test:cloudflare`.
+Never enable sends, create cloud resources, or publish as part of tests.
+See `docs/notes/2026-09-26-cloudflare-runbook.md` for provisioning and cutover.
+
 `Dockerfile` runs the sources as the non-root `node` user with production dependencies only.
 `compose.yaml` starts PostgreSQL and ingress by default; profiles `send` and `public` enable the real worker and Caddy proxy respectively.
 Use `--env-file deploy/runtime.env` explicitly; `deploy/environment.example` is the empty template.
@@ -90,7 +110,7 @@ Never print resolved configuration with secrets; use `config --quiet`.
 Fresh DB volumes initialize the current schema and a separate DML-only `automations_app` role.
 Existing volumes require explicit migrations as described in `docs/notes/2026-09-26-deployment-runbook.md`.
 Deployment smoke checks must use synthetic credentials, a separate Compose project and loopback ports, with no live Meta calls.
-`.github/workflows/ci.yaml` runs type checks, unit and PostgreSQL integration tests, Trunk, and a container deployment smoke check on PRs and pushes to `main`.
+`.github/workflows/ci.yaml` runs type checks, unit and PostgreSQL integration tests, a local workerd/Hyperdrive/Queue smoke check, Trunk, and a container deployment smoke check on PRs and pushes to `main`.
 The deployment job verifies signed-event persistence, replay protection, restricted DB privileges and HTTPS with a local Caddy CA; it never starts a sending worker.
 
 ## Verification boundaries

@@ -1,0 +1,153 @@
+# Cloudflare + Supabase 배포 절차
+
+## 현재 상태
+
+Cloudflare 어댑터와 로컬 검증 경로를 구현했습니다.
+실제 Cloudflare·Supabase 리소스 생성과 공개 배포는 아직 수행하지 않았습니다.
+아래 SQL 적용·리소스 생성·secrets 등록·deploy 명령은 개인 계정의 프로젝트와 공개 주소를 정하고 운영 승인을 받은 뒤 실행합니다.
+
+## 구성
+
+| 구성 요소                    | 역할                                                        |
+| ---------------------------- | ----------------------------------------------------------- |
+| Workers `fetch`              | `/webhooks/instagram` 구독 확인, 원문 서명 검사, DB 저장    |
+| Queue `auto-chatter-replies` | 연결 ID만 담는 처리 알림                                    |
+| Workers `queue`              | 알림당 한 행 claim, 기존 정책 검사·발송, 다음 due 작업 알림 |
+| 매분 Cron                    | 중단된 발송을 `unknown`으로 정리하고 due 작업 알림 복구     |
+| Supabase PostgreSQL          | 이벤트·규칙·outbox·연결 cooldown의 영속 상태                |
+| Hyperdrive                   | 이벤트별 DB 연결 중개, 조회 캐시는 비활성화                 |
+
+Cloudflare 경로는 Instagram Login 연결 하나를 처리합니다.
+다른 연결을 DB에 등록해도 해당 연결의 발송 소비자가 자동으로 생기지 않습니다.
+Facebook Login은 기존 Node 워커 경로에서만 지원합니다.
+기존 `pg`를 재사용하며 ORM이나 Supabase JavaScript SDK를 추가하지 않습니다.
+
+## 1. Supabase 준비
+
+이 서비스 전용 프로젝트를 사용합니다.
+관리자 psql 연결은 비밀 관리 도구나 로컬 `PGSERVICE` 설정으로 제공하고 비밀번호를 명령 이력에 쓰지 않습니다.
+신규 DB에는 두 파일을 한 트랜잭션으로 적용합니다.
+`SUPABASE_ADMIN_SERVICE`는 비밀번호가 아닌 로컬 psql 서비스 이름입니다.
+
+```bash
+PGSERVICE="$SUPABASE_ADMIN_SERVICE" psql -X --set ON_ERROR_STOP=1 --single-transaction \
+  --file db/schema.sql --file deploy/supabase-access.sql
+```
+
+제품 테이블 다섯 개에 RLS를 켜고 `PUBLIC`, `anon`, `authenticated`, `service_role`의 접근 권한을 회수합니다.
+`auto_chatter_server`에만 SELECT·INSERT·UPDATE 정책과 필요한 sequence 접근을 허용합니다.
+이 역할은 전체 서비스 데이터를 처리하는 신뢰된 서버 역할이며 클라이언트 사용자별 격리를 제공하지 않습니다.
+`PUBLIC`의 public 스키마 CREATE도 회수하므로 공유 프로젝트에는 그대로 적용하지 않습니다.
+새 테이블은 이 권한 파일에도 등록해야 합니다.
+기존에 같은 이름의 역할에 관리자 속성, 다른 역할 membership, DB·스키마·테이블·시퀀스 소유권이 있으면 SQL은 중단합니다.
+
+역할은 처음에 NOLOGIN으로 생성됩니다.
+관리자 psql에서 아래 SQL을 실행한 뒤 `\password auto_chatter_server` 명령으로 비밀번호를 대화형 설정합니다.
+
+```sql
+ALTER ROLE auto_chatter_server LOGIN;
+```
+
+연결·규칙의 `active`와 `enabled`는 테스트 준비가 끝날 때까지 false로 유지합니다.
+기존 DB 이전에는 별도의 백업·복원이 필요하며 현재 구현은 기존 데이터를 자동 복사하지 않습니다.
+
+## 2. Cloudflare 준비
+
+Queue `auto-chatter-replies`를 생성합니다.
+Hyperdrive에는 Supabase의 Direct connection과 `auto_chatter_server` 자격 증명을 설정합니다.
+[공식 Supabase 연결 안내](https://developers.cloudflare.com/hyperdrive/examples/connect-to-postgres/postgres-database-providers/supabase/)에 따라 pooled endpoint 대신 Direct 연결을 사용합니다.
+관리자 `postgres` 역할을 애플리케이션에 연결하지 않습니다.
+
+Hyperdrive 조회 캐시는 반드시 끄고 원본 TLS 검증을 설정합니다.
+Wrangler의 대응 옵션은 `--caching-disabled`, `--sslmode verify-full`입니다.
+배포 전에 대시보드에서 캐시 비활성화를 확인합니다.
+로컬 에뮬레이션으로 원격 캐시 설정을 검증할 수는 없습니다.
+[조회 캐시 문서](https://developers.cloudflare.com/hyperdrive/concepts/query-caching/)와 [Wrangler 옵션](https://developers.cloudflare.com/hyperdrive/reference/wrangler-commands/)을 참고합니다.
+
+`wrangler.json`의 all-zero Hyperdrive ID를 실제 ID로 바꿉니다.
+현재 `workers_dev`, `preview_urls`는 false이고 route도 없어 공개 진입점이 없습니다.
+승인 후 `workers_dev: true`를 설정하거나 Cloudflare 관리 도메인의 custom domain을 등록합니다.
+계정·환경이 다르면 Queue와 DB도 분리합니다.
+
+## 3. Workers 환경 값
+
+비밀값은 Worker secrets에 대화형으로 입력합니다.
+
+```bash
+corepack pnpm exec wrangler secret put INSTAGRAM_APP_SECRET --env-file /dev/null
+corepack pnpm exec wrangler secret put INSTAGRAM_VERIFY_TOKEN --env-file /dev/null
+corepack pnpm exec wrangler secret put META_INSTAGRAM_ACCESS_TOKEN --env-file /dev/null
+```
+
+| 값                             | 설정                                  |
+| ------------------------------ | ------------------------------------- |
+| `META_GRAPH_VERSION`           | 실제 앱에서 사용할 Graph 버전         |
+| `META_INSTAGRAM_ACCOUNT_ID`    | 토큰에 대응하는 전문 계정의 `user_id` |
+| `META_INSTAGRAM_CONNECTION_ID` | 해당 계정의 DB 연결 UUID              |
+| `SEND_ENABLED`                 | 최초 배포는 문자열 `false`            |
+
+비밀이 아닌 Meta 설정 세 개는 `wrangler.json`의 `vars`에 추가합니다.
+`META_LOGIN_MODE`는 이 어댑터에서 사용하지 않습니다.
+Node 명령과 Docker는 기존 환경 설정을 유지합니다.
+빌드는 `--env-file /dev/null`로 로컬 비밀 파일 자동 로드를 피합니다.
+
+## 4. 검증과 배포
+
+테스트는 격리된 로컬 PostgreSQL의 `automations_test` DB와 관리자 역할이 필요합니다.
+제품 테이블을 초기화하고 테스트 역할·스키마 권한을 바꾸므로 운영 DB에서는 실행하지 않습니다.
+두 DB 검사 명령을 같은 DB에서 동시에 실행하지 않습니다.
+
+```bash
+corepack pnpm install --frozen-lockfile
+corepack pnpm check-types
+corepack pnpm test
+TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:5433/automations_test corepack pnpm test:db
+TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:5433/automations_test corepack pnpm test:cloudflare
+```
+
+Wrangler 4.116.0·Miniflare 4.20260730.0을 함께 고정했습니다.
+조사한 Miniflare v4와 v5 alpha에는 타입 선언 누락이 있어 런타임 검증 도구는 `.mjs`로 실행합니다.
+애플리케이션의 strict TypeScript 설정은 유지합니다.
+Trunk 보안 검사에서 발견한 개발 도구의 전이 의존성은 `pnpm-workspace.yaml`에서 같은 버전 계열로 보정했습니다.
+실제 설치 결과는 sharp 0.35.4, undici 7.30.0이며 패치 근거는 [sharp 보안 공지](https://github.com/advisories/GHSA-rgj7-g3m4-5g8c), [undici 보안 공지](https://github.com/advisories/GHSA-4cwx-7wf7-3272)입니다.
+override 주석에 관련 공지를 기록했으며 도구 업데이트 시 제거 가능 여부를 다시 확인합니다.
+Workers가 지원하지 않는 Fetch `redirect: error`는 어댑터에서 `manual` 요청과 3xx 거부로 대체합니다.
+토큰을 다른 호스트로 전달하지 않는 transport 계약을 유지합니다.
+
+실제 바인딩과 운영 승인을 확인하고 배포합니다.
+
+```bash
+corepack pnpm exec wrangler deploy --env-file /dev/null
+```
+
+`SEND_ENABLED=false`에서 공개 주소의 구독 확인, 잘못된 서명 거부, 실제 댓글 event/outbox 저장, 중복 이벤트 제거를 먼저 확인합니다.
+DB 저장 실패는 503을 반환합니다.
+DB 커밋 뒤 Queue 발행 실패는 200을 반환하고 고정 오류 문구를 남기며, 발송 활성화 후 Cron이 due 작업을 복구합니다.
+
+## 5. 발송 전환과 복구
+
+댓글 관리 권한과 실제 비공개 답장 발송은 아직 검증되지 않았습니다.
+첫 발송을 별도로 승인한 뒤 기존 Compose 발송 워커를 중지하고 `SEND_ENABLED=true`로 전환합니다.
+Cron은 기존 pending 행도 처리하므로 활성화 전에 backlog를 검토합니다.
+
+기존 발송 상태와 속도 제한 backoff를 유지합니다.
+Queue 알림 재시도와 Meta 발송 재시도는 별개입니다.
+소비자 오류로 다시 전달된 알림도 DB의 `sending`·완료 행을 다시 claim하지 않습니다.
+알림 소실과 Queue 재시도 소진은 Cron이 복구하며 `unknown`은 수동 검토 대상으로 남습니다.
+비활성 연결의 due 작업도 기존 워커 정책을 거쳐 `blocked`로 정리됩니다.
+연결 cooldown이 있으면 기존 claim 정책대로 만료 후 처리합니다.
+Queue 동시 실행 수는 1이며 이미 발송에 들어간 요청은 설정 변경으로 취소되지 않습니다.
+
+장애 시 `SEND_ENABLED=false`로 배포하고 진행 중 요청 종료를 확인합니다.
+DB 상태와 고정 오류 로그를 확인하고 `unknown`을 일괄 pending으로 되돌리지 않습니다.
+롤백 때도 같은 DB를 유지하며 Cloudflare와 Node 발송 워커를 동시에 켜지 않습니다.
+백업·복구 옵션과 요금은 선택한 Supabase 프로젝트 플랜에서 별도 확인합니다.
+
+## 검증 경계
+
+로컬 workerd 테스트는 pg TCP 연결, 서명, Queue·Cron 호출, 전용 서버 역할의 로그인과 RLS 적용을 확인합니다.
+Graph 응답은 테스트용이며 외부 네트워크 호출을 대신 처리합니다.
+실제 Hyperdrive TLS·캐시, Supabase 네트워크, Cloudflare Cron 운영, Meta 권한과 실발송은 배포 후 검증해야 합니다.
+
+2026-09-26 로컬에서 타입 검사, 기존 단위 테스트 46건, 기존 PostgreSQL 테스트 36건, Cloudflare 관련 테스트 15건, Docker 이미지 빌드를 통과했습니다.
+발송 안전성과 DB 접근 권한에 대한 독립적 정적 리뷰를 수행했고, 비활성 연결의 정체·API 역할 권한 잔존·기존 역할 소유권 우회를 수정한 뒤 두 리뷰 모두 승인됐습니다.

@@ -1,5 +1,8 @@
 # 단일 서버 배포 운영 절차
 
+운영 기본 경로는 [Cloudflare + Supabase](2026-09-26-cloudflare-runbook.md)로 변경했습니다.
+이 문서는 로컬 검증과 단일 서버 대체 배포용으로 유지합니다.
+
 ## 구성
 
 `compose.yaml`의 기본 서비스는 `db`와 `ingress`입니다.
