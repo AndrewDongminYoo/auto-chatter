@@ -3,7 +3,7 @@
 ManyChat 유료 기능에 대응하는 자체 운영형 메시징 자동화 서비스를 만드는 저장소입니다.
 Instagram 댓글·DM 웹훅 수신, 사용자별 로그인·계정 연결·규칙 설정, 댓글 키워드별 첫 DM과 응답 후 팔로우 조건별 후속 DM을 구현했습니다.
 다중 사용자 코드와 DB 마이그레이션은 2026-09-26에 운영 배포했으며 발송은 비활성화했습니다.
-Instagram OAuth 앱 secret·외부 로그인 설정·기존 작업 공간 소유권 배정과 실제 OAuth·발송 검증은 남아 있습니다.
+Instagram OAuth 앱 secret 등록을 확인했으며 외부 로그인 설정·기존 작업 공간 소유권 배정과 실제 OAuth·발송 검증은 남아 있습니다.
 Instagram Login과 Facebook Login용 Meta Graph 어댑터와 별도 발송 워커 명령이 있습니다.
 운영자는 Meta 개발자 대시보드에서 일반 DM 발송에 성공했다고 보고했습니다.
 운영자가 실행한 `meta:check`에서 토큰의 Instagram 계정 ID와 설정값이 일치하는 것도 확인했습니다.

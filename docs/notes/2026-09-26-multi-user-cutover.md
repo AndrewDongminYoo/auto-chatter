@@ -18,7 +18,8 @@
 ### 운영 배포 기록
 
 - 코드 태그: `2a5403e`.
-- Worker 버전: `0073b9ec-2141-420f-9b7d-52e0fd2ece8d`.
+- 최초 다중 사용자 코드 배포 버전: `0073b9ec-2141-420f-9b7d-52e0fd2ece8d`.
+  이후 OAuth 앱 secret 등록으로 배포된 버전은 `9c327413-8e4d-4506-8010-e7b2a4aca773`입니다.
 - Supabase 프로젝트: `asjjftrioaxzspkbtebf`.
 - 서비스의 public 스키마·데이터 백업: Git에서 제외된 `deploy/secrets/backups/2026-09-26T08-51-06.150Z/public-before-multi-user.dump`.
   디렉터리는 0700, 백업은 0600이며 `pg_restore --list`에서 기존 제품 테이블 다섯 개의 데이터 항목을 확인했습니다.
@@ -35,8 +36,9 @@
   공개 JavaScript·CSS 응답이 배포한 checkout의 파일과 같은 것을 확인했습니다.
   이 점검은 실제 이메일 인증·Instagram OAuth·서명된 댓글의 신규 배포 수신·실발송 검증을 대신하지 않습니다.
 
-남은 전환 작업은 `INSTAGRAM_OAUTH_APP_SECRET` 등록, Supabase Auth Site URL·이메일 확인 링크와 Meta redirect URI 확인, 확인된 운영자의 기존 작업 공간 소유권 배정, 실제 OAuth 연결 검증입니다.
-OAuth 앱 secret이 없는 상태에서는 Instagram 연결이 준비되지 않았다는 오류를 반환합니다.
+`INSTAGRAM_OAUTH_APP_SECRET`을 포함한 secrets 다섯 개의 등록과 배포된 앱 ID `1822350878757042`, 전역 `SEND_ENABLED=false`를 확인했습니다.
+이는 secret 값이 해당 앱과 일치하거나 OAuth 코드 교환에 성공했다는 검증은 아닙니다.
+남은 전환 작업은 Supabase Auth Site URL·이메일 확인 링크와 Meta redirect URI 확인, 확인된 운영자의 기존 작업 공간 소유권 배정, 실제 OAuth 연결 검증입니다.
 아래 배포 순서의 DB 백업·마이그레이션·Worker 배포는 완료했으며 나머지 작업은 완료로 간주하지 않습니다.
 
 ## 검증
