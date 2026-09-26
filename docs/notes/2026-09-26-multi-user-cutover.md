@@ -22,6 +22,9 @@
 - `TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:5433/automations_test corepack pnpm test:db`: 사용자 간 격리, 일회성 OAuth state, 기존 소유권 배정, 조건별 DM 상태 및 중복·동시 처리를 실제 로컬 PostgreSQL로 검증.
 - 같은 DB 환경에서 `corepack pnpm test:cloudflare`: workerd 번들·Hyperdrive·Queue 경로, API 역할의 접근 차단, 암호화 토큰별 계정 격리, 서명된 댓글 → 첫 DM → 미팔로우 안내 → 재확인 → 완료 DM을 합성 Graph 응답으로 검증.
 - 독립 코드 리뷰와 적대적 발송 리뷰에서 발견한 세션 종료, 연결 해제 후 재활성화, 규칙 ID 변경, OAuth 완료 경쟁, 발송 직전 확인 및 수신자 ID 누락 처리를 수정했고 재검토에서 차단 항목이 해소됐습니다.
+- PR 전 검토에서 마이그레이션 내부의 `COMMIT`이 외부 트랜잭션을 끊는 문제를 수정했습니다.
+  로컬 테스트 DB에서 중간 실패를 주입했을 때 기존 방식은 검증용 행이 남았고, 단일 실행 스크립트는 행을 롤백했습니다.
+  실제 `psql -f deploy/migrate-multi-user.sql` 실행도 정상 완료했습니다.
 - 브라우저는 실제 정적 자산과 합성 API 서버로 로그인·조건별 규칙 저장·수정 ID 잠금·세션 만료 후 데이터 제거를 확인했습니다.
   390px 모바일 화면은 가로 넘침이 없고, 해당 화면의 axe WCAG 2 A/AA 검사는 위반 0건이었습니다.
   이는 실제 Supabase 이메일 인증이나 실제 Instagram OAuth 화면 검증을 대체하지 않습니다.
@@ -29,7 +32,10 @@
 ## 배포 순서
 
 1. 운영 데이터베이스 백업과 현재 스키마를 확인하고 전역 발송 중지를 유지합니다.
-2. Supabase 관리자 연결로 `db/migrations/003_comment_rule_matching.sql`부터 `006_follow_conversations.sql`까지 순서대로 적용하고, 같은 트랜잭션에서 `deploy/supabase-access.sql`을 적용합니다.
+2. Supabase 관리자 연결로 `psql "$ADMIN_DATABASE_URL" -f deploy/migrate-multi-user.sql`을 실행합니다.
+   실행 스크립트는 003–006 마이그레이션과 `deploy/supabase-access.sql`을 한 트랜잭션에서 순서대로 적용하며 첫 오류에서 중단합니다.
+   개별 마이그레이션을 직접 실행하거나 오류 후 다음 파일부터 계속하지 않습니다.
+   실패하면 전체 롤백을 확인하고 원인을 고친 뒤 실행 스크립트를 다시 시작합니다.
    서버 역할의 SELECT/INSERT/UPDATE만 허용하며 익명·인증·service_role의 제품 테이블 직접 접근 금지를 유지합니다.
    RLS를 완화하지 않습니다.
 3. Supabase Auth에 공개 서비스의 Site URL을 설정하고 이메일 인증을 켭니다.

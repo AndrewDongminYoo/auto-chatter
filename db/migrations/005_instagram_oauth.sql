@@ -1,4 +1,4 @@
-BEGIN;
+-- Run through deploy/migrate-multi-user.sql; the caller owns the transaction.
 CREATE TABLE IF NOT EXISTS instagram_oauth_states (
   state_hash text PRIMARY KEY,
   user_id uuid NOT NULL,
@@ -17,4 +17,3 @@ BEGIN
     END IF;
   END LOOP;
 END $$;
-COMMIT;

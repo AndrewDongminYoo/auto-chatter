@@ -1,4 +1,4 @@
-BEGIN;
+-- Run through deploy/migrate-multi-user.sql; the caller owns the transaction.
 
 CREATE TABLE IF NOT EXISTS workspace_members (
   user_id uuid PRIMARY KEY,
@@ -29,5 +29,3 @@ BEGIN
     END IF;
   END LOOP;
 END $$;
-
-COMMIT;

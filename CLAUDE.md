@@ -123,7 +123,9 @@ Wrangler and Miniflare are pinned to the tested v4 runtime pair; upgrade them to
 Never enable sends, create cloud resources, or publish as part of tests.
 See `docs/notes/2026-09-26-cloudflare-runbook.md` for the deployed baseline and `docs/notes/2026-09-26-multi-user-cutover.md` for the new migration and configuration procedure.
 This multi-user implementation is local until that cutover is explicitly performed.
-Apply migrations 003–006 and the updated access script in one administrator transaction before deploying this code.
+Run `psql -f deploy/migrate-multi-user.sql` with an administrator connection before deploying this code.
+This runner owns the transaction for migrations 003–006 and the access script, stops on the first error, and rolls back on failure.
+Do not apply these migration files individually without that transaction.
 Assign the existing workspace to a confirmed operator with `deploy/assign-workspace-owner.sql`; never claim legacy data automatically by email.
 Token renewal currently requires reconnecting the Instagram account before the displayed expiry.
 
