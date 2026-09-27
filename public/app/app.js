@@ -267,9 +267,13 @@ function list(text) {
 }
 
 async function loadWorkspace() {
+  const generation = segmentsGeneration;
   const me = await api("/api/me");
+  if (generation !== segmentsGeneration) return;
   await api("/api/workspace", "POST");
+  if (generation !== segmentsGeneration) return;
   const [accounts, settings] = await Promise.all([api("/api/connections"), api("/api/rules")]);
+  if (generation !== segmentsGeneration) return;
   connections = accounts.connections;
   const selectedConnection = form.elements.connection_id.value;
   byId("startup").hidden = true;
@@ -428,6 +432,7 @@ async function loadWorkspace() {
   try {
     await loadActivity();
   } catch (error) {
+    if (generation !== segmentsGeneration) return;
     if (error.status === 401) throw error;
     byId("activity").replaceChildren(
       emptyState(
@@ -755,7 +760,9 @@ formConditions();
 void start();
 
 async function loadActivity() {
+  const generation = segmentsGeneration;
   const result = await api("/api/activity");
+  if (generation !== segmentsGeneration) return;
   const labels = {
     pending: "대기",
     waiting: "응답 대기",
