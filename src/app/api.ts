@@ -19,6 +19,7 @@ import {
   saveContactTags,
 } from "./contacts.ts";
 import { connectionMedia } from "./instagram-media.ts";
+import { archiveContactField, createContactField, listContactFields, saveContactFieldValue } from "./contact-fields.ts";
 
 export async function appApi(
   request: Request,
@@ -51,6 +52,26 @@ export async function appApi(
         return json({ connections: await listConnections(pool, user) });
       if (url.pathname === "/api/contacts" && request.method === "GET")
         return json(await listContacts(pool, user, url.searchParams));
+      if (url.pathname === "/api/contact-fields" && request.method === "GET")
+        return json({ fields: await listContactFields(pool, user) });
+      if (url.pathname === "/api/contact-fields" && request.method === "POST")
+        return json(await createContactField(pool, user, await readJson(request)), 201);
+      const field = /^\/api\/contact-fields\/([a-f0-9-]+)$/.exec(url.pathname);
+      if (field && request.method === "DELETE") return json(await archiveContactField(pool, user, field[1]!));
+      const fieldValue = /^\/api\/connections\/([a-f0-9-]+)\/contacts\/([^/]+)\/fields\/([a-f0-9-]+)$/.exec(
+        url.pathname,
+      );
+      if (fieldValue && request.method === "PUT") {
+        let senderId: string;
+        try {
+          senderId = decodeURIComponent(fieldValue[2]!);
+        } catch {
+          throw new ApiError(400, "invalid_contact_request");
+        }
+        return json(
+          await saveContactFieldValue(pool, user, fieldValue[1]!, senderId, fieldValue[3]!, await readJson(request)),
+        );
+      }
       if (url.pathname === "/api/contact-segments" && request.method === "GET")
         return json({ segments: await listContactSegments(pool, user) });
       if (url.pathname === "/api/contact-segments" && request.method === "POST")

@@ -287,6 +287,43 @@ test("saved segment list is authenticated and workspace scoped", async () => {
   assert.deepEqual(await response.json(), { segments: [] });
 });
 
+test("custom field list is authenticated and workspace scoped", async () => {
+  const pool = {
+    query: async (sql: string) => ({ rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId }] : [] }),
+    end: async () => {},
+  } as unknown as Pool;
+  const response = await appApi(
+    new Request("https://app.test/api/contact-fields", {
+      headers: { cookie: "__Host-ac-access=test" },
+    }),
+    config,
+    () => pool,
+    mediaFetch(),
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { fields: [] });
+});
+
+test("custom field mutations reject cross-origin access before database reads", async () => {
+  for (const [path, method] of [
+    ["/api/contact-fields", "POST"],
+    ["/api/contact-fields/123", "DELETE"],
+    [`/api/connections/${connectionId}/contacts/888/fields/123`, "PUT"],
+  ]) {
+    const response = await appApi(
+      new Request(`https://app.test${path}`, {
+        method,
+        headers: { origin: "https://evil.test" },
+      }),
+      config,
+      () => {
+        throw new Error("Database must not be opened");
+      },
+    );
+    assert.equal(response.status, 403);
+  }
+});
+
 test("segment writes reject cross-origin requests before opening the database", async () => {
   for (const [path, method] of [
     ["/api/contact-segments", "POST"],

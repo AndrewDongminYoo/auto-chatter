@@ -322,6 +322,26 @@
             <button id="segment-archive" class="secondary" disabled>필터 보관</button>
           </div>
           <p id="segments-status" class="hint" role="status" aria-live="polite"></p>
+          <details class="segment-save">
+            <summary>사용자 정의 필드</summary>
+            <p class="hint">
+              연락처에 필요한 정보만 기록하세요. 민감정보는 입력하지 마세요. 보관된 필드 값은 유지됩니다.
+            </p>
+            <form id="field-create" class="contacts-filter">
+              <label>필드 이름<input name="name" required maxlength="60" placeholder="예: 관심 자료" /></label>
+              <label
+                >값 종류<select name="type">
+                  <option value="text">텍스트</option>
+                  <option value="number">숫자</option>
+                  <option value="boolean">예 / 아니요</option>
+                  <option value="date">날짜</option>
+                </select></label
+              >
+              <button type="submit" class="secondary" data-loading-label="저장 중…">필드 만들기</button>
+            </form>
+            <div id="field-definitions" class="field-definitions"></div>
+            <p id="fields-status" class="hint" role="status" aria-live="polite"></p>
+          </details>
           <form id="contacts-filter" class="contacts-filter">
             <label
               >Instagram 계정<select name="connection_id">
@@ -329,6 +349,24 @@
               </select></label
             >
             <label>태그로 찾기<input name="tag" maxlength="40" placeholder="예: 관심" /></label>
+            <label
+              >추가 정보<select name="field_id">
+                <option value="">조건 없음</option>
+              </select></label
+            >
+            <label id="field-filter-operator" hidden
+              >조건<select name="field_operator">
+                <option value="eq">값이 같음</option>
+                <option value="is_set">입력됨</option>
+                <option value="is_unset">미입력</option>
+              </select></label
+            >
+            <label id="field-filter-value" hidden
+              >찾을 값<input name="field_value" maxlength="1000" /><select name="field_boolean" hidden>
+                <option value="true">예</option>
+                <option value="false">아니요</option>
+              </select></label
+            >
             <button type="submit" class="secondary">필터 적용</button>
           </form>
           <details class="segment-save">
@@ -337,7 +375,7 @@
               <label>필터 이름<input name="name" required maxlength="60" placeholder="예: 자료를 요청한 사람" /></label>
               <button type="submit" class="secondary" data-loading-label="저장 중…">필터 저장</button>
             </form>
-            <p class="hint">계정·태그 조건을 저장합니다. 연락처는 조회할 때 갱신됩니다. 최대 50개.</p>
+            <p class="hint">계정·태그·추가 정보 조건을 저장합니다. 연락처는 조회할 때 갱신됩니다. 최대 50개.</p>
           </details>
           <p id="contacts-status" class="hint" role="status" aria-live="polite"></p>
           <div id="contacts-list" class="contacts-list"></div>

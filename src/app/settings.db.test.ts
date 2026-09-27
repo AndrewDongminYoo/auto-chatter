@@ -20,6 +20,7 @@ import {
 } from "./contacts.ts";
 import { connectionMedia } from "./instagram-media.ts";
 import { sealSecret } from "./secrets.ts";
+import { appApi } from "./api.ts";
 
 const url = new URL(process.env.TEST_DATABASE_URL ?? "http://invalid");
 if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
@@ -55,6 +56,189 @@ beforeEach(async () => {
 });
 after(async () => {
   await pool.end();
+});
+
+async function fieldRequest(method: string, path: string, body?: unknown, user = a) {
+  return appApi(
+    new Request(`https://app.test${path}`, {
+      method,
+      headers: { origin: "https://app.test", cookie: "__Host-ac-access=test", "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+    { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "test" },
+    () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
+    (async () => Response.json({ ...user, email_confirmed_at: "2026-09-25" })) as typeof fetch,
+  );
+}
+async function createField(name: string, type: string) {
+  const response = await fieldRequest("POST", "/api/contact-fields", { name, type });
+  assert.equal(response.status, 201);
+  return response.json();
+}
+async function fieldContact() {
+  const workspace = await ensureWorkspace(pool, a);
+  await pool.query(
+    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'field-comment','media','sender','private')",
+    [workspace, connectionId],
+  );
+}
+const fieldValuePath = (id: string, sender = "sender", connection = connectionId) =>
+  `/api/connections/${connection}/contacts/${encodeURIComponent(sender)}/fields/${id}`;
+
+test("custom fields persist typed zero false and empty text separately from unset", async () => {
+  await fieldContact();
+  for (const [type, value] of [
+    ["number", 0],
+    ["boolean", false],
+    ["text", ""],
+    ["date", "2024-02-29"],
+  ] as const) {
+    const field = await createField(type, type);
+    const saved = await fieldRequest("PUT", fieldValuePath(field.id), { value });
+    assert.equal(saved.status, 200);
+    assert.deepEqual(await saved.json(), { value });
+    assert.equal((await listContacts(pool, a)).contacts[0]!.fields[field.id], value);
+    const query = new URLSearchParams({ field_id: field.id, field_operator: "eq", field_value: JSON.stringify(value) });
+    assert.equal((await listContacts(pool, a, query)).contacts.length, 1);
+    assert.equal(
+      (await listContacts(pool, a, new URLSearchParams({ field_id: field.id, field_operator: "is_set" }))).contacts
+        .length,
+      1,
+    );
+    assert.equal((await fieldRequest("PUT", fieldValuePath(field.id), { value: null })).status, 200);
+    assert.equal((await listContacts(pool, a, query)).contacts.length, 0);
+    assert.equal(
+      (await listContacts(pool, a, new URLSearchParams({ field_id: field.id, field_operator: "is_unset" }))).contacts
+        .length,
+      1,
+    );
+    assert.equal(Object.hasOwn((await listContacts(pool, a)).contacts[0]!.fields, field.id), false);
+  }
+});
+
+test("field validation refuses coercion invalid dates controls and foreign identities", async () => {
+  await fieldContact();
+  for (const [type, bad] of [
+    ["number", "0"],
+    ["number", true],
+    ["boolean", "false"],
+    ["boolean", 0],
+    ["date", "2025-02-29"],
+    ["date", "2024-2-9"],
+    ["text", "x".repeat(1001)],
+    ["text", "a\u0000b"],
+    ["text", "a\u0085b"],
+    ["text", {}],
+  ] as const) {
+    const field = await createField(`${type}-${Math.random()}`, type);
+    assert.equal((await fieldRequest("PUT", fieldValuePath(field.id), { value: bad })).status, 400);
+    assert.equal((await fieldRequest("PUT", fieldValuePath(field.id), { value: null, extra: 1 })).status, 400);
+    assert.equal((await fieldRequest("PUT", fieldValuePath(field.id, "missing"), { value: null })).status, 404);
+    assert.equal((await fieldRequest("PUT", fieldValuePath(field.id), { value: null }, b)).status, 404);
+    assert.equal((await fieldRequest("DELETE", `/api/contact-fields/${field.id}`, undefined, b)).status, 404);
+  }
+  assert.deepEqual(await (await fieldRequest("GET", "/api/contact-fields", undefined, b)).json(), { fields: [] });
+  for (const input of [
+    { name: "", type: "text" },
+    { name: "x", type: "object" },
+    { name: "x", type: ["text"] },
+    { name: "x\u0000", type: "text" },
+  ])
+    assert.equal((await fieldRequest("POST", "/api/contact-fields", input)).status, 400);
+  await createField(" Cafe\u0301 ", "text");
+  assert.equal((await fieldRequest("POST", "/api/contact-fields", { name: "Café", type: "number" })).status, 409);
+});
+
+test("field values and saved conditions remain account scoped and current", async () => {
+  await fieldContact();
+  const workspace = await ensureWorkspace(pool, a);
+  const other = "77777777-7777-4777-8777-777777777777";
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'other')", [
+    other,
+    workspace,
+  ]);
+  await pool.query(
+    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'other-field-comment','media','sender','private')",
+    [workspace, other],
+  );
+  const field = await createField("Interest", "text");
+  await fieldRequest("PUT", fieldValuePath(field.id), { value: "guide" });
+  const query = new URLSearchParams({ field_id: field.id, field_operator: "eq", field_value: '"guide"' });
+  const selected = await listContacts(pool, a, query);
+  assert.deepEqual(
+    selected.contacts.map((c) => c.connection_id),
+    [connectionId],
+  );
+  const segmentResponse = await fieldRequest("POST", "/api/contact-segments", {
+    name: "Guide",
+    field_id: field.id,
+    field_operator: "eq",
+    field_value: "guide",
+  });
+  assert.equal(segmentResponse.status, 201);
+  const segment = await segmentResponse.json();
+  assert.equal((await listContacts(pool, a, new URLSearchParams({ segment_id: segment.id }))).contacts.length, 1);
+  assert.equal((await fieldRequest("DELETE", `/api/contact-fields/${field.id}`)).status, 409);
+  await fieldRequest("PUT", fieldValuePath(field.id), { value: "other" });
+  assert.equal((await listContacts(pool, a, new URLSearchParams({ segment_id: segment.id }))).contacts.length, 0);
+  await archiveContactSegment(pool, a, segment.id);
+  assert.equal((await fieldRequest("DELETE", `/api/contact-fields/${field.id}`)).status, 200);
+  assert.equal((await fieldRequest("PUT", fieldValuePath(field.id), { value: "guide" })).status, 404);
+  assert.equal((await fieldRequest("GET", `/api/contacts?${query}`)).status, 404);
+  assert.deepEqual((await listContacts(pool, a)).contacts[0]!.fields, {});
+  assert.equal((await fieldRequest("POST", "/api/contact-fields", { name: "Interest", type: "text" })).status, 409);
+});
+
+test("field filters reject malformed mixed and foreign conditions", async () => {
+  const field = await createField("Score", "number");
+  for (const query of [
+    "field_operator=is_set",
+    `field_id=${field.id}`,
+    `field_id=${field.id}&field_operator=eq&field_value=%220%22`,
+    `field_id=${field.id}&field_operator=is_set&field_value=0`,
+    `field_id=${field.id}&field_operator=sql`,
+    `field_id=${field.id}&field_id=${field.id}&field_operator=is_set`,
+  ])
+    assert.equal((await fieldRequest("GET", `/api/contacts?${query}`)).status, 400);
+  assert.equal(
+    (await fieldRequest("GET", `/api/contacts?field_id=${field.id}&field_operator=is_set`, undefined, b)).status,
+    404,
+  );
+  assert.equal(
+    (
+      await fieldRequest("POST", "/api/contact-segments", {
+        name: "Invalid operator",
+        field_id: field.id,
+        field_operator: ["is_set"],
+      })
+    ).status,
+    400,
+  );
+});
+
+test("concurrent field creation enforces the active cap and field archive serializes segment creation", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  for (let n = 0; n < 49; n++) await createField(`field-${n}`, "text");
+  const results = await Promise.all([
+    fieldRequest("POST", "/api/contact-fields", { name: "A", type: "text" }),
+    fieldRequest("POST", "/api/contact-fields", { name: "B", type: "text" }),
+  ]);
+  assert.deepEqual(results.map((response) => response.status).sort(), [201, 409]);
+  assert.deepEqual(await results.find((response) => response.status === 409)!.json(), { error: "field_limit_reached" });
+  assert.equal(
+    (
+      await pool.query("SELECT count(*) FROM instagram_contact_fields WHERE workspace_id=$1 AND NOT archived", [
+        workspace,
+      ])
+    ).rows[0].count,
+    "50",
+  );
+  const field = await results.find((response) => response.status === 201)!.json();
+  const [archive, segment] = await Promise.all([
+    fieldRequest("DELETE", `/api/contact-fields/${field.id}`),
+    fieldRequest("POST", "/api/contact-segments", { name: "Race", field_id: field.id, field_operator: "is_set" }),
+  ]);
+  assert.ok((archive.status === 200 && segment.status === 404) || (archive.status === 409 && segment.status === 201));
 });
 
 test("parallel first login creates exactly one workspace per user", async () => {
@@ -509,4 +693,50 @@ test("segment migration upgrades and replays while retaining saved filters", asy
     await client.query("ROLLBACK");
     client.release();
   }
+});
+
+test("field migration upgrades and replays without losing typed values and conditions", async () => {
+  await pool.query("DROP TABLE instagram_contact_field_values,instagram_contact_fields CASCADE");
+  const migration = await readFile(new URL("../../db/migrations/010_contact_fields.sql", import.meta.url), "utf8");
+  await pool.query(migration);
+  await fieldContact();
+  const field = await createField("Migrated", "boolean");
+  await fieldRequest("PUT", fieldValuePath(field.id), { value: false });
+  const segment = await (
+    await fieldRequest("POST", "/api/contact-segments", {
+      name: "Migration",
+      field_id: field.id,
+      field_operator: "eq",
+      field_value: false,
+    })
+  ).json();
+  await pool.query(migration);
+  await pool.query(migration);
+  assert.equal(
+    (await listContacts(pool, a, new URLSearchParams({ segment_id: segment.id }))).contacts[0]!.fields[field.id],
+    false,
+  );
+});
+
+test("typed field conditions retain keyset pagination across fifty matching contacts", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const field = await createField("Confirmed", "boolean");
+  await pool.query(
+    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,'field-'||n,'media','field-sender-'||lpad(n::text,3,'0'),'private' FROM generate_series(1,51) n",
+    [workspace, connectionId],
+  );
+  await pool.query(
+    "INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) SELECT workspace_id,connection_id,sender_id,$3,'false'::jsonb FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2",
+    [workspace, connectionId, field.id],
+  );
+  const query = new URLSearchParams({ field_id: field.id, field_operator: "eq", field_value: "false" });
+  const first = await listContacts(pool, a, query);
+  assert.equal(first.contacts.length, 50);
+  assert.ok(first.after);
+  query.set("after", first.after!);
+  const second = await listContacts(pool, a, query);
+  assert.equal(second.contacts.length, 1);
+  assert.equal(second.contacts[0]!.sender_id, "field-sender-051");
+  assert.equal(second.contacts[0]!.fields[field.id], false);
+  assert.equal(second.after, null);
 });

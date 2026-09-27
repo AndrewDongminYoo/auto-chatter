@@ -1008,3 +1008,26 @@ section {
     width: 100%;
   }
 }
+
+.field-definition {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border);
+  overflow-wrap: anywhere;
+}
+.field-definition span {
+  min-width: 0;
+}
+.contact-field-editor input,
+.contact-field-editor select {
+  width: 100%;
+}
+.contact-field-editor button {
+  margin: 8px 8px 0 0;
+}
+.contact-field-values p {
+  overflow-wrap: anywhere;
+}

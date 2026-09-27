@@ -117,7 +117,7 @@ jobs:
             if docker compose --env-file /dev/null cp proxy:/data/caddy/pki/authorities/local/root.crt /tmp/caddy-root.crt; then break; fi
             sleep 1
           done
-          curl --fail --retry 5 --retry-connrefused --cacert /tmp/caddy-root.crt 'https://localhost:19443/webhooks/instagram?hub.mode=subscribe&hub.verify_token=ci-verify-token&hub.challenge=ci-challenge' > /tmp/challenge.txt
+          curl --fail --retry 5 --retry-delay 1 --retry-all-errors --retry-connrefused --max-time 5 --cacert /tmp/caddy-root.crt 'https://localhost:19443/webhooks/instagram?hub.mode=subscribe&hub.verify_token=ci-verify-token&hub.challenge=ci-challenge' > /tmp/challenge.txt
           test "$(cat /tmp/challenge.txt)" = ci-challenge
       - name: Show failure logs
         if: failure()
