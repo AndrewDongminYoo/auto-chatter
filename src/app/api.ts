@@ -1,3 +1,4 @@
+import { inboxHandoff, saveInboxHandoff } from "./inbox-handoff.ts";
 import type { Pool } from "pg";
 import { ApiError, AuthClient, json, readJson, requireSameOrigin, type AuthEnv } from "./auth.ts";
 import {
@@ -54,6 +55,13 @@ export async function appApi(
         return json({ connections: await listConnections(pool, user) });
       if (url.pathname === "/api/inbox" && request.method === "GET")
         return json(await listInbox(pool, user, url.searchParams));
+      const handoff = /^\/api\/connections\/([a-f0-9-]+)\/inbox\/(\d+)\/handoff$/.exec(url.pathname);
+      if (handoff && request.method === "GET")
+        return json(await inboxHandoff(pool, user, handoff[1]!, handoff[2]!, url.searchParams));
+      if (handoff && request.method === "PUT")
+        return json(
+          await saveInboxHandoff(pool, user, handoff[1]!, handoff[2]!, url.searchParams, await readJson(request)),
+        );
       const context = /^\/api\/connections\/([a-f0-9-]+)\/inbox\/(\d+)\/context$/.exec(url.pathname);
       if (context && request.method === "GET")
         return json(await inboxContext(pool, user, context[1]!, context[2]!, url.searchParams));

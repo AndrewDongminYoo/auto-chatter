@@ -371,6 +371,175 @@ test("resuming receiving excludes delayed messages from the stopped interval and
   );
 });
 
+const handoffPath = (recipient = "456", connection = connectionId) =>
+  `/api/connections/${connection}/inbox/${recipient}/handoff`;
+const setHandoff = (active: boolean, expected_version: number, recipient = "456") =>
+  fieldRequest("PUT", handoffPath(recipient), { active, expected_version });
+
+async function readyHandoff() {
+  await identityInbox();
+  return identityReply("888", "12345");
+}
+
+test("handoff starts with owned provider evidence and retries without duplicate audit", async () => {
+  const evidence = await readyHandoff();
+  const initial = await fieldRequest("GET", handoffPath());
+  assert.equal(initial.status, 200);
+  assert.deepEqual(await initial.json(), { active: false, version: 0 });
+  const start = await setHandoff(true, 0);
+  assert.equal(start.status, 200);
+  assert.deepEqual(await start.json(), { active: true, version: 1 });
+  assert.deepEqual(await (await setHandoff(true, 0)).json(), { active: true, version: 1 });
+  assert.equal((await (await fieldRequest("GET", identityPath())).json()).automation_paused, true);
+  const current = (await pool.query("SELECT sender_id,evidence_reply_id::text FROM instagram_inbox_handoffs")).rows[0];
+  assert.deepEqual(current, { sender_id: "888", evidence_reply_id: evidence });
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_inbox_handoff_events")).rows[0].count, "1");
+});
+
+test("handoff resume preserves manual pause and captured sender after evidence is lost", async () => {
+  await readyHandoff();
+  await fieldRequest("PUT", `/api/connections/${connectionId}/contacts/888/automation`, { paused: true });
+  assert.equal((await setHandoff(true, 0)).status, 200);
+  await pool.query("UPDATE private_reply_outbox SET status='unknown'");
+  await pool.query("UPDATE instagram_connections SET inbox_enabled_at=now() WHERE id=$1", [connectionId]);
+  const resume = await setHandoff(false, 1);
+  assert.equal(resume.status, 200);
+  assert.deepEqual(await resume.json(), { active: false, version: 2 });
+  assert.deepEqual(await (await setHandoff(false, 1)).json(), { active: false, version: 2 });
+  assert.deepEqual((await pool.query("SELECT paused,handoff_paused FROM instagram_contact_automation")).rows[0], {
+    paused: true,
+    handoff_paused: false,
+  });
+  assert.equal((await pool.query("SELECT status FROM private_reply_outbox")).rows[0].status, "unknown");
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_inbox_handoff_events")).rows[0].count, "2");
+});
+
+test("handoff refuses unverified identity foreign sessions and invalid request versions", async () => {
+  await identityInbox();
+  assert.equal((await setHandoff(true, 0)).status, 409);
+  await identityReply("888", "12345");
+  await pool.query("UPDATE instagram_connections SET inbox_enabled_at=now() WHERE id=$1", [connectionId]);
+  assert.equal((await setHandoff(true, 0)).status, 409);
+  await pool.query("UPDATE instagram_connections SET inbox_enabled_at=now()-interval '1 hour' WHERE id=$1", [
+    connectionId,
+  ]);
+  await identityReply("999", "54321");
+  assert.equal((await setHandoff(true, 0)).status, 409);
+  assert.equal((await fieldRequest("GET", handoffPath(), undefined, b)).status, 404);
+  assert.equal((await fieldRequest("PUT", handoffPath(), { active: true, expected_version: 0 }, b)).status, 404);
+  for (const body of [
+    { active: true },
+    { active: true, expected_version: -1 },
+    { active: true, expected_version: 0, extra: true },
+  ])
+    assert.equal((await fieldRequest("PUT", handoffPath(), body)).status, 400);
+  assert.equal((await fieldRequest("GET", `${handoffPath()}?extra=1`)).status, 400);
+});
+
+test("handoff keeps another conversation's pause and forbids manual resume while active", async () => {
+  await readyHandoff();
+  await identityInbox("789");
+  await identityReply("888", "54321", { recipient: "789" });
+  assert.equal((await setHandoff(true, 0)).status, 200);
+  assert.equal((await setHandoff(true, 0, "789")).status, 200);
+  assert.equal((await setHandoff(false, 1)).status, 200);
+  assert.equal((await (await fieldRequest("GET", identityPath())).json()).automation_paused, true);
+  const manual = await fieldRequest("PUT", `/api/connections/${connectionId}/contacts/888/automation`, {
+    paused: false,
+  });
+  assert.equal(manual.status, 409);
+  assert.equal((await setHandoff(false, 1, "789")).status, 200);
+  assert.equal((await (await fieldRequest("GET", identityPath())).json()).automation_paused, false);
+});
+
+test("handoff serializes duplicate starts and rejects stale opposite transitions", async () => {
+  await readyHandoff();
+  const starts = await Promise.all([setHandoff(true, 0), setHandoff(true, 0)]);
+  assert.deepEqual(
+    starts.map((response) => response.status),
+    [200, 200],
+  );
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_inbox_handoff_events")).rows[0].count, "1");
+  assert.equal((await setHandoff(false, 0)).status, 409);
+  assert.equal((await setHandoff(false, 1)).status, 200);
+  const transitions = await Promise.all([setHandoff(true, 2), setHandoff(false, 1)]);
+  assert.deepEqual(
+    transitions.map((response) => response.status),
+    [200, 409],
+  );
+  assert.deepEqual(await (await fieldRequest("GET", handoffPath())).json(), { active: true, version: 3 });
+});
+
+test("handoff migration replays with active state and resume survives deleted DM history", async () => {
+  await pool.query(
+    "DROP TABLE instagram_inbox_handoff_events,instagram_inbox_handoffs; DROP INDEX private_reply_outbox_identity_idx; ALTER TABLE instagram_contact_automation DROP COLUMN handoff_paused",
+  );
+  const migration = await readFile(new URL("../../db/migrations/013_inbox_handoffs.sql", import.meta.url), "utf8");
+  await pool.query(migration);
+  await readyHandoff();
+  assert.equal((await setHandoff(true, 0)).status, 200);
+  await pool.query(migration);
+  await pool.query(migration);
+  assert.deepEqual(await (await fieldRequest("GET", handoffPath())).json(), { active: true, version: 1 });
+  assert.equal(
+    (await pool.query("SELECT handoff_paused FROM instagram_contact_automation")).rows[0].handoff_paused,
+    true,
+  );
+  await pool.query("DELETE FROM instagram_inbox_messages");
+  assert.equal((await fieldRequest("GET", identityPath())).status, 404);
+  assert.equal((await setHandoff(false, 1)).status, 200);
+  assert.deepEqual(await (await fieldRequest("GET", handoffPath())).json(), { active: false, version: 2 });
+  assert.equal(
+    (await pool.query("SELECT handoff_paused FROM instagram_contact_automation")).rows[0].handoff_paused,
+    false,
+  );
+});
+
+test("handoff audit failure rolls back state and contact pause together", async () => {
+  await readyHandoff();
+  await pool.query(`CREATE FUNCTION reject_handoff_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'audit unavailable'; END $$;
+    CREATE TRIGGER reject_handoff_audit BEFORE INSERT ON instagram_inbox_handoff_events FOR EACH ROW EXECUTE FUNCTION reject_handoff_audit()`);
+  try {
+    assert.equal((await setHandoff(true, 0)).status, 503);
+    assert.equal((await pool.query("SELECT count(*) FROM instagram_inbox_handoffs")).rows[0].count, "0");
+    assert.equal((await pool.query("SELECT count(*) FROM instagram_contact_automation")).rows[0].count, "0");
+    assert.equal((await pool.query("SELECT count(*) FROM instagram_inbox_handoff_events")).rows[0].count, "0");
+  } finally {
+    await pool.query(
+      "DROP TRIGGER reject_handoff_audit ON instagram_inbox_handoff_events; DROP FUNCTION reject_handoff_audit()",
+    );
+  }
+  assert.equal((await setHandoff(true, 0)).status, 200);
+});
+
+test("handoff restart captures changed evidence without clearing a concurrent manual pause", async () => {
+  await readyHandoff();
+  const changes = await Promise.all([
+    setHandoff(true, 0),
+    fieldRequest("PUT", `/api/connections/${connectionId}/contacts/888/automation`, { paused: true }),
+  ]);
+  assert.deepEqual(
+    changes.map((response) => response.status),
+    [200, 200],
+  );
+  assert.equal((await setHandoff(false, 1)).status, 200);
+  await pool.query("UPDATE private_reply_outbox SET status='failed'");
+  const evidence = await identityReply("999", "54321");
+  assert.equal((await setHandoff(true, 2)).status, 200);
+  assert.deepEqual(
+    (await pool.query("SELECT sender_id,paused,handoff_paused FROM instagram_contact_automation ORDER BY sender_id"))
+      .rows,
+    [
+      { sender_id: "888", paused: true, handoff_paused: false },
+      { sender_id: "999", paused: false, handoff_paused: true },
+    ],
+  );
+  assert.equal(
+    (await pool.query("SELECT evidence_reply_id::text FROM instagram_inbox_handoffs")).rows[0].evidence_reply_id,
+    evidence,
+  );
+});
+
 before(async () => {
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/012_instagram_inbox.sql", import.meta.url), "utf8"));
