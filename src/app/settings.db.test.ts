@@ -159,6 +159,43 @@ test("inbox stores parsed postbacks without inventing confirmation eligibility",
   assert.equal((await pool.query("SELECT count(*) FROM instagram_message_receipts")).rows[0].count, "0");
 });
 
+test("resuming receiving excludes delayed messages from the stopped interval and keeps stored history", async () => {
+  await pool.query(
+    "UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now()-interval '2 hours' WHERE id=$1",
+    [connectionId],
+  );
+  const message = {
+    accountId: "123",
+    senderId: "456",
+    messageId: "before-stop",
+    text: "stored",
+    timestamp: new Date(Date.now() - 3600000),
+  };
+  await ingestMessages(pool, [message]);
+  await updateConnection(pool, a, connectionId, { active: false, send_enabled: false });
+  const stoppedAt = (await pool.query("SELECT clock_timestamp() AS stopped_at")).rows[0].stopped_at;
+  await pool.query("SELECT pg_sleep(0.02)");
+  await updateConnection(pool, a, connectionId, { active: true, send_enabled: false });
+  const cutoff = (await pool.query("SELECT inbox_enabled_at FROM instagram_connections WHERE id=$1", [connectionId]))
+    .rows[0].inbox_enabled_at;
+  assert.ok(cutoff.getTime() > stoppedAt.getTime(), "resume advances the opt-in cutoff");
+  await ingestMessages(pool, [
+    { ...message, messageId: "delayed-stopped", timestamp: stoppedAt },
+    { ...message, messageId: "after-resume", timestamp: new Date(cutoff.getTime() + 1000) },
+  ]);
+  const history = (await pool.query("SELECT message_id FROM instagram_inbox_messages ORDER BY id")).rows.map(
+    (row) => row.message_id,
+  );
+  assert.deepEqual(history, ["before-stop", "after-resume"]);
+  await updateConnection(pool, a, connectionId, { active: true, send_enabled: true });
+  assert.equal(
+    (
+      await pool.query("SELECT inbox_enabled_at FROM instagram_connections WHERE id=$1", [connectionId])
+    ).rows[0].inbox_enabled_at.getTime(),
+    cutoff.getTime(),
+  );
+});
+
 before(async () => {
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/012_instagram_inbox.sql", import.meta.url), "utf8"));

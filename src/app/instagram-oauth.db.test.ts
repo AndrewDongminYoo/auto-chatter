@@ -3,8 +3,9 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { beginInstagramOAuth, finishInstagramOAuth } from "./instagram-oauth.ts";
-import { ensureWorkspace } from "./settings.ts";
+import { disconnectConnection, ensureWorkspace } from "./settings.ts";
 import { openSecret } from "./secrets.ts";
+import { ingestMessages } from "../instagram/follow-flow.ts";
 
 const url = new URL(process.env.TEST_DATABASE_URL ?? "http://invalid");
 if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
@@ -90,6 +91,54 @@ test("expired, cross-user, and browser-mismatched states make no provider call",
   await assert.rejects(finishInstagramOAuth(pool, user, mismatch, env, provider), /invalid_oauth_state/);
   await pool.query("UPDATE instagram_oauth_states SET expires_at=now()-interval '1 minute'");
   await assert.rejects(finishInstagramOAuth(pool, user, request, env, provider), /invalid_oauth_state/);
+});
+
+test("OAuth reconnection advances opted-in retention past delayed messages while preserving history", async () => {
+  const id = "33333333-3333-4333-8333-333333333333";
+  await pool.query(
+    "INSERT INTO instagram_connections(id,workspace_id,account_id,active,inbox_enabled,inbox_enabled_at) VALUES($1,$2,'98765',true,true,now()-interval '2 hours')",
+    [id, workspaceId],
+  );
+  const message = {
+    accountId: "98765",
+    senderId: "456",
+    messageId: "before-disconnect",
+    text: "stored",
+    timestamp: new Date(Date.now() - 3600000),
+  };
+  await ingestMessages(pool, [message]);
+  await disconnectConnection(pool, user, id);
+  const stoppedAt = (await pool.query("SELECT clock_timestamp() AS stopped_at")).rows[0].stopped_at;
+  await pool.query("SELECT pg_sleep(0.02)");
+  const { request } = await authorization();
+  const provider: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("api.instagram.com/oauth"))
+      return Response.json({
+        access_token: "short",
+        permissions: "instagram_business_basic,instagram_business_manage_comments,instagram_business_manage_messages",
+      });
+    if (url.includes("/access_token")) return Response.json({ access_token: "long", expires_in: 3600 });
+    if (url.includes("/me?")) return Response.json({ user_id: "98765", username: "account" });
+    return Response.json({ success: true });
+  };
+  assert.equal((await finishInstagramOAuth(pool, user, request, env, provider)).status, 303);
+  const row = (
+    await pool.query("SELECT active,inbox_enabled,inbox_enabled_at FROM instagram_connections WHERE id=$1", [id])
+  ).rows[0];
+  assert.equal(row.active, true);
+  assert.equal(row.inbox_enabled, true);
+  assert.ok(row.inbox_enabled_at.getTime() > stoppedAt.getTime(), "OAuth activation advances the opt-in cutoff");
+  await ingestMessages(pool, [
+    { ...message, messageId: "delayed-disconnected", timestamp: stoppedAt },
+    { ...message, messageId: "after-reconnect", timestamp: new Date(row.inbox_enabled_at.getTime() + 1000) },
+  ]);
+  assert.deepEqual(
+    (await pool.query("SELECT message_id FROM instagram_inbox_messages ORDER BY id")).rows.map(
+      (message) => message.message_id,
+    ),
+    ["before-disconnect", "after-reconnect"],
+  );
 });
 
 test("a callback overtaken by another connection update cannot claim success", async () => {
