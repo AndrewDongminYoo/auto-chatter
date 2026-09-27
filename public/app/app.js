@@ -189,6 +189,7 @@ const errors = {
   connection_not_found: "접근할 수 있는 Instagram 계정을 선택해 주세요.",
   connection_unavailable: "계정 연결 상태와 토큰 유효기간을 확인해 주세요.",
   keywords_required: "키워드를 하나 이상 입력해 주세요.",
+  invalid_contact_automation: "연락처 자동화 설정을 확인해 주세요.",
   invalid_contact_tags: "태그는 한 줄에 하나씩 최대 20개, 각각 40자까지 입력해 주세요.",
   invalid_contact_request: "연락처 필터를 확인한 뒤 다시 불러와 주세요.",
   contact_not_found: "연락처에 접근할 수 없습니다. 목록을 다시 불러와 주세요.",
@@ -831,6 +832,7 @@ async function loadActivity() {
         inactive_connection: "계정 수신이 중지됐습니다.",
         delivery_not_permitted: "계정·규칙 또는 응답 가능 시간을 확인해 주세요.",
         connection_paused: "요청 제한으로 잠시 대기합니다.",
+        contact_paused: "이 연락처의 자동화가 중지되어 대기합니다.",
         connection_changed: "계정 연결 설정이 변경되어 중지됐습니다.",
       };
       item.append(
@@ -869,8 +871,64 @@ function contactCard(contact) {
   const summary = node("div", "", "contact-summary");
   summary.append(
     node("h3", `참여자 ${contact.sender_id}`),
-    node("p", `@${contact.username || "연결 계정"} · 댓글 ${contact.comment_count}개`, "hint"),
+    node(
+      "p",
+      `연결 계정 ${contact.username ? `@${contact.username}` : "이름 확인 전"} · 댓글 ${contact.comment_count}개`,
+      "hint",
+    ),
   );
+  const automation = node("div");
+  const automationStatus = badge("");
+  const toggle = node("button", "", "secondary");
+  toggle.type = "button";
+  toggle.dataset.automationToggle = "";
+  const renderAutomation = () => {
+    automationStatus.textContent = contact.automation_paused ? "자동화 중지 중" : "자동화 허용";
+    automationStatus.className = `badge${contact.automation_paused ? " warning" : ""}`;
+    toggle.textContent = contact.automation_paused ? "자동화 재개" : "자동화 중지";
+    toggle.setAttribute("aria-label", `${contact.sender_id} ${toggle.textContent}`);
+  };
+  renderAutomation();
+  toggle.addEventListener("click", () => {
+    if (contactsSaving || contactsBusy || fieldBusy || segmentBusy) return;
+    const paused = !contact.automation_paused;
+    if (
+      !paused &&
+      !confirm("자동화를 재개할까요? 응답 가능 시간이 남은 대기 메시지는 다음 워커 실행에서 발송될 수 있습니다.")
+    )
+      return;
+    const generation = contactsGeneration;
+    void action(toggle, async () => {
+      contactsSaving = true;
+      try {
+        const saved = await api(
+          `/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}/automation`,
+          "PUT",
+          { paused },
+        );
+        if (generation !== contactsGeneration) return;
+        contact.automation_paused = saved.automation_paused;
+        renderAutomation();
+        notice(
+          paused
+            ? "자동화를 중지했습니다. 이미 전송 중인 메시지는 취소할 수 없습니다."
+            : "자동화를 재개했습니다. 대기 메시지는 기존 발송 정책을 다시 확인합니다.",
+        );
+      } catch (error) {
+        if (generation === contactsGeneration) throw error;
+      } finally {
+        if (generation === contactsGeneration) contactsSaving = false;
+      }
+    }).finally(() => {
+      if (generation === contactsGeneration) renderAutomation();
+    });
+  });
+  automation.append(
+    automationStatus,
+    node("p", "중지 중에는 새 확인 답장을 자동 처리하지 않습니다. 대기 발송은 보관됩니다.", "hint"),
+    toggle,
+  );
+  summary.append(automation);
   const date = new Date(contact.last_comment_at);
   summary.append(node("p", `최근 댓글 · ${date.toLocaleString("ko-KR")}`, "hint"));
   const tags = node("div", "", "badges");
