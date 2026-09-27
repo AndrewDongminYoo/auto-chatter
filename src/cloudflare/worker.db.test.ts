@@ -70,7 +70,7 @@ async function rows() {
 
 before(async () => {
   await pool.query(
-    "DROP TABLE IF EXISTS instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+    "DROP TABLE IF EXISTS instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
   );
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
 });
@@ -323,6 +323,8 @@ test("signed comment and confirmation webhooks complete the conditional DM flow 
   await worker.fetch(request("comment-1", "456"), env);
   assert.equal(await consume(), "ack");
   assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "waiting");
+  await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 second'");
+  const firstConfirmationAt = Date.now() - 200;
   const confirmation = (id: string) => {
     const body = JSON.stringify({
       object: "instagram",
@@ -333,7 +335,7 @@ test("signed comment and confirmation webhooks complete the conditional DM flow 
             {
               sender: { id: "456" },
               recipient: { id: "123" },
-              timestamp: Date.now(),
+              timestamp: firstConfirmationAt + (id === "confirm-1" ? 0 : 1),
               message: { mid: id, text: "확인" },
             },
           ],
@@ -349,6 +351,7 @@ test("signed comment and confirmation webhooks complete the conditional DM flow 
   assert.equal((await worker.fetch(confirmation("confirm-1"), env)).status, 200);
   await consume();
   assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "waiting");
+  assert.deepEqual(delivered, ["reply", "Follow and confirm again"]);
   follows = true;
   await worker.fetch(confirmation("confirm-2"), env);
   await consume();
@@ -556,4 +559,80 @@ test("Cloudflare follow final guard defers a pause after worker permissions", as
   published = [];
   await worker.scheduled({}, env);
   assert.deepEqual(published, []);
+});
+
+async function handoffSender(sender = "sender-1") {
+  await pool.query(
+    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,handoff_paused) SELECT workspace_id,id,$2,true FROM instagram_connections WHERE id=$1",
+    [connectionId, sender],
+  );
+}
+test("Cloudflare handoff excludes cron wake and queue claims", async () => {
+  await worker.fetch(request(), env);
+  await handoffSender();
+  published = [];
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, []);
+  await consume();
+  assert.equal(sends, 0);
+  assert.equal((await rows())[0].status, "pending");
+});
+test("Cloudflare handoff committed during verification prevents private final POST", async () => {
+  let mediaReads = 0;
+  const providerFetch = globalThis.fetch;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/media-1") && ++mediaReads === 2)
+      await handoffSender();
+    return providerFetch(input, init);
+  });
+  await worker.fetch(request(), env);
+  await consume();
+  assert.equal(mediaReads, 2);
+  assert.equal(sends, 0);
+  assert.equal((await rows())[0].failure_code, "contact_paused");
+});
+test("Cloudflare handoff committed after follow permissions prevents final POST", async () => {
+  await pool.query(
+    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final',non_follower_reply_text='Follow'",
+  );
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const path = new URL(String(input)).pathname;
+    if (init?.method === "POST") {
+      sends++;
+      return Response.json({ message_id: "sent-" + sends, recipient_id: "456" });
+    }
+    if (path.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (path.endsWith("/456")) return Response.json({ is_user_follow_business: true });
+    if (path.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
+    return Response.json({
+      id: "comment-1",
+      from: { id: "456" },
+      media: { id: "media-1" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  await worker.fetch(request("comment-1", "456"), env);
+  await consume();
+  assert.equal(sends, 1);
+  await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 second'");
+  await ingestMessages(pool, [
+    { accountId: "123", senderId: "456", messageId: "handoff-confirm", text: "확인", timestamp: new Date() },
+  ]);
+  assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "pending");
+  const originalQuery = Pool.prototype.query;
+  let finalChecks = 0;
+  mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    if (sql.includes("flow.confirmed_at>now()-interval '24 hours'") && sql.includes("c.access_token_encrypted=$4")) {
+      finalChecks++;
+      await handoffSender("456");
+    }
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  await consume();
+  assert.equal(finalChecks, 1);
+  assert.equal(sends, 1);
+  assert.equal(
+    (await pool.query("SELECT failure_code FROM instagram_follow_conversations")).rows[0].failure_code,
+    "contact_paused",
+  );
 });

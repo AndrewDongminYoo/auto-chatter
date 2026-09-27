@@ -13,7 +13,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
   const client = await pool.connect();
   try {
     await client.query(
-      "DROP TABLE IF EXISTS instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await client.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await client.query(
@@ -25,7 +25,15 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await client.query(
       "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='automations_app') THEN CREATE ROLE automations_app; END IF; END $$",
     );
-    await client.query("GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO automations_app");
+    const bootstrap = await readFile(new URL("../../deploy/init-app-user.sh", import.meta.url), "utf8");
+    const grants = bootstrap.match(
+      /GRANT SELECT, INSERT, UPDATE ON ALL TABLES[\s\S]*?GRANT USAGE, SELECT ON ALL SEQUENCES[^;]*;/,
+    );
+    assert.ok(grants, "Compose initializer must declare application table grants");
+    await client.query(grants[0]);
+    await client.query("SET ROLE automations_app");
+    await assert.rejects(client.query("UPDATE instagram_inbox_handoff_events SET active=active"), { code: "42501" });
+    await client.query("RESET ROLE");
     await client.query("GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role");
     await client.query("GRANT CREATE ON SCHEMA public TO PUBLIC");
     await client.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8"));
@@ -33,6 +41,8 @@ test("Supabase roles cannot read product data; the server role has DML without D
       await client.query(`SET ROLE ${role}`);
       for (const table of [
         "workspaces",
+        "instagram_inbox_handoffs",
+        "instagram_inbox_handoff_events",
         "instagram_inbox_messages",
         "instagram_contact_automation",
         "instagram_contact_fields",
@@ -57,6 +67,8 @@ test("Supabase roles cannot read product data; the server role has DML without D
     );
     assert.equal((await client.query("SELECT count(*) FROM workspaces")).rows[0].count, "1");
     await assert.rejects(client.query("DELETE FROM workspaces"), { code: "42501" });
+    await assert.rejects(client.query("UPDATE instagram_inbox_handoff_events SET active=active"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM instagram_inbox_handoff_events"), { code: "42501" });
     await assert.rejects(client.query("CREATE TABLE public.forbidden(id int)"), { code: "42501" });
     await client.query("RESET ROLE");
     await client.query("SET ROLE automations_app");
@@ -73,8 +85,12 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await client.query("INSERT INTO workspaces VALUES ('22222222-2222-4222-8222-222222222222')");
     await client.query("UPDATE workspaces SET id=id");
     await assert.rejects(client.query("DELETE FROM workspaces"), { code: "42501" });
+    await assert.rejects(client.query("UPDATE instagram_inbox_handoff_events SET active=active"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM instagram_inbox_handoff_events"), { code: "42501" });
     await assert.rejects(client.query("CREATE TABLE public.forbidden_compose(id int)"), { code: "42501" });
     for (const table of [
+      "instagram_inbox_handoffs",
+      "instagram_inbox_handoff_events",
       "instagram_inbox_messages",
       "instagram_contact_automation",
       "instagram_contact_fields",
@@ -87,9 +103,9 @@ test("Supabase roles cannot read product data; the server role has DML without D
       await client.query(`SELECT * FROM ${table}`);
     await client.query("RESET ROLE");
     const protectedTables = await client.query(
-      "SELECT relname FROM pg_class WHERE relnamespace='public'::regnamespace AND relrowsecurity AND relname IN ('instagram_inbox_messages','instagram_contact_automation','instagram_contact_fields','instagram_contact_field_values','workspaces','workspace_members','instagram_oauth_states','instagram_follow_conversations','instagram_message_receipts','instagram_connections','instagram_comment_rules','instagram_comment_events','private_reply_outbox')",
+      "SELECT relname FROM pg_class WHERE relnamespace='public'::regnamespace AND relrowsecurity AND relname IN ('instagram_inbox_handoffs','instagram_inbox_handoff_events','instagram_inbox_messages','instagram_contact_automation','instagram_contact_fields','instagram_contact_field_values','workspaces','workspace_members','instagram_oauth_states','instagram_follow_conversations','instagram_message_receipts','instagram_connections','instagram_comment_rules','instagram_comment_events','private_reply_outbox')",
     );
-    assert.equal(protectedTables.rowCount, 13);
+    assert.equal(protectedTables.rowCount, 15);
     // Exercise RLS independently of table grants: an accidental future grant must not expose rows.
     await client.query("GRANT SELECT ON workspaces TO anon");
     await client.query("SET ROLE anon");

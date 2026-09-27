@@ -41,11 +41,11 @@ async function wakeDueReplies(
        AND (c.send_paused_until IS NULL OR c.send_paused_until<=now())
        AND (EXISTS(SELECT 1 FROM private_reply_outbox reply WHERE reply.connection_id=c.id AND reply.status='pending' AND reply.next_attempt_at<=now()
          AND NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
-           AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND automation.paused))
+           AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused)))
        OR EXISTS(SELECT 1 FROM instagram_follow_conversations flow JOIN private_reply_outbox reply ON reply.id=flow.reply_id
          WHERE flow.connection_id=c.id AND flow.status='pending' AND flow.next_attempt_at<=now()
          AND NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
-           AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND automation.paused)))
+           AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused))))
      ORDER BY c.id LIMIT 100`,
     [
       scope && "connectionId" in scope ? scope.connectionId : null,
@@ -169,7 +169,7 @@ export default {
                 if (body?.recipient?.comment_id) {
                   const rule = await pool.query(
                     `SELECT NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
-                      AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND automation.paused) AS automation_active
+                      AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused)) AS automation_active
                      FROM private_reply_outbox reply JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
                     WHERE reply.connection_id=$1 AND reply.comment_id=$2 AND rule.enabled AND reply.status='sending'`,
                     [connectionId, body.recipient.comment_id],
@@ -199,7 +199,7 @@ export default {
                   beforeSend: async (context) => {
                     const permitted = await pool.query(
                       `SELECT NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
-                  AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND automation.paused) AS automation_active
+                  AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused)) AS automation_active
                 FROM instagram_follow_conversations flow
                 JOIN private_reply_outbox reply ON reply.id=flow.reply_id JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
                 JOIN instagram_connections c ON c.id=flow.connection_id

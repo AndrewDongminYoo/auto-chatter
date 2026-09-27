@@ -137,7 +137,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
   });
   try {
     await pool.query(
-      "DROP TABLE IF EXISTS instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
@@ -349,6 +349,43 @@ test("workerd contact API uses restricted server privileges and verified workspa
       ).status,
       404,
     );
+    await pool.query(
+      `INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled)
+      VALUES('33333333-3333-4333-8333-333333333333',$1,$2,'media','hello','fixture',true)`,
+      [workspace, connection],
+    );
+    await pool.query(
+      `INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,status,private_reply_text,recipient_id,provider_message_id,sent_at)
+      SELECT $1,$2,event.id,'33333333-3333-4333-8333-333333333333','comment','media','sender-1','sent','fixture','456','provider-fixture',connection.inbox_enabled_at
+      FROM instagram_comment_events event JOIN instagram_connections connection ON connection.id=event.connection_id
+      WHERE event.connection_id=$2 AND event.comment_id='comment'`,
+      [workspace, connection],
+    );
+    const handoffPath = `${inboxPath}/456/handoff`;
+    const startHandoff = await runtime.dispatchFetch(handoffPath, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ active: true, expected_version: 0 }),
+    });
+    assert.equal(startHandoff.status, 200);
+    assert.deepEqual(await startHandoff.json(), { active: true, version: 1 });
+    assert.equal(
+      (await (await runtime.dispatchFetch(`${inboxPath}/456/context`, { headers })).json()).automation_paused,
+      true,
+    );
+    assert.equal(
+      (await runtime.dispatchFetch(handoffPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } }))
+        .status,
+      404,
+    );
+    const endHandoff = await runtime.dispatchFetch(handoffPath, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ active: false, expected_version: 1 }),
+    });
+    assert.equal(endHandoff.status, 200);
+    assert.deepEqual(await endHandoff.json(), { active: false, version: 2 });
+    assert.equal((await pool.query("SELECT count(*) FROM instagram_inbox_handoff_events")).rows[0].count, "2");
     const inboxHistory = await runtime.dispatchFetch(`${inboxPath}/456`, { headers });
     assert.equal((await inboxHistory.json()).messages[0].text, "private body");
     assert.equal(

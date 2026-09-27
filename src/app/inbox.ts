@@ -102,6 +102,15 @@ export async function inboxContext(
   if (!isUuid(connection) || !/^\d{1,40}$/.test(recipient) || query.size)
     throw new ApiError(400, "invalid_inbox_query");
   const workspace = await workspaceFor(pool, user);
+  return readInboxContext(pool, workspace, connection, recipient);
+}
+
+export async function readInboxContext(
+  pool: Pick<Pool, "query">,
+  workspace: string,
+  connection: string,
+  recipient: string,
+) {
   const result = await pool.query(
     `WITH owned AS (
        SELECT id,workspace_id,inbox_enabled_at FROM instagram_connections WHERE id=$1 AND workspace_id=$2
@@ -121,7 +130,7 @@ export async function inboxContext(
      )
      SELECT conversation.last_message_at,identity.sender_count,identity.sender_id,identity.fresh,
        (SELECT id::text FROM candidates WHERE fresh ORDER BY sent_at DESC,id DESC LIMIT 1) AS evidence_reply_id,
-       coalesce(automation.paused,false) AS automation_paused
+       coalesce((automation.paused OR automation.handoff_paused),false) AS automation_paused
      FROM owned CROSS JOIN conversation CROSS JOIN identity
      LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=owned.workspace_id
        AND automation.connection_id=owned.id AND automation.sender_id=identity.sender_id`,

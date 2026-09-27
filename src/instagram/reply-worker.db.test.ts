@@ -61,7 +61,7 @@ async function outbox(): Promise<{
 
 before(async () => {
   await pool.query(
-    "DROP TABLE IF EXISTS instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+    "DROP TABLE IF EXISTS instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
   );
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
 });
@@ -796,4 +796,57 @@ test("a paused contact does not stop another contact or retry unknown sends", as
     ),
     false,
   );
+});
+
+async function pauseForHandoff() {
+  await pool.query(
+    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,handoff_paused) VALUES($1,$2,'sender-1',true)",
+    [workspaceId, connectionId],
+  );
+}
+test("handoff pause prevents private claim without changing manual pause", async () => {
+  await queueReply();
+  await pauseForHandoff();
+  let calls = 0;
+  assert.equal(
+    await processNextPrivateReply(
+      pool,
+      {
+        verify: async (request) => {
+          calls++;
+          return verified(request);
+        },
+        send: async () => {
+          calls++;
+          return { messageId: "sent" };
+        },
+      },
+      () => now,
+      connectionId,
+    ),
+    false,
+  );
+  assert.equal(calls, 0);
+  assert.equal((await outbox()).status, "pending");
+});
+test("handoff during private verification defers before provider send", async () => {
+  await queueReply();
+  let sends = 0;
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: async (request) => {
+        await pauseForHandoff();
+        return verified(request);
+      },
+      send: async () => {
+        sends++;
+        return { messageId: "sent" };
+      },
+    },
+    () => now,
+    connectionId,
+  );
+  assert.equal(sends, 0);
+  assert.equal((await outbox()).failure_code, "contact_paused");
 });
