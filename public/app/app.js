@@ -906,7 +906,7 @@ function contactCard(contact) {
   });
   editor.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (contactsSaving || contactsBusy) return;
+    if (contactsSaving || contactsBusy || fieldBusy) return;
     const values = list(input.value);
     if (values.length > 20 || values.some((value) => value.length > 40)) {
       input.setCustomValidity(errors.invalid_contact_tags);
@@ -952,6 +952,15 @@ function contactCard(contact) {
   if (contactFields.length) editors.append(contactFieldEditor(contact, fieldSummary));
   return item;
 }
+function clearContactResults() {
+  contactsGeneration++;
+  contactsAfter = null;
+  contactsQuery = "";
+  contactsDirty.clear();
+  contactsBusy = false;
+  byId("contacts-list").replaceChildren();
+  byId("contacts-more").hidden = true;
+}
 async function loadContacts(more = false) {
   if (contactsSaving || (more && (contactsBusy || !contactsAfter))) return;
   let fieldCondition;
@@ -959,6 +968,9 @@ async function loadContacts(more = false) {
     try {
       fieldCondition = contactFieldCondition();
     } catch (error) {
+      if (!contactFields.some((field) => field.id === byId("contacts-filter").elements.field_id.value)) {
+        clearContactResults();
+      }
       byId("contacts-status").textContent = error.message;
       return;
     }
@@ -1271,9 +1283,14 @@ byId("field-create").addEventListener("submit", (event) => {
       if (generation !== fieldsGeneration) return;
       byId("field-create").reset();
       fieldNameDirty = false;
-      await loadContactFields(true);
-      if (!contactsDirty.size && !contactsSaving) await loadContacts();
-      notice("필드를 만들었습니다. 연락처의 추가 정보 편집에서 값을 기록할 수 있습니다.");
+      const loaded = await loadContactFields(true);
+      if (generation !== fieldsGeneration) return;
+      if (loaded && !contactsDirty.size && !contactsSaving) await loadContacts();
+      notice(
+        loaded
+          ? "필드를 만들었습니다. 연락처의 추가 정보 편집에서 값을 기록할 수 있습니다."
+          : "필드를 만들었지만 목록을 갱신하지 못했습니다. 새로고침으로 다시 불러와 주세요.",
+      );
     } finally {
       if (generation === fieldsGeneration) {
         fieldBusy = false;
@@ -1295,9 +1312,19 @@ function archiveField(field, button) {
       await api(`/api/contact-fields/${field.id}`, "DELETE");
       if (generation !== fieldsGeneration) return;
       if (selected.value === field.id) selected.value = "";
-      await loadContactFields(true);
-      await loadContacts();
-      notice("필드를 보관했습니다. 저장한 값은 유지됩니다.");
+      contactFields = contactFields.filter((definition) => definition.id !== field.id);
+      button.closest(".field-definition")?.remove();
+      [...selected.options].find((option) => option.value === field.id)?.remove();
+      fieldFilterControls();
+      clearContactResults();
+      const loaded = await loadContactFields(true);
+      if (generation !== fieldsGeneration) return;
+      if (loaded) await loadContacts();
+      notice(
+        loaded
+          ? "필드를 보관했습니다. 저장한 값은 유지됩니다."
+          : "필드를 보관했지만 목록을 갱신하지 못했습니다. 새로고침으로 다시 불러와 주세요.",
+      );
     } finally {
       if (generation === fieldsGeneration) {
         fieldBusy = false;
