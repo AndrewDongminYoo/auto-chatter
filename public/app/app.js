@@ -1,6 +1,12 @@
 const byId = (id) => document.getElementById(id);
 const form = byId("rule-form");
 let connections = [];
+let contactsGeneration = 0;
+let contactsAfter = null;
+let contactsBusy = false;
+let contactsSaving = false;
+let contactsQuery = "";
+const contactsDirty = new Set();
 let refreshPromise;
 let editingRuleId;
 let dirty = false;
@@ -18,7 +24,7 @@ function editorState(
   if (byId("save-status").textContent !== message) byId("save-status").textContent = message;
 }
 function canDiscard() {
-  return !dirty || confirm("저장하지 않은 변경 사항을 버릴까요?");
+  return (!dirty && !contactsDirty.size) || confirm("저장하지 않은 규칙·태그 변경 사항을 버릴까요?");
 }
 function focusEditor() {
   const target = editingRuleId
@@ -94,13 +100,22 @@ function markDirty() {
 form.addEventListener("input", markDirty);
 form.addEventListener("change", markDirty);
 window.addEventListener("beforeunload", (event) => {
-  if (dirty) {
+  if (dirty || contactsDirty.size) {
     event.preventDefault();
     event.returnValue = "";
   }
 });
 function resetSession() {
   connections = [];
+  contactsGeneration++;
+  contactsDirty.clear();
+  contactsAfter = null;
+  contactsBusy = false;
+  contactsSaving = false;
+  byId("contacts-list").replaceChildren();
+  byId("contacts-filter").reset();
+  byId("contacts-more").hidden = true;
+  byId("contacts-status").textContent = "";
   mediaCache.clear();
   mediaSession++;
   ruleMediaObserver.disconnect();
@@ -137,6 +152,9 @@ const errors = {
   connection_not_found: "접근할 수 있는 Instagram 계정을 선택해 주세요.",
   connection_unavailable: "계정 연결 상태와 토큰 유효기간을 확인해 주세요.",
   keywords_required: "키워드를 하나 이상 입력해 주세요.",
+  invalid_contact_tags: "태그는 한 줄에 하나씩 최대 20개, 각각 40자까지 입력해 주세요.",
+  invalid_contact_request: "연락처 필터를 확인한 뒤 다시 불러와 주세요.",
+  contact_not_found: "연락처에 접근할 수 없습니다. 목록을 다시 불러와 주세요.",
   invalid_keywords: "키워드는 최대 20개, 각각 100자까지 입력할 수 있습니다.",
   invalid_confirmation_button: "버튼 이름은 20자, 버튼 메시지는 640자 이내로 작성하고 팔로우 확인을 켜주세요.",
   invalid_rule: "게시물 선택, 답장 문구와 팔로우 조건을 확인해 주세요.",
@@ -378,6 +396,8 @@ async function loadWorkspace() {
   }
   formConditions();
   void loadMedia();
+  initializeContacts();
+  if (!contactsDirty.size && !contactsSaving) void loadContacts();
   try {
     await loadActivity();
   } catch (error) {
@@ -769,3 +789,145 @@ async function loadActivity() {
   }
 }
 byId("refresh-activity").addEventListener("click", (event) => action(event.currentTarget, loadActivity));
+
+function initializeContacts() {
+  const select = byId("contacts-filter").elements.connection_id;
+  const previous = select.value;
+  select.replaceChildren(new Option("모든 계정", ""));
+  for (const connection of connections)
+    select.add(new Option(connection.username || connection.account_id, connection.id));
+  if (connections.some((connection) => connection.id === previous)) select.value = previous;
+}
+function canReloadContacts() {
+  return !contactsSaving && (!contactsDirty.size || confirm("저장하지 않은 태그 변경 사항을 버릴까요?"));
+}
+function contactCard(contact) {
+  const item = node("article", "", "contact-row");
+  const summary = node("div", "", "contact-summary");
+  summary.append(
+    node("h3", `참여자 ${contact.sender_id}`),
+    node("p", `@${contact.username || "연결 계정"} · 댓글 ${contact.comment_count}개`, "hint"),
+  );
+  const date = new Date(contact.last_comment_at);
+  summary.append(node("p", `최근 댓글 · ${date.toLocaleString("ko-KR")}`, "hint"));
+  const tags = node("div", "", "badges");
+  for (const tag of contact.tags) tags.append(badge(tag));
+  if (!contact.tags.length) tags.append(node("span", "태그 없음", "hint"));
+  summary.append(tags);
+  const edit = document.createElement("details");
+  edit.append(node("summary", "태그 편집"));
+  const editor = document.createElement("form");
+  const label = node("label", "태그");
+  const input = document.createElement("textarea");
+  input.rows = 3;
+  input.maxLength = 1000;
+  input.value = contact.tags.join("\n");
+  label.append(input);
+  const hint = node(
+    "p",
+    "한 줄에 하나씩, 최대 20개·각 40자. 대소문자는 구분하지 않습니다. 모두 지우고 저장하면 태그가 제거됩니다.",
+    "hint",
+  );
+  const hintId = `contact-help-${contact.connection_id}-${contact.sender_id}`;
+  hint.id = hintId;
+  input.setAttribute("aria-describedby", hintId);
+  const save = node("button", "태그 저장");
+  save.type = "submit";
+  save.dataset.loadingLabel = "저장 중…";
+  editor.append(label, hint, save);
+  const key = `${contact.connection_id}:${contact.sender_id}`;
+  input.addEventListener("input", () => {
+    if (input.value !== contact.tags.join("\n")) contactsDirty.add(key);
+    else contactsDirty.delete(key);
+    input.setCustomValidity("");
+  });
+  editor.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (contactsSaving || contactsBusy) return;
+    const values = list(input.value);
+    if (values.length > 20 || values.some((value) => value.length > 40)) {
+      input.setCustomValidity(errors.invalid_contact_tags);
+      input.reportValidity();
+      return;
+    }
+    const generation = contactsGeneration;
+    void action(save, async () => {
+      contactsSaving = true;
+      input.disabled = true;
+      try {
+        const result = await api(
+          `/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}`,
+          "PATCH",
+          {
+            tags: values,
+          },
+        );
+        if (generation !== contactsGeneration) return;
+        contact.tags = result.tags;
+        input.value = result.tags.join("\n");
+        contactsDirty.delete(key);
+        tags.replaceChildren(...result.tags.map((value) => badge(value)));
+        if (!result.tags.length) tags.append(node("span", "태그 없음", "hint"));
+        notice("태그를 저장했습니다. 필터 결과를 갱신하려면 필터를 다시 적용해 주세요.");
+      } finally {
+        input.disabled = false;
+        if (generation === contactsGeneration) contactsSaving = false;
+      }
+    });
+  });
+  edit.append(editor);
+  item.append(summary, edit);
+  return item;
+}
+async function loadContacts(more = false) {
+  if (contactsSaving || (more && (contactsBusy || !contactsAfter))) return;
+  if (!more) {
+    contactsGeneration++;
+    contactsDirty.clear();
+    contactsAfter = null;
+    const fields = byId("contacts-filter").elements;
+    const query = new URLSearchParams();
+    if (fields.connection_id.value) query.set("connection_id", fields.connection_id.value);
+    if (fields.tag.value.trim()) query.set("tag", fields.tag.value.trim());
+    contactsQuery = query.toString();
+    byId("contacts-list").replaceChildren();
+    byId("contacts-more").hidden = true;
+  }
+  const generation = contactsGeneration;
+  contactsBusy = true;
+  byId("contacts-more").disabled = true;
+  byId("contacts-status").textContent = "연락처를 불러오고 있습니다…";
+  const query = new URLSearchParams(contactsQuery);
+  if (more) query.set("after", contactsAfter);
+  try {
+    const page = await api(`/api/contacts?${query}`);
+    if (generation !== contactsGeneration) return;
+    for (const contact of page.contacts) byId("contacts-list").append(contactCard(contact));
+    contactsAfter = page.after;
+    byId("contacts-more").hidden = !contactsAfter;
+    byId("contacts-status").textContent =
+      `연락처 ${byId("contacts-list").children.length}명을 표시합니다. 같은 계정의 반복 댓글은 한 명으로 묶습니다.`;
+    if (!byId("contacts-list").children.length)
+      byId("contacts-list").append(
+        emptyState("표시할 연락처가 없습니다", "댓글을 받거나 태그·계정 필터를 바꾼 뒤 다시 불러와 주세요."),
+      );
+  } catch (error) {
+    if (generation === contactsGeneration)
+      byId("contacts-status").textContent = `${error.message} 새로고침으로 다시 시도할 수 있습니다.`;
+  } finally {
+    if (generation === contactsGeneration) {
+      contactsBusy = false;
+      byId("contacts-more").disabled = false;
+    }
+  }
+}
+byId("contacts-filter").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (canReloadContacts()) void loadContacts();
+});
+byId("contacts-reload").addEventListener("click", () => {
+  if (canReloadContacts()) void loadContacts();
+});
+byId("contacts-more").addEventListener("click", () => {
+  void loadContacts(true);
+});
