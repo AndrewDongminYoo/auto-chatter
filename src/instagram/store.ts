@@ -17,6 +17,7 @@ interface RuleRow extends CommentRuleMatch {
   private_reply_text: string;
   follow_gate_enabled: boolean;
   confirmation_keyword: string;
+  confirmation_button_title: string;
   follower_reply_text: string;
   non_follower_reply_text: string;
 }
@@ -47,7 +48,7 @@ export async function ingestComments(pool: Pool, comments: readonly InstagramCom
       if (!event) continue;
 
       const rules = await client.query<RuleRow>(
-        `SELECT id, keyword, keywords, match_mode, excluded_keywords, private_reply_text, follow_gate_enabled, confirmation_keyword, follower_reply_text, non_follower_reply_text FROM instagram_comment_rules
+        `SELECT id, keyword, keywords, match_mode, excluded_keywords, private_reply_text, follow_gate_enabled, confirmation_keyword, confirmation_button_title, follower_reply_text, non_follower_reply_text FROM instagram_comment_rules
          WHERE workspace_id = $1 AND connection_id = $2 AND media_id = $3 AND enabled = true`,
         [connection.workspace_id, connection.id, comment.postId],
       );
@@ -71,6 +72,7 @@ export async function ingestComments(pool: Pool, comments: readonly InstagramCom
           rule.follow_gate_enabled
             ? JSON.stringify({
                 confirmation_keyword: rule.confirmation_keyword,
+                confirmation_button_title: rule.confirmation_button_title,
                 follower_reply_text: rule.follower_reply_text,
                 non_follower_reply_text: rule.non_follower_reply_text,
               })

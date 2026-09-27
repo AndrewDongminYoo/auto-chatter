@@ -34,6 +34,7 @@ const input = {
 
 before(async () => {
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/007_confirmation_button.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/004_workspace_settings.sql", import.meta.url), "utf8"));
 });
 beforeEach(async () => {
@@ -196,4 +197,51 @@ test("activity belongs to the verified workspace and excludes recipient content"
   assert.equal("sender_id" in owned[0], false);
   assert.equal("private_reply_text" in owned[0], false);
   assert.deepEqual(await listActivity(pool, b), []);
+});
+
+test("confirmation button round trips within a workspace and invalid configurations cannot save", async () => {
+  const config = {
+    ...input,
+    follow_gate_enabled: true,
+    confirmation_button_title: "자료 받기",
+    confirmation_keyword: "확인",
+    follower_reply_text: "링크",
+    non_follower_reply_text: "팔로우 후 눌러 주세요",
+  };
+  await saveRule(pool, a, config);
+  assert.equal((await listRules(pool, a))[0].confirmation_button_title, "자료 받기");
+  assert.deepEqual(await listRules(pool, b), []);
+  for (const invalid of [
+    { ...config, confirmation_button_title: "x".repeat(21) },
+    { ...config, follow_gate_enabled: false },
+    { ...config, private_reply_text: "x".repeat(641) },
+    { ...config, non_follower_reply_text: "x".repeat(641) },
+  ])
+    await assert.rejects(saveRule(pool, a, invalid), ApiError);
+  await saveRule(pool, a, { ...config, confirmation_button_title: "" });
+  assert.equal((await listRules(pool, a))[0].confirmation_button_title, "");
+});
+
+test("button migration upgrades existing rows with no button and is repeatable", async () => {
+  await saveRule(pool, a, input);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("ALTER TABLE instagram_comment_rules DROP COLUMN confirmation_button_title");
+    await client.query("ALTER TABLE instagram_follow_conversations DROP COLUMN confirmation_button_title");
+    const migration = await readFile(
+      new URL("../../db/migrations/007_confirmation_button.sql", import.meta.url),
+      "utf8",
+    );
+    await client.query(migration);
+    await client.query(migration);
+    assert.equal(
+      (await client.query("SELECT confirmation_button_title FROM instagram_comment_rules")).rows[0]
+        .confirmation_button_title,
+      "",
+    );
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
 });

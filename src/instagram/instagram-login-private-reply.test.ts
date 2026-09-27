@@ -438,3 +438,35 @@ test("final delivery guard runs after Graph verification and prevents POST", asy
     false,
   );
 });
+
+test("a private reply emits one bound button template without a second send", async () => {
+  const graph = mockGraph();
+  const fetchImpl: typeof fetch = async (url, init) => {
+    if (String(url).endsWith("/messages")) {
+      assert.deepEqual(JSON.parse(String(init?.body)), {
+        recipient: { comment_id: "111" },
+        message: {
+          attachment: {
+            type: "template",
+            payload: {
+              template_type: "button",
+              text: "자료 링크입니다",
+              buttons: [{ type: "postback", title: "자료 받기", payload: "auto-chatter:confirm:1" }],
+            },
+          },
+        },
+      });
+      return graphResponse({ message_id: "button-private", recipient_id: "333" });
+    }
+    return graph.fetchImpl(url, init);
+  };
+  const transport = new InstagramLoginPrivateReplyTransport(config(fetchImpl));
+  assert.deepEqual(await transport.send({ ...request, confirmationButtonTitle: "자료 받기" }), {
+    messageId: "button-private",
+    recipientId: "333",
+  });
+  await assert.rejects(
+    transport.send({ ...request, confirmationButtonTitle: "x".repeat(21) }),
+    PreSendVerificationError,
+  );
+});

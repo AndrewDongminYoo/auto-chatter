@@ -61,6 +61,10 @@ test("OAuth verifies ownership, stores ciphertext, subscribes webhooks, and cons
     if (calls === 3) return Response.json({ user_id: "98765", username: "account" });
     assert.equal(String(input), "https://graph.instagram.com/v26.0/98765/subscribed_apps");
     assert.equal(init?.method, "POST");
+    assert.equal(
+      new URLSearchParams(String(init?.body)).get("subscribed_fields"),
+      "comments,messages,messaging_postbacks",
+    );
     return Response.json({ success: true });
   };
   const response = await finishInstagramOAuth(pool, user, request, env, provider);

@@ -213,6 +213,30 @@
                       </p>
                       <p class="hint">첫 메시지에 아래 확인 단어로 답장하도록 안내하세요.</p>
                       <label>확인 단어<input name="confirmation_keyword" value="확인" maxlength="100" /></label>
+                      <label class="toggle"
+                        ><input
+                          name="confirmation_button_enabled"
+                          type="checkbox"
+                          aria-controls="confirmation-button-settings"
+                        /><span
+                          >확인 버튼 추가<small
+                            >첫 DM과 미팔로우 안내에서 버튼을 누르면 확인 단어 응답으로 처리합니다.</small
+                          ></span
+                        ></label
+                      >
+                      <div id="confirmation-button-settings" hidden>
+                        <label
+                          >버튼 이름<input
+                            name="confirmation_button_title"
+                            value="확인"
+                            maxlength="20"
+                            aria-describedby="confirmation-button-help"
+                        /></label>
+                        <p id="confirmation-button-help" class="hint">
+                          최대 20자. 버튼이 붙는 첫 DM과 미팔로우 안내는 최대 640자입니다. 확인 단어를 직접 입력해도
+                          됩니다.
+                        </p>
+                      </div>
                       <label
                         >팔로우한 사람에게<textarea
                           name="follower_reply_text"
@@ -262,6 +286,7 @@
                 <p id="preview-comment" class="bubble incoming">키워드를 입력하세요</p>
                 <p class="conversation-label">첫 DM</p>
                 <p id="preview-message" class="bubble outgoing">작성한 첫 메시지가 여기에 표시됩니다.</p>
+                <p id="preview-first-button" class="dm-response-button" hidden></p>
                 <div id="preview-follow" hidden>
                   <p class="conversation-label">상대가 확인 단어로 답장하면</p>
                   <p id="preview-confirmation" class="bubble incoming">확인</p>
@@ -272,6 +297,7 @@
                   <div class="preview-branch">
                     <span>팔로우하지 않은 경우</span>
                     <p id="preview-non-follower" class="bubble outgoing"></p>
+                    <p id="preview-retry-button" class="dm-response-button" hidden></p>
                   </div>
                   <p class="hint">팔로우 상태를 확인할 수 없으면 후속 DM을 보내지 않습니다.</p>
                 </div>

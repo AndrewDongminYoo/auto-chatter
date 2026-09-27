@@ -28,14 +28,14 @@ export async function ingestMessages(
     JOIN instagram_connections c ON c.id=flow.connection_id
     JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
     WHERE c.account_id=$1 AND c.active AND c.send_enabled AND rule.enabled
-      AND flow.recipient_id=$2 AND flow.status='waiting' AND reply.status='sent' AND reply.sent_at<=$3
+      AND flow.recipient_id=$2 AND ($4::text IS NULL OR (flow.reply_id::text=$4 AND flow.confirmation_button_title<>'')) AND flow.status='waiting' AND reply.status='sent' AND reply.sent_at<=$3
     ORDER BY reply.sent_at DESC,reply.id DESC LIMIT 1 FOR UPDATE OF flow`,
-        [message.accountId, message.senderId, message.timestamp],
+        [message.accountId, message.senderId, message.timestamp, message.confirmationReplyId ?? null],
       );
       const row = result.rows[0];
       if (
         !row ||
-        normalized(row.confirmation_keyword) !== normalized(message.text) ||
+        (!message.confirmationReplyId && normalized(row.confirmation_keyword) !== normalized(message.text)) ||
         (row.last_message_at && message.timestamp <= row.last_message_at)
       )
         continue;
@@ -156,7 +156,13 @@ export async function processNextFollowReply(
     const sent = await transport.send(
       row.recipient_id,
       follows ? row.follower_reply_text : row.non_follower_reply_text,
-      { replyId: row.reply_id, attemptId: attempt },
+      {
+        replyId: row.reply_id,
+        attemptId: attempt,
+        ...(!follows && row.confirmation_button_title
+          ? { confirmationButtonTitle: row.confirmation_button_title }
+          : {}),
+      },
     );
     if (typeof sent.messageId !== "string" || !sent.messageId.trim()) throw new Error("Missing message ID");
     messageId = sent.messageId;

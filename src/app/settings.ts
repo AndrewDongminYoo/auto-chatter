@@ -57,7 +57,16 @@ export function parseRule(input: unknown) {
   const included = keywords(input.keywords),
     excluded = keywords(input.excluded_keywords);
   if (input.match_mode !== "all" && !included.length) throw new ApiError(400, "keywords_required");
+  const buttonTitle = text(input.confirmation_button_title ?? "", 20, false);
+  if (
+    buttonTitle &&
+    (!input.follow_gate_enabled ||
+      String(input.private_reply_text).length > 640 ||
+      String(input.non_follower_reply_text).length > 640)
+  )
+    throw new ApiError(400, "invalid_confirmation_button");
   return {
+    confirmation_button_title: buttonTitle,
     id: input.id as string | undefined,
     connection_id: input.connection_id,
     media_id: input.media_id,
@@ -85,7 +94,7 @@ export async function listRules(pool: Pool, user: User) {
   const workspaceId = await workspaceFor(pool, user);
   return (
     await pool.query(
-      `SELECT id,connection_id,media_id,keyword,keywords,excluded_keywords,match_mode,private_reply_text,enabled,follow_gate_enabled,follower_reply_text,non_follower_reply_text,confirmation_keyword FROM instagram_comment_rules WHERE workspace_id=$1 ORDER BY id`,
+      `SELECT id,connection_id,media_id,keyword,keywords,excluded_keywords,match_mode,private_reply_text,enabled,follow_gate_enabled,follower_reply_text,non_follower_reply_text,confirmation_keyword,confirmation_button_title FROM instagram_comment_rules WHERE workspace_id=$1 ORDER BY id`,
       [workspaceId],
     )
   ).rows;
@@ -96,11 +105,11 @@ export async function saveRule(pool: Pool, user: User, input: unknown) {
   const result = await pool.query(
     rule.id
       ? `UPDATE instagram_comment_rules SET keyword=$5,keywords=$6,excluded_keywords=$7,match_mode=$8,
- private_reply_text=$9,enabled=$10,follow_gate_enabled=$11,follower_reply_text=$12,non_follower_reply_text=$13,confirmation_keyword=$14
+ private_reply_text=$9,enabled=$10,follow_gate_enabled=$11,follower_reply_text=$12,non_follower_reply_text=$13,confirmation_keyword=$14,confirmation_button_title=$15
  WHERE id=$1 AND workspace_id=$2 AND connection_id=$3 AND media_id=$4 RETURNING id`
-      : `INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,keywords,excluded_keywords,match_mode,private_reply_text,enabled,follow_gate_enabled,follower_reply_text,non_follower_reply_text,confirmation_keyword)
- SELECT $1,$2,c.id,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14 FROM instagram_connections c WHERE c.id=$3 AND c.workspace_id=$2
- ON CONFLICT(connection_id,media_id) DO UPDATE SET keyword=EXCLUDED.keyword,keywords=EXCLUDED.keywords,excluded_keywords=EXCLUDED.excluded_keywords,match_mode=EXCLUDED.match_mode,private_reply_text=EXCLUDED.private_reply_text,enabled=EXCLUDED.enabled,follow_gate_enabled=EXCLUDED.follow_gate_enabled,follower_reply_text=EXCLUDED.follower_reply_text,non_follower_reply_text=EXCLUDED.non_follower_reply_text,confirmation_keyword=EXCLUDED.confirmation_keyword WHERE instagram_comment_rules.workspace_id=$2 RETURNING id`,
+      : `INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,keywords,excluded_keywords,match_mode,private_reply_text,enabled,follow_gate_enabled,follower_reply_text,non_follower_reply_text,confirmation_keyword,confirmation_button_title)
+ SELECT $1,$2,c.id,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15 FROM instagram_connections c WHERE c.id=$3 AND c.workspace_id=$2
+ ON CONFLICT(connection_id,media_id) DO UPDATE SET keyword=EXCLUDED.keyword,keywords=EXCLUDED.keywords,excluded_keywords=EXCLUDED.excluded_keywords,match_mode=EXCLUDED.match_mode,private_reply_text=EXCLUDED.private_reply_text,enabled=EXCLUDED.enabled,follow_gate_enabled=EXCLUDED.follow_gate_enabled,follower_reply_text=EXCLUDED.follower_reply_text,non_follower_reply_text=EXCLUDED.non_follower_reply_text,confirmation_keyword=EXCLUDED.confirmation_keyword,confirmation_button_title=EXCLUDED.confirmation_button_title WHERE instagram_comment_rules.workspace_id=$2 RETURNING id`,
     [
       rule.id ?? randomUUID(),
       workspaceId,
@@ -116,6 +125,7 @@ export async function saveRule(pool: Pool, user: User, input: unknown) {
       rule.follower_reply_text,
       rule.non_follower_reply_text,
       rule.confirmation_keyword,
+      rule.confirmation_button_title,
     ],
   );
   if (!result.rows[0]) throw new ApiError(404, "connection_not_found");

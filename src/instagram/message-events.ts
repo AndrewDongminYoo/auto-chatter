@@ -5,6 +5,7 @@ export interface InstagramMessage {
   messageId: string;
   text: string;
   timestamp: Date;
+  confirmationReplyId?: string;
 }
 export function parseMessageEvents(body: Uint8Array): InstagramMessage[] {
   const payload: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
@@ -14,9 +15,15 @@ export function parseMessageEvents(body: Uint8Array): InstagramMessage[] {
   for (const entry of payload.entry) {
     if (!isRecord(entry) || typeof entry.id !== "string" || !Array.isArray(entry.messaging)) continue;
     for (const event of entry.messaging) {
-      if (!isRecord(event) || !isRecord(event.sender) || !isRecord(event.recipient) || !isRecord(event.message))
-        continue;
-      const message = event.message;
+      if (!isRecord(event) || event.is_self === true || !isRecord(event.sender) || !isRecord(event.recipient)) continue;
+      const postback = isRecord(event.postback) ? event.postback : null;
+      const binding =
+        postback && typeof postback.payload === "string"
+          ? /^auto-chatter:confirm:([1-9][0-9]{0,18})$/.exec(postback.payload)
+          : null;
+      if (postback && !binding) continue;
+      const message = postback ? { mid: postback.mid, text: postback.title } : event.message;
+      if (!isRecord(message)) continue;
       if (
         typeof event.sender.id !== "string" ||
         !/^\d+$/.test(event.sender.id) ||
@@ -42,6 +49,7 @@ export function parseMessageEvents(body: Uint8Array): InstagramMessage[] {
         messageId: message.mid,
         text: message.text,
         timestamp,
+        ...(binding ? { confirmationReplyId: binding[1]! } : {}),
       });
     }
   }

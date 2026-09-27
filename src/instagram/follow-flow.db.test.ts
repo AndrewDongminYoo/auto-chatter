@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
+import { ingestComments } from "./store.ts";
 import { ingestMessages, processNextFollowReply } from "./follow-flow.ts";
 import { createNodeFollowTransport, assertNodePrivateReplyAllowed } from "./node-delivery.ts";
 import { ProviderRateLimitedError, runPrivateReplyWorker, processNextPrivateReply } from "./reply-worker.ts";
@@ -15,6 +16,7 @@ const workspace = "11111111-1111-4111-8111-111111111111",
 let replyId: string;
 before(async () => {
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/007_confirmation_button.sql", import.meta.url), "utf8"));
   await pool.query(
     await readFile(new URL("../../db/migrations/006_follow_conversations.sql", import.meta.url), "utf8"),
   );
@@ -398,3 +400,66 @@ for (const condition of ["enabled", "disabled", "oauth", "foreign_account", "los
     else await assert.rejects(guard, { failureCode: "delivery_not_permitted" });
   });
 }
+
+test("bound button taps ignore visible text, reject foreign actors and deduplicate receipts", async () => {
+  await pool.query(
+    "UPDATE instagram_follow_conversations SET confirmation_button_title='자료 받기' WHERE reply_id=$1",
+    [replyId],
+  );
+  const tap = { ...incoming("tap", "자료 받기"), confirmationReplyId: replyId };
+  await ingestMessages(pool, [
+    { ...tap, senderId: "999" },
+    { ...tap, accountId: "999" },
+    { ...tap, confirmationReplyId: "999999" },
+  ]);
+  assert.equal((await state()).status, "waiting");
+  await ingestMessages(pool, [tap]);
+  assert.equal((await state()).status, "pending");
+  let context: unknown;
+  await processNextFollowReply(pool, connection, {
+    followStatus: async () => false,
+    send: async (_id, _text, sentContext) => {
+      context = sentContext;
+      return { messageId: "nonfollower-button" };
+    },
+  });
+  assert.equal((context as { confirmationButtonTitle: string }).confirmationButtonTitle, "자료 받기");
+  await ingestMessages(pool, [tap]);
+  assert.equal((await state()).status, "waiting");
+  await pool.query("UPDATE instagram_follow_conversations SET confirmation_button_title='' WHERE reply_id=$1", [
+    replyId,
+  ]);
+  await ingestMessages(pool, [{ ...tap, messageId: "new-tap", timestamp: new Date(Date.now() + 1000) }]);
+  assert.equal((await state()).status, "waiting");
+});
+
+test("comment ingestion snapshots button settings through first delivery and later rule edits", async () => {
+  await pool.query(
+    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_button_title='자료 받기',follower_reply_text='링크',non_follower_reply_text='팔로우 안내' WHERE id=$1",
+    [rule],
+  );
+  await ingestComments(pool, [{ accountId: "123", commentId: "333", postId: "111", senderId: "789", text: "link" }]);
+  const queued = (await pool.query("SELECT * FROM private_reply_outbox WHERE comment_id='333'")).rows[0];
+  assert.equal(queued.follow_config.confirmation_button_title, "자료 받기");
+  await pool.query("UPDATE instagram_comment_rules SET confirmation_button_title='새 이름' WHERE id=$1", [rule]);
+  let deliveredTitle: string | undefined;
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: async () => ({ commentCreatedAt: new Date(), authorizationVerified: true, mediaOwned: true }),
+      send: async (request) => {
+        deliveredTitle = request.confirmationButtonTitle;
+        return { messageId: "first-button", recipientId: "789" };
+      },
+    },
+    () => new Date(),
+    connection,
+  );
+  assert.equal(deliveredTitle, "자료 받기");
+  const flow = (
+    await pool.query("SELECT confirmation_button_title FROM instagram_follow_conversations WHERE reply_id=$1", [
+      queued.id,
+    ])
+  ).rows[0];
+  assert.equal(flow.confirmation_button_title, "자료 받기");
+});
