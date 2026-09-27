@@ -1016,11 +1016,12 @@ byId("contacts-filter").addEventListener("submit", (event) => {
   event.preventDefault();
   if (canReloadContacts()) void loadContacts();
 });
-byId("contacts-reload").addEventListener("click", () => {
-  if (canReloadContacts()) {
+byId("contacts-reload").addEventListener("click", async () => {
+  if (contactsSaving || segmentBusy || fieldBusy) return;
+  const generation = fieldsGeneration;
+  if ((await loadContactFields()) && generation === fieldsGeneration && canReloadContacts()) {
     void loadContacts();
     void loadContactSegments();
-    void loadContactFields();
   }
 });
 byId("contacts-more").addEventListener("click", () => {
@@ -1216,12 +1217,12 @@ function fieldControls() {
   for (const button of byId("field-definitions").querySelectorAll("button")) button.disabled = fieldBusy;
 }
 async function loadContactFields(force = false) {
-  if (fieldBusy && !force) return;
+  if (fieldBusy && !force) return false;
   const generation = fieldsGeneration;
   const request = ++fieldsRequest;
   try {
     const result = await api("/api/contact-fields");
-    if (generation !== fieldsGeneration || request !== fieldsRequest) return;
+    if (generation !== fieldsGeneration || request !== fieldsRequest) return false;
     contactFields = result.fields;
     const select = byId("contacts-filter").elements.field_id;
     const previous = select.value;
@@ -1246,9 +1247,11 @@ async function loadContactFields(force = false) {
     byId("fields-status").textContent = contactFields.length
       ? `활성 필드 ${contactFields.length}개 / 50개`
       : "아직 필드가 없습니다. 연락처에 기록할 항목을 만들어 보세요.";
+    return true;
   } catch (error) {
     if (generation === fieldsGeneration && request === fieldsRequest)
       byId("fields-status").textContent = `${error.message} 새로고침으로 다시 시도해 주세요.`;
+    return false;
   }
 }
 byId("field-create").addEventListener("input", () => {
