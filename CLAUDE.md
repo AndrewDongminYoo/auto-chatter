@@ -218,3 +218,14 @@ Paused confirmations retain receipt metadata, including paused non-waiting flows
 Resume retains queued work and original time windows; it never resets unknown, failed or blocked outcomes.
 Already admitted provider requests cannot be recalled.
 No inbox body retention, manual sends or operator assignment is implemented by this control.
+
+## Received Instagram inbox
+
+Apply migration 012 through the administrator transaction before deploying this reader.
+Each connection defaults to `inbox_enabled=false`; its activation timestamp gates new text DM and confirmation postback storage.
+Active receiving and explicit inbox opt-in are required; disabling keeps stored history under the approved manual deletion policy.
+`instagram_inbox_messages` deduplicates by connection and provider message ID in the existing confirmation transaction.
+`GET /api/inbox` pages account/DM-recipient keys; the owned connection inbox reader pages stored arrivals by descending ID.
+DM recipient IDs remain separate from comment participant IDs.
+Echoes, attachments, edits, deletions, historical import, outbound history, manual replies and shared team roles remain unimplemented.
+No production migration or live inbox verification has been performed.
