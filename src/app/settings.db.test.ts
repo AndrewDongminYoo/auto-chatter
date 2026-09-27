@@ -11,7 +11,13 @@ import {
   updateConnection,
 } from "./settings.ts";
 import { ApiError } from "./auth.ts";
-import { listContacts, saveContactTags } from "./contacts.ts";
+import {
+  archiveContactSegment,
+  createContactSegment,
+  listContactSegments,
+  listContacts,
+  saveContactTags,
+} from "./contacts.ts";
 import { connectionMedia } from "./instagram-media.ts";
 import { sealSecret } from "./secrets.ts";
 
@@ -397,4 +403,110 @@ test("existing string sender identities can be tagged and used at a page boundar
   assert.equal(next.contacts.length, 1);
   assert.equal(next.contacts[0].sender_id, "sender-051");
   await saveContactTags(pool, a, connectionId, "sender-050", { tags: ["lead"] });
+});
+
+test("saved segments isolate workspace and evaluate current tags", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  await pool.query(
+    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'segment-comment','media','sender','private')",
+    [workspace, connectionId],
+  );
+  const segment = await createContactSegment(pool, a, { name: " Leads ", connection_id: connectionId, tag: " Lead " });
+  assert.deepEqual(segment, { id: segment.id, name: "Leads", connection_id: connectionId, tag: "lead" });
+  assert.equal((await listContactSegments(pool, a)).length, 1);
+  assert.deepEqual(await listContactSegments(pool, b), []);
+  const query = new URLSearchParams({ segment_id: segment.id });
+  assert.equal((await listContacts(pool, a, query)).contacts.length, 0);
+  await saveContactTags(pool, a, connectionId, "sender", { tags: ["lead"] });
+  assert.equal((await listContacts(pool, a, query)).contacts[0]?.sender_id, "sender");
+  await saveContactTags(pool, a, connectionId, "sender", { tags: [] });
+  assert.equal((await listContacts(pool, a, query)).contacts.length, 0);
+  for (const action of [
+    () => createContactSegment(pool, b, { name: "Foreign", connection_id: connectionId }),
+    () => listContacts(pool, b, query),
+    () => archiveContactSegment(pool, b, segment.id),
+  ])
+    await assert.rejects(action, (e: unknown) => e instanceof ApiError && e.status === 404);
+  await archiveContactSegment(pool, a, segment.id);
+  await archiveContactSegment(pool, a, segment.id);
+  assert.deepEqual(await listContactSegments(pool, a), []);
+  await assert.rejects(listContacts(pool, a, query), (e: unknown) => e instanceof ApiError && e.status === 404);
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_comment_events")).rows[0].count, "1");
+  assert.ok((await createContactSegment(pool, a, { name: "Leads" })).id);
+});
+
+test("segments reject invalid names, duplicate normalized names and mixed filters", async () => {
+  for (const input of [
+    { name: " " },
+    { name: "x".repeat(61) },
+    { name: "bad\nname" },
+    { name: "Lead", extra: true },
+    { name: "Lead", connection_id: "bad" },
+    { name: "Lead", tag: "x".repeat(41) },
+  ]) {
+    await assert.rejects(
+      createContactSegment(pool, a, input),
+      (e: unknown) => e instanceof ApiError && e.status === 400,
+    );
+  }
+  const segment = await createContactSegment(pool, a, { name: " Cafe\u0301 " });
+  await assert.rejects(
+    createContactSegment(pool, a, { name: "Café" }),
+    (e: unknown) => e instanceof ApiError && e.status === 409,
+  );
+  for (const query of [
+    `segment_id=${segment.id}&tag=lead`,
+    `segment_id=${segment.id}&connection_id=${connectionId}`,
+    "segment_id=bad",
+    `segment_id=${segment.id}&segment_id=${segment.id}`,
+  ])
+    await assert.rejects(
+      listContacts(pool, a, new URLSearchParams(query)),
+      (e: unknown) => e instanceof ApiError && e.status === 400,
+    );
+});
+
+test("concurrent segment creations cannot exceed fifty active records", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  await pool.query(
+    "INSERT INTO instagram_contact_segments(workspace_id,name) SELECT $1,'segment-'||n FROM generate_series(1,49) n",
+    [workspace],
+  );
+  const results = await Promise.allSettled([
+    createContactSegment(pool, a, { name: "one" }),
+    createContactSegment(pool, a, { name: "two" }),
+  ]);
+  assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
+  const rejected = results.find((r) => r.status === "rejected");
+  assert.ok(
+    rejected?.status === "rejected" &&
+      rejected.reason instanceof ApiError &&
+      rejected.reason.message === "segment_limit_reached",
+  );
+  assert.equal((await listContactSegments(pool, a)).length, 50);
+  const [first] = await listContactSegments(pool, a);
+  await archiveContactSegment(pool, a, first.id);
+  assert.ok((await createContactSegment(pool, a, { name: "replacement" })).id);
+  assert.equal((await listContactSegments(pool, a)).length, 50);
+});
+
+test("segment migration upgrades and replays while retaining saved filters", async () => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DROP TABLE instagram_contact_segments");
+    const migration = await readFile(new URL("../../db/migrations/009_contact_segments.sql", import.meta.url), "utf8");
+    await client.query(migration);
+    await client.query(
+      "INSERT INTO instagram_contact_segments(workspace_id,name,tag) SELECT workspace_id,'saved','lead' FROM instagram_connections WHERE id=$1",
+      [connectionId],
+    );
+    await client.query(migration);
+    assert.deepEqual((await client.query("SELECT name,tag,archived FROM instagram_contact_segments")).rows, [
+      { name: "saved", tag: "lead", archived: false },
+    ]);
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
 });

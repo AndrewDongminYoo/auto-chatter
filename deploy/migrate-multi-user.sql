@@ -8,5 +8,6 @@ BEGIN;
 \ir ../db/migrations/006_follow_conversations.sql
 \ir ../db/migrations/007_confirmation_button.sql
 \ir ../db/migrations/008_instagram_contact_tags.sql
+\ir ../db/migrations/009_contact_segments.sql
 \ir supabase-access.sql
 COMMIT;

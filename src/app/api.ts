@@ -11,7 +11,13 @@ import {
   updateConnection,
 } from "./settings.ts";
 import { beginInstagramOAuth, finishInstagramOAuth, type InstagramOAuthEnv } from "./instagram-oauth.ts";
-import { listContacts, saveContactTags } from "./contacts.ts";
+import {
+  archiveContactSegment,
+  createContactSegment,
+  listContactSegments,
+  listContacts,
+  saveContactTags,
+} from "./contacts.ts";
 import { connectionMedia } from "./instagram-media.ts";
 
 export async function appApi(
@@ -45,6 +51,12 @@ export async function appApi(
         return json({ connections: await listConnections(pool, user) });
       if (url.pathname === "/api/contacts" && request.method === "GET")
         return json(await listContacts(pool, user, url.searchParams));
+      if (url.pathname === "/api/contact-segments" && request.method === "GET")
+        return json({ segments: await listContactSegments(pool, user) });
+      if (url.pathname === "/api/contact-segments" && request.method === "POST")
+        return json(await createContactSegment(pool, user, await readJson(request)), 201);
+      const segment = /^\/api\/contact-segments\/([a-f0-9-]+)$/.exec(url.pathname);
+      if (segment && request.method === "DELETE") return json(await archiveContactSegment(pool, user, segment[1]!));
       const contact = /^\/api\/connections\/([a-f0-9-]+)\/contacts\/([^/]+)$/.exec(url.pathname);
       if (contact && request.method === "PATCH") {
         let senderId: string;
