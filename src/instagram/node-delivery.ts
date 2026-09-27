@@ -19,7 +19,7 @@ export function createNodeFollowTransport(
       const permitted = await pool
         .query(
           `SELECT NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
-           AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND automation.paused) AS automation_active
+           AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused)) AS automation_active
          FROM instagram_follow_conversations flow
          JOIN private_reply_outbox reply ON reply.id=flow.reply_id
          JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
@@ -48,7 +48,7 @@ export async function assertNodePrivateReplyAllowed(
   const permitted = await pool
     .query(
       `SELECT NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
-       AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND automation.paused) AS automation_active
+       AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused)) AS automation_active
      FROM private_reply_outbox reply
      JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
      JOIN instagram_connections c ON c.id=reply.connection_id

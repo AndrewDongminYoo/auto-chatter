@@ -636,3 +636,96 @@ test("confirmations received while paused pending work cannot restart a waiting 
   await ingestMessages(pool, [pausedMessage]);
   assert.equal((await state()).status, "waiting");
 });
+
+async function handoffPause() {
+  await pool.query(
+    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,handoff_paused) VALUES($1,$2,'456',true)",
+    [workspace, connection],
+  );
+}
+test("handoff ignores and deduplicates confirmations without replay on resume", async () => {
+  await handoffPause();
+  const message = incoming();
+  await ingestMessages(pool, [message]);
+  assert.equal((await state()).status, "waiting");
+  await pool.query("UPDATE instagram_contact_automation SET handoff_paused=false");
+  await ingestMessages(pool, [message]);
+  assert.equal((await state()).status, "waiting");
+});
+test("handoff stops follow claim and a pause during profile lookup prevents send", async () => {
+  await ingestMessages(pool, [incoming()]);
+  await handoffPause();
+  const transport = {
+    followStatus: async () => true,
+    send: async () => {
+      throw new Error("must not send");
+    },
+  };
+  assert.equal(await processNextFollowReply(pool, connection, transport), false);
+  await pool.query("UPDATE instagram_contact_automation SET handoff_paused=false");
+  let sends = 0;
+  await processNextFollowReply(pool, connection, {
+    followStatus: async () => {
+      await pool.query("UPDATE instagram_contact_automation SET handoff_paused=true");
+      return true;
+    },
+    send: async () => {
+      sends++;
+      return { messageId: "sent" };
+    },
+  });
+  assert.equal(sends, 0);
+  assert.equal((await state()).failure_code, "contact_paused");
+});
+test("handoff is checked by Node private final authorization", async () => {
+  await handoffPause();
+  const attemptId = "44444444-4444-4444-8444-444444444444";
+  await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL");
+  await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=$1,attempt_started_at=now()", [
+    attemptId,
+  ]);
+  await assert.rejects(
+    assertNodePrivateReplyAllowed(
+      pool,
+      { connectionId: connection, accountId: "123" },
+      {
+        id: replyId,
+        workspaceId: workspace,
+        connectionId: connection,
+        accountId: "123",
+        commentId: "comment",
+        mediaId: "media",
+        senderId: "456",
+        text: "hello",
+        attemptId,
+      },
+    ),
+    { disposition: "retry", failureCode: "contact_paused" },
+  );
+});
+
+test("handoff is checked by Node follow final authorization", async () => {
+  await handoffPause();
+  const attemptId = "44444444-4444-4444-8444-444444444444";
+  await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL");
+  await pool.query(
+    "UPDATE instagram_follow_conversations SET status='sending',confirmed_at=now(),attempt_id=$1,attempt_started_at=now()",
+    [attemptId],
+  );
+  let sends = 0;
+  const transport = createNodeFollowTransport(pool, {
+    accountId: "123",
+    connectionId: connection,
+    accessToken: "synthetic",
+    graphVersion: "v26.0",
+    fetchImpl: async () => {
+      sends++;
+      return Response.json({ message_id: "sent" });
+    },
+  });
+  await assert.rejects(transport.send("456", "Confirm", { replyId, attemptId }), {
+    disposition: "retry",
+    failureCode: "contact_paused",
+  });
+  assert.equal(sends, 0);
+});

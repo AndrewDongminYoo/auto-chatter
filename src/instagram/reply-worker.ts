@@ -106,7 +106,7 @@ export async function processNextPrivateReply(
          AND connection_id = $2
          AND NOT EXISTS (SELECT 1 FROM instagram_contact_automation automation
            WHERE automation.workspace_id=candidate_reply.workspace_id AND automation.connection_id=candidate_reply.connection_id
-             AND automation.sender_id=candidate_reply.sender_id AND automation.paused)
+             AND automation.sender_id=candidate_reply.sender_id AND (automation.paused OR automation.handoff_paused))
          AND NOT EXISTS (
            SELECT 1 FROM instagram_connections AS connection
            WHERE connection.id = $2 AND connection.send_paused_until > now()
@@ -205,7 +205,7 @@ export async function processNextPrivateReply(
        next_attempt_at=now()+interval '1 minute',failure_code='contact_paused'
      WHERE reply.id=$1 AND reply.status='sending' AND reply.attempt_id=$2
        AND EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
-         AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND automation.paused)`,
+         AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused))`,
     [row.id, attemptId],
   );
   if (contactDeferred.rowCount === 1) return true;
