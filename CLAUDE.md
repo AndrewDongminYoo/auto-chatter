@@ -106,7 +106,8 @@ The adapter prioritizes pending follow confirmations, and rechecks the rule, cla
 There is no atomic transaction spanning PostgreSQL and Meta: a setting change after the final guard cannot recall an in-flight request.
 `instagram_follow_conversations` snapshots the first reply configuration; a nonfollower response returns to waiting, a follower response completes, and ambiguous sends remain unknown.
 A missing recipient ID after a successful first DM records `follow_recipient_unavailable` without resending.
-Inbound DM text is compared in memory and is not persisted; receipt IDs and timestamps deduplicate confirmation events.
+Inbound DM text is compared in memory for follow confirmation; receipt IDs and timestamps deduplicate confirmation events.
+The separate opt-in inbox persists eligible new text DMs and confirmation postbacks after its activation cutoff; see the received Instagram inbox section below.
 `SEND_ENABLED` must equal `true` to send; the committed configuration keeps it `false` and pins the provisioned personal Cloudflare account and Hyperdrive ID.
 The Worker is deployed on workers.dev with both webhook secrets registered; incorrect verification tokens and unsigned requests return 403.
 Public GET/HEAD routes `/privacy`, `/data-deletion`, and `/service` serve static Korean privacy policy, manual deletion instructions, and service terms without accessing secrets or database bindings.
@@ -129,7 +130,7 @@ Wrangler and Miniflare are pinned to the tested v4 runtime pair; upgrade them to
 Never enable sends, create cloud resources, or publish as part of tests.
 See `docs/notes/2026-09-26-cloudflare-runbook.md` for the deployed baseline and `docs/notes/2026-09-26-multi-user-cutover.md` for the new migration and configuration procedure.
 The multi-user code and migrations 003–006 were deployed on 2026-09-26 with sends disabled.
-The deployed code tag is `6d71ef7`, Worker version `dfa763f7-742d-497a-8e58-6eeb737837bd`.
+The 2026-09-26 multi-user cutover recorded code tag `6d71ef7` and Worker version `dfa763f7-742d-497a-8e58-6eeb737837bd`; these identifiers do not establish the latest deployment.
 The auth client wraps injected fetch in a standalone call because workerd rejects a native fetch invoked with the client object as its receiver.
 The workerd auth regression test verifies synthetic signup success and rejected login; production rejected login returns 401 after previously returning 503.
 The operator reported signup completion; the production database confirms the operator's email-confirmed user and a completed sign-in.
@@ -147,7 +148,7 @@ The conversation finished as `sent / following` with two confirmation receipts a
 See `docs/notes/2026-09-26-live-follow-test.md` for the approved texts, evidence and shutdown procedure.
 Email confirmation-link behavior, multi-user live isolation, live unavailable-follow and duplicate-event cases, and Advanced Access remain unverified.
 Run `psql -f deploy/migrate-multi-user.sql` with an administrator connection before deploying this code.
-This runner owns the transaction for migrations 003–006 and the access script, stops on the first error, and rolls back on failure.
+This runner owns the transaction for migrations 003–012 and the access script, stops on the first error, and rolls back on failure.
 Do not apply these migration files individually without that transaction.
 Assign the existing workspace to a confirmed operator with `deploy/assign-workspace-owner.sql`; never claim legacy data automatically by email.
 Token renewal currently requires reconnecting the Instagram account before the displayed expiry.

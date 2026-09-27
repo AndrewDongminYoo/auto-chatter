@@ -1,10 +1,13 @@
 # 메시징 자동화 플랫폼 구현 계획
 
-상태: ChatbotX 채택 검증을 수행하고 Instagram 웹훅 수신·이벤트 저장·개인 답장 요청 보관·발송 정책·워커 모듈을 구현했습니다.
+상태: 최초 단계 계획이며, 이후 진행 상태는 [기능 격차 기록](../notes/2026-09-27-manychat-parity.md)을 따릅니다.
+ChatbotX 채택 검증을 수행하고 Instagram 웹훅 수신·이벤트 저장·개인 답장 요청 보관·발송 정책·워커 모듈을 구현했습니다.
 Facebook Login과 Instagram Login용 발송 어댑터와 실행 명령은 모의 Graph 응답으로 검증했습니다.
 Meta 앱의 Instagram Login 설정을 확인했고, 운영자는 Instagram API 설정에서 발급한 토큰으로 개발자 대시보드의 일반 DM 발송에 성공했다고 보고했습니다.
 운영자가 실행한 `meta:check`는 토큰의 Instagram 계정 ID와 설정값이 일치한다고 확인했습니다.
-댓글 관리 권한과 이 저장소의 댓글 비공개 답장 발송은 아직 검증하지 않았습니다.
+이후 Supabase Auth·Instagram OAuth·설정 화면을 배포하고 Cloudflare 워커의 첫 비공개 답장과 팔로우 조건 분기를 실계정에서 검증했습니다.
+연락처·태그·필터·필드·자동화 중지·수신 인박스의 구현 및 로컬 검증도 마쳤습니다.
+수동 답장과 팀 인박스는 아직 구현하지 않았으며, 최근 기능의 운영 적용·다른 실제 사용자·Advanced Access 검증은 남아 있습니다.
 검증 결과와 남은 조건은 [채택 검증 기록](../notes/2026-09-25-chatbotx-validation.md)에 있습니다.
 제품 경계는 [명세](../specs/2026-09-25-messaging-automation-platform.md), 외부 사실과 후보 비교는 [조사 보고서](../notes/2026-09-25-manychat-research.md)를 따릅니다.
 
@@ -17,7 +20,7 @@ DB outbox가 발송 상태를 관리하며 Queue는 처리 알림만 전달합�
 첫 구현은 Instagram 웹훅 검증과 댓글 이벤트 정규화·저장입니다.
 PostgreSQL outbox를 처리하는 워커 모듈을 구현했습니다.
 Facebook Login과 Instagram Login 어댑터를 실행 진입점에 연결했습니다.
-현재 앱에는 Instagram Login 경로가 설정돼 있으며, 실계정 권한과 개인 답장 호출을 확인한 뒤 운영 경로를 확정합니다.
+현재 운영 경로는 여러 사용자의 Instagram Login을 처리하는 Cloudflare Workers + Supabase이며, 실발송과 중지 절차는 [검증 기록](../notes/2026-09-26-live-follow-test.md)에 있습니다.
 Chatwoot은 인박스 요구가 특히 강할 때 비교 대상이지만, ManyChat식 마케팅 플로를 구현할 추가 비용이 큽니다.
 [후보 평가 근거](../notes/2026-09-25-manychat-research.md#유사-오픈소스-평가).
 
@@ -106,7 +109,7 @@ Chatwoot은 인박스 요구가 특히 강할 때 비교 대상이지만, ManyCh
 모델 선택은 공급자 이름이 아니라 실제 한국어·영어 FAQ 평가, 근거 누락률, 상담원 전환율, 지연, 메시지당 비용으로 결정합니다.
 규칙 기반 플로와 발송 정책이 최종 권한을 가지며, 모델은 결제·환불·무동의 마케팅 발송을 직접 실행하지 않습니다.
 
-## 현재 작업의 완료 조건
+## 최초 문서화 작업의 완료 조건
 
 1. 새 Git 저장소가 이 폴더를 루트로 사용합니다.
    검증: 저장소 루트에서 `test -d .git && test "$(cat .git/HEAD)" = "ref: refs/heads/main"`.
