@@ -26,6 +26,9 @@ function editorState(
 function canDiscard() {
   return (!dirty && !contactsDirty.size) || confirm("저장하지 않은 규칙·태그 변경 사항을 버릴까요?");
 }
+function canDiscardRule() {
+  return !dirty || confirm("저장하지 않은 규칙 변경 사항을 버릴까요?");
+}
 function focusEditor() {
   const target = editingRuleId
     ? form.elements[form.elements.match_mode.value === "all" ? "private_reply_text" : "keywords"]
@@ -363,7 +366,7 @@ async function loadWorkspace() {
     const button = node("button", "수정");
     button.className = "secondary";
     button.addEventListener("click", () => {
-      if (!canDiscard()) return;
+      if (!canDiscardRule()) return;
       dirty = false;
       editingRuleId = rule.id;
       form.elements.connection_id.disabled = true;
@@ -633,7 +636,7 @@ byId("connect").addEventListener("click", (event) =>
   }),
 );
 byId("new-rule").addEventListener("click", () => {
-  if (!canDiscard()) return;
+  if (!canDiscardRule()) return;
   dirty = false;
   editingRuleId = undefined;
   form.elements.connection_id.disabled = false;
