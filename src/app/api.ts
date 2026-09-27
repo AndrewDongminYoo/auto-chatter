@@ -1,3 +1,4 @@
+import { queueManualReply, listManualReplies, resolveManualReply } from "./manual-replies.ts";
 import { inboxHandoff, saveInboxHandoff } from "./inbox-handoff.ts";
 import type { Pool } from "pg";
 import { ApiError, AuthClient, json, readJson, requireSameOrigin, type AuthEnv } from "./auth.ts";
@@ -29,6 +30,7 @@ export async function appApi(
   env: AuthEnv & InstagramOAuthEnv & { SEND_ENABLED?: string },
   openPool: () => Pool,
   fetchImpl: typeof fetch = fetch,
+  notifyReply?: (connectionId: string) => Promise<void>,
 ): Promise<Response> {
   try {
     const url = new URL(request.url);
@@ -55,6 +57,48 @@ export async function appApi(
         return json({ connections: await listConnections(pool, user) });
       if (url.pathname === "/api/inbox" && request.method === "GET")
         return json(await listInbox(pool, user, url.searchParams));
+      const manual =
+        /^\/api\/connections\/([a-f0-9-]+)\/inbox\/(\d+)\/replies(?:\/([a-f0-9-]+)\/(retry|resolution))?$/.exec(
+          url.pathname,
+        );
+      if (manual && request.method === "GET" && !manual[3])
+        return json(await listManualReplies(pool, user, manual[1]!, manual[2]!, url.searchParams));
+      if (manual && request.method === "POST") {
+        const body = await readJson(request);
+        if (manual[4] === "resolution") {
+          const resolution = await resolveManualReply(
+            pool,
+            user,
+            manual[1]!,
+            manual[2]!,
+            manual[3]!,
+            url.searchParams,
+            body,
+          );
+          try {
+            await notifyReply?.(manual[1]!);
+          } catch {
+            console.error("Manual reply notification failed; scheduled recovery required");
+          }
+          return json(resolution);
+        }
+        const reply = await queueManualReply(
+          pool,
+          user,
+          manual[1]!,
+          manual[2]!,
+          url.searchParams,
+          body,
+          env.SEND_ENABLED === "true",
+          manual[3],
+        );
+        try {
+          await notifyReply?.(manual[1]!);
+        } catch {
+          console.error("Manual reply notification failed; scheduled recovery required");
+        }
+        return json(reply, 202);
+      }
       const handoff = /^\/api\/connections\/([a-f0-9-]+)\/inbox\/(\d+)\/handoff$/.exec(url.pathname);
       if (handoff && request.method === "GET")
         return json(await inboxHandoff(pool, user, handoff[1]!, handoff[2]!, url.searchParams));

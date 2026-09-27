@@ -1,3 +1,8 @@
+import {
+  processNextManualReply,
+  assertManualReplyAllowed,
+  recoverStaleManualReplies,
+} from "../instagram/manual-reply-worker.ts";
 import { parseMessageEvents } from "../instagram/message-events.ts";
 import { ingestMessages, processNextFollowReply, recoverStaleFollowReplies } from "../instagram/follow-flow.ts";
 export interface Env extends AuthEnv, InstagramOAuthEnv {
@@ -37,15 +42,18 @@ async function wakeDueReplies(
   const due = await pool.query<{ id: string }>(
     `SELECT c.id FROM instagram_connections c
      WHERE ($1::uuid IS NULL OR c.id=$1) AND ($2::text[] IS NULL OR c.account_id=ANY($2))
-       AND c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>now()
        AND (c.send_paused_until IS NULL OR c.send_paused_until<=now())
+       AND (EXISTS(SELECT 1 FROM instagram_manual_replies manual WHERE manual.connection_id=c.id AND manual.status='pending' AND manual.next_attempt_at<=now()
+         AND NOT EXISTS(SELECT 1 FROM instagram_manual_replies earlier WHERE earlier.workspace_id=manual.workspace_id AND earlier.connection_id=manual.connection_id AND earlier.recipient_id=manual.recipient_id
+           AND (earlier.created_at,earlier.id)<(manual.created_at,manual.id) AND (earlier.status IN ('pending','sending') OR (earlier.status='unknown' AND earlier.resolved_at IS NULL))))
+       OR (c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>now()
        AND (EXISTS(SELECT 1 FROM private_reply_outbox reply WHERE reply.connection_id=c.id AND reply.status='pending' AND reply.next_attempt_at<=now()
          AND NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
            AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused)))
        OR EXISTS(SELECT 1 FROM instagram_follow_conversations flow JOIN private_reply_outbox reply ON reply.id=flow.reply_id
          WHERE flow.connection_id=c.id AND flow.status='pending' AND flow.next_attempt_at<=now()
          AND NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
-           AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused))))
+           AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused))))))
      ORDER BY c.id LIMIT 100`,
     [
       scope && "connectionId" in scope ? scope.connectionId : null,
@@ -81,7 +89,16 @@ async function receive(request: Request, env: Env): Promise<Response> {
   const page = publicPage(request);
   if (page) return page;
   const url = new URL(request.url);
-  if (url.pathname.startsWith("/api/")) return appApi(request, env, () => openPool(env));
+  if (url.pathname.startsWith("/api/"))
+    return appApi(
+      request,
+      env,
+      () => openPool(env),
+      fetch,
+      async (connectionId) => {
+        if (env.SEND_ENABLED === "true") await env.REPLY_QUEUE.send({ connectionId });
+      },
+    );
   if (url.pathname !== "/webhooks/instagram") return new Response(null, { status: 404 });
   if (!env.INSTAGRAM_APP_SECRET || !env.INSTAGRAM_VERIFY_TOKEN) throw new Error("Webhook secrets missing");
   if (request.method === "GET") {
@@ -139,11 +156,16 @@ export default {
         const pool = openPool(env);
         try {
           const result = await pool.query(
-            "SELECT id,workspace_id,account_id,access_token_encrypted FROM instagram_connections WHERE id=$1 AND send_enabled AND token_expires_at>now() AND access_token_encrypted IS NOT NULL",
+            "SELECT id,workspace_id,account_id,access_token_encrypted,send_enabled,token_expires_at>now() AS token_valid FROM instagram_connections WHERE id=$1",
             [connectionId],
           );
           const connection = result.rows[0];
-          if (connection) {
+          if (
+            connection &&
+            (!connection.send_enabled || !connection.token_valid || !connection.access_token_encrypted)
+          ) {
+            await processNextManualReply(pool, connectionId, null, connection.access_token_encrypted);
+          } else if (connection) {
             if (!env.TOKEN_ENCRYPTION_KEY) throw new Error("Token encryption not configured");
             const accessToken = openSecret(
               connection.access_token_encrypted,
@@ -188,8 +210,29 @@ export default {
               connectionId,
               fetchImpl: graphFetch,
             };
+            // Manual replies own active handoff conversations and share the normal DM window.
+            const manualProcessed = await processNextManualReply(
+              pool,
+              connectionId,
+              new InstagramFollowTransport({
+                ...config,
+                fetchImpl: rawGraphFetch,
+                beforeSend: async (context) => {
+                  if (env.SEND_ENABLED !== "true") throw new PreSendVerificationError("block", "global_send_disabled");
+                  await assertManualReplyAllowed(
+                    pool,
+                    context.replyId,
+                    context.attemptId,
+                    connectionId,
+                    connection.access_token_encrypted,
+                  );
+                },
+              }),
+              connection.access_token_encrypted,
+            );
             // Follow confirmations have a shorter delivery window than comment private replies.
             if (
+              !manualProcessed &&
               !(await processNextFollowReply(
                 pool,
                 connectionId,
@@ -241,6 +284,7 @@ export default {
         await pool.query(
           "UPDATE private_reply_outbox SET status='unknown',failure_code='worker_interrupted' WHERE status='sending' AND attempt_started_at<now()-interval '10 minutes'",
         );
+        await recoverStaleManualReplies(pool);
         await recoverStaleFollowReplies(pool, new Date(Date.now() - 10 * 60_000));
         await wakeDueReplies(pool, env);
       } finally {

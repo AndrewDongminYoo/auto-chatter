@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseMessageEvents } from "./message-events.ts";
 import { InstagramFollowTransport } from "./follow-transport.ts";
-import { ProviderRateLimitedError, ProviderRejectedError } from "./reply-worker.ts";
+import { PreSendVerificationError, ProviderRateLimitedError, ProviderRejectedError } from "./reply-worker.ts";
 const body = (messaging: unknown[]) =>
   Buffer.from(JSON.stringify({ object: "instagram", entry: [{ id: "123", messaging }] }));
 const message = {
@@ -72,10 +72,16 @@ test("the final delivery guard runs with the claim and prevents a provider POST"
     },
     beforeSend: async (context) => {
       assert.deepEqual(context, { replyId: "1", attemptId: "attempt-1" });
-      throw new Error("delivery disabled before POST");
+      throw new PreSendVerificationError("block", "delivery_disabled");
     },
   });
-  await assert.rejects(transport.send("456", "hello", { replyId: "1", attemptId: "attempt-1" }), /delivery disabled/);
+  await assert.rejects(
+    transport.send("456", "hello", { replyId: "1", attemptId: "attempt-1" }),
+    (error) =>
+      error instanceof PreSendVerificationError &&
+      error.disposition === "block" &&
+      error.failureCode === "delivery_disabled",
+  );
   assert.equal(requests, 0);
 });
 
@@ -130,4 +136,45 @@ test("normal nonfollower DM includes the bound confirmation button and rejects l
   payload = undefined;
   await assert.rejects(transport.send("456", "x".repeat(641), context));
   assert.equal(payload, undefined);
+});
+
+test("manual account verification checks only the stored Instagram user_id", async () => {
+  for (const user_id of ["123", "999", undefined]) {
+    const transport = new InstagramFollowTransport({
+      accountId: "123",
+      accessToken: "synthetic",
+      graphVersion: "v26.0",
+      fetchImpl: async (input, init) => {
+        assert.equal(String(input), "https://graph.instagram.com/v26.0/me?fields=user_id");
+        assert.equal(init?.method, "GET");
+        return Response.json({ user_id });
+      },
+    });
+    assert.equal(await transport.verifyAccount(), user_id === "123");
+  }
+});
+
+test("DM pre-POST guard exceptions remain definite unsent verification failures", async () => {
+  const { PreSendVerificationError } = await import("./reply-worker.ts");
+  let posts = 0;
+  const transport = new InstagramFollowTransport({
+    accountId: "123",
+    accessToken: "synthetic",
+    graphVersion: "v26.0",
+    fetchImpl: async () => {
+      posts++;
+      return Response.json({ message_id: "forbidden" });
+    },
+    beforeSend: async () => {
+      throw new Error("database read unavailable");
+    },
+  });
+  await assert.rejects(
+    transport.send("456", "Manual reply", { replyId: "manual", attemptId: "attempt" }),
+    (error) =>
+      error instanceof PreSendVerificationError &&
+      error.disposition === "retry" &&
+      error.failureCode === "verification_unavailable",
+  );
+  assert.equal(posts, 0);
 });
