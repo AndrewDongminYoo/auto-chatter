@@ -323,6 +323,8 @@ test("signed comment and confirmation webhooks complete the conditional DM flow 
   await worker.fetch(request("comment-1", "456"), env);
   assert.equal(await consume(), "ack");
   assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "waiting");
+  await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 second'");
+  const firstConfirmationAt = Date.now() - 200;
   const confirmation = (id: string) => {
     const body = JSON.stringify({
       object: "instagram",
@@ -333,7 +335,7 @@ test("signed comment and confirmation webhooks complete the conditional DM flow 
             {
               sender: { id: "456" },
               recipient: { id: "123" },
-              timestamp: Date.now(),
+              timestamp: firstConfirmationAt + (id === "confirm-1" ? 0 : 1),
               message: { mid: id, text: "확인" },
             },
           ],
@@ -349,6 +351,7 @@ test("signed comment and confirmation webhooks complete the conditional DM flow 
   assert.equal((await worker.fetch(confirmation("confirm-1"), env)).status, 200);
   await consume();
   assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "waiting");
+  assert.deepEqual(delivered, ["reply", "Follow and confirm again"]);
   follows = true;
   await worker.fetch(confirmation("confirm-2"), env);
   await consume();
