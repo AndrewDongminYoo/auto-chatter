@@ -137,7 +137,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
   });
   try {
     await pool.query(
-      "DROP TABLE IF EXISTS instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
@@ -249,8 +249,45 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
       [{ status: "sent", provider_message_id: "runtime-message" }],
       JSON.stringify(graphPaths),
     );
+    await pool.query(
+      "UPDATE instagram_connections SET inbox_enabled=true; UPDATE private_reply_outbox SET recipient_id='456'",
+    );
+    const { saveInboxHandoff } = await import("../app/inbox-handoff.ts");
+    const { queueManualReply } = await import("../app/manual-replies.ts");
+    const operator = { id: "66666666-6666-4666-8666-666666666666", email: "operator@example.test" };
+    await pool.query("INSERT INTO workspace_members VALUES($1,'11111111-1111-4111-8111-111111111111')", [operator.id]);
+    const connection = "22222222-2222-4222-8222-222222222222";
+    await saveInboxHandoff(pool, operator, connection, "456", new URLSearchParams(), {
+      active: true,
+      expected_version: 0,
+    });
+    await queueManualReply(
+      pool,
+      operator,
+      connection,
+      "456",
+      new URLSearchParams(),
+      {
+        request_key: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        text: "Manual workerd reply",
+        expected_handoff_version: 1,
+      },
+      true,
+    );
+    await consumer.queue("auto-chatter-replies", [
+      { id: "manual", timestamp: new Date(), body: { connectionId: connection }, attempts: 1 },
+    ]);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if ((await pool.query("SELECT status FROM instagram_manual_replies")).rows[0]?.status === "sent") break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.deepEqual((await pool.query("SELECT status,provider_message_id FROM instagram_manual_replies")).rows, [
+      { status: "sent", provider_message_id: "runtime-message" },
+    ]);
+    assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_reply_events")).rows[0].count, "3");
+    assert.equal(sends, 2);
     await consumer.scheduled({ scheduledTime: Date.now(), cron: "* * * * *" });
-    assert.equal(sends, 1);
+    assert.equal(sends, 2);
   } finally {
     await runtime.dispose();
     await pool.end();
@@ -277,7 +314,11 @@ test("workerd contact API uses restricted server privileges and verified workspa
     compatibilityDate: config.compatibility_date,
     compatibilityFlags: config.compatibility_flags,
     hyperdrives: { HYPERDRIVE: serverUrl.href },
-    bindings: { SUPABASE_URL: "https://auth-test.supabase.co", SUPABASE_PUBLISHABLE_KEY: "synthetic-public-key" },
+    bindings: {
+      SUPABASE_URL: "https://auth-test.supabase.co",
+      SUPABASE_PUBLISHABLE_KEY: "synthetic-public-key",
+      SEND_ENABLED: "true",
+    },
     outboundService: async (request) => {
       assert.equal(new URL(request.url).origin, "https://auth-test.supabase.co");
       return Response.json({
@@ -378,6 +419,63 @@ test("workerd contact API uses restricted server privileges and verified workspa
         .status,
       404,
     );
+    await pool.query(
+      "UPDATE instagram_connections SET send_enabled=true,access_token_encrypted='synthetic-encrypted',token_expires_at=now()+interval '1 day' WHERE id=$1",
+      [connection],
+    );
+    const manualPath = `${inboxPath}/456/replies`;
+    const manualBody = {
+      request_key: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      expected_handoff_version: 1,
+      text: "Manual runtime reply",
+    };
+    const queued = await runtime.dispatchFetch(manualPath, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(manualBody),
+    });
+    assert.equal(queued.status, 202);
+    const manual = await queued.json();
+    assert.equal(manual.status, "pending");
+    assert.equal(
+      (
+        await runtime.dispatchFetch(manualPath, {
+          method: "POST",
+          headers: { ...headers, cookie: "__Host-ac-access=foreign" },
+          body: JSON.stringify(manualBody),
+        })
+      ).status,
+      404,
+    );
+    assert.equal(
+      (
+        await runtime.dispatchFetch(manualPath, {
+          method: "POST",
+          headers: { ...headers, origin: "https://evil.test" },
+          body: JSON.stringify(manualBody),
+        })
+      ).status,
+      403,
+    );
+    const outbound = await (await runtime.dispatchFetch(manualPath, { headers })).json();
+    assert.equal(outbound.replies[0].text, "Manual runtime reply");
+    assert.equal(outbound.replies[0].events[0].kind, "queued");
+    assert.equal(JSON.stringify(outbound).includes("synthetic-encrypted"), false);
+    await pool.query(
+      "UPDATE instagram_manual_replies SET status='unknown',failure_code='worker_interrupted' WHERE id=$1",
+      [manual.id],
+    );
+    const resolution = await runtime.dispatchFetch(`${manualPath}/${manual.id}/resolution`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        request_key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        decision: "no_retry",
+        reason: "Reviewed without retry",
+      }),
+    });
+    assert.equal(resolution.status, 200);
+    assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_reply_events")).rows[0].count, "2");
     const endHandoff = await runtime.dispatchFetch(handoffPath, {
       method: "PUT",
       headers,

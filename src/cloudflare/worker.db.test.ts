@@ -70,7 +70,7 @@ async function rows() {
 
 before(async () => {
   await pool.query(
-    "DROP TABLE IF EXISTS instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+    "DROP TABLE IF EXISTS instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
   );
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
 });
@@ -636,3 +636,131 @@ test("Cloudflare handoff committed after follow permissions prevents final POST"
     "contact_paused",
   );
 });
+
+async function manualFixture() {
+  const user = { id: "44444444-4444-4444-8444-444444444444", email: "operator@example.test" };
+  await pool.query(
+    "INSERT INTO workspace_members(user_id,workspace_id) VALUES($1,'11111111-1111-4111-8111-111111111111')",
+    [user.id],
+  );
+  assert.equal((await worker.fetch(request("manual-comment", "888"), env)).status, 200);
+  await pool.query(
+    "UPDATE private_reply_outbox SET status='sent',recipient_id='456',provider_message_id='bridge',sent_at=now()-interval '1 second'; UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now()-interval '1 hour'",
+  );
+  await ingestMessages(pool, [
+    {
+      accountId: "123",
+      senderId: "456",
+      messageId: "manual-inbound",
+      text: "Please help",
+      timestamp: new Date(Date.now() - 500),
+    },
+  ]);
+  const { saveInboxHandoff } = await import("../app/inbox-handoff.ts");
+  await saveInboxHandoff(pool, user, connectionId, "456", new URLSearchParams(), { active: true, expected_version: 0 });
+  const { queueManualReply } = await import("../app/manual-replies.ts");
+  const reply = await queueManualReply(
+    pool,
+    user,
+    connectionId,
+    "456",
+    new URLSearchParams(),
+    { request_key: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", text: "Manual response", expected_handoff_version: 1 },
+    true,
+  );
+  return { user, reply };
+}
+
+test("manual queued reply wakes on cron and duplicate queue messages send once", async () => {
+  await manualFixture();
+  published = [];
+  await worker.scheduled(null, env);
+  assert.deepEqual(published, [{ connectionId }]);
+  assert.equal(await consume(), "ack");
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 1);
+  assert.deepEqual((await pool.query("SELECT status,provider_message_id FROM instagram_manual_replies")).rows, [
+    { status: "sent", provider_message_id: "message-1" },
+  ]);
+});
+
+test("manual POST guard rejects token rotation handoff resume expiry and receive stop after verification", async () => {
+  for (const change of [
+    "access_token_encrypted='rotated'",
+    "active=false",
+    "inbox_enabled=false",
+    "token_expires_at=now()-interval '1 second'",
+    "handoff",
+  ]) {
+    await pool.query("TRUNCATE workspaces CASCADE");
+    await pool.query(
+      "INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111'); INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,token_expires_at,access_token_encrypted) VALUES('22222222-2222-4222-8222-222222222222','11111111-1111-4111-8111-111111111111','123',true,true,now()+interval '1 day','unused'); INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES('33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','media-1','hello','reply',true)",
+    );
+    await pool.query("UPDATE instagram_connections SET access_token_encrypted=$1", [
+      sealSecret("synthetic", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"),
+    ]);
+    await manualFixture();
+    let posts = 0;
+    mock.method(globalThis, "fetch", async (_input: URL | RequestInfo, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        posts++;
+        return Response.json({ message_id: "forbidden" });
+      }
+      await pool.query(
+        change === "handoff"
+          ? "UPDATE instagram_inbox_handoffs SET active=false"
+          : `UPDATE instagram_connections SET ${change}`,
+      );
+      return Response.json({ user_id: "123" });
+    });
+    assert.equal(await consume(), "ack");
+    assert.equal(posts, 0);
+    assert.equal((await pool.query("SELECT status FROM instagram_manual_replies")).rows[0].status, "failed");
+  }
+});
+
+test("manual Meta throttle refusal is audited failed without retry and shares cooldown", async () => {
+  await manualFixture();
+  mock.method(globalThis, "fetch", async (_input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      sends++;
+      return Response.json({ error: { code: 4 } }, { status: 400 });
+    }
+    return Response.json({ user_id: "123" });
+  });
+  assert.equal(await consume(), "ack");
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 1);
+  assert.deepEqual((await pool.query("SELECT status,safe_to_retry,failure_code FROM instagram_manual_replies")).rows, [
+    { status: "failed", safe_to_retry: true, failure_code: "meta_error_4" },
+  ]);
+  assert.equal(
+    (await pool.query("SELECT send_paused_until>now() AS paused FROM instagram_connections")).rows[0].paused,
+    true,
+  );
+});
+
+for (const [label, change] of [
+  ["send disabled", "send_enabled=false"],
+  ["expired token", "token_expires_at=now()-interval '1 second'"],
+  ["missing token", "access_token_encrypted=NULL"],
+])
+  test(`manual cron repairs lost notification after ${label} without Graph requests`, async () => {
+    await manualFixture();
+    published = [];
+    await pool.query(`UPDATE instagram_connections SET ${change}`);
+    let graphRequests = 0;
+    mock.method(globalThis, "fetch", async () => {
+      graphRequests++;
+      throw new Error("must not reach Graph");
+    });
+    await worker.scheduled(null, env);
+    assert.deepEqual(published, [{ connectionId }]);
+    assert.equal(await consume(), "ack");
+    assert.equal(graphRequests, 0);
+    assert.equal((await pool.query("SELECT status FROM instagram_manual_replies")).rows[0].status, "failed");
+    assert.equal(
+      (await pool.query("SELECT count(*) FROM instagram_manual_reply_events WHERE kind='failed'")).rows[0].count,
+      "1",
+    );
+  });
