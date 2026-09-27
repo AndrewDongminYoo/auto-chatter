@@ -182,10 +182,25 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
       });
     assert.equal((await post(`sha256=${"0".repeat(64)}`)).status, 403);
     assert.equal((await pool.query("SELECT count(*) FROM private_reply_outbox")).rows[0].count, "0");
+    await pool.query(
+      "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','sender-1',true)",
+    );
     const signature = `sha256=${createHmac("sha256", "runtime-secret").update(body).digest("hex")}`;
     assert.equal((await post(signature)).status, 200);
     assert.equal((await post(signature)).status, 200);
     const consumer = await runtime.getWorker();
+    await consumer.queue("auto-chatter-replies", [
+      {
+        id: "paused",
+        timestamp: new Date(),
+        body: { connectionId: "22222222-2222-4222-8222-222222222222" },
+        attempts: 1,
+      },
+    ]);
+    assert.equal(sends, 0);
+    assert.deepEqual(graphPaths, []);
+    assert.equal((await pool.query("SELECT status FROM private_reply_outbox")).rows[0].status, "pending");
+    await pool.query("UPDATE instagram_contact_automation SET paused=false");
     await consumer.queue("auto-chatter-replies", [
       {
         id: "duplicate",
@@ -277,6 +292,29 @@ test("workerd contact API uses restricted server privileges and verified workspa
     const list = await runtime.dispatchFetch("https://app.test/api/contacts", { headers });
     assert.equal(list.status, 200);
     assert.equal((await list.json()).contacts[0].sender_id, "sender-1");
+    const automationPath = `https://app.test/api/connections/${connection}/contacts/sender-1/automation`;
+    const pause = await runtime.dispatchFetch(automationPath, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ paused: true }),
+    });
+    assert.equal(pause.status, 200);
+    assert.deepEqual(await pause.json(), { automation_paused: true });
+    const pausedList = await runtime.dispatchFetch("https://app.test/api/contacts", { headers });
+    assert.equal((await pausedList.json()).contacts[0].automation_paused, true);
+    const foreignPause = await runtime.dispatchFetch(automationPath, {
+      method: "PUT",
+      headers: { ...headers, cookie: "__Host-ac-access=foreign" },
+      body: JSON.stringify({ paused: false }),
+    });
+    assert.equal(foreignPause.status, 404);
+    const resume = await runtime.dispatchFetch(automationPath, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ paused: false }),
+    });
+    assert.equal(resume.status, 200);
+    assert.deepEqual(await resume.json(), { automation_paused: false });
     const saved = await runtime.dispatchFetch(`https://app.test/api/connections/${connection}/contacts/sender-1`, {
       method: "PATCH",
       headers,
@@ -286,7 +324,11 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.deepEqual(await saved.json(), { tags: ["lead"] });
     const filtered = await runtime.dispatchFetch("https://app.test/api/contacts?tag=lead", { headers });
     assert.equal((await filtered.json()).contacts.length, 1);
-    for (const table of ["instagram_contact_fields", "instagram_contact_field_values"]) {
+    for (const table of [
+      "instagram_contact_automation",
+      "instagram_contact_fields",
+      "instagram_contact_field_values",
+    ]) {
       const protectedTable = await pool.query("SELECT relrowsecurity FROM pg_class WHERE oid=$1::regclass", [table]);
       assert.equal(protectedTable.rows[0].relrowsecurity, true);
       const privileges = await pool.query("SELECT has_table_privilege('auto_chatter_server',$1,'DELETE') AS allowed", [

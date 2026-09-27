@@ -1,3 +1,4 @@
+import { ingestMessages } from "../instagram/follow-flow.ts";
 import { sealSecret } from "../app/secrets.ts";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
@@ -457,4 +458,99 @@ test("consuming one account cannot multiply notifications for another due accoun
   published = [];
   await worker.scheduled({}, env);
   assert.deepEqual(published, [{ connectionId }, { connectionId: other }]);
+});
+
+async function pauseSender(sender = "sender-1") {
+  await pool.query(
+    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) SELECT workspace_id,id,$2,true FROM instagram_connections WHERE id=$1 ON CONFLICT(workspace_id,connection_id,sender_id) DO UPDATE SET paused=true",
+    [connectionId, sender],
+  );
+}
+test("Cloudflare cron and queue exclude paused contacts while another contact can send", async () => {
+  await worker.fetch(request(), env);
+  await pauseSender();
+  published = [];
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, []);
+  await consume();
+  assert.equal(sends, 0);
+  assert.equal((await rows())[0].status, "pending");
+  const providerFetch = globalThis.fetch;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) =>
+    new URL(String(input)).pathname.endsWith("/comment-2")
+      ? Response.json({
+          id: "comment-2",
+          from: { id: "sender-2" },
+          media: { id: "media-1" },
+          timestamp: new Date().toISOString(),
+        })
+      : providerFetch(input, init),
+  );
+  await worker.fetch(request("comment-2", "sender-2"), env);
+  await consume();
+  assert.equal(sends, 1);
+});
+
+test("Cloudflare private final POST guard sees a pause during second verification", async () => {
+  let mediaReads = 0;
+  const providerFetch = globalThis.fetch;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/media-1") && ++mediaReads === 2)
+      await pauseSender();
+    return providerFetch(input, init);
+  });
+  await worker.fetch(request(), env);
+  await consume();
+  assert.equal(mediaReads, 2);
+  assert.equal(sends, 0);
+  assert.equal((await rows())[0].status, "pending");
+  assert.equal((await rows())[0].failure_code, "contact_paused");
+  await pool.query("UPDATE instagram_contact_automation SET paused=false");
+  await pool.query("UPDATE private_reply_outbox SET next_attempt_at=now()");
+  await consume();
+  assert.equal(sends, 1);
+});
+test("Cloudflare follow final guard defers a pause after worker permissions", async () => {
+  await pool.query(
+    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final',non_follower_reply_text='Follow'",
+  );
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const path = new URL(String(input)).pathname;
+    if (init?.method === "POST") {
+      sends++;
+      return Response.json({ message_id: "sent-" + sends, recipient_id: "456" });
+    }
+    if (path.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (path.endsWith("/456")) return Response.json({ is_user_follow_business: true });
+    if (path.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
+    return Response.json({
+      id: "comment-1",
+      from: { id: "456" },
+      media: { id: "media-1" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  await worker.fetch(request("comment-1", "456"), env);
+  await consume();
+  assert.equal(sends, 1);
+  await ingestMessages(pool, [
+    { accountId: "123", senderId: "456", messageId: "confirm", text: "확인", timestamp: new Date() },
+  ]);
+  let finalChecks = 0;
+  const originalQuery = Pool.prototype.query;
+  mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    if (sql.includes("flow.confirmed_at>now()-interval '24 hours'") && sql.includes("c.access_token_encrypted=$4")) {
+      finalChecks++;
+      await pauseSender("456");
+    }
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  await consume();
+  assert.equal(finalChecks, 1);
+  assert.equal(sends, 1);
+  const flow = (await pool.query("SELECT status,failure_code FROM instagram_follow_conversations")).rows[0];
+  assert.deepEqual(flow, { status: "pending", failure_code: "contact_paused" });
+  published = [];
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, []);
 });

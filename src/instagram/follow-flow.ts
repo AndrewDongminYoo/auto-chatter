@@ -22,13 +22,16 @@ export async function ingestMessages(
         continue;
       // Most recent eligible first DM wins when more than one automation is awaiting the same person.
       const result = await client.query(
-        `SELECT flow.reply_id,flow.confirmation_keyword,flow.last_message_at,flow.connection_id
+        `SELECT flow.reply_id,flow.confirmation_keyword,flow.last_message_at,flow.connection_id,
+      NOT coalesce(automation.paused,false) AS automation_active
     FROM instagram_follow_conversations flow
     JOIN private_reply_outbox reply ON reply.id=flow.reply_id
     JOIN instagram_connections c ON c.id=flow.connection_id
     JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
+    LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=reply.workspace_id
+      AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id
     WHERE c.account_id=$1 AND c.active AND c.send_enabled AND rule.enabled
-      AND flow.recipient_id=$2 AND ($4::text IS NULL OR (flow.reply_id::text=$4 AND flow.confirmation_button_title<>'')) AND flow.status='waiting' AND reply.status='sent' AND reply.sent_at<=$3
+      AND flow.recipient_id=$2 AND ($4::text IS NULL OR (flow.reply_id::text=$4 AND flow.confirmation_button_title<>'')) AND (flow.status='waiting' OR automation.paused) AND reply.status='sent' AND reply.sent_at<=$3
     ORDER BY reply.sent_at DESC,reply.id DESC LIMIT 1 FOR UPDATE OF flow`,
         [message.accountId, message.senderId, message.timestamp, message.confirmationReplyId ?? null],
       );
@@ -43,9 +46,12 @@ export async function ingestMessages(
         `INSERT INTO instagram_message_receipts(connection_id,message_id,received_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING message_id`,
         [row.connection_id, message.messageId, message.timestamp],
       );
-      if (!receipt.rowCount) continue;
+      if (!receipt.rowCount || !row.automation_active) continue;
       await client.query(
-        "UPDATE instagram_follow_conversations SET status='pending',confirmed_at=$2,last_message_at=$2,next_attempt_at=now(),failure_code=NULL,rate_limit_retries=0 WHERE reply_id=$1",
+        `UPDATE instagram_follow_conversations SET status='pending',confirmed_at=$2,last_message_at=$2,next_attempt_at=now(),failure_code=NULL,rate_limit_retries=0
+         WHERE reply_id=$1 AND NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation
+           JOIN private_reply_outbox reply ON reply.workspace_id=automation.workspace_id AND reply.connection_id=automation.connection_id AND reply.sender_id=automation.sender_id
+           WHERE reply.id=$1 AND automation.paused)`,
         [row.reply_id, message.timestamp],
       );
     }
@@ -71,8 +77,11 @@ export async function processNextFollowReply(
   const claimed = await pool.query(
     `WITH candidate AS (
   SELECT flow.reply_id FROM instagram_follow_conversations flow JOIN instagram_connections c ON c.id=flow.connection_id
+  JOIN private_reply_outbox reply ON reply.id=flow.reply_id
   WHERE flow.connection_id=$1 AND flow.status='pending' AND flow.next_attempt_at<=now()
     AND (c.send_paused_until IS NULL OR c.send_paused_until<=now())
+    AND NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
+      AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND automation.paused)
   ORDER BY flow.next_attempt_at,flow.reply_id LIMIT 1 FOR UPDATE OF flow SKIP LOCKED
  ) UPDATE instagram_follow_conversations flow SET status='sending',attempt_id=$2,attempt_started_at=now()
  FROM candidate WHERE flow.reply_id=candidate.reply_id RETURNING flow.*`,
@@ -97,9 +106,11 @@ export async function processNextFollowReply(
   };
   const permitted = async () => {
     if (!(row.confirmed_at instanceof Date) || now().getTime() - row.confirmed_at.getTime() >= 24 * 3600000)
-      return false;
+      return "denied";
     const result = await pool.query(
-      `SELECT 1 FROM instagram_follow_conversations flow
+      `SELECT NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
+     AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND automation.paused) AS automation_active
+    FROM instagram_follow_conversations flow
    JOIN private_reply_outbox reply ON reply.id=flow.reply_id
    JOIN instagram_connections c ON c.id=flow.connection_id
    JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
@@ -110,16 +121,23 @@ export async function processNextFollowReply(
      AND rule.enabled`,
       [row.reply_id, attempt, environmentAccountId ?? null],
     );
-    return result.rowCount === 1;
+    return !result.rows[0] ? "denied" : result.rows[0].automation_active ? "allowed" : "paused";
+  };
+  const checkPermission = async () => {
+    const permission = await permitted();
+    if (permission === "allowed") return true;
+    await update(
+      permission === "paused" ? "pending" : "blocked",
+      permission === "paused" ? "contact_paused" : "delivery_not_permitted",
+      permission === "paused" ? 60 : 0,
+    );
+    return false;
   };
   if (now().getTime() - row.confirmed_at?.getTime() >= 24 * 3600000) {
     await update("waiting", "response_window_expired");
     return true;
   }
-  if (!(await permitted())) {
-    await update("blocked", "delivery_not_permitted");
-    return true;
-  }
+  if (!(await checkPermission())) return true;
   let follows: boolean | null;
   try {
     follows = await transport.followStatus(row.recipient_id);
@@ -134,10 +152,7 @@ export async function processNextFollowReply(
     await update("waiting", "response_window_expired");
     return true;
   }
-  if (!(await permitted())) {
-    await update("blocked", "delivery_not_permitted");
-    return true;
-  }
+  if (!(await checkPermission())) return true;
   const pause = await pool.query(
     "SELECT send_paused_until FROM instagram_connections WHERE id=$1 AND send_paused_until>now()",
     [connectionId],
