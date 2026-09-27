@@ -102,7 +102,7 @@ Cron runs each minute to recover stale sends and repair missed notifications or 
 The adapter supports multiple Instagram Login connections.
 `TOKEN_ENCRYPTION_KEY` decrypts workspace/account-bound AES-GCM credentials; the Node worker retains its explicit environment-token path.
 A valid per-account token and `send_enabled` are required in addition to the global switch.
-The adapter prioritizes pending follow confirmations, and rechecks the rule, claim, connection, token version, cooldown and 24-hour window immediately before a normal DM POST.
+The adapter prioritizes manual replies, then pending follow confirmations, and rechecks the rule, claim, connection, token version, cooldown and 24-hour window immediately before a normal DM POST.
 There is no atomic transaction spanning PostgreSQL and Meta: a setting change after the final guard cannot recall an in-flight request.
 `instagram_follow_conversations` snapshots the first reply configuration; a nonfollower response returns to waiting, a follower response completes, and ambiguous sends remain unknown.
 A missing recipient ID after a successful first DM records `follow_recipient_unavailable` without resending.
@@ -148,7 +148,7 @@ The conversation finished as `sent / following` with two confirmation receipts a
 See `docs/notes/2026-09-26-live-follow-test.md` for the approved texts, evidence and shutdown procedure.
 Email confirmation-link behavior, multi-user live isolation, live unavailable-follow and duplicate-event cases, and Advanced Access remain unverified.
 Run `psql -f deploy/migrate-multi-user.sql` with an administrator connection before deploying this code.
-This runner owns the transaction for migrations 003–013 and the access script, stops on the first error, and rolls back on failure.
+This runner owns the transaction for migrations 003–014 and the access script, stops on the first error, and rolls back on failure.
 Do not apply these migration files individually without that transaction.
 Assign the existing workspace to a confirmed operator with `deploy/assign-workspace-owner.sql`; never claim legacy data automatically by email.
 Token renewal currently requires reconnecting the Instagram account before the displayed expiry.
@@ -236,5 +236,17 @@ Starting requires a currently verified comment bridge; resuming uses the capture
 `instagram_contact_automation.handoff_paused` is derived from active handoffs independently of manual `paused`; every automated claim and final send guard checks either reason.
 Manual contact resume is refused while a handoff remains active.
 Migration 013 precedes deployment; the administrator runner includes its tables and restricted audit grants.
-Echoes, attachments, edits, deletions, historical import, outbound history, manual replies and shared team roles remain unimplemented.
+Migration 014 adds `instagram_manual_replies` and append-only `instagram_manual_reply_events`.
+The owned same-origin replies POST uses a UUID request key and the current active handoff version; repeated identical requests return the existing row, while payload reuse is refused.
+Only a fresh stored inbound text DM opens the conservative 24-hour manual window; postbacks and outbound replies do not extend it.
+Cloudflare OAuth delivery verifies the account and rechecks claim, token version/expiry, connection, handoff, identity bridge, derived pause and window immediately before POST.
+Same-conversation pending/sending/unresolved unknown rows block later manual replies; other conversations remain independent.
+Definite unsent failures permit an audited explicit retry as a new linked row; unknown never permits retry.
+An audited `no_retry` decision retains unknown and releases later manual rows.
+The owned GET returns 50 outbound rows with the latest 50 audit events each and a microsecond-preserving cursor.
+API notification failures are repaired by cron; stale sends become unknown with audit in the same transaction.
+Both fresh Compose and migrated server roles cannot UPDATE or DELETE the manual audit.
+The Node environment-token worker does not process manual replies.
+See [the manual reply contract](docs/specs/2026-09-27-inbox-manual-replies.md).
+Echoes, attachments, edits, deletions, historical import, manual reply UI and shared team roles remain unimplemented.
 No production migration or live inbox verification has been performed.
