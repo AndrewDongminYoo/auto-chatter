@@ -394,3 +394,18 @@ test("contact routes accept encoded string sender IDs without changing identity"
   assert.equal(result.status, 200);
   assert.deepEqual(await result.json(), { tags: ["lead"] });
 });
+
+test("contact automation rejects unauthenticated and cross-origin writes before opening DB", async () => {
+  const open = () => {
+    throw new Error("DB must not be opened");
+  };
+  const path = `https://app.test/api/connections/${connectionId}/contacts/sender/automation`;
+  assert.equal(
+    (await appApi(new Request(path, { method: "PUT", headers: { origin: "https://evil.test" } }), config, open)).status,
+    403,
+  );
+  assert.equal(
+    (await appApi(new Request(path, { method: "PUT", headers: { origin: "https://app.test" } }), config, open)).status,
+    401,
+  );
+});

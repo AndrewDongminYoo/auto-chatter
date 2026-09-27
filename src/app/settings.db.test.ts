@@ -740,3 +740,34 @@ test("typed field conditions retain keyset pagination across fifty matching cont
   assert.equal(second.contacts[0]!.fields[field.id], false);
   assert.equal(second.after, null);
 });
+
+test("contact automation API stores only exact booleans for existing owned contacts", async () => {
+  const workspace = (await pool.query("SELECT workspace_id FROM instagram_connections WHERE id=$1", [connectionId]))
+    .rows[0].workspace_id;
+  await pool.query(
+    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'automation-comment','media','sender/one% test','hello')",
+    [workspace, connectionId],
+  );
+  const path = `/api/connections/${connectionId}/contacts/${encodeURIComponent("sender/one% test")}/automation`;
+  const paused = await fieldRequest("PUT", path, { paused: true });
+  assert.equal(paused.status, 200);
+  assert.deepEqual(await paused.json(), { automation_paused: true });
+  assert.equal((await listContacts(pool, a)).contacts[0]!.automation_paused, true);
+  for (const body of [{ paused: "true" }, { paused: 1 }, { paused: null }, {}, { paused: false, extra: 1 }, []]) {
+    assert.equal((await fieldRequest("PUT", path, body)).status, 400);
+  }
+  assert.equal((await fieldRequest("PUT", path, { paused: false }, b)).status, 404);
+  assert.equal(
+    (await fieldRequest("PUT", `/api/connections/${connectionId}/contacts/missing/automation`, { paused: true }))
+      .status,
+    404,
+  );
+  const resumed = await fieldRequest("PUT", path, { paused: false });
+  assert.equal(resumed.status, 200);
+  assert.deepEqual(await resumed.json(), { automation_paused: false });
+  assert.equal((await listContacts(pool, a)).contacts[0]!.automation_paused, false);
+  const migration = await readFile(new URL("../../db/migrations/011_contact_automation.sql", import.meta.url), "utf8");
+  await pool.query(migration);
+  await pool.query(migration);
+  assert.equal((await listContacts(pool, a)).contacts[0]!.automation_paused, false);
+});
