@@ -190,7 +190,9 @@ export async function finishInstagramOAuth(
   );
   if (!isRecord(subscribed) || subscribed.success !== true) throw new ApiError(502, "instagram_subscription_failed");
   const activated = await pool.query(
-    "UPDATE instagram_connections SET active=true WHERE id=$1 AND workspace_id=$2 AND access_token_encrypted=$3",
+    `UPDATE instagram_connections SET active=true,
+     inbox_enabled_at=CASE WHEN NOT active AND inbox_enabled THEN clock_timestamp() ELSE inbox_enabled_at END
+     WHERE id=$1 AND workspace_id=$2 AND access_token_encrypted=$3`,
     [saved.rows[0].id, workspaceId, encrypted],
   );
   if (activated.rowCount !== 1) throw new ApiError(409, "instagram_connection_changed");

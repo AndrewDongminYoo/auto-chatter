@@ -85,7 +85,7 @@ export async function listConnections(pool: Pool, user: User) {
   const workspaceId = await workspaceFor(pool, user);
   return (
     await pool.query(
-      `SELECT id,account_id,username,active,send_enabled,token_expires_at,access_token_encrypted IS NOT NULL AS token_registered FROM instagram_connections WHERE workspace_id=$1 ORDER BY id`,
+      `SELECT id,account_id,username,active,send_enabled,inbox_enabled,token_expires_at,access_token_encrypted IS NOT NULL AS token_registered FROM instagram_connections WHERE workspace_id=$1 ORDER BY id`,
       [workspaceId],
     )
   ).rows;
@@ -136,7 +136,9 @@ export async function updateConnection(pool: Pool, user: User, id: string, input
     throw new ApiError(400, "invalid_connection");
   const workspaceId = await workspaceFor(pool, user);
   const result = await pool.query(
-    `UPDATE instagram_connections SET active=$3,send_enabled=$4 WHERE id=$1 AND workspace_id=$2
+    `UPDATE instagram_connections SET active=$3,send_enabled=$4,
+ inbox_enabled_at=CASE WHEN $3 AND NOT active AND inbox_enabled THEN clock_timestamp() ELSE inbox_enabled_at END
+ WHERE id=$1 AND workspace_id=$2
  AND (($3=false AND $4=false) OR (access_token_encrypted IS NOT NULL AND token_expires_at>now())) RETURNING id`,
     [id, workspaceId, input.active, input.send_enabled],
   );

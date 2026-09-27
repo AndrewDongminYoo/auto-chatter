@@ -11,5 +11,6 @@ BEGIN;
 \ir ../db/migrations/009_contact_segments.sql
 \ir ../db/migrations/010_contact_fields.sql
 \ir ../db/migrations/011_contact_automation.sql
+\ir ../db/migrations/012_instagram_inbox.sql
 \ir supabase-access.sql
 COMMIT;

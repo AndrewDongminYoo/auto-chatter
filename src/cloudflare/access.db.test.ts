@@ -13,7 +13,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
   const client = await pool.connect();
   try {
     await client.query(
-      "DROP TABLE IF EXISTS instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await client.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await client.query(
@@ -33,6 +33,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
       await client.query(`SET ROLE ${role}`);
       for (const table of [
         "workspaces",
+        "instagram_inbox_messages",
         "instagram_contact_automation",
         "instagram_contact_fields",
         "instagram_contact_field_values",
@@ -74,6 +75,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("DELETE FROM workspaces"), { code: "42501" });
     await assert.rejects(client.query("CREATE TABLE public.forbidden_compose(id int)"), { code: "42501" });
     for (const table of [
+      "instagram_inbox_messages",
       "instagram_contact_automation",
       "instagram_contact_fields",
       "instagram_contact_field_values",
@@ -85,9 +87,9 @@ test("Supabase roles cannot read product data; the server role has DML without D
       await client.query(`SELECT * FROM ${table}`);
     await client.query("RESET ROLE");
     const protectedTables = await client.query(
-      "SELECT relname FROM pg_class WHERE relnamespace='public'::regnamespace AND relrowsecurity AND relname IN ('instagram_contact_automation','instagram_contact_fields','instagram_contact_field_values','workspaces','workspace_members','instagram_oauth_states','instagram_follow_conversations','instagram_message_receipts','instagram_connections','instagram_comment_rules','instagram_comment_events','private_reply_outbox')",
+      "SELECT relname FROM pg_class WHERE relnamespace='public'::regnamespace AND relrowsecurity AND relname IN ('instagram_inbox_messages','instagram_contact_automation','instagram_contact_fields','instagram_contact_field_values','workspaces','workspace_members','instagram_oauth_states','instagram_follow_conversations','instagram_message_receipts','instagram_connections','instagram_comment_rules','instagram_comment_events','private_reply_outbox')",
     );
-    assert.equal(protectedTables.rowCount, 12);
+    assert.equal(protectedTables.rowCount, 13);
     // Exercise RLS independently of table grants: an accidental future grant must not expose rows.
     await client.query("GRANT SELECT ON workspaces TO anon");
     await client.query("SET ROLE anon");

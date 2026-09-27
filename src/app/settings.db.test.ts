@@ -21,6 +21,8 @@ import {
 import { connectionMedia } from "./instagram-media.ts";
 import { sealSecret } from "./secrets.ts";
 import { appApi } from "./api.ts";
+import { ingestMessages } from "../instagram/follow-flow.ts";
+import { parseMessageEvents } from "../instagram/message-events.ts";
 
 const url = new URL(process.env.TEST_DATABASE_URL ?? "http://invalid");
 if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
@@ -40,8 +42,163 @@ const input = {
   follow_gate_enabled: false,
 };
 
+test("inbox opt-in gates body storage and owns settings and readers", async () => {
+  const path = `/api/connections/${connectionId}/inbox`;
+  const message = {
+    accountId: "123",
+    senderId: "456",
+    messageId: "dm-1",
+    text: "<script>private</script>",
+    timestamp: new Date(),
+  };
+  assert.equal((await listConnections(pool, a))[0].inbox_enabled, false);
+  await ingestMessages(pool, [message]);
+  assert.equal((await fieldRequest("GET", "/api/inbox")).status, 200);
+  assert.deepEqual((await (await fieldRequest("GET", "/api/inbox")).json()).conversations, []);
+  for (const body of [{ enabled: "true" }, {}, { enabled: true, extra: true }])
+    assert.equal((await fieldRequest("PUT", path, body)).status, 400);
+  assert.equal((await fieldRequest("PUT", path, { enabled: true }, b)).status, 404);
+  assert.equal((await fieldRequest("PUT", path, { enabled: true })).status, 200);
+  await ingestMessages(pool, [message]); // occurred before activation
+  assert.equal((await (await fieldRequest("GET", "/api/inbox")).json()).conversations.length, 0);
+  message.timestamp = new Date(Date.now() + 1000);
+  await ingestMessages(pool, [message, message]);
+  const page = await (await fieldRequest("GET", "/api/inbox")).json();
+  assert.equal(page.conversations.length, 1);
+  assert.equal(page.conversations[0].recipient_id, "456");
+  const messagesPath = `${path}/456`;
+  const history = await (await fieldRequest("GET", messagesPath)).json();
+  assert.equal(history.messages.length, 1);
+  assert.equal(history.messages[0].text, message.text);
+  assert.equal((await fieldRequest("GET", messagesPath, undefined, b)).status, 404);
+  assert.deepEqual((await (await fieldRequest("GET", "/api/inbox", undefined, b)).json()).conversations, []);
+  await ingestMessages(pool, [{ ...message, messageId: "dm-2", timestamp: new Date(Date.now() + 500) }]);
+  const latest = await (await fieldRequest("GET", "/api/inbox")).json();
+  assert.equal(latest.conversations[0].last_message_at, message.timestamp.toISOString());
+  await fieldRequest("PUT", path, { enabled: false });
+  await ingestMessages(pool, [{ ...message, messageId: "dm-3" }]);
+  assert.equal((await (await fieldRequest("GET", messagesPath)).json()).messages.length, 2);
+  assert.equal((await fieldRequest("GET", `${messagesPath}?before=invalid`)).status, 400);
+  assert.equal((await fieldRequest("GET", "/api/inbox?after=invalid")).status, 400);
+  await pool.query("UPDATE instagram_connections SET active=false WHERE id=$1", [connectionId]);
+  assert.equal((await fieldRequest("PUT", path, { enabled: true })).status, 409);
+});
+
+test("inbox pagination preserves arrivals and settings activation cutoff", async () => {
+  const migration = await readFile(new URL("../../db/migrations/012_instagram_inbox.sql", import.meta.url), "utf8");
+  await pool.query(migration);
+  await pool.query(migration);
+  const path = `/api/connections/${connectionId}/inbox`;
+  await fieldRequest("PUT", path, { enabled: true });
+  const cutoff = (await pool.query("SELECT inbox_enabled_at FROM instagram_connections WHERE id=$1", [connectionId]))
+    .rows[0].inbox_enabled_at;
+  await fieldRequest("PUT", path, { enabled: true });
+  assert.equal(
+    (
+      await pool.query("SELECT inbox_enabled_at FROM instagram_connections WHERE id=$1", [connectionId])
+    ).rows[0].inbox_enabled_at.getTime(),
+    cutoff.getTime(),
+  );
+  const timestamp = new Date(Date.now() + 1000);
+  const messages = Array.from({ length: 55 }, (_, i) => ({
+    accountId: "123",
+    senderId: "456",
+    messageId: `paged-${i}`,
+    text: `message ${i}`,
+    timestamp,
+  }));
+  await ingestMessages(pool, messages);
+  const first = await (await fieldRequest("GET", `${path}/456`)).json();
+  assert.equal(first.messages.length, 50);
+  assert.equal(first.messages[0].text, "message 54");
+  const older = await (await fieldRequest("GET", `${path}/456?before=${first.before}`)).json();
+  assert.equal(older.messages.length, 5);
+  assert.equal(new Set([...first.messages, ...older.messages].map((row) => row.message_id)).size, 55);
+  assert.equal(older.before, null);
+  await ingestMessages(
+    pool,
+    Array.from({ length: 55 }, (_, i) => ({ ...messages[0]!, senderId: String(1000 + i), messageId: `contact-${i}` })),
+  );
+  const page = await (await fieldRequest("GET", "/api/inbox")).json();
+  const next = await (await fieldRequest("GET", `/api/inbox?after=${page.after}`)).json();
+  assert.equal(page.conversations.length, 50);
+  assert.equal(next.conversations.length, 6);
+  assert.equal(new Set([...page.conversations, ...next.conversations].map((row) => row.recipient_id)).size, 56);
+  await pool.query("UPDATE instagram_connections SET active=false WHERE id=$1", [connectionId]);
+  await ingestMessages(pool, [{ ...messages[0]!, messageId: "stopped" }]);
+  assert.equal(
+    (await pool.query("SELECT count(*) FROM instagram_inbox_messages WHERE message_id='stopped'")).rows[0].count,
+    "0",
+  );
+});
+
+test("inbox stores parsed postbacks without inventing confirmation eligibility", async () => {
+  await fieldRequest("PUT", `/api/connections/${connectionId}/inbox`, { enabled: true });
+  const payload = {
+    object: "instagram",
+    entry: [
+      {
+        id: "123",
+        messaging: [
+          {
+            sender: { id: "456" },
+            recipient: { id: "123" },
+            timestamp: Date.now() + 1000,
+            postback: { mid: "button-dm", title: "자료 받기", payload: "auto-chatter:confirm:1" },
+          },
+        ],
+      },
+    ],
+  };
+  const messages = parseMessageEvents(Buffer.from(JSON.stringify(payload)));
+  assert.equal(messages.length, 1);
+  await ingestMessages(pool, messages);
+  const history = await (await fieldRequest("GET", `/api/connections/${connectionId}/inbox/456`)).json();
+  assert.equal(history.messages[0].kind, "postback");
+  assert.equal(history.messages[0].text, "자료 받기");
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_message_receipts")).rows[0].count, "0");
+});
+
+test("resuming receiving excludes delayed messages from the stopped interval and keeps stored history", async () => {
+  await pool.query(
+    "UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now()-interval '2 hours' WHERE id=$1",
+    [connectionId],
+  );
+  const message = {
+    accountId: "123",
+    senderId: "456",
+    messageId: "before-stop",
+    text: "stored",
+    timestamp: new Date(Date.now() - 3600000),
+  };
+  await ingestMessages(pool, [message]);
+  await updateConnection(pool, a, connectionId, { active: false, send_enabled: false });
+  const stoppedAt = (await pool.query("SELECT clock_timestamp() AS stopped_at")).rows[0].stopped_at;
+  await pool.query("SELECT pg_sleep(0.02)");
+  await updateConnection(pool, a, connectionId, { active: true, send_enabled: false });
+  const cutoff = (await pool.query("SELECT inbox_enabled_at FROM instagram_connections WHERE id=$1", [connectionId]))
+    .rows[0].inbox_enabled_at;
+  assert.ok(cutoff.getTime() > stoppedAt.getTime(), "resume advances the opt-in cutoff");
+  await ingestMessages(pool, [
+    { ...message, messageId: "delayed-stopped", timestamp: stoppedAt },
+    { ...message, messageId: "after-resume", timestamp: new Date(cutoff.getTime() + 1000) },
+  ]);
+  const history = (await pool.query("SELECT message_id FROM instagram_inbox_messages ORDER BY id")).rows.map(
+    (row) => row.message_id,
+  );
+  assert.deepEqual(history, ["before-stop", "after-resume"]);
+  await updateConnection(pool, a, connectionId, { active: true, send_enabled: true });
+  assert.equal(
+    (
+      await pool.query("SELECT inbox_enabled_at FROM instagram_connections WHERE id=$1", [connectionId])
+    ).rows[0].inbox_enabled_at.getTime(),
+    cutoff.getTime(),
+  );
+});
+
 before(async () => {
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/012_instagram_inbox.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/007_confirmation_button.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/004_workspace_settings.sql", import.meta.url), "utf8"));
 });
