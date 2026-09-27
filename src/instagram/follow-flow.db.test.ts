@@ -463,3 +463,176 @@ test("comment ingestion snapshots button settings through first delivery and lat
   ).rows[0];
   assert.equal(flow.confirmation_button_title, "자료 받기");
 });
+
+async function pauseAutomation(paused = true) {
+  await pool.query(
+    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'456',$3) ON CONFLICT(workspace_id,connection_id,sender_id) DO UPDATE SET paused=$3",
+    [workspace, connection, paused],
+  );
+}
+test("paused confirmation is ignored and deduplicated after resume", async () => {
+  await pauseAutomation();
+  const message = incoming();
+  await ingestMessages(pool, [message]);
+  assert.equal((await state()).status, "waiting");
+  await pauseAutomation(false);
+  await ingestMessages(pool, [message]);
+  assert.equal((await state()).status, "waiting");
+  await ingestMessages(pool, [incoming("new")]);
+  assert.equal((await state()).status, "pending");
+});
+test("paused follow work stays pending and resume cannot extend its response window", async () => {
+  await ingestMessages(pool, [incoming()]);
+  await pauseAutomation();
+  let calls = 0;
+  const transport = {
+    followStatus: async () => {
+      calls++;
+      return true;
+    },
+    send: async () => {
+      calls++;
+      return { messageId: "sent" };
+    },
+  };
+  assert.equal(await processNextFollowReply(pool, connection, transport), false);
+  assert.equal(calls, 0);
+  await pauseAutomation(false);
+  await processNextFollowReply(pool, connection, transport, () => new Date(Date.now() + 25 * 3600000));
+  assert.equal(calls, 0);
+  assert.equal((await state()).status, "waiting");
+  assert.equal((await state()).failure_code, "response_window_expired");
+});
+test("pause during follow lookup defers without a provider POST", async () => {
+  await ingestMessages(pool, [incoming()]);
+  let sends = 0;
+  await processNextFollowReply(pool, connection, {
+    followStatus: async () => {
+      await pauseAutomation();
+      return true;
+    },
+    send: async () => {
+      sends++;
+      return { messageId: "sent" };
+    },
+  });
+  assert.equal(sends, 0);
+  assert.equal((await state()).status, "pending");
+  assert.equal((await state()).failure_code, "contact_paused");
+  assert.equal((await state()).attempt_id, null);
+  assert.equal((await state()).rate_limit_retries, 0);
+});
+test("Node final private and follow guards defer a contact paused after authorization", async () => {
+  const attemptId = "44444444-4444-4444-8444-444444444444";
+  await pauseAutomation();
+  await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL");
+  await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=$1,attempt_started_at=now()", [
+    attemptId,
+  ]);
+  await assert.rejects(
+    assertNodePrivateReplyAllowed(
+      pool,
+      { accountId: "123", connectionId: connection },
+      {
+        id: replyId,
+        attemptId,
+        workspaceId: workspace,
+        connectionId: connection,
+        accountId: "123",
+        commentId: "222",
+        mediaId: "111",
+        senderId: "456",
+        text: "Confirm",
+      },
+    ),
+    { disposition: "retry", failureCode: "contact_paused" },
+  );
+  await pool.query("UPDATE private_reply_outbox SET status='sent'");
+  await pool.query(
+    "UPDATE instagram_follow_conversations SET status='sending',confirmed_at=now(),attempt_id=$1,attempt_started_at=now()",
+    [attemptId],
+  );
+  let sends = 0;
+  const transport = createNodeFollowTransport(pool, {
+    accountId: "123",
+    connectionId: connection,
+    accessToken: "synthetic",
+    graphVersion: "v26.0",
+    fetchImpl: async () => {
+      sends++;
+      return Response.json({ message_id: "sent" });
+    },
+  });
+  await assert.rejects(transport.send("456", "Confirm", { replyId, attemptId }), {
+    disposition: "retry",
+    failureCode: "contact_paused",
+  });
+  assert.equal(sends, 0);
+});
+
+test("a pause committed while the confirmation receipt waits prevents later activation", async () => {
+  const lock = await pool.connect();
+  let pending: Promise<void> | undefined;
+  try {
+    await lock.query("BEGIN");
+    await lock.query("LOCK TABLE instagram_message_receipts IN ACCESS EXCLUSIVE MODE");
+    pending = ingestMessages(pool, [incoming("paused-race")]);
+    let waiting = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const blocked = await pool.query(
+        "SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%INSERT INTO instagram_message_receipts%'",
+      );
+      if (blocked.rowCount) {
+        waiting = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(waiting, true, "Fixture must block receipt insertion after the initial flow lookup");
+    await pauseAutomation();
+    await lock.query("COMMIT");
+    await pending;
+    assert.equal((await state()).status, "waiting");
+    assert.equal((await state()).confirmed_at, null);
+    await pauseAutomation(false);
+    let sends = 0;
+    assert.equal(
+      await processNextFollowReply(pool, connection, {
+        followStatus: async () => true,
+        send: async () => {
+          sends++;
+          return { messageId: "sent" };
+        },
+      }),
+      false,
+    );
+    assert.equal(sends, 0);
+    await ingestMessages(pool, [incoming("paused-race")]);
+    assert.equal((await state()).status, "waiting");
+  } finally {
+    await lock.query("ROLLBACK");
+    lock.release();
+    if (pending) await pending;
+  }
+});
+
+test("confirmations received while paused pending work cannot restart a waiting flow after resume", async () => {
+  const first = incoming("first");
+  await ingestMessages(pool, [first]);
+  await pauseAutomation();
+  const pausedMessage = incoming("paused-pending", "확인", new Date(first.timestamp.getTime() + 1000));
+  await ingestMessages(pool, [pausedMessage]);
+  await pauseAutomation(false);
+  let sends = 0;
+  await processNextFollowReply(pool, connection, {
+    followStatus: async () => false,
+    send: async () => {
+      sends++;
+      return { messageId: "sent" };
+    },
+  });
+  assert.equal(sends, 1);
+  assert.equal((await state()).status, "waiting");
+  await ingestMessages(pool, [pausedMessage]);
+  assert.equal((await state()).status, "waiting");
+});

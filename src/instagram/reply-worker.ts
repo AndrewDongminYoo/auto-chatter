@@ -101,9 +101,12 @@ export async function processNextPrivateReply(
   const attemptId = randomUUID();
   const claimed = await pool.query<ClaimedRow>(
     `WITH candidate AS (
-       SELECT id FROM private_reply_outbox
+       SELECT id FROM private_reply_outbox AS candidate_reply
        WHERE status = 'pending' AND next_attempt_at <= now()
          AND connection_id = $2
+         AND NOT EXISTS (SELECT 1 FROM instagram_contact_automation automation
+           WHERE automation.workspace_id=candidate_reply.workspace_id AND automation.connection_id=candidate_reply.connection_id
+             AND automation.sender_id=candidate_reply.sender_id AND automation.paused)
          AND NOT EXISTS (
            SELECT 1 FROM instagram_connections AS connection
            WHERE connection.id = $2 AND connection.send_paused_until > now()
@@ -196,6 +199,16 @@ export async function processNextPrivateReply(
     );
     return true;
   }
+
+  const contactDeferred = await pool.query(
+    `UPDATE private_reply_outbox reply SET status='pending',attempt_id=NULL,attempt_started_at=NULL,
+       next_attempt_at=now()+interval '1 minute',failure_code='contact_paused'
+     WHERE reply.id=$1 AND reply.status='sending' AND reply.attempt_id=$2
+       AND EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
+         AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND automation.paused)`,
+    [row.id, attemptId],
+  );
+  if (contactDeferred.rowCount === 1) return true;
 
   // Another worker may have paused this connection while this reply was being verified.
   // Defer work that has not entered send(); requests already in progress cannot be recalled.

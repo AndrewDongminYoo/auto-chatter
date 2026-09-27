@@ -10,5 +10,6 @@ BEGIN;
 \ir ../db/migrations/008_instagram_contact_tags.sql
 \ir ../db/migrations/009_contact_segments.sql
 \ir ../db/migrations/010_contact_fields.sql
+\ir ../db/migrations/011_contact_automation.sql
 \ir supabase-access.sql
 COMMIT;

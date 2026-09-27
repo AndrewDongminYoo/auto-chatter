@@ -61,7 +61,7 @@ async function outbox(): Promise<{
 
 before(async () => {
   await pool.query(
-    "DROP TABLE IF EXISTS instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+    "DROP TABLE IF EXISTS instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
   );
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
 });
@@ -689,4 +689,111 @@ test("a connection-scoped worker leaves another connection's reply pending", asy
     [otherConnectionId],
   );
   assert.equal(other.rows[0]?.status, "sending");
+});
+
+async function pauseContact(paused = true) {
+  await pool.query(
+    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'sender-1',$3) ON CONFLICT(workspace_id,connection_id,sender_id) DO UPDATE SET paused=$3",
+    [workspaceId, connectionId, paused],
+  );
+}
+test("paused contact is not claimed and resumed contact rechecks the original window", async () => {
+  await queueReply();
+  await pauseContact();
+  let calls = 0;
+  const transport: PrivateReplyTransport = {
+    verify: async (request) => {
+      calls++;
+      return verified(request);
+    },
+    send: async () => {
+      calls++;
+      return { messageId: "sent" };
+    },
+  };
+  assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), false);
+  assert.equal(calls, 0);
+  assert.equal((await outbox()).status, "pending");
+  await pauseContact(false);
+  assert.equal(await processNextPrivateReply(pool, transport, () => new Date("2030-01-01"), connectionId), true);
+  assert.equal(calls, 1);
+  assert.equal((await outbox()).status, "blocked");
+});
+test("pause during private verification defers without send or rate retry", async () => {
+  await queueReply();
+  let sends = 0;
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: async (request) => {
+        await pauseContact();
+        return verified(request);
+      },
+      send: async () => {
+        sends++;
+        return { messageId: "sent" };
+      },
+    },
+    () => now,
+    connectionId,
+  );
+  assert.equal(sends, 0);
+  assert.equal((await outbox()).status, "pending");
+  assert.equal((await outbox()).failure_code, "contact_paused");
+  const row = (await pool.query("SELECT attempt_id,rate_limit_retries FROM private_reply_outbox")).rows[0];
+  assert.equal(row.attempt_id, null);
+  assert.equal(row.rate_limit_retries, 0);
+  await pauseContact(false);
+  await pool.query("UPDATE private_reply_outbox SET next_attempt_at=now()");
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: verified,
+      send: async () => {
+        sends++;
+        return { messageId: "sent" };
+      },
+    },
+    () => now,
+    connectionId,
+  );
+  assert.equal(sends, 1);
+  assert.equal((await outbox()).status, "sent");
+});
+test("a paused contact does not stop another contact or retry unknown sends", async () => {
+  await queueReply();
+  await pauseContact();
+  await ingestComments(pool, [
+    { accountId: "account-1", commentId: "comment-2", postId: "post-1", senderId: "sender-2", text: "자료" },
+  ]);
+  const sent: string[] = [];
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: verified,
+      send: async (request) => {
+        sent.push(request.senderId);
+        return { messageId: "sent" };
+      },
+    },
+    () => now,
+    connectionId,
+  );
+  assert.deepEqual(sent, ["sender-2"]);
+  await pool.query("UPDATE private_reply_outbox SET status='unknown' WHERE sender_id='sender-1'");
+  await pauseContact(false);
+  assert.equal(
+    await processNextPrivateReply(
+      pool,
+      {
+        verify: verified,
+        send: async () => {
+          throw new Error("must not send");
+        },
+      },
+      () => now,
+      connectionId,
+    ),
+    false,
+  );
 });

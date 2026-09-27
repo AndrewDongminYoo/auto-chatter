@@ -39,8 +39,13 @@ async function wakeDueReplies(
      WHERE ($1::uuid IS NULL OR c.id=$1) AND ($2::text[] IS NULL OR c.account_id=ANY($2))
        AND c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>now()
        AND (c.send_paused_until IS NULL OR c.send_paused_until<=now())
-       AND (EXISTS(SELECT 1 FROM private_reply_outbox reply WHERE reply.connection_id=c.id AND reply.status='pending' AND reply.next_attempt_at<=now())
-       OR EXISTS(SELECT 1 FROM instagram_follow_conversations flow WHERE flow.connection_id=c.id AND flow.status='pending' AND flow.next_attempt_at<=now()))
+       AND (EXISTS(SELECT 1 FROM private_reply_outbox reply WHERE reply.connection_id=c.id AND reply.status='pending' AND reply.next_attempt_at<=now()
+         AND NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
+           AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND automation.paused))
+       OR EXISTS(SELECT 1 FROM instagram_follow_conversations flow JOIN private_reply_outbox reply ON reply.id=flow.reply_id
+         WHERE flow.connection_id=c.id AND flow.status='pending' AND flow.next_attempt_at<=now()
+         AND NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
+           AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND automation.paused)))
      ORDER BY c.id LIMIT 100`,
     [
       scope && "connectionId" in scope ? scope.connectionId : null,
@@ -163,10 +168,14 @@ export default {
                 const body = typeof init.body === "string" ? JSON.parse(init.body) : null;
                 if (body?.recipient?.comment_id) {
                   const rule = await pool.query(
-                    `SELECT 1 FROM private_reply_outbox reply JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
+                    `SELECT NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
+                      AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND automation.paused) AS automation_active
+                     FROM private_reply_outbox reply JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
                     WHERE reply.connection_id=$1 AND reply.comment_id=$2 AND rule.enabled AND reply.status='sending'`,
                     [connectionId, body.recipient.comment_id],
                   );
+                  if (rule.rows[0]?.automation_active === false)
+                    throw new PreSendVerificationError("retry", "contact_paused");
                   if (!rule.rowCount) throw new PreSendVerificationError("block", "inactive_rule");
                 }
               }
@@ -189,7 +198,9 @@ export default {
                   fetchImpl: rawGraphFetch,
                   beforeSend: async (context) => {
                     const permitted = await pool.query(
-                      `SELECT 1 FROM instagram_follow_conversations flow
+                      `SELECT NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
+                  AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND automation.paused) AS automation_active
+                FROM instagram_follow_conversations flow
                 JOIN private_reply_outbox reply ON reply.id=flow.reply_id JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
                 JOIN instagram_connections c ON c.id=flow.connection_id
                 WHERE flow.reply_id=$1 AND flow.attempt_id=$2 AND flow.status='sending' AND flow.confirmed_at>now()-interval '24 hours'
@@ -197,6 +208,8 @@ export default {
                   AND (c.send_paused_until IS NULL OR c.send_paused_until<=now())`,
                       [context.replyId, context.attemptId, connectionId, connection.access_token_encrypted],
                     );
+                    if (permitted.rows[0]?.automation_active === false)
+                      throw new PreSendVerificationError("retry", "contact_paused");
                     if (!permitted.rowCount) throw new PreSendVerificationError("block", "delivery_not_permitted");
                   },
                 }),

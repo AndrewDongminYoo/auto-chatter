@@ -18,7 +18,9 @@ export function createNodeFollowTransport(
     beforeSend: async (context) => {
       const permitted = await pool
         .query(
-          `SELECT 1 FROM instagram_follow_conversations flow
+          `SELECT NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
+           AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND automation.paused) AS automation_active
+         FROM instagram_follow_conversations flow
          JOIN private_reply_outbox reply ON reply.id=flow.reply_id
          JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
          JOIN instagram_connections c ON c.id=flow.connection_id
@@ -32,6 +34,7 @@ export function createNodeFollowTransport(
         .catch(() => {
           throw new PreSendVerificationError("retry");
         });
+      if (permitted.rows[0]?.automation_active === false) throw new PreSendVerificationError("retry", "contact_paused");
       if (!permitted.rowCount) throw new PreSendVerificationError("block", "delivery_not_permitted");
     },
   });
@@ -44,7 +47,9 @@ export async function assertNodePrivateReplyAllowed(
 ): Promise<void> {
   const permitted = await pool
     .query(
-      `SELECT 1 FROM private_reply_outbox reply
+      `SELECT NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
+       AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND automation.paused) AS automation_active
+     FROM private_reply_outbox reply
      JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
      JOIN instagram_connections c ON c.id=reply.connection_id
      WHERE reply.id=$1 AND reply.attempt_id=$2 AND reply.status='sending'
@@ -56,5 +61,6 @@ export async function assertNodePrivateReplyAllowed(
     .catch(() => {
       throw new PreSendVerificationError("retry");
     });
+  if (permitted.rows[0]?.automation_active === false) throw new PreSendVerificationError("retry", "contact_paused");
   if (!permitted.rowCount) throw new PreSendVerificationError("block", "delivery_not_permitted");
 }

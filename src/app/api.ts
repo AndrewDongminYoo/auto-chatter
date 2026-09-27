@@ -17,6 +17,7 @@ import {
   listContactSegments,
   listContacts,
   saveContactTags,
+  saveContactAutomation,
 } from "./contacts.ts";
 import { connectionMedia } from "./instagram-media.ts";
 import { archiveContactField, createContactField, listContactFields, saveContactFieldValue } from "./contact-fields.ts";
@@ -78,6 +79,16 @@ export async function appApi(
         return json(await createContactSegment(pool, user, await readJson(request)), 201);
       const segment = /^\/api\/contact-segments\/([a-f0-9-]+)$/.exec(url.pathname);
       if (segment && request.method === "DELETE") return json(await archiveContactSegment(pool, user, segment[1]!));
+      const automation = /^\/api\/connections\/([a-f0-9-]+)\/contacts\/([^/]+)\/automation$/.exec(url.pathname);
+      if (automation && request.method === "PUT") {
+        let senderId: string;
+        try {
+          senderId = decodeURIComponent(automation[2]!);
+        } catch {
+          throw new ApiError(400, "invalid_contact_request");
+        }
+        return json(await saveContactAutomation(pool, user, automation[1]!, senderId, await readJson(request)));
+      }
       const contact = /^\/api\/connections\/([a-f0-9-]+)\/contacts\/([^/]+)$/.exec(url.pathname);
       if (contact && request.method === "PATCH") {
         let senderId: string;

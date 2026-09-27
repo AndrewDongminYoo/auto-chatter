@@ -60,7 +60,7 @@ async function rowCount(table: "instagram_comment_events" | "private_reply_outbo
 before(async () => {
   const schema = await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8");
   await pool.query(
-    "DROP TABLE IF EXISTS instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+    "DROP TABLE IF EXISTS instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
   );
   await pool.query(schema);
   server = createInstagramWebhookServer({ pool, appSecret: "test-app-secret", verifyToken: "test-verify-token" });

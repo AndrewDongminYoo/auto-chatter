@@ -10,6 +10,7 @@ type Contact = {
   first_comment_at: Date;
   last_comment_at: Date;
   comment_count: string;
+  automation_paused: boolean;
   tags: string[];
   fields: Record<string, unknown>;
 };
@@ -89,11 +90,12 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   await validateFieldCondition(pool, workspaceId, condition);
   const result = await pool.query<Contact>(
     `SELECT e.connection_id,e.sender_id,c.username,min(e.created_at) AS first_comment_at,
- max(e.created_at) AS last_comment_at,count(*)::text AS comment_count,coalesce(t.tags,'{}'::text[]) AS tags,
+ max(e.created_at) AS last_comment_at,count(*)::text AS comment_count,coalesce(automation.paused,false) AS automation_paused,coalesce(t.tags,'{}'::text[]) AS tags,
  coalesce((SELECT jsonb_object_agg(v.field_id::text,v.value) FROM instagram_contact_field_values v
  JOIN instagram_contact_fields f ON f.id=v.field_id AND f.workspace_id=v.workspace_id AND NOT f.archived
  WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.value IS NOT NULL),'{}'::jsonb) AS fields
  FROM instagram_comment_events e JOIN instagram_connections c ON c.id=e.connection_id AND c.workspace_id=e.workspace_id
+ LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=e.workspace_id AND automation.connection_id=e.connection_id AND automation.sender_id=e.sender_id
  LEFT JOIN instagram_contact_tags t ON t.workspace_id=e.workspace_id AND t.connection_id=e.connection_id AND t.sender_id=e.sender_id
  WHERE e.workspace_id=$1 AND ($2::uuid IS NULL OR e.connection_id=$2)
  AND ($3::text IS NULL OR $3=ANY(t.tags))
@@ -101,7 +103,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
  AND ($6::uuid IS NULL OR CASE WHEN $7::text='is_unset' THEN NOT EXISTS(
    SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=$6 AND v.value IS NOT NULL)
  ELSE EXISTS(SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=$6 AND v.value IS NOT NULL AND ($7='is_set' OR v.value=$8::jsonb)) END)
- GROUP BY e.workspace_id,e.connection_id,e.sender_id,c.username,t.tags ORDER BY e.connection_id,e.sender_id LIMIT 51`,
+ GROUP BY e.workspace_id,e.connection_id,e.sender_id,c.username,t.tags,automation.paused ORDER BY e.connection_id,e.sender_id LIMIT 51`,
     [
       workspaceId,
       connectionId,
@@ -240,4 +242,31 @@ export async function archiveContactSegment(pool: Pool, user: User, id: string) 
   );
   if (!result.rows[0]) throw new ApiError(404, "segment_not_found");
   return { id: result.rows[0].id };
+}
+
+export async function saveContactAutomation(
+  pool: Pool,
+  user: User,
+  connectionId: string,
+  senderId: string,
+  input: unknown,
+) {
+  if (
+    !isUuid(connectionId) ||
+    !senderIdentity(senderId) ||
+    !isRecord(input) ||
+    Object.keys(input).length !== 1 ||
+    typeof input.paused !== "boolean"
+  )
+    throw new ApiError(400, "invalid_contact_automation");
+  const workspace = await workspaceFor(pool, user);
+  const result = await pool.query(
+    `INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused)
+     SELECT $1,$2,$3,$4 WHERE EXISTS(SELECT 1 FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3)
+     ON CONFLICT(workspace_id,connection_id,sender_id) DO UPDATE SET paused=EXCLUDED.paused,updated_at=now()
+     RETURNING paused AS automation_paused`,
+    [workspace, connectionId, senderId, input.paused],
+  );
+  if (!result.rows[0]) throw new ApiError(404, "contact_not_found");
+  return result.rows[0];
 }
