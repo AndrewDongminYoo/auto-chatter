@@ -137,7 +137,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
   });
   try {
     await pool.query(
-      "DROP TABLE IF EXISTS instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
@@ -286,6 +286,53 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.deepEqual(await saved.json(), { tags: ["lead"] });
     const filtered = await runtime.dispatchFetch("https://app.test/api/contacts?tag=lead", { headers });
     assert.equal((await filtered.json()).contacts.length, 1);
+    for (const table of ["instagram_contact_fields", "instagram_contact_field_values"]) {
+      const protectedTable = await pool.query("SELECT relrowsecurity FROM pg_class WHERE oid=$1::regclass", [table]);
+      assert.equal(protectedTable.rows[0].relrowsecurity, true);
+      const privileges = await pool.query("SELECT has_table_privilege('auto_chatter_server',$1,'DELETE') AS allowed", [
+        table,
+      ]);
+      assert.equal(privileges.rows[0].allowed, false);
+    }
+    const fieldResponse = await runtime.dispatchFetch("https://app.test/api/contact-fields", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Score", type: "number" }),
+    });
+    assert.equal(fieldResponse.status, 201);
+    const field = await fieldResponse.json();
+    const fieldList = await runtime.dispatchFetch("https://app.test/api/contact-fields", { headers });
+    assert.equal((await fieldList.json()).fields[0].id, field.id);
+    const valuePath = `https://app.test/api/connections/${connection}/contacts/sender-1/fields/${field.id}`;
+    const fieldSaved = await runtime.dispatchFetch(valuePath, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ value: 0 }),
+    });
+    assert.equal(fieldSaved.status, 200);
+    assert.deepEqual(await fieldSaved.json(), { value: 0 });
+    const fieldFiltered = await runtime.dispatchFetch(
+      `https://app.test/api/contacts?field_id=${field.id}&field_operator=eq&field_value=0`,
+      { headers },
+    );
+    assert.equal((await fieldFiltered.json()).contacts[0].fields[field.id], 0);
+    const foreignField = await runtime.dispatchFetch(valuePath, {
+      method: "PUT",
+      headers: { ...headers, cookie: "__Host-ac-access=foreign" },
+      body: JSON.stringify({ value: 1 }),
+    });
+    assert.equal(foreignField.status, 404);
+    const fieldArchive = await runtime.dispatchFetch(`https://app.test/api/contact-fields/${field.id}`, {
+      method: "DELETE",
+      headers,
+    });
+    assert.equal(fieldArchive.status, 200);
+    const inactiveField = await runtime.dispatchFetch(valuePath, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ value: 1 }),
+    });
+    assert.equal(inactiveField.status, 404);
     assert.equal(
       (await pool.query("SELECT relrowsecurity FROM pg_class WHERE oid='instagram_contact_segments'::regclass")).rows[0]
         .relrowsecurity,
