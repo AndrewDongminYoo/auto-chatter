@@ -190,4 +190,18 @@ See `docs/specs/2026-09-27-instagram-contacts.md` and the parity backlog in `doc
 Creation locks the workspace row before checking the 50-active-segment limit; normalized active names are unique within a workspace.
 Apply migration 009 and the existing server access script before deploying the feature.
 The UI preserves contact drafts when archiving filters and rejects late segment responses after session reset.
-Segments do not grant messaging consent or delivery eligibility; custom fields and segment-driven sends remain unimplemented.
+Segments do not grant messaging consent or delivery eligibility; segment-driven sends remain unimplemented.
+
+## Typed contact fields
+
+`GET/POST /api/contact-fields` lists or creates workspace-owned text, number, boolean and date definitions.
+`DELETE /api/contact-fields/:id` archives a definition; active saved segments that reference it prevent archive with `field_in_use`.
+`PUT /api/connections/:id/contacts/:senderId/fields/:fieldId` saves a typed value or clears it with `{value:null}`.
+Values stay scoped to workspace, connection and sender; zero, false and empty text are set values.
+Manual and saved contact filters accept a single typed equality or presence condition and evaluate current values.
+Apply migration 010 through the administrator runner before deployment; two new tables use existing server RLS policies and no DELETE grants.
+Archived definitions retain stored values and names; the UI omits them, and permanent deletion remains the approved manual operator process.
+Privacy and deletion pages disclose manually entered contact tags and field values.
+Workspace and activity readers reject late responses after session reset.
+These capabilities have local DB/workerd/browser evidence only; production migration and deployment have not been performed.
+Data collection, message interpolation, global bot fields and segment-driven sends remain backlog items.
