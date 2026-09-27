@@ -6,6 +6,7 @@
     <title>자동화 설정 | auto-chatter</title>
     <link rel="icon" href="../icons/auto-chatter.png" type="image/png" />
     <link rel="stylesheet" href="./styles.css" />
+    <script src="./inbox.js" defer></script>
     <script src="./app.js" defer></script>
   </head>
   <body>
@@ -93,7 +94,7 @@
       <div id="workspace" hidden>
         <nav class="workspace-nav" aria-label="설정 구역">
           <a href="#accounts-section">연결 계정</a><a href="#automation-section">자동화 규칙</a
-          ><a href="#contacts-section">연락처</a><a href="#inbox-section">수신 인박스</a
+          ><a href="#contacts-section">연락처</a><a href="#inbox-section">인박스</a
           ><a href="#activity-section">처리 내역</a>
         </nav>
         <div id="delivery-banner" class="delivery-banner">
@@ -384,12 +385,12 @@
         </section>
         <section id="inbox-section" class="card" aria-labelledby="inbox-title">
           <div class="section-heading">
-            <h2 id="inbox-title">수신 인박스</h2>
+            <h2 id="inbox-title">인박스</h2>
             <button id="inbox-refresh" class="secondary">새로고침</button>
           </div>
           <p class="hint">
-            연결 계정에서 ‘DM 보관 켜기’를 선택한 이후의 텍스트와 확인 버튼 응답입니다. 수동 답장과 발신 이력은 아직
-            제공하지 않습니다.
+            DM 보관을 켠 이후의 수신 메시지와 수동 답장 이력입니다. 상담을 시작하면 자동 답장을 잠시 멈추고 직접 답장할
+            수 있습니다.
           </p>
           <label
             >Instagram 계정<select id="inbox-account">
@@ -402,11 +403,39 @@
               <div id="inbox-conversations"></div>
               <button id="inbox-more" class="secondary" hidden>대화 더 보기</button>
             </div>
-            <section aria-labelledby="inbox-conversation-title">
-              <h3 id="inbox-conversation-title">대화를 선택하세요</h3>
+            <section class="inbox-thread" aria-labelledby="inbox-conversation-title">
+              <div class="section-heading">
+                <h3 id="inbox-conversation-title">대화를 선택하세요</h3>
+                <button id="inbox-thread-refresh" class="secondary" hidden>대화 새로고침</button>
+              </div>
+              <div id="inbox-handoff-controls" hidden>
+                <p id="inbox-handoff-state" class="hint"></p>
+                <button id="inbox-handoff" class="secondary">상담 시작</button>
+              </div>
               <p id="inbox-message-status" class="hint" role="status" aria-live="polite"></p>
-              <button id="inbox-older" class="secondary" hidden>이전 메시지 보기</button>
+              <button id="inbox-older" class="secondary" hidden>이전 수신·답장 보기</button>
               <div id="inbox-messages"></div>
+              <form id="inbox-composer" class="inbox-composer" hidden>
+                <h4>직접 답장</h4>
+                <p id="inbox-eligibility" class="hint" role="status"></p>
+                <label for="inbox-reply-text">메시지</label>
+                <textarea
+                  id="inbox-reply-text"
+                  rows="4"
+                  maxlength="1000"
+                  required
+                  aria-describedby="inbox-reply-help inbox-reply-count"
+                ></textarea>
+                <div class="composer-footer">
+                  <p id="inbox-reply-help" class="hint">Enter로 줄바꿈 · Ctrl/⌘ + Enter로 예약</p>
+                  <span id="inbox-reply-count" class="hint">0 / 1,000</span>
+                </div>
+                <p id="inbox-reply-status" class="hint" role="status" aria-live="polite"></p>
+                <div class="composer-actions">
+                  <button id="inbox-request-check" type="button" class="secondary" hidden>같은 요청의 접수 확인</button>
+                  <button id="inbox-send" type="submit" disabled>답장 예약</button>
+                </div>
+              </form>
             </section>
           </div>
         </section>

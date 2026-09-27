@@ -1,4 +1,4 @@
-import { queueManualReply, listManualReplies, resolveManualReply } from "./manual-replies.ts";
+import { queueManualReply, listManualReplies, resolveManualReply, readManualReplyStatus } from "./manual-replies.ts";
 import { inboxHandoff, saveInboxHandoff } from "./inbox-handoff.ts";
 import type { Pool } from "pg";
 import { ApiError, AuthClient, json, readJson, requireSameOrigin, type AuthEnv } from "./auth.ts";
@@ -57,6 +57,18 @@ export async function appApi(
         return json({ connections: await listConnections(pool, user) });
       if (url.pathname === "/api/inbox" && request.method === "GET")
         return json(await listInbox(pool, user, url.searchParams));
+      const replyStatus = /^\/api\/connections\/([a-f0-9-]+)\/inbox\/(\d+)\/reply-status$/.exec(url.pathname);
+      if (replyStatus && request.method === "GET")
+        return json(
+          await readManualReplyStatus(
+            pool,
+            user,
+            replyStatus[1]!,
+            replyStatus[2]!,
+            url.searchParams,
+            env.SEND_ENABLED === "true",
+          ),
+        );
       const manual =
         /^\/api\/connections\/([a-f0-9-]+)\/inbox\/(\d+)\/replies(?:\/([a-f0-9-]+)\/(retry|resolution))?$/.exec(
           url.pathname,

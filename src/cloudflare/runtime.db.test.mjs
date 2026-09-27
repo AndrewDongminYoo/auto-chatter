@@ -424,6 +424,22 @@ test("workerd contact API uses restricted server privileges and verified workspa
       [connection],
     );
     const manualPath = `${inboxPath}/456/replies`;
+    const replyStatus = await runtime.dispatchFetch(`${inboxPath}/456/reply-status`, { headers });
+    assert.equal(replyStatus.status, 200);
+    const composerStatus = await replyStatus.json();
+    assert.equal(composerStatus.handoff_active, true);
+    assert.equal(composerStatus.handoff_version, 1);
+    assert.equal(composerStatus.failure_code, null);
+    assert.equal(composerStatus.allowed, true);
+    assert.equal(JSON.stringify(composerStatus).includes("synthetic-encrypted"), false);
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`${inboxPath}/456/reply-status`, {
+          headers: { ...headers, cookie: "__Host-ac-access=foreign" },
+        })
+      ).status,
+      404,
+    );
     const manualBody = {
       request_key: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       expected_handoff_version: 1,

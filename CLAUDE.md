@@ -248,5 +248,8 @@ API notification failures are repaired by cron; stale sends become unknown with 
 Both fresh Compose and migrated server roles cannot UPDATE or DELETE the manual audit.
 The Node environment-token worker does not process manual replies.
 See [the manual reply contract](docs/specs/2026-09-27-inbox-manual-replies.md).
-Echoes, attachments, edits, deletions, historical import, manual reply UI and shared team roles remain unimplemented.
+The owned `GET /api/connections/:connectionId/inbox/:recipientId/reply-status` shares the worker policy snapshot and returns advisory eligibility, handoff version, server time, window expiry and unresolved-unknown blocking without token or identity evidence.
+The inbox controller in `public/app/inbox.js` keeps conversation drafts and independent inbound/outbound cursors, guards stale session/read responses, and replays uncertain reception with the same UUID and payload.
+It exposes handoff start/resume, safe failed-row retry and audited unknown `no_retry` resolution; see [the UI contract](docs/specs/2026-09-28-inbox-manual-reply-ui.md).
+Echoes, attachments, edits, deletions, historical import and shared team roles remain unimplemented.
 No production migration or live inbox verification has been performed.
