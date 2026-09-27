@@ -85,7 +85,7 @@ export async function listConnections(pool: Pool, user: User) {
   const workspaceId = await workspaceFor(pool, user);
   return (
     await pool.query(
-      `SELECT id,account_id,username,active,send_enabled,token_expires_at,access_token_encrypted IS NOT NULL AS token_registered FROM instagram_connections WHERE workspace_id=$1 ORDER BY id`,
+      `SELECT id,account_id,username,active,send_enabled,inbox_enabled,token_expires_at,access_token_encrypted IS NOT NULL AS token_registered FROM instagram_connections WHERE workspace_id=$1 ORDER BY id`,
       [workspaceId],
     )
   ).rows;

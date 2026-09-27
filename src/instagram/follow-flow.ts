@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import type { InstagramMessage } from "./message-events.ts";
 import type { FollowTransport } from "./follow-transport.ts";
+import { storeInboxMessage } from "./inbox.ts";
 import { PreSendVerificationError, ProviderRateLimitedError, ProviderRejectedError } from "./reply-worker.ts";
 
 const normalized = (text: string) => text.normalize("NFC").trim().toLowerCase();
@@ -15,6 +16,7 @@ export async function ingestMessages(
   try {
     await client.query("BEGIN");
     for (const message of messages) {
+      await storeInboxMessage(client, message, now);
       if (
         message.timestamp.getTime() > now.getTime() + 60000 ||
         message.timestamp.getTime() <= now.getTime() - 24 * 3600000

@@ -137,7 +137,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
   });
   try {
     await pool.query(
-      "DROP TABLE IF EXISTS instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
@@ -159,6 +159,37 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
     );
     assert.equal(challenge.status, 200);
     assert.equal(await challenge.text(), "verified");
+    await pool.query("UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now()-interval '1 minute'");
+    const dmBody = JSON.stringify({
+      object: "instagram",
+      entry: [
+        {
+          id: "123",
+          messaging: [
+            {
+              sender: { id: "456" },
+              recipient: { id: "123" },
+              timestamp: Date.now(),
+              message: { mid: "runtime-inbox", text: "private runtime inbox" },
+            },
+          ],
+        },
+      ],
+    });
+    const dmSignature = `sha256=${createHmac("sha256", "runtime-secret").update(dmBody).digest("hex")}`;
+    for (let replay = 0; replay < 2; replay++)
+      assert.equal(
+        (
+          await runtime.dispatchFetch("https://example.test/webhooks/instagram", {
+            method: "POST",
+            body: dmBody,
+            headers: { "x-hub-signature-256": dmSignature },
+          })
+        ).status,
+        200,
+      );
+    assert.equal((await pool.query("SELECT count(*) FROM instagram_inbox_messages")).rows[0].count, "1");
+    await pool.query("UPDATE instagram_connections SET inbox_enabled=false");
     const body = JSON.stringify({
       object: "instagram",
       entry: [
@@ -289,6 +320,45 @@ test("workerd contact API uses restricted server privileges and verified workspa
       origin: "https://app.test",
       "content-type": "application/json",
     };
+    await pool.query("UPDATE instagram_connections SET active=true WHERE id=$1", [connection]);
+    const inboxPath = `https://app.test/api/connections/${connection}/inbox`;
+    assert.equal(
+      (await runtime.dispatchFetch(inboxPath, { method: "PUT", headers, body: JSON.stringify({ enabled: true }) }))
+        .status,
+      200,
+    );
+    await pool.query(
+      "INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at) VALUES($1,$2,'456','owned-dm','private body','text',now())",
+      [workspace, connection],
+    );
+    const inboxPage = await runtime.dispatchFetch("https://app.test/api/inbox", { headers });
+    assert.equal(inboxPage.status, 200);
+    assert.equal((await inboxPage.json()).conversations[0].recipient_id, "456");
+    const inboxHistory = await runtime.dispatchFetch(`${inboxPath}/456`, { headers });
+    assert.equal((await inboxHistory.json()).messages[0].text, "private body");
+    assert.equal(
+      (await runtime.dispatchFetch(`${inboxPath}/456`, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } }))
+        .status,
+      404,
+    );
+    assert.equal(
+      (
+        await runtime.dispatchFetch(inboxPath, {
+          method: "PUT",
+          headers: { ...headers, origin: "https://foreign.test" },
+          body: JSON.stringify({ enabled: false }),
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await pool.query(
+          "SELECT has_table_privilege('auto_chatter_server','instagram_inbox_messages','DELETE') AS allowed",
+        )
+      ).rows[0].allowed,
+      false,
+    );
     const list = await runtime.dispatchFetch("https://app.test/api/contacts", { headers });
     assert.equal(list.status, 200);
     assert.equal((await list.json()).contacts[0].sender_id, "sender-1");
