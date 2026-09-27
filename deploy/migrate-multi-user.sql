@@ -7,5 +7,6 @@ BEGIN;
 \ir ../db/migrations/005_instagram_oauth.sql
 \ir ../db/migrations/006_follow_conversations.sql
 \ir ../db/migrations/007_confirmation_button.sql
+\ir ../db/migrations/008_instagram_contact_tags.sql
 \ir supabase-access.sql
 COMMIT;

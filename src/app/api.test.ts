@@ -256,3 +256,73 @@ test("API rejects unauthenticated and cross-origin requests before opening a dat
   );
   assert.equal(crossOrigin.status, 403);
 });
+
+test("contacts API is authenticated and returns only the workspace list", async () => {
+  const pool = {
+    query: async (sql: string) => ({ rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId }] : [] }),
+    end: async () => {},
+  } as unknown as Pool;
+  const response = await appApi(
+    new Request("https://app.test/api/contacts", { headers: { cookie: "__Host-ac-access=test" } }),
+    config,
+    () => pool,
+    mediaFetch(),
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { contacts: [], after: null });
+});
+
+test("contact mutations reject cross-origin writes and invalid tags before a write", async () => {
+  const path = `https://app.test/api/connections/${connectionId}/contacts/888`;
+  const open = () => {
+    throw new Error("DB must not be opened");
+  };
+  assert.equal(
+    (await appApi(new Request(path, { method: "PATCH", headers: { origin: "https://evil.test" } }), config, open))
+      .status,
+    403,
+  );
+  const pool = {
+    query: async () => {
+      throw new Error("No SQL on invalid input");
+    },
+    end: async () => {},
+  } as unknown as Pool;
+  const invalid = await appApi(
+    new Request(path, {
+      method: "PATCH",
+      headers: { origin: "https://app.test", cookie: "__Host-ac-access=test", "content-type": "application/json" },
+      body: JSON.stringify({ tags: ["x".repeat(41)] }),
+    }),
+    config,
+    () => pool,
+    mediaFetch(),
+  );
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(await invalid.json(), { error: "invalid_contact_tags" });
+});
+
+test("contact routes accept encoded string sender IDs without changing identity", async () => {
+  const sender = "sender/one% test";
+  const pool = {
+    query: async (sql: string, values: unknown[]) => ({
+      rows: sql.includes("workspace_members")
+        ? [{ workspace_id: workspaceId }]
+        : values[2] === sender
+          ? [{ tags: ["lead"] }]
+          : [],
+    }),
+    end: async () => {},
+  } as unknown as Pool;
+  const request = new Request(
+    `https://app.test/api/connections/${connectionId}/contacts/${encodeURIComponent(sender)}`,
+    {
+      method: "PATCH",
+      headers: { origin: "https://app.test", cookie: "__Host-ac-access=test", "content-type": "application/json" },
+      body: JSON.stringify({ tags: ["lead"] }),
+    },
+  );
+  const result = await appApi(request, config, () => pool, mediaFetch());
+  assert.equal(result.status, 200);
+  assert.deepEqual(await result.json(), { tags: ["lead"] });
+});

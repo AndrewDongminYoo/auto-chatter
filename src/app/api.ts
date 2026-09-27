@@ -11,6 +11,7 @@ import {
   updateConnection,
 } from "./settings.ts";
 import { beginInstagramOAuth, finishInstagramOAuth, type InstagramOAuthEnv } from "./instagram-oauth.ts";
+import { listContacts, saveContactTags } from "./contacts.ts";
 import { connectionMedia } from "./instagram-media.ts";
 
 export async function appApi(
@@ -42,6 +43,18 @@ export async function appApi(
         return json({ workspace_id: await ensureWorkspace(pool, user) });
       if (url.pathname === "/api/connections" && request.method === "GET")
         return json({ connections: await listConnections(pool, user) });
+      if (url.pathname === "/api/contacts" && request.method === "GET")
+        return json(await listContacts(pool, user, url.searchParams));
+      const contact = /^\/api\/connections\/([a-f0-9-]+)\/contacts\/([^/]+)$/.exec(url.pathname);
+      if (contact && request.method === "PATCH") {
+        let senderId: string;
+        try {
+          senderId = decodeURIComponent(contact[2]!);
+        } catch {
+          throw new ApiError(400, "invalid_contact_request");
+        }
+        return json(await saveContactTags(pool, user, contact[1]!, senderId, await readJson(request)));
+      }
       if (url.pathname === "/api/activity" && request.method === "GET")
         return json({ activity: await listActivity(pool, user) });
       if (url.pathname === "/api/rules" && request.method === "GET")
