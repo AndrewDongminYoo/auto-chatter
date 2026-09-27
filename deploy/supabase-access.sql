@@ -38,7 +38,7 @@ BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'automations_app') THEN
     server_roles := server_roles || ', automations_app';
   END IF;
-  FOREACH product_table IN ARRAY ARRAY['instagram_inbox_handoffs', 'instagram_inbox_handoff_events', 'instagram_inbox_messages', 'instagram_contact_automation', 'instagram_contact_fields', 'instagram_contact_field_values', 'instagram_contact_segments', 'instagram_contact_tags', 'workspaces', 'workspace_members', 'instagram_follow_conversations', 'instagram_message_receipts', 'instagram_oauth_states', 'instagram_connections', 'instagram_comment_rules', 'instagram_comment_events', 'private_reply_outbox'] LOOP
+  FOREACH product_table IN ARRAY ARRAY['instagram_manual_replies', 'instagram_manual_reply_events', 'instagram_inbox_handoffs', 'instagram_inbox_handoff_events', 'instagram_inbox_messages', 'instagram_contact_automation', 'instagram_contact_fields', 'instagram_contact_field_values', 'instagram_contact_segments', 'instagram_contact_tags', 'workspaces', 'workspace_members', 'instagram_follow_conversations', 'instagram_message_receipts', 'instagram_oauth_states', 'instagram_connections', 'instagram_comment_rules', 'instagram_comment_events', 'private_reply_outbox'] LOOP
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', product_table);
     EXECUTE format('REVOKE ALL ON public.%I FROM PUBLIC, %s', product_table, server_roles);
     FOREACH api_role IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
@@ -78,3 +78,15 @@ BEGIN
   END LOOP;
 END $$;
 DROP POLICY IF EXISTS server_update ON public.instagram_inbox_handoff_events;
+
+-- Manual delivery audit is append-only for both runtime roles.
+DO $$
+DECLARE server_role text;
+BEGIN
+  FOREACH server_role IN ARRAY ARRAY['auto_chatter_server','automations_app'] LOOP
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname=server_role) THEN
+      EXECUTE format('REVOKE UPDATE ON public.instagram_manual_reply_events FROM %I',server_role);
+    END IF;
+  END LOOP;
+END $$;
+DROP POLICY IF EXISTS server_update ON public.instagram_manual_reply_events;
