@@ -6,7 +6,10 @@ Cloudflare 어댑터와 로컬 검증 경로를 구현했습니다.
 2026-09-26 승인된 개인 계정에서 Supabase 프로젝트와 Cloudflare 리소스를 생성하고 workers.dev에 배포했습니다.
 2026-09-28 `auto-chat.donminzzi.kr`를 같은 계정의 기존 `auto-chatter` Worker에 Custom Domain으로 연결했습니다.
 새 도메인의 `/app/`, `/privacy`, `/service`, `/data-deletion`은 HTTPS 200, 로그인하지 않은 `/api/me`는 401로 응답했습니다.
+도메인 루트 `/`에만 적용되는 Cloudflare Redirect Rule은 `/app/`로 302 이동시키며 쿼리 문자열을 보존합니다.
 기존 workers.dev 주소의 `/service`도 200으로 유지했습니다.
+Supabase Auth의 Site URL을 `https://auto-chat.donminzzi.kr/app/`로 변경하고 저장 후 재조회로 확인했습니다.
+확인 이메일의 실제 복귀는 아직 실사용 계정으로 검증하지 않았습니다.
 새 Worker 코드를 배포하지 않았으며, Meta OAuth 콜백과 웹훅 주소를 새 도메인으로 변경하기 전까지 아래 Meta 등록 주소와 운영 `APP_ORIGIN`은 기존 workers.dev 주소를 사용합니다.
 기본 배포 설정은 `SEND_ENABLED=false`입니다.
 승인된 단일 게시물의 첫 DM 테스트에서 실제 수신과 DB의 `sent` 행·공급자 메시지 ID를 확인한 뒤 전역·계정·규칙 발송을 모두 중지했습니다.
