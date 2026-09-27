@@ -90,7 +90,7 @@ OAuth 연결 이후 `auto-chatter OAuth 수신 테스트` 댓글이 `2026-09-26T
 
 1. 운영 데이터베이스 백업과 현재 스키마를 확인하고 전역 발송 중지를 유지합니다.
 2. Supabase 관리자 연결로 `psql "$ADMIN_DATABASE_URL" -f deploy/migrate-multi-user.sql`을 실행합니다.
-   현재 실행 스크립트는 003–012 마이그레이션과 `deploy/supabase-access.sql`을 한 트랜잭션에서 순서대로 적용하며 첫 오류에서 중단합니다.
+   현재 실행 스크립트는 003–013 마이그레이션과 `deploy/supabase-access.sql`을 한 트랜잭션에서 순서대로 적용하며 첫 오류에서 중단합니다.
    최초 전환 당시 적용 기록은 003–006이며, 이후 마이그레이션의 운영 적용 여부는 별도로 확인합니다.
    개별 마이그레이션을 직접 실행하거나 오류 후 다음 파일부터 계속하지 않습니다.
    실패하면 전체 롤백을 확인하고 원인을 고친 뒤 실행 스크립트를 다시 시작합니다.
@@ -154,10 +154,10 @@ Meta 자체의 앱 권한 철회는 Instagram 설정에서 별도로 수행할 �
 전체 데이터 삭제는 기존에 승인한 운영자 수동 처리 정책을 따릅니다.
 
 작업 공간 전체의 관리자 삭제 절차는 계정 수신·발송과 인박스 보관을 먼저 중지하고 진행 중인 요청이 없는지 확인한 뒤 수행합니다.
-삭제 범위의 workspace·연결 ID를 확인하고 한 트랜잭션에서 `instagram_inbox_messages`·`instagram_contact_automation`·`instagram_contact_tags`·`instagram_contact_field_values`·`instagram_contact_segments` → `instagram_contact_fields` → `instagram_message_receipts`·`instagram_follow_conversations` → `private_reply_outbox` → 댓글 이벤트·규칙 → 연결 → 해당 workspace의 OAuth state → membership → workspace 순으로 처리합니다.
+삭제 범위의 workspace·연결 ID를 확인하고 한 트랜잭션에서 `instagram_inbox_handoff_events` → `instagram_inbox_handoffs` → `instagram_inbox_messages`·`instagram_contact_automation`·`instagram_contact_tags`·`instagram_contact_field_values`·`instagram_contact_segments` → `instagram_contact_fields` → `instagram_message_receipts`·`instagram_follow_conversations` → `private_reply_outbox` → 댓글 이벤트·규칙 → 연결 → 해당 workspace의 OAuth state → membership → workspace 순으로 처리합니다.
 다른 작업 공간의 행은 삭제 대상에 포함하지 않으며, 단일 연락처나 연결만 삭제하는 요청은 해당 범위와 참조 관계를 별도로 확인합니다.
 로그인 계정 삭제 요청이면 관련 작업 공간 데이터를 처리한 뒤 Supabase Auth 사용자도 관리자 권한으로 삭제합니다.
-별도 인박스 보관을 켠 연결의 수신 DM 본문과 확인 버튼 응답, 연락처 태그·필드·필터·자동화 중지 상태, 발송 문구, 확인 메시지 식별자·시각, 팔로우 확인 상태는 삭제 대상에 포함합니다.
+별도 인박스 보관을 켠 연결의 수신 DM 본문과 확인 버튼 응답, 연락처 태그·필드·필터·직접 중지와 상담 중지 상태, 상담 전환 버전·운영자·근거·감사 기록, 발송 문구, 확인 메시지 식별자·시각, 팔로우 확인 상태는 삭제 대상에 포함합니다.
 서버 역할에 DELETE 권한을 추가하지 않습니다.
 
 `unknown`은 자동 재발송하지 않고 운영자가 공급자 상태를 확인합니다.

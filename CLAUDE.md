@@ -148,7 +148,7 @@ The conversation finished as `sent / following` with two confirmation receipts a
 See `docs/notes/2026-09-26-live-follow-test.md` for the approved texts, evidence and shutdown procedure.
 Email confirmation-link behavior, multi-user live isolation, live unavailable-follow and duplicate-event cases, and Advanced Access remain unverified.
 Run `psql -f deploy/migrate-multi-user.sql` with an administrator connection before deploying this code.
-This runner owns the transaction for migrations 003–012 and the access script, stops on the first error, and rolls back on failure.
+This runner owns the transaction for migrations 003–013 and the access script, stops on the first error, and rolls back on failure.
 Do not apply these migration files individually without that transaction.
 Assign the existing workspace to a confirmed operator with `deploy/assign-workspace-owner.sql`; never claim legacy data automatically by email.
 Token renewal currently requires reconnecting the Instagram account before the displayed expiry.
@@ -231,5 +231,10 @@ DM recipient IDs remain separate from comment participant IDs.
 `GET /api/connections/:connectionId/inbox/:recipientId/context` reads a stored provider-response bridge and current comment automation pause in one SQL snapshot.
 It masks identity and pause fields unless one fresh sender is verified; missing, stale and ambiguous evidence remain distinct.
 This read is advisory, not send authorization or a handoff mutation; see [the handoff contract](docs/specs/2026-09-27-inbox-handoff-contract.md).
+`GET/PUT /api/connections/:connectionId/inbox/:recipientId/handoff` persists human handoff with version checks and append-only server audit.
+Starting requires a currently verified comment bridge; resuming uses the captured sender even after history or evidence is lost.
+`instagram_contact_automation.handoff_paused` is derived from active handoffs independently of manual `paused`; every automated claim and final send guard checks either reason.
+Manual contact resume is refused while a handoff remains active.
+Migration 013 precedes deployment; the administrator runner includes its tables and restricted audit grants.
 Echoes, attachments, edits, deletions, historical import, outbound history, manual replies and shared team roles remain unimplemented.
 No production migration or live inbox verification has been performed.

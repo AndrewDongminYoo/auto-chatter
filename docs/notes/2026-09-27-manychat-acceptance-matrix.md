@@ -5,65 +5,65 @@
 [목표 명세](../specs/2026-09-25-messaging-automation-platform.md)와 [백로그](2026-09-27-manychat-backlog.md)의 알려진 필수 작업을 코드·로컬 검사·실계정·운영 적용으로 구분합니다.
 기준은 `591cc091e5e3cdb55bba20fe65d3c662df800fd4`이며 이 표의 미완료는 구현된 첫 DM·팔로우·연락처 기능을 없다고 판정한 것이 아닙니다.
 각 행은 해당 이슈의 확장 또는 최종 검증 완료 여부입니다.
-이번 문맥 조회의 로컬 근거는 [검증 기록](2026-09-27-inbox-handoff-verification.md)에 있으며 공급자·운영 검증과 구분합니다.
+문맥 조회의 로컬 근거는 [조회 검증 기록](2026-09-27-inbox-handoff-verification.md), 상담 전환은 [전환 검증 기록](2026-09-27-inbox-human-handoff-verification.md)에 있으며 공급자·운영 검증과 구분합니다.
 채널 지원 표시는 코드와 공식 승인·실계정 왕복·운영 적용을 모두 확인한 범위로 제한합니다.
 검증 담당자는 기능별 구현자·독립 검토자이며, 외부 계정·가격·정책·배포·발송의 승인 담당자는 운영자입니다.
 
-| 작업                                                              | 요구 또는 검증                                                | 현재 코드              | 로컬 증거                      | 공급자·실계정                | 운영 완료     |
-| ----------------------------------------------------------------- | ------------------------------------------------------------- | ---------------------- | ------------------------------ | ---------------------------- | ------------- |
-| [#12](https://github.com/AndrewDongminYoo/auto-chatter/issues/12) | ManyChat 대체 범위와 기능별 검증 매트릭스 확정                | 매트릭스 작성          | 53건 이슈 대응 확인            | 미검증                       | 완료하지 않음 |
-| [#13](https://github.com/AndrewDongminYoo/auto-chatter/issues/13) | 병합된 연락처·필터·필드·자동화 중지·수신 인박스 운영 적용     | 부분 기반              | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
-| [#14](https://github.com/AndrewDongminYoo/auto-chatter/issues/14) | Instagram App Review·Advanced Access 및 추가 사용자 연결 검증 | 부분 기반              | 기존 증거 있음, 추가 검증 필요 | 운영자 Instagram 일부만 확인 | 완료하지 않음 |
-| [#15](https://github.com/AndrewDongminYoo/auto-chatter/issues/15) | 회원가입·이메일 확인·비밀번호 복구·세션 만료 경로 완성        | 부분 기반              | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
-| [#16](https://github.com/AndrewDongminYoo/auto-chatter/issues/16) | Instagram 토큰 갱신·연결 상태·재인증 안내                     | 부분 기반              | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
-| [#17](https://github.com/AndrewDongminYoo/auto-chatter/issues/17) | DM 대화와 댓글 연락처 연결 및 상담 전환 정책 확정             | 조회 구현, 쓰기 미구현 | DB·workerd 조회 확인           | 미검증                       | 완료하지 않음 |
-| [#18](https://github.com/AndrewDongminYoo/auto-chatter/issues/18) | 인박스 수동 답장 outbox·정책 검사·발신 이력 구현              | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#19](https://github.com/AndrewDongminYoo/auto-chatter/issues/19) | 인박스 답장 작성·전송 상태·실패 안내 화면                     | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#20](https://github.com/AndrewDongminYoo/auto-chatter/issues/20) | Instagram 첨부·발신 echo·수정·삭제·전달 이벤트 처리           | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#21](https://github.com/AndrewDongminYoo/auto-chatter/issues/21) | 작업 공간 초대·역할·멤버 제거와 서버 권한 검사                | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#22](https://github.com/AndrewDongminYoo/auto-chatter/issues/22) | 대화 담당자·열림/완료 상태·자동화 인계 구현                   | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#23](https://github.com/AndrewDongminYoo/auto-chatter/issues/23) | 인박스 검색·읽음·라벨·내부 메모·리마인더                      | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#24](https://github.com/AndrewDongminYoo/auto-chatter/issues/24) | 상담 답장 템플릿과 예약 답장                                  | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#25](https://github.com/AndrewDongminYoo/auto-chatter/issues/25) | 연락처 상세·동의 있는 식별자 연결·CSV 가져오기/내보내기       | 부분 기반              | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
-| [#26](https://github.com/AndrewDongminYoo/auto-chatter/issues/26) | 저장된 세그먼트 복합 조건·대상 미리보기·변경 감지             | 부분 기반              | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
-| [#27](https://github.com/AndrewDongminYoo/auto-chatter/issues/27) | 채널별 동의·수신 거부·차단 원장과 발송 guard                  | 부분 기반              | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
-| [#28](https://github.com/AndrewDongminYoo/auto-chatter/issues/28) | 플로 초안·버전·발행 검증 데이터 계약                          | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#29](https://github.com/AndrewDongminYoo/auto-chatter/issues/29) | 버전 고정 플로 실행·분기·중복 방지·실행 이력                  | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#30](https://github.com/AndrewDongminYoo/auto-chatter/issues/30) | 시각적 플로 편집기·미리보기·테스트 실행                       | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#31](https://github.com/AndrewDongminYoo/auto-chatter/issues/31) | 플로 태그·필드 동작·응답 수집·메시지 변수                     | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#32](https://github.com/AndrewDongminYoo/auto-chatter/issues/32) | 플로 지연·시퀀스·응답 대기·취소와 재개                        | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#33](https://github.com/AndrewDongminYoo/auto-chatter/issues/33) | Instagram 일반 DM·스토리 응답·멘션 시작 트리거                | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#34](https://github.com/AndrewDongminYoo/auto-chatter/issues/34) | Instagram 성장 트리거·공개 댓글 답장·링크 버튼 지원 조사      | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#35](https://github.com/AndrewDongminYoo/auto-chatter/issues/35) | 세그먼트 캠페인 초안·대상 확정·비용 미리보기                  | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#36](https://github.com/AndrewDongminYoo/auto-chatter/issues/36) | 캠페인 분할 발송·취소·진행률·부분 실패 복구                   | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#37](https://github.com/AndrewDongminYoo/auto-chatter/issues/37) | 채널 이벤트·대화·발송 capability 계약과 정책 경계             | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#38](https://github.com/AndrewDongminYoo/auto-chatter/issues/38) | Facebook Messenger Page 연결·수신·정책 적용 발송              | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#39](https://github.com/AndrewDongminYoo/auto-chatter/issues/39) | Telegram Bot 연결·수신·버튼·플로·수신 거부                    | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#40](https://github.com/AndrewDongminYoo/auto-chatter/issues/40) | WhatsApp Business 연결·번호·웹훅·서비스 답장                  | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#41](https://github.com/AndrewDongminYoo/auto-chatter/issues/41) | WhatsApp 템플릿 승인·변수·동의·비용 한도                      | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#42](https://github.com/AndrewDongminYoo/auto-chatter/issues/42) | TikTok Business Messaging 지역·사업자·API 승인 관문 검증      | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#43](https://github.com/AndrewDongminYoo/auto-chatter/issues/43) | 승인된 TikTok 계정의 인박스·답장·플로 어댑터                  | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#44](https://github.com/AndrewDongminYoo/auto-chatter/issues/44) | 이메일 채널·발신 인증·반송·수신 거부·비용 상한                | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#45](https://github.com/AndrewDongminYoo/auto-chatter/issues/45) | SMS 출시 국가·발신번호·동의·요금 공급자 결정                  | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#46](https://github.com/AndrewDongminYoo/auto-chatter/issues/46) | SMS 발송·수신·STOP 처리·전달 결과 어댑터                      | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#47](https://github.com/AndrewDongminYoo/auto-chatter/issues/47) | 플로 외부 요청·서명된 outbound webhook·재시도                 | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#48](https://github.com/AndrewDongminYoo/auto-chatter/issues/48) | 작업 공간 API 키·연락처/플로 외부 API·제한과 감사             | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#49](https://github.com/AndrewDongminYoo/auto-chatter/issues/49) | Google Sheets 리드 동기화·중복 방지·CSV 대안                  | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#50](https://github.com/AndrewDongminYoo/auto-chatter/issues/50) | 자동화·캠페인·상담 전환·비용 리포트                           | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#51](https://github.com/AndrewDongminYoo/auto-chatter/issues/51) | 청구월 활성 연락처 원장·중복 제거·재계산                      | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#52](https://github.com/AndrewDongminYoo/auto-chatter/issues/52) | 플랜 권한·좌석·채널·활성 연락처·예산 상한                     | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#53](https://github.com/AndrewDongminYoo/auto-chatter/issues/53) | 판매 플랜·사업자·결제 공급자·환불/실패 정책 확정              | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#54](https://github.com/AndrewDongminYoo/auto-chatter/issues/54) | 구독 결제·체험·갱신·업/다운그레이드·해지 원장                 | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#55](https://github.com/AndrewDongminYoo/auto-chatter/issues/55) | 작업 공간 FAQ 지식·버전·검색·출처 관리                        | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#56](https://github.com/AndrewDongminYoo/auto-chatter/issues/56) | 응답 에이전트 모델 비교·구조화 출력·예산 제한                 | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#57](https://github.com/AndrewDongminYoo/auto-chatter/issues/57) | AI 답변 승인 guard·상담원 인계·운영 평가                      | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#58](https://github.com/AndrewDongminYoo/auto-chatter/issues/58) | 개인정보 내보내기·삭제·보관 정책과 Meta 연결 해제             | 부분 기반              | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
-| [#59](https://github.com/AndrewDongminYoo/auto-chatter/issues/59) | 비밀 없는 운영 지표·경보·지원 진단                            | 부분 기반              | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
-| [#60](https://github.com/AndrewDongminYoo/auto-chatter/issues/60) | 앱 전체·계정·작업 공간 발송 한도와 공정한 스케줄링            | 미구현                 | 미검증                         | 미검증                       | 완료하지 않음 |
-| [#61](https://github.com/AndrewDongminYoo/auto-chatter/issues/61) | 운영 백업·복구 훈련·암호화 키 회전·배포 복구                  | 부분 기반              | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
-| [#62](https://github.com/AndrewDongminYoo/auto-chatter/issues/62) | 공개 다중 사용자 서비스 보안 회귀와 남용 방지                 | 부분 기반              | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
-| [#63](https://github.com/AndrewDongminYoo/auto-chatter/issues/63) | 가입부터 플로·인박스·결제까지 사용성·접근성 검증              | 부분 기반              | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
-| [#64](https://github.com/AndrewDongminYoo/auto-chatter/issues/64) | ManyChat 대체제 전체 수용 테스트·운영 증거·출시 판정          | 부분 기반              | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
+| 작업                                                              | 요구 또는 검증                                                | 현재 코드               | 로컬 증거                      | 공급자·실계정                | 운영 완료     |
+| ----------------------------------------------------------------- | ------------------------------------------------------------- | ----------------------- | ------------------------------ | ---------------------------- | ------------- |
+| [#12](https://github.com/AndrewDongminYoo/auto-chatter/issues/12) | ManyChat 대체 범위와 기능별 검증 매트릭스 확정                | 매트릭스 작성           | 53건 이슈 대응 확인            | 미검증                       | 완료하지 않음 |
+| [#13](https://github.com/AndrewDongminYoo/auto-chatter/issues/13) | 병합된 연락처·필터·필드·자동화 중지·수신 인박스 운영 적용     | 부분 기반               | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
+| [#14](https://github.com/AndrewDongminYoo/auto-chatter/issues/14) | Instagram App Review·Advanced Access 및 추가 사용자 연결 검증 | 부분 기반               | 기존 증거 있음, 추가 검증 필요 | 운영자 Instagram 일부만 확인 | 완료하지 않음 |
+| [#15](https://github.com/AndrewDongminYoo/auto-chatter/issues/15) | 회원가입·이메일 확인·비밀번호 복구·세션 만료 경로 완성        | 부분 기반               | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
+| [#16](https://github.com/AndrewDongminYoo/auto-chatter/issues/16) | Instagram 토큰 갱신·연결 상태·재인증 안내                     | 부분 기반               | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
+| [#17](https://github.com/AndrewDongminYoo/auto-chatter/issues/17) | DM 대화와 댓글 연락처 연결 및 상담 전환 정책 확정             | 조회·상담 전환 API 구현 | DB·workerd 조회·전환 확인      | 미검증                       | 완료하지 않음 |
+| [#18](https://github.com/AndrewDongminYoo/auto-chatter/issues/18) | 인박스 수동 답장 outbox·정책 검사·발신 이력 구현              | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#19](https://github.com/AndrewDongminYoo/auto-chatter/issues/19) | 인박스 답장 작성·전송 상태·실패 안내 화면                     | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#20](https://github.com/AndrewDongminYoo/auto-chatter/issues/20) | Instagram 첨부·발신 echo·수정·삭제·전달 이벤트 처리           | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#21](https://github.com/AndrewDongminYoo/auto-chatter/issues/21) | 작업 공간 초대·역할·멤버 제거와 서버 권한 검사                | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#22](https://github.com/AndrewDongminYoo/auto-chatter/issues/22) | 대화 담당자·열림/완료 상태·자동화 인계 구현                   | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#23](https://github.com/AndrewDongminYoo/auto-chatter/issues/23) | 인박스 검색·읽음·라벨·내부 메모·리마인더                      | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#24](https://github.com/AndrewDongminYoo/auto-chatter/issues/24) | 상담 답장 템플릿과 예약 답장                                  | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#25](https://github.com/AndrewDongminYoo/auto-chatter/issues/25) | 연락처 상세·동의 있는 식별자 연결·CSV 가져오기/내보내기       | 부분 기반               | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
+| [#26](https://github.com/AndrewDongminYoo/auto-chatter/issues/26) | 저장된 세그먼트 복합 조건·대상 미리보기·변경 감지             | 부분 기반               | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
+| [#27](https://github.com/AndrewDongminYoo/auto-chatter/issues/27) | 채널별 동의·수신 거부·차단 원장과 발송 guard                  | 부분 기반               | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
+| [#28](https://github.com/AndrewDongminYoo/auto-chatter/issues/28) | 플로 초안·버전·발행 검증 데이터 계약                          | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#29](https://github.com/AndrewDongminYoo/auto-chatter/issues/29) | 버전 고정 플로 실행·분기·중복 방지·실행 이력                  | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#30](https://github.com/AndrewDongminYoo/auto-chatter/issues/30) | 시각적 플로 편집기·미리보기·테스트 실행                       | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#31](https://github.com/AndrewDongminYoo/auto-chatter/issues/31) | 플로 태그·필드 동작·응답 수집·메시지 변수                     | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#32](https://github.com/AndrewDongminYoo/auto-chatter/issues/32) | 플로 지연·시퀀스·응답 대기·취소와 재개                        | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#33](https://github.com/AndrewDongminYoo/auto-chatter/issues/33) | Instagram 일반 DM·스토리 응답·멘션 시작 트리거                | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#34](https://github.com/AndrewDongminYoo/auto-chatter/issues/34) | Instagram 성장 트리거·공개 댓글 답장·링크 버튼 지원 조사      | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#35](https://github.com/AndrewDongminYoo/auto-chatter/issues/35) | 세그먼트 캠페인 초안·대상 확정·비용 미리보기                  | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#36](https://github.com/AndrewDongminYoo/auto-chatter/issues/36) | 캠페인 분할 발송·취소·진행률·부분 실패 복구                   | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#37](https://github.com/AndrewDongminYoo/auto-chatter/issues/37) | 채널 이벤트·대화·발송 capability 계약과 정책 경계             | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#38](https://github.com/AndrewDongminYoo/auto-chatter/issues/38) | Facebook Messenger Page 연결·수신·정책 적용 발송              | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#39](https://github.com/AndrewDongminYoo/auto-chatter/issues/39) | Telegram Bot 연결·수신·버튼·플로·수신 거부                    | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#40](https://github.com/AndrewDongminYoo/auto-chatter/issues/40) | WhatsApp Business 연결·번호·웹훅·서비스 답장                  | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#41](https://github.com/AndrewDongminYoo/auto-chatter/issues/41) | WhatsApp 템플릿 승인·변수·동의·비용 한도                      | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#42](https://github.com/AndrewDongminYoo/auto-chatter/issues/42) | TikTok Business Messaging 지역·사업자·API 승인 관문 검증      | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#43](https://github.com/AndrewDongminYoo/auto-chatter/issues/43) | 승인된 TikTok 계정의 인박스·답장·플로 어댑터                  | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#44](https://github.com/AndrewDongminYoo/auto-chatter/issues/44) | 이메일 채널·발신 인증·반송·수신 거부·비용 상한                | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#45](https://github.com/AndrewDongminYoo/auto-chatter/issues/45) | SMS 출시 국가·발신번호·동의·요금 공급자 결정                  | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#46](https://github.com/AndrewDongminYoo/auto-chatter/issues/46) | SMS 발송·수신·STOP 처리·전달 결과 어댑터                      | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#47](https://github.com/AndrewDongminYoo/auto-chatter/issues/47) | 플로 외부 요청·서명된 outbound webhook·재시도                 | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#48](https://github.com/AndrewDongminYoo/auto-chatter/issues/48) | 작업 공간 API 키·연락처/플로 외부 API·제한과 감사             | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#49](https://github.com/AndrewDongminYoo/auto-chatter/issues/49) | Google Sheets 리드 동기화·중복 방지·CSV 대안                  | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#50](https://github.com/AndrewDongminYoo/auto-chatter/issues/50) | 자동화·캠페인·상담 전환·비용 리포트                           | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#51](https://github.com/AndrewDongminYoo/auto-chatter/issues/51) | 청구월 활성 연락처 원장·중복 제거·재계산                      | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#52](https://github.com/AndrewDongminYoo/auto-chatter/issues/52) | 플랜 권한·좌석·채널·활성 연락처·예산 상한                     | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#53](https://github.com/AndrewDongminYoo/auto-chatter/issues/53) | 판매 플랜·사업자·결제 공급자·환불/실패 정책 확정              | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#54](https://github.com/AndrewDongminYoo/auto-chatter/issues/54) | 구독 결제·체험·갱신·업/다운그레이드·해지 원장                 | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#55](https://github.com/AndrewDongminYoo/auto-chatter/issues/55) | 작업 공간 FAQ 지식·버전·검색·출처 관리                        | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#56](https://github.com/AndrewDongminYoo/auto-chatter/issues/56) | 응답 에이전트 모델 비교·구조화 출력·예산 제한                 | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#57](https://github.com/AndrewDongminYoo/auto-chatter/issues/57) | AI 답변 승인 guard·상담원 인계·운영 평가                      | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#58](https://github.com/AndrewDongminYoo/auto-chatter/issues/58) | 개인정보 내보내기·삭제·보관 정책과 Meta 연결 해제             | 부분 기반               | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
+| [#59](https://github.com/AndrewDongminYoo/auto-chatter/issues/59) | 비밀 없는 운영 지표·경보·지원 진단                            | 부분 기반               | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
+| [#60](https://github.com/AndrewDongminYoo/auto-chatter/issues/60) | 앱 전체·계정·작업 공간 발송 한도와 공정한 스케줄링            | 미구현                  | 미검증                         | 미검증                       | 완료하지 않음 |
+| [#61](https://github.com/AndrewDongminYoo/auto-chatter/issues/61) | 운영 백업·복구 훈련·암호화 키 회전·배포 복구                  | 부분 기반               | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
+| [#62](https://github.com/AndrewDongminYoo/auto-chatter/issues/62) | 공개 다중 사용자 서비스 보안 회귀와 남용 방지                 | 부분 기반               | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
+| [#63](https://github.com/AndrewDongminYoo/auto-chatter/issues/63) | 가입부터 플로·인박스·결제까지 사용성·접근성 검증              | 부분 기반               | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
+| [#64](https://github.com/AndrewDongminYoo/auto-chatter/issues/64) | ManyChat 대체제 전체 수용 테스트·운영 증거·출시 판정          | 부분 기반               | 기존 증거 있음, 추가 검증 필요 | 미검증                       | 완료하지 않음 |
 
 ## 공개 제공과 최종 완료 조건
 
