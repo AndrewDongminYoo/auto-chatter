@@ -702,6 +702,28 @@ select:disabled {
   color: var(--color-muted);
   margin: 22px 0 10px;
 }
+.inbox-layout {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) minmax(0, 2fr);
+  gap: 24px;
+  margin-top: 24px;
+}
+#inbox-messages {
+  overflow-wrap: anywhere;
+}
+#inbox-messages .bubble {
+  white-space: pre-wrap;
+}
+#inbox-conversations button {
+  text-align: left;
+  width: 100%;
+  margin-bottom: 8px;
+}
+@media (max-width: 700px) {
+  .inbox-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .bubble {
   padding: 12px;
   border-radius: 10px;

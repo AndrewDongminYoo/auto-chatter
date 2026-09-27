@@ -93,7 +93,8 @@
       <div id="workspace" hidden>
         <nav class="workspace-nav" aria-label="설정 구역">
           <a href="#accounts-section">연결 계정</a><a href="#automation-section">자동화 규칙</a
-          ><a href="#contacts-section">연락처</a><a href="#activity-section">처리 내역</a>
+          ><a href="#contacts-section">연락처</a><a href="#inbox-section">수신 인박스</a
+          ><a href="#activity-section">처리 내역</a>
         </nav>
         <div id="delivery-banner" class="delivery-banner">
           <strong id="delivery-title">발송 상태</strong>
@@ -380,6 +381,34 @@
           <p id="contacts-status" class="hint" role="status" aria-live="polite"></p>
           <div id="contacts-list" class="contacts-list"></div>
           <button id="contacts-more" class="secondary" hidden>연락처 더 보기</button>
+        </section>
+        <section id="inbox-section" class="card" aria-labelledby="inbox-title">
+          <div class="section-heading">
+            <h2 id="inbox-title">수신 인박스</h2>
+            <button id="inbox-refresh" class="secondary">새로고침</button>
+          </div>
+          <p class="hint">
+            연결 계정에서 ‘DM 보관 켜기’를 선택한 이후의 텍스트와 확인 버튼 응답입니다. 수동 답장과 발신 이력은 아직
+            제공하지 않습니다.
+          </p>
+          <label
+            >Instagram 계정<select id="inbox-account">
+              <option value="">모든 계정</option>
+            </select></label
+          >
+          <p id="inbox-status" class="hint" role="status" aria-live="polite"></p>
+          <div class="inbox-layout">
+            <div>
+              <div id="inbox-conversations"></div>
+              <button id="inbox-more" class="secondary" hidden>대화 더 보기</button>
+            </div>
+            <section aria-labelledby="inbox-conversation-title">
+              <h3 id="inbox-conversation-title">대화를 선택하세요</h3>
+              <p id="inbox-message-status" class="hint" role="status" aria-live="polite"></p>
+              <button id="inbox-older" class="secondary" hidden>이전 메시지 보기</button>
+              <div id="inbox-messages"></div>
+            </section>
+          </div>
         </section>
         <section id="activity-section" class="card" aria-labelledby="activity-title">
           <div class="section-heading">
