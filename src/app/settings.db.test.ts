@@ -462,12 +462,13 @@ test("handoff serializes duplicate starts and rejects stale opposite transitions
   assert.equal((await pool.query("SELECT count(*) FROM instagram_inbox_handoff_events")).rows[0].count, "1");
   assert.equal((await setHandoff(false, 0)).status, 409);
   assert.equal((await setHandoff(false, 1)).status, 200);
+  assert.equal((await setHandoff(false, 1)).status, 200);
   const transitions = await Promise.all([setHandoff(true, 2), setHandoff(false, 1)]);
-  assert.deepEqual(
-    transitions.map((response) => response.status),
-    [200, 409],
-  );
+  assert.equal(transitions[0]!.status, 200);
+  assert.ok([200, 409].includes(transitions[1]!.status));
   assert.deepEqual(await (await fieldRequest("GET", handoffPath())).json(), { active: true, version: 3 });
+  assert.equal((await setHandoff(false, 1)).status, 409);
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_inbox_handoff_events")).rows[0].count, "3");
 });
 
 test("handoff migration replays with active state and resume survives deleted DM history", async () => {
