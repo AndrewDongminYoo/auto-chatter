@@ -44,11 +44,14 @@ export class InstagramFollowTransport implements FollowTransport {
     }
     return response.json();
   }
-  async followStatus(recipientId: string): Promise<boolean | null> {
-    if (!/^\d+$/.test(recipientId) || recipientId === this.config.accountId) return null;
+  async verifyAccount(): Promise<boolean> {
     const me = await this.request("me?fields=user_id");
     const profile = isRecord(me) && Array.isArray(me.data) ? me.data[0] : me;
-    if (!isRecord(profile) || profile.user_id !== this.config.accountId) return null;
+    return isRecord(profile) && profile.user_id === this.config.accountId;
+  }
+  async followStatus(recipientId: string): Promise<boolean | null> {
+    if (!/^\d+$/.test(recipientId) || recipientId === this.config.accountId) return null;
+    if (!(await this.verifyAccount())) return null;
     const result = await this.request(`${recipientId}?fields=is_user_follow_business`);
     return isRecord(result) && typeof result.is_user_follow_business === "boolean"
       ? result.is_user_follow_business

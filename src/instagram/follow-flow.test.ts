@@ -131,3 +131,19 @@ test("normal nonfollower DM includes the bound confirmation button and rejects l
   await assert.rejects(transport.send("456", "x".repeat(641), context));
   assert.equal(payload, undefined);
 });
+
+test("manual account verification checks only the stored Instagram user_id", async () => {
+  for (const user_id of ["123", "999", undefined]) {
+    const transport = new InstagramFollowTransport({
+      accountId: "123",
+      accessToken: "synthetic",
+      graphVersion: "v26.0",
+      fetchImpl: async (input, init) => {
+        assert.equal(String(input), "https://graph.instagram.com/v26.0/me?fields=user_id");
+        assert.equal(init?.method, "GET");
+        return Response.json({ user_id });
+      },
+    });
+    assert.equal(await transport.verifyAccount(), user_id === "123");
+  }
+});

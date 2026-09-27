@@ -472,10 +472,11 @@ test("handoff serializes duplicate starts and rejects stale opposite transitions
 
 test("handoff migration replays with active state and resume survives deleted DM history", async () => {
   await pool.query(
-    "DROP TABLE instagram_inbox_handoff_events,instagram_inbox_handoffs; DROP INDEX private_reply_outbox_identity_idx; ALTER TABLE instagram_contact_automation DROP COLUMN handoff_paused",
+    "DROP TABLE instagram_manual_reply_events,instagram_manual_replies,instagram_inbox_handoff_events,instagram_inbox_handoffs; DROP INDEX private_reply_outbox_identity_idx; ALTER TABLE instagram_contact_automation DROP COLUMN handoff_paused",
   );
   const migration = await readFile(new URL("../../db/migrations/013_inbox_handoffs.sql", import.meta.url), "utf8");
   await pool.query(migration);
+  await pool.query(await readFile(new URL("../../db/migrations/014_manual_replies.sql", import.meta.url), "utf8"));
   await readyHandoff();
   assert.equal((await setHandoff(true, 0)).status, 200);
   await pool.query(migration);
@@ -559,14 +560,14 @@ after(async () => {
   await pool.end();
 });
 
-async function fieldRequest(method: string, path: string, body?: unknown, user = a) {
+async function fieldRequest(method: string, path: string, body?: unknown, user = a, sendEnabled?: string) {
   return appApi(
     new Request(`https://app.test${path}`, {
       method,
       headers: { origin: "https://app.test", cookie: "__Host-ac-access=test", "content-type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }),
-    { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "test" },
+    { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "test", SEND_ENABLED: sendEnabled },
     () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
     (async () => Response.json({ ...user, email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
@@ -1271,4 +1272,449 @@ test("contact automation API stores only exact booleans for existing owned conta
   await pool.query(migration);
   await pool.query(migration);
   assert.equal((await listContacts(pool, a)).contacts[0]!.automation_paused, false);
+});
+
+const manualPath = (suffix = "", recipient = "456", connection = connectionId) =>
+  `/api/connections/${connection}/inbox/${recipient}/replies${suffix}`;
+const manualBody = {
+  request_key: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  text: "Manual answer",
+  expected_handoff_version: 1,
+};
+const manualRequest = (method: string, suffix = "", body?: unknown, user = a, sendEnabled = "true") =>
+  fieldRequest(method, manualPath(suffix), body, user, sendEnabled);
+async function readyManual() {
+  await readyHandoff();
+  assert.equal((await setHandoff(true, 0)).status, 200);
+  await pool.query("UPDATE instagram_connections SET send_enabled=true WHERE id=$1", [connectionId]);
+}
+
+test("manual reply queues once for concurrent identical requests and rejects key payload reuse", async () => {
+  await readyManual();
+  const responses = await Promise.all([manualRequest("POST", "", manualBody), manualRequest("POST", "", manualBody)]);
+  for (const response of responses) assert.equal(response.status, 202);
+  const [first, second] = await Promise.all(responses.map((r) => r.json()));
+  assert.equal(first.id, second.id);
+  assert.equal(first.status, "pending");
+  assert.equal((await manualRequest("POST", "", { ...manualBody, text: "Other" })).status, 409);
+  await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours'");
+  assert.equal((await manualRequest("POST", "", manualBody)).status, 202, "idempotent read survives expired window");
+  assert.equal((await manualRequest("GET")).status, 200);
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_replies")).rows[0].count, "1");
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_reply_events")).rows[0].count, "1");
+});
+
+test("manual reply requires owned conversation current handoff and fresh inbound window", async () => {
+  await readyManual();
+  assert.equal((await manualRequest("POST", "", manualBody, b)).status, 404);
+  assert.equal((await manualRequest("GET", "", undefined, b)).status, 404);
+  assert.equal((await manualRequest("POST", "", manualBody, a, "false")).status, 409);
+  assert.equal((await manualRequest("POST", "", { ...manualBody, expected_handoff_version: 3 })).status, 409);
+  await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '24 hours'");
+  assert.equal((await manualRequest("POST", "", manualBody)).status, 409);
+  await pool.query("UPDATE instagram_inbox_messages SET message_at=now()+interval '1 hour'");
+  assert.equal((await manualRequest("POST", "", manualBody)).status, 409);
+  await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '1 second'");
+  assert.equal((await setHandoff(false, 1)).status, 200);
+  assert.equal((await manualRequest("POST", "", manualBody)).status, 409);
+});
+
+test("manual reply rejects invalid text keys extra fields and query parameters", async () => {
+  await readyManual();
+  for (const body of [
+    { ...manualBody, text: " " },
+    { ...manualBody, text: "x".repeat(1001) },
+    { ...manualBody, request_key: "bad" },
+    { ...manualBody, extra: 1 },
+    { ...manualBody, expected_handoff_version: 0 },
+  ])
+    assert.equal((await manualRequest("POST", "", body)).status, 400);
+  assert.equal((await manualRequest("POST", "?extra=1", manualBody)).status, 400);
+  assert.equal((await manualRequest("GET", "?before=bad")).status, 400);
+});
+
+test("manual reply retry is explicit audited idempotent and forbids unknown outcomes", async () => {
+  await readyManual();
+  const initial = await manualRequest("POST", "", manualBody);
+  assert.equal(initial.status, 202);
+  const reply = await initial.json();
+  await pool.query(
+    "UPDATE instagram_manual_replies SET status='unknown',failure_code='worker_interrupted' WHERE id=$1",
+    [reply.id],
+  );
+  const retry = {
+    request_key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    expected_handoff_version: 1,
+    reason: "Retry definite rejection",
+  };
+  assert.equal((await manualRequest("POST", `/${reply.id}/retry`, retry)).status, 409);
+  const decision = {
+    request_key: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    decision: "no_retry",
+    reason: "Provider result unavailable",
+  };
+  assert.equal((await manualRequest("POST", `/${reply.id}/resolution`, decision)).status, 200);
+  assert.equal((await manualRequest("POST", `/${reply.id}/resolution`, decision)).status, 200);
+  await pool.query(
+    "UPDATE instagram_manual_replies SET status='failed',safe_to_retry=true,resolved_at=NULL,failure_code='meta_error_10' WHERE id=$1",
+    [reply.id],
+  );
+  const responses = await Promise.all([
+    manualRequest("POST", `/${reply.id}/retry`, retry),
+    manualRequest("POST", `/${reply.id}/retry`, retry),
+  ]);
+  for (const response of responses) assert.equal(response.status, 202);
+  const rows = await Promise.all(responses.map((r) => r.json()));
+  assert.equal(rows[0].id, rows[1].id);
+  assert.equal(
+    (
+      await manualRequest("POST", `/${reply.id}/retry`, {
+        ...retry,
+        request_key: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      })
+    ).status,
+    409,
+  );
+  assert.equal(
+    (await pool.query("SELECT count(*) FROM instagram_manual_reply_events WHERE kind='no_retry'")).rows[0].count,
+    "1",
+  );
+  assert.equal(
+    (await pool.query("SELECT count(*) FROM instagram_manual_reply_events WHERE kind='retry_requested'")).rows[0].count,
+    "1",
+  );
+});
+
+test("manual reply worker serializes a conversation and preserves ambiguous outcomes until resolution", async () => {
+  const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
+  await readyManual();
+  for (const request_key of [manualBody.request_key, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"])
+    assert.equal((await manualRequest("POST", "", { ...manualBody, request_key })).status, 202);
+  let entered!: () => void, release!: () => void;
+  const admission = new Promise<void>((r) => (entered = r)),
+    finish = new Promise<void>((r) => (release = r));
+  let sends = 0;
+  const transport = {
+    async verifyAccount() {
+      return true;
+    },
+    async send() {
+      sends++;
+      entered();
+      await finish;
+      throw new Error("ambiguous provider response");
+    },
+  };
+  const first = processNextManualReply(pool, connectionId, transport, "encrypted-test");
+  // A stub worker must fail before this wait, rather than hanging the red test.
+  const admitted = await Promise.race([admission.then(() => true), first.then(() => false)]);
+  assert.equal(admitted, true, "worker must admit oldest queued reply");
+  assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), false);
+  release();
+  assert.equal(await first, true);
+  assert.equal(sends, 1);
+  assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), false);
+  const unknown = (await pool.query("SELECT id,status FROM instagram_manual_replies ORDER BY created_at,id")).rows[0];
+  assert.equal(unknown.status, "unknown");
+  await manualRequest("POST", `/${unknown.id}/resolution`, {
+    request_key: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    decision: "no_retry",
+    reason: "Reviewed; no resend",
+  });
+  const { assertManualReplyAllowed } = await import("../instagram/manual-reply-worker.ts");
+  assert.equal(
+    await processNextManualReply(
+      pool,
+      connectionId,
+      {
+        async verifyAccount() {
+          return true;
+        },
+        async send(_recipient, text, context) {
+          await assertManualReplyAllowed(pool, context!.replyId, context!.attemptId, connectionId, "encrypted-test");
+          assert.equal(text, "Manual answer");
+          return { messageId: "manual-provider" };
+        },
+      },
+      "encrypted-test",
+    ),
+    true,
+  );
+  assert.equal(
+    (await pool.query("SELECT count(*) FROM instagram_manual_replies WHERE status='sent'")).rows[0].count,
+    "1",
+  );
+});
+
+test("manual reply worker records definite refusals safely and interrupted sends as unknown", async () => {
+  const { processNextManualReply, recoverStaleManualReplies } = await import("../instagram/manual-reply-worker.ts");
+  const { ProviderRejectedError } = await import("../instagram/reply-worker.ts");
+  await readyManual();
+  const response = await manualRequest("POST", "", manualBody);
+  assert.equal(response.status, 202);
+  const reply = await response.json();
+  assert.equal(
+    await processNextManualReply(
+      pool,
+      connectionId,
+      {
+        async verifyAccount() {
+          return true;
+        },
+        async send() {
+          throw new ProviderRejectedError(10);
+        },
+      },
+      "encrypted-test",
+    ),
+    true,
+  );
+  let row = (
+    await pool.query("SELECT status,safe_to_retry,failure_code FROM instagram_manual_replies WHERE id=$1", [reply.id])
+  ).rows[0];
+  assert.deepEqual(row, { status: "failed", safe_to_retry: true, failure_code: "meta_error_10" });
+  await pool.query(
+    "UPDATE instagram_manual_replies SET status='sending',safe_to_retry=false,attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '11 minutes' WHERE id=$1",
+    [reply.id],
+  );
+  await recoverStaleManualReplies(pool);
+  row = (
+    await pool.query("SELECT status,safe_to_retry,failure_code FROM instagram_manual_replies WHERE id=$1", [reply.id])
+  ).rows[0];
+  assert.deepEqual(row, { status: "unknown", safe_to_retry: false, failure_code: "worker_interrupted" });
+});
+
+test("manual reply final guard refuses handoff resume token change expired window and changed bridge before POST", async () => {
+  const { processNextManualReply, assertManualReplyAllowed } = await import("../instagram/manual-reply-worker.ts");
+  await readyManual();
+  for (const [index, change] of [
+    async () => {
+      await setHandoff(false, 1);
+    },
+    async () => {
+      await pool.query("UPDATE instagram_connections SET access_token_encrypted='rotated' WHERE id=$1", [connectionId]);
+    },
+    async () => {
+      await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours'");
+    },
+    async () => {
+      await identityReply("999", "99999");
+    },
+  ].entries()) {
+    if (index) {
+      await pool.query(
+        "TRUNCATE instagram_manual_reply_events,instagram_manual_replies; UPDATE instagram_connections SET access_token_encrypted='encrypted-test' WHERE id='33333333-3333-4333-8333-333333333333'; UPDATE instagram_inbox_messages SET message_at=now()-interval '1 second'; UPDATE private_reply_outbox SET status='failed' WHERE sender_id='999'",
+      );
+      if (index === 1) assert.equal((await setHandoff(true, 2)).status, 200);
+    }
+    const queued = await manualRequest("POST", "", { ...manualBody, expected_handoff_version: index ? 3 : 1 });
+    assert.equal(queued.status, 202);
+    let posts = 0;
+    assert.equal(
+      await processNextManualReply(
+        pool,
+        connectionId,
+        {
+          async verifyAccount() {
+            return true;
+          },
+          async send(_r, _t, context) {
+            await change();
+            await assertManualReplyAllowed(pool, context!.replyId, context!.attemptId, connectionId, "encrypted-test");
+            posts++;
+            return { messageId: "must-not-send" };
+          },
+        },
+        "encrypted-test",
+      ),
+      true,
+    );
+    assert.equal(posts, 0);
+    assert.equal(
+      (await pool.query("SELECT status,safe_to_retry FROM instagram_manual_replies")).rows[0].status,
+      "failed",
+    );
+  }
+});
+
+test("manual reply audit failure rolls back queue and delivery outcome together", async () => {
+  await readyManual();
+  await pool.query(
+    `CREATE FUNCTION reject_manual_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'audit unavailable'; END $$; CREATE TRIGGER reject_manual_audit BEFORE INSERT ON instagram_manual_reply_events FOR EACH ROW EXECUTE FUNCTION reject_manual_audit()`,
+  );
+  try {
+    assert.equal((await manualRequest("POST", "", manualBody)).status, 503);
+    assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_replies")).rows[0].count, "0");
+  } finally {
+    await pool.query(
+      "DROP TRIGGER reject_manual_audit ON instagram_manual_reply_events; DROP FUNCTION reject_manual_audit()",
+    );
+  }
+});
+
+test("manual reply history keeps microsecond cursor boundaries and migration replay preserves audit", async () => {
+  await readyManual();
+  const created = await manualRequest("POST", "", manualBody);
+  assert.equal(created.status, 202);
+  const first = await created.json();
+  await pool.query(
+    `INSERT INTO instagram_manual_replies(workspace_id,connection_id,recipient_id,request_key,created_by,text,handoff_version,created_at)
+    SELECT workspace_id,connection_id,recipient_id,gen_random_uuid(),created_by,'page',handoff_version,created_at+n*interval '1 microsecond' FROM instagram_manual_replies CROSS JOIN generate_series(1,51) n WHERE id=$1`,
+    [first.id],
+  );
+  const page = await (await manualRequest("GET")).json();
+  assert.equal(page.replies.length, 50);
+  assert.ok(page.before);
+  const next = await (await manualRequest("GET", `?before=${page.before}`)).json();
+  assert.equal(next.replies.length, 2);
+  assert.equal(new Set([...page.replies, ...next.replies].map((row) => row.id)).size, 52);
+  const migration = await readFile(new URL("../../db/migrations/014_manual_replies.sql", import.meta.url), "utf8");
+  await pool.query(migration);
+  await pool.query(migration);
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_reply_events")).rows[0].count, "1");
+});
+
+test("manual reply verification failure defers without POST and nonfinite inbound is rejected", async () => {
+  const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
+  await readyManual();
+  await pool.query("UPDATE instagram_inbox_messages SET message_at='infinity'");
+  assert.equal((await manualRequest("POST", "", manualBody)).status, 409);
+  await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '1 second'");
+  assert.equal((await manualRequest("POST", "", manualBody)).status, 202);
+  let sends = 0;
+  assert.equal(
+    await processNextManualReply(
+      pool,
+      connectionId,
+      {
+        async verifyAccount() {
+          throw new Error("temporary read failure");
+        },
+        async send() {
+          sends++;
+          return { messageId: "forbidden" };
+        },
+      },
+      "encrypted-test",
+    ),
+    true,
+  );
+  assert.equal(sends, 0);
+  const row = (
+    await pool.query("SELECT status,failure_code,next_attempt_at>now() AS delayed FROM instagram_manual_replies")
+  ).rows[0];
+  assert.deepEqual(row, { status: "pending", failure_code: "verification_unavailable", delayed: true });
+});
+
+test("manual reply sent audit failure preserves claim for unknown recovery instead of resending", async () => {
+  const { processNextManualReply, recoverStaleManualReplies } = await import("../instagram/manual-reply-worker.ts");
+  await readyManual();
+  assert.equal((await manualRequest("POST", "", manualBody)).status, 202);
+  await pool.query(
+    `CREATE FUNCTION reject_sent_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'audit unavailable'; END $$; CREATE TRIGGER reject_sent_audit BEFORE INSERT ON instagram_manual_reply_events FOR EACH ROW WHEN (NEW.kind='sent') EXECUTE FUNCTION reject_sent_audit()`,
+  );
+  let sends = 0;
+  try {
+    await assert.rejects(
+      processNextManualReply(
+        pool,
+        connectionId,
+        {
+          async verifyAccount() {
+            return true;
+          },
+          async send() {
+            sends++;
+            return { messageId: "acknowledged" };
+          },
+        },
+        "encrypted-test",
+      ),
+      /audit unavailable/,
+    );
+    assert.equal((await pool.query("SELECT status FROM instagram_manual_replies")).rows[0].status, "sending");
+    assert.equal(
+      await processNextManualReply(
+        pool,
+        connectionId,
+        {
+          async verifyAccount() {
+            return true;
+          },
+          async send() {
+            sends++;
+            return { messageId: "duplicate" };
+          },
+        },
+        "encrypted-test",
+      ),
+      false,
+    );
+    assert.equal(sends, 1);
+    await pool.query("UPDATE instagram_manual_replies SET attempt_started_at=now()-interval '11 minutes'");
+    await recoverStaleManualReplies(pool);
+    assert.equal((await pool.query("SELECT status FROM instagram_manual_replies")).rows[0].status, "unknown");
+  } finally {
+    await pool.query(
+      "DROP TRIGGER reject_sent_audit ON instagram_manual_reply_events; DROP FUNCTION reject_sent_audit()",
+    );
+  }
+});
+
+test("manual reply skips a locked oldest row without claiming the next conversation row", async () => {
+  const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
+  await readyManual();
+  for (const request_key of [manualBody.request_key, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"])
+    assert.equal((await manualRequest("POST", "", { ...manualBody, request_key })).status, 202);
+  const locker = await pool.connect();
+  let sends = 0;
+  try {
+    await locker.query("BEGIN");
+    await locker.query("SELECT id FROM instagram_manual_replies ORDER BY created_at,id LIMIT 1 FOR UPDATE");
+    assert.equal(
+      await processNextManualReply(
+        pool,
+        connectionId,
+        {
+          async verifyAccount() {
+            return true;
+          },
+          async send() {
+            sends++;
+            return { messageId: "forbidden" };
+          },
+        },
+        "encrypted-test",
+      ),
+      false,
+    );
+    assert.equal(sends, 0);
+  } finally {
+    await locker.query("ROLLBACK");
+    locker.release();
+  }
+});
+
+test("manual reply policy expires before a failing verification read can defer the job", async () => {
+  const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
+  await readyManual();
+  assert.equal((await manualRequest("POST", "", manualBody)).status, 202);
+  await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours'");
+  let reads = 0;
+  await processNextManualReply(
+    pool,
+    connectionId,
+    {
+      async verifyAccount() {
+        reads++;
+        throw new Error("unavailable");
+      },
+      async send() {
+        throw new Error("forbidden");
+      },
+    },
+    "encrypted-test",
+  );
+  assert.equal(reads, 0);
+  assert.equal((await pool.query("SELECT status FROM instagram_manual_replies")).rows[0].status, "failed");
 });
