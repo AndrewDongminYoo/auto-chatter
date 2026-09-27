@@ -1280,7 +1280,10 @@ byId("field-create").addEventListener("submit", (event) => {
   }).finally(fieldControls);
 });
 function archiveField(field, button) {
-  if (!canReloadContacts() || !confirm(`${field.name} 필드를 보관할까요? 저장한 값은 유지됩니다.`)) return;
+  const selected = byId("contacts-filter").elements.field_id;
+  const filterNotice = selected.value === field.id ? " 이 필드의 검색 조건은 해제됩니다." : "";
+  if (!canReloadContacts() || !confirm(`${field.name} 필드를 보관할까요? 저장한 값은 유지됩니다.${filterNotice}`))
+    return;
   const generation = fieldsGeneration;
   void action(button, async () => {
     fieldBusy = true;
@@ -1288,6 +1291,7 @@ function archiveField(field, button) {
     try {
       await api(`/api/contact-fields/${field.id}`, "DELETE");
       if (generation !== fieldsGeneration) return;
+      if (selected.value === field.id) selected.value = "";
       await loadContactFields(true);
       await loadContacts();
       notice("필드를 보관했습니다. 저장한 값은 유지됩니다.");
