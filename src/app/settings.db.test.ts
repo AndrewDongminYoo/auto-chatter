@@ -343,6 +343,7 @@ test("contact migration is repeatable and creates a table when upgrading", async
   try {
     await client.query("BEGIN");
     await client.query("DROP TABLE instagram_contact_tags");
+    await client.query("DROP INDEX IF EXISTS instagram_comment_events_contact_lookup_idx");
     const migration = await readFile(
       new URL("../../db/migrations/008_instagram_contact_tags.sql", import.meta.url),
       "utf8",
@@ -354,6 +355,29 @@ test("contact migration is repeatable and creates a table when upgrading", async
       [connectionId],
     );
     assert.deepEqual((await client.query("SELECT tags FROM instagram_contact_tags")).rows[0].tags, []);
+    assert.equal(
+      (await client.query("SELECT to_regclass('instagram_comment_events_contact_lookup_idx')::text AS name")).rows[0]
+        .name,
+      "instagram_comment_events_contact_lookup_idx",
+    );
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+});
+
+test("contact existence lookups can use the workspace/account/sender index", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Prove index eligibility, not a planner choice or production latency bound.
+    await client.query("SET LOCAL enable_seqscan=off");
+    const result = await client.query(
+      "EXPLAIN (FORMAT JSON) SELECT 1 FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3",
+      [workspace, connectionId, "sender-1"],
+    );
+    assert.ok(JSON.stringify(result.rows).includes("instagram_comment_events_contact_lookup_idx"));
   } finally {
     await client.query("ROLLBACK");
     client.release();

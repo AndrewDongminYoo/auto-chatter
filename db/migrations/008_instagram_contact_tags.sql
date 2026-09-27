@@ -1,3 +1,6 @@
+CREATE INDEX IF NOT EXISTS instagram_comment_events_contact_lookup_idx
+  ON instagram_comment_events (workspace_id, connection_id, sender_id) INCLUDE (created_at);
+
 CREATE TABLE IF NOT EXISTS instagram_contact_tags (
   workspace_id uuid NOT NULL,
   connection_id uuid NOT NULL,

@@ -63,6 +63,9 @@ CREATE TABLE IF NOT EXISTS instagram_comment_events (
   UNIQUE (id, connection_id, workspace_id)
 );
 
+CREATE INDEX IF NOT EXISTS instagram_comment_events_contact_lookup_idx
+  ON instagram_comment_events (workspace_id, connection_id, sender_id) INCLUDE (created_at);
+
 CREATE TABLE IF NOT EXISTS private_reply_outbox (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   workspace_id uuid NOT NULL,
