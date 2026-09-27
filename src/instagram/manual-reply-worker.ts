@@ -13,6 +13,13 @@ export async function manualReplyEligibility(
   row: ManualReplyScope,
   claim?: { id: string; attempt: string; encryptedToken: string | null },
 ): Promise<string | null> {
+  return (await manualReplyStatus(pool, row, claim)).failure_code;
+}
+export async function manualReplyStatus(
+  pool: Pick<Pool, "query">,
+  row: Omit<ManualReplyScope, "handoff_version"> & { handoff_version?: number },
+  claim?: { id: string; attempt: string; encryptedToken: string | null },
+) {
   const found = await pool.query(
     `WITH candidates AS (
       SELECT r.sender_id,r.sent_at>=c.inbox_enabled_at AS fresh FROM private_reply_outbox r
@@ -23,7 +30,8 @@ export async function manualReplyEligibility(
     ) SELECT c.active AS connection_active,c.inbox_enabled,c.send_enabled,c.access_token_encrypted,c.token_expires_at>clock_timestamp() AS token_valid,c.send_paused_until>clock_timestamp() AS cooldown,c.account_id,h.active AS handoff_active,h.version,h.sender_id,a.handoff_paused,
     (SELECT count(DISTINCT sender_id)=1 AND bool_or(fresh) AND min(sender_id)=h.sender_id FROM candidates) AS identity_verified,
     (SELECT max(message_at) FROM instagram_inbox_messages m WHERE m.workspace_id=c.workspace_id AND m.connection_id=c.id AND m.recipient_id=$3 AND m.kind='text') AS last_inbound,
-    clock_timestamp() AS checked_at
+    clock_timestamp() AS checked_at,
+    EXISTS(SELECT 1 FROM instagram_manual_replies unresolved WHERE unresolved.workspace_id=c.workspace_id AND unresolved.connection_id=c.id AND unresolved.recipient_id=$3 AND unresolved.status='unknown' AND unresolved.resolved_at IS NULL) AS blocked_by_unknown
     FROM instagram_connections c LEFT JOIN instagram_inbox_handoffs h ON h.workspace_id=c.workspace_id AND h.connection_id=c.id AND h.recipient_id=$3
     LEFT JOIN instagram_contact_automation a ON a.workspace_id=h.workspace_id AND a.connection_id=h.connection_id AND a.sender_id=h.sender_id
     WHERE c.workspace_id=$1 AND c.id=$2
@@ -39,19 +47,32 @@ export async function manualReplyEligibility(
     ],
   );
   const current = found.rows[0];
-  if (!current && claim) return "delivery_changed";
+  const last = current?.last_inbound instanceof Date ? current.last_inbound.getTime() : NaN;
+  const expiry = last + 24 * 60 * 60_000;
+  const result = (failure_code: string | null) => ({
+    failure_code,
+    handoff_active: current?.handoff_active === true,
+    handoff_version: current?.version ?? 0,
+    checked_at: current?.checked_at?.toISOString() ?? null,
+    window_expires_at: Number.isFinite(expiry) && Math.abs(expiry) <= 8.64e15 ? new Date(expiry).toISOString() : null,
+    blocked_by_unknown: current?.blocked_by_unknown === true,
+  });
+  if (!current && claim) return result("delivery_changed");
   if (!current || !current.connection_active || !current.inbox_enabled || !current.send_enabled)
-    return "connection_disabled";
-  if (!current.access_token_encrypted || !current.token_valid) return "token_unavailable";
-  if (current.cooldown) return "connection_paused";
-  if (!current.handoff_active || current.version !== row.handoff_version || !current.handoff_paused)
-    return "handoff_changed";
-  if (current.account_id === row.recipient_id) return "invalid_recipient";
-  const last = current.last_inbound instanceof Date ? current.last_inbound.getTime() : NaN,
-    now = current.checked_at.getTime();
-  if (!Number.isFinite(last) || last > now || now - last >= 24 * 60 * 60_000) return "reply_window_closed";
-  if (!current.identity_verified) return "handoff_identity_unverified";
-  return null;
+    return result("connection_disabled");
+  if (!current.access_token_encrypted || !current.token_valid) return result("token_unavailable");
+  if (current.cooldown) return result("connection_paused");
+  if (
+    !current.handoff_active ||
+    current.version !== (row.handoff_version ?? current.version) ||
+    !current.handoff_paused
+  )
+    return result("handoff_changed");
+  if (current.account_id === row.recipient_id) return result("invalid_recipient");
+  const now = current.checked_at.getTime();
+  if (!Number.isFinite(last) || last > now || now - last >= 24 * 60 * 60_000) return result("reply_window_closed");
+  if (!current.identity_verified) return result("handoff_identity_unverified");
+  return result(null);
 }
 export interface ManualReplyTransport {
   verifyAccount(): Promise<boolean>;

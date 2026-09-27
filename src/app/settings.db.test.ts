@@ -1290,6 +1290,64 @@ async function readyManual() {
   await pool.query("UPDATE instagram_connections SET send_enabled=true WHERE id=$1", [connectionId]);
 }
 
+test("manual reply status reports the server window and current handoff without credentials", async () => {
+  await readyManual();
+  const path = `/api/connections/${connectionId}/inbox/456/reply-status`;
+  const response = await fieldRequest("GET", path, undefined, a, "true");
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.allowed, true);
+  assert.equal(result.failure_code, null);
+  assert.equal(result.handoff_active, true);
+  assert.equal(result.handoff_version, 1);
+  assert.ok(Date.parse(result.window_expires_at) > Date.parse(result.checked_at));
+  assert.equal(JSON.stringify(result).includes("access_token"), false);
+  assert.equal((await fieldRequest("GET", path, undefined, b)).status, 404);
+  assert.equal((await fieldRequest("GET", `${path}?extra=1`)).status, 400);
+  assert.equal((await fieldRequest("GET", path.replace("/456/", "/999/"))).status, 404);
+});
+
+test("manual reply status rejects disabled sending and expired windows without mutating delivery", async () => {
+  await readyManual();
+  const path = `/api/connections/${connectionId}/inbox/456/reply-status`;
+  assert.equal(
+    (await (await fieldRequest("GET", path, undefined, a, "false")).json()).failure_code,
+    "global_send_disabled",
+  );
+  await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '24 hours'");
+  const result = await (await fieldRequest("GET", path)).json();
+  assert.equal(result.allowed, false);
+  assert.equal(result.failure_code, "reply_window_closed");
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_replies")).rows[0].count, "0");
+});
+
+test("manual reply status reports the latest handoff version for the composer", async () => {
+  await readyManual();
+  assert.equal((await setHandoff(false, 1)).status, 200);
+  const result = await (await fieldRequest("GET", `/api/connections/${connectionId}/inbox/456/reply-status`)).json();
+  assert.equal(result.allowed, false);
+  assert.equal(result.handoff_active, false);
+  assert.equal(result.handoff_version, 2);
+  assert.equal(result.failure_code, "handoff_changed");
+});
+
+test("manual reply status distinguishes an unresolved unknown from policy eligibility", async () => {
+  await readyManual();
+  const queued = await (await manualRequest("POST", "", manualBody)).json();
+  await pool.query("UPDATE instagram_manual_replies SET status='unknown' WHERE id=$1", [queued.id]);
+  const path = `/api/connections/${connectionId}/inbox/456/reply-status`;
+  let status = await (await fieldRequest("GET", path, undefined, a, "true")).json();
+  assert.equal(status.allowed, true);
+  assert.equal(status.blocked_by_unknown, true);
+  await manualRequest("POST", `/${queued.id}/resolution`, {
+    request_key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    decision: "no_retry",
+    reason: "Verified in Instagram",
+  });
+  status = await (await fieldRequest("GET", path, undefined, a, "true")).json();
+  assert.equal(status.blocked_by_unknown, false);
+});
+
 test("manual reply queues once for concurrent identical requests and rejects key payload reuse", async () => {
   await readyManual();
   const responses = await Promise.all([manualRequest("POST", "", manualBody), manualRequest("POST", "", manualBody)]);

@@ -1,11 +1,34 @@
 import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { workspaceFor } from "./settings.ts";
-import { manualReplyEligibility } from "../instagram/manual-reply-worker.ts";
+import { manualReplyEligibility, manualReplyStatus } from "../instagram/manual-reply-worker.ts";
 
 function validate(connection: string, recipient: string, query: URLSearchParams) {
   if (!isUuid(connection) || !/^\d{1,40}$/.test(recipient) || query.size)
     throw new ApiError(400, "invalid_manual_reply_request");
+}
+export async function readManualReplyStatus(
+  pool: Pool,
+  user: User,
+  connection: string,
+  recipient: string,
+  query: URLSearchParams,
+  enabled: boolean,
+) {
+  validate(connection, recipient, query);
+  const workspace = await workspaceFor(pool, user);
+  const owned = await pool.query(
+    "SELECT 1 FROM instagram_connections c WHERE c.id=$1 AND c.workspace_id=$2 AND EXISTS(SELECT 1 FROM instagram_inbox_messages m WHERE m.workspace_id=c.workspace_id AND m.connection_id=c.id AND m.recipient_id=$3)",
+    [connection, workspace, recipient],
+  );
+  if (!owned.rowCount) throw new ApiError(404, "conversation_not_found");
+  const status = await manualReplyStatus(pool, {
+    workspace_id: workspace,
+    connection_id: connection,
+    recipient_id: recipient,
+  });
+  const failure_code = status.failure_code ?? (enabled ? null : "global_send_disabled");
+  return { ...status, failure_code, allowed: failure_code === null };
 }
 function requestKey(input: unknown, fields: string[]) {
   if (
