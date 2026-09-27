@@ -25,7 +25,15 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await client.query(
       "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='automations_app') THEN CREATE ROLE automations_app; END IF; END $$",
     );
-    await client.query("GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO automations_app");
+    const bootstrap = await readFile(new URL("../../deploy/init-app-user.sh", import.meta.url), "utf8");
+    const grants = bootstrap.match(
+      /GRANT SELECT, INSERT, UPDATE ON ALL TABLES[\s\S]*?GRANT USAGE, SELECT ON ALL SEQUENCES[^;]*;/,
+    );
+    assert.ok(grants, "Compose initializer must declare application table grants");
+    await client.query(grants[0]);
+    await client.query("SET ROLE automations_app");
+    await assert.rejects(client.query("UPDATE instagram_inbox_handoff_events SET active=active"), { code: "42501" });
+    await client.query("RESET ROLE");
     await client.query("GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role");
     await client.query("GRANT CREATE ON SCHEMA public TO PUBLIC");
     await client.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8"));
