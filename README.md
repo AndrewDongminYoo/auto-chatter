@@ -13,6 +13,8 @@ Instagram Login과 Facebook Login용 Meta Graph 어댑터와 별도 발송 워�
 
 ## 문서
 
+- [전체 구현·검증 로드맵](https://github.com/AndrewDongminYoo/auto-chatter/issues/11): 남은 작업의 완료 조건과 선행 관계를 GitHub 이슈로 추적합니다.
+- [백로그·문서 드리프트 수정 기록](docs/notes/2026-09-27-manychat-backlog.md): 현재 코드와 운영 증거를 구분한 등록 기준입니다.
 - [시장·API·오픈소스 조사](docs/notes/2026-09-25-manychat-research.md): ManyChat 요금제, 공식 연동 경로, 비용과 재사용 후보를 정리했습니다.
 - [ChatbotX 채택 검증](docs/notes/2026-09-25-chatbotx-validation.md): 고정 커밋의 라이선스·설치·검사 결과와 직접 구현으로 전환한 근거를 기록했습니다.
 - [Instagram 수신 검증](docs/notes/2026-09-25-ingress-validation.md): 실제 PostgreSQL 통합 테스트와 적대적 검토 결과를 기록했습니다.
@@ -28,7 +30,11 @@ Instagram Login과 Facebook Login용 Meta Graph 어댑터와 별도 발송 워�
 
 공식 플랫폼 API만 사용하고, 채널별 제한을 발송 직전에 검사합니다.
 ChatbotX Community Edition의 현재 고정 커밋은 채택을 보류하고 최소 기능을 직접 구현합니다.
-현재 수신기는 구독 확인과 원본 본문 서명을 검증하고, 활성 연결의 댓글만 저장합니다.
+현재 수신기는 구독 확인과 원본 본문 서명을 검증하고, 활성 연결의 댓글을 저장합니다.
+수신 인박스 보관을 별도로 켠 연결에서는 보관 시작 시각 이후의 텍스트 DM과 확인 버튼 응답도 저장합니다.
+연락처·태그·저장된 필터·사용자 정의 필드·연락처별 자동화 중지·수신 인박스는 구현 및 로컬 검증을 마쳤으며, 운영 적용과 실제 DM 보관 검증은 남아 있습니다.
+수동 답장과 팀 배정은 아직 구현하지 않았습니다.
+최신 기능별 검증 범위는 [대체제 기준과 격차](docs/notes/2026-09-27-manychat-parity.md)를 따릅니다.
 같은 댓글은 하나의 이벤트로 기록하고 같은 계정·게시물·발신자에게는 개인 답장 요청을 하나만 보관합니다.
 Facebook Login 어댑터는 토큰 권한, Page와 Instagram 계정 연결, 댓글 생성 시각과 미디어 소유를 발송 직전에 확인합니다.
 Instagram Login 어댑터는 Instagram 사용자 토큰의 계정 ID와 댓글·미디어 소유를 확인하고 `graph.instagram.com`에 개인 답장을 요청합니다.
@@ -45,10 +51,10 @@ Hyperdrive를 통해 DB에 연결하며, 매분 예약 실행으로 누락된 �
 Supabase Auth 및 OAuth secrets와 마이그레이션은 아래 배포 전환 문서에 따라 설정해야 합니다.
 설정과 전환 순서는 [Cloudflare 배포 절차](docs/notes/2026-09-26-cloudflare-runbook.md), 구현 범위는 [전환 계획](docs/plans/2026-09-26-cloudflare-supabase.md)을 따릅니다.
 2026-09-26 Supabase 서울 리전 프로젝트와 Cloudflare Queue·Hyperdrive를 생성하고 Worker를 workers.dev에 배포했습니다.
-발송 기본값과 현재 배포의 규칙·계정·전역 스위치는 모두 비활성화입니다.
+발송 기본값은 비활성화이며 2026-09-26 실발송 검증 종료 시 규칙·계정·전역 스위치를 모두 비활성화했습니다.
 웹훅 secrets 두 개의 등록과 잘못된 검증 토큰·서명 없는 요청의 거부를 확인했습니다.
 Meta 대시보드에서 전송한 테스트 웹훅의 HTTP 200 응답도 확인했습니다.
-운영 DB의 두 테스트 규칙과 해당 계정의 발송은 비활성화 상태이며 미완료 outbox·팔로우 대화는 없습니다.
+2026-09-26 검증 종료 시 운영 DB의 두 테스트 규칙과 해당 계정의 발송이 비활성화 상태이며 미완료 outbox·팔로우 대화가 없음을 확인했습니다.
 실제 테스트 댓글 저장, 첫 비공개 답장과 미팔로우·팔로워 후속 DM 수신을 2026-09-26에 확인했습니다.
 
 로컬 통합 환경과 단일 서버 대체 배포에는 `Dockerfile`과 `compose.yaml`을 사용합니다.
@@ -64,7 +70,7 @@ docker exec -i automations-postgres psql -U postgres -d automations < db/schema.
 ```
 
 기존 스키마로 만든 DB에는 아직 적용하지 않은 001·002 마이그레이션을 먼저 적용합니다.
-이후 003–006과 서버 접근 정책은 전용 실행 파일로 한 트랜잭션에서 적용합니다.
+이후 003–012와 서버 접근 정책은 전용 실행 파일로 한 트랜잭션에서 적용합니다.
 오류가 나면 전체 트랜잭션이 롤백되며, 성공하기 전에는 새 수신기와 워커를 배포하지 않습니다.
 
 ```bash

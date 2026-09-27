@@ -15,7 +15,8 @@ Instagram Login 제품 설정에서 `comments` 구독이 활성화된 화면을 
 이후 운영자가 지정한 `ai.you.wanted`의 수신 연결을 등록했습니다.
 실제 테스트 댓글 저장과 비공개 답장 1건의 발송·수신은 2026-09-26에 확인했습니다.
 다중 사용자 코드와 003–006 DB 마이그레이션은 2026-09-26에 발송을 비활성화한 상태로 운영 배포했습니다.
-현재 Worker 버전은 `dfa763f7-742d-497a-8e58-6eeb737837bd`이며 배포 코드 태그는 `6d71ef7`입니다.
+2026-09-26 다중 사용자 전환에서 확인한 Worker 버전은 `dfa763f7-742d-497a-8e58-6eeb737837bd`이며 배포 코드 태그는 `6d71ef7`입니다.
+이 식별자는 최신 배포 버전 확인을 대신하지 않습니다.
 팔로우 조건 테스트를 마친 뒤 전역 `SEND_ENABLED=false`를 배포하고 실제 버전 조회로 확인했습니다.
 실행 코드 변경 없이 이전에 검증한 소유권 수정 버전을 사용합니다.
 운영 로그인 요청의 503 해소를 확인했고, 운영자가 회원가입 완료를 보고한 뒤 DB에서 이메일 인증·로그인 완료를 확인했습니다.
@@ -105,7 +106,7 @@ PGSERVICE="$SUPABASE_ADMIN_SERVICE" psql -X --set ON_ERROR_STOP=1 --single-trans
   --file db/schema.sql --file deploy/supabase-access.sql
 ```
 
-현재 제품 테이블 아홉 개에 RLS를 켜고 `PUBLIC`, `anon`, `authenticated`, `service_role`의 접근 권한을 회수합니다.
+`deploy/supabase-access.sql`에 열거한 제품 테이블에 RLS를 켜고 `PUBLIC`, `anon`, `authenticated`, `service_role`의 접근 권한을 회수합니다.
 `auto_chatter_server`와 기존 Compose 역할 `automations_app`이 있으면 해당 역할에 SELECT·INSERT·UPDATE 정책과 필요한 sequence 접근을 허용합니다.
 이 역할들은 전체 서비스 데이터를 처리하는 신뢰된 서버 역할이며 사용자별 격리는 서버의 세션·workspace 검사로 수행합니다.
 `PUBLIC`의 public 스키마 CREATE도 회수하므로 공유 프로젝트에는 그대로 적용하지 않습니다.
@@ -122,7 +123,9 @@ ALTER ROLE auto_chatter_server LOGIN;
 연결의 `active`는 수신 허용 여부입니다.
 발송 준비 전에는 연결의 `send_enabled`, 규칙의 `enabled`와 전역 `SEND_ENABLED`를 false로 유지합니다.
 기존 DB에는 신규 초기화 명령 대신 백업 후 `deploy/migrate-multi-user.sql`을 관리자 연결로 실행합니다.
-이 실행 스크립트가 003–006 마이그레이션과 접근 권한 갱신을 한 트랜잭션으로 처리하며, 자세한 순서는 [다중 사용자 배포 전환](2026-09-26-multi-user-cutover.md)을 따릅니다.
+이 실행 스크립트가 003–012 마이그레이션과 접근 권한 갱신을 한 트랜잭션으로 처리하며, 자세한 순서는 [다중 사용자 배포 전환](2026-09-26-multi-user-cutover.md)을 따릅니다.
+이 범위는 현재 코드의 배포 요구사항이며 운영 DB에 모두 적용했다는 기록이 아닙니다.
+연락처·필터·필드·자동화 중지·수신 인박스의 운영 적용과 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
 
 ## 2. Cloudflare 준비

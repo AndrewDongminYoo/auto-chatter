@@ -533,9 +533,12 @@ test("Cloudflare follow final guard defers a pause after worker permissions", as
   await worker.fetch(request("comment-1", "456"), env);
   await consume();
   assert.equal(sends, 1);
+  // Keep the arrival after the PostgreSQL send timestamp despite JS millisecond precision.
+  await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 second'");
   await ingestMessages(pool, [
     { accountId: "123", senderId: "456", messageId: "confirm", text: "확인", timestamp: new Date() },
   ]);
+  assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "pending");
   let finalChecks = 0;
   const originalQuery = Pool.prototype.query;
   mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
