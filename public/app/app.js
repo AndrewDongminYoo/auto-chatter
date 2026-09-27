@@ -13,6 +13,11 @@ let segmentsRequest = 0;
 let segmentBusy = false;
 let activeSegmentId = "";
 let segmentNameDirty = false;
+let contactFields = [];
+let fieldsGeneration = 0;
+let fieldsRequest = 0;
+let fieldBusy = false;
+let fieldNameDirty = false;
 let refreshPromise;
 let editingRuleId;
 let dirty = false;
@@ -31,8 +36,8 @@ function editorState(
 }
 function canDiscard() {
   return (
-    (!dirty && !contactsDirty.size && !segmentNameDirty) ||
-    confirm("저장하지 않은 규칙·태그·필터 변경 사항을 버릴까요?")
+    (!dirty && !contactsDirty.size && !segmentNameDirty && !fieldNameDirty) ||
+    confirm("저장하지 않은 규칙·연락처·필터 변경 사항을 버릴까요?")
   );
 }
 function canDiscardRule() {
@@ -112,7 +117,7 @@ function markDirty() {
 form.addEventListener("input", markDirty);
 form.addEventListener("change", markDirty);
 window.addEventListener("beforeunload", (event) => {
-  if (dirty || contactsDirty.size || segmentNameDirty) {
+  if (dirty || contactsDirty.size || segmentNameDirty || fieldNameDirty) {
     event.preventDefault();
     event.returnValue = "";
   }
@@ -129,6 +134,15 @@ function resetSession() {
   segmentBusy = false;
   activeSegmentId = "";
   segmentNameDirty = false;
+  fieldsGeneration++;
+  contactFields = [];
+  fieldBusy = false;
+  fieldNameDirty = false;
+  byId("field-create").reset();
+  byId("field-definitions").replaceChildren();
+  byId("fields-status").textContent = "";
+  byId("contacts-filter").elements.field_id.replaceChildren(new Option("조건 없음", ""));
+  fieldControls();
   byId("contact-segment").replaceChildren(new Option("직접 조건 설정", ""));
   byId("segment-archive").disabled = true;
   byId("segment-save").reset();
@@ -136,6 +150,7 @@ function resetSession() {
   segmentControls();
   byId("contacts-list").replaceChildren();
   byId("contacts-filter").reset();
+  fieldFilterControls();
   byId("contacts-more").hidden = true;
   byId("contacts-status").textContent = "";
   mediaCache.clear();
@@ -181,6 +196,13 @@ const errors = {
   segment_not_found: "필터에 접근할 수 없습니다. 저장된 필터를 다시 불러와 주세요.",
   segment_name_exists: "같은 이름의 필터가 있습니다. 다른 이름으로 저장해 주세요.",
   segment_limit_reached: "저장된 필터는 최대 50개입니다. 사용하지 않는 필터를 보관해 주세요.",
+  invalid_contact_field: "필드 이름은 1–60자이며 값 종류를 선택해 주세요.",
+  invalid_field_value: "선택한 종류에 맞는 값을 입력해 주세요. 텍스트는 최대 1000자입니다.",
+  invalid_field_condition: "추가 정보의 필드·조건·찾을 값을 확인해 주세요.",
+  field_not_found: "접근할 수 없거나 보관된 필드입니다. 필드를 다시 불러와 주세요.",
+  field_in_use: "저장된 필터에서 사용하는 필드입니다. 해당 필터를 먼저 보관해 주세요.",
+  field_name_exists: "보관된 필드를 포함해 같은 이름이 있습니다. 다른 이름을 사용해 주세요.",
+  field_limit_reached: "활성 필드는 최대 50개입니다. 사용하지 않는 필드를 보관해 주세요.",
   invalid_keywords: "키워드는 최대 20개, 각각 100자까지 입력할 수 있습니다.",
   invalid_confirmation_button: "버튼 이름은 20자, 버튼 메시지는 640자 이내로 작성하고 팔로우 확인을 켜주세요.",
   invalid_rule: "게시물 선택, 답장 문구와 팔로우 조건을 확인해 주세요.",
@@ -428,6 +450,8 @@ async function loadWorkspace() {
   void loadMedia();
   initializeContacts();
   void loadContactSegments();
+  await loadContactFields();
+  if (generation !== segmentsGeneration) return;
   if (!contactsDirty.size && !contactsSaving) void loadContacts();
   try {
     await loadActivity();
@@ -834,7 +858,10 @@ function initializeContacts() {
 }
 function canReloadContacts() {
   return (
-    !segmentBusy && !contactsSaving && (!contactsDirty.size || confirm("저장하지 않은 태그 변경 사항을 버릴까요?"))
+    !segmentBusy &&
+    !fieldBusy &&
+    !contactsSaving &&
+    (!contactsDirty.size || confirm("저장하지 않은 연락처 변경 사항을 버릴까요?"))
   );
 }
 function contactCard(contact) {
@@ -912,11 +939,30 @@ function contactCard(contact) {
     });
   });
   edit.append(editor);
-  item.append(summary, edit);
+  const editors = node("div");
+  editors.append(edit);
+  item.append(summary, editors);
+  const fieldSummary = node("div", "", "contact-field-values");
+  const fieldNames = new Map(contactFields.map((field) => [field.id, field]));
+  for (const [id, value] of Object.entries(contact.fields || {})) {
+    const field = fieldNames.get(id);
+    if (field) fieldSummary.append(node("p", `${field.name} · ${displayFieldValue(value)}`, "hint"));
+  }
+  summary.append(fieldSummary);
+  if (contactFields.length) editors.append(contactFieldEditor(contact, fieldSummary));
   return item;
 }
 async function loadContacts(more = false) {
   if (contactsSaving || (more && (contactsBusy || !contactsAfter))) return;
+  let fieldCondition;
+  if (!more && !activeSegmentId) {
+    try {
+      fieldCondition = contactFieldCondition();
+    } catch (error) {
+      byId("contacts-status").textContent = error.message;
+      return;
+    }
+  }
   if (!more) {
     contactsGeneration++;
     contactsDirty.clear();
@@ -927,6 +973,12 @@ async function loadContacts(more = false) {
     else {
       if (fields.connection_id.value) query.set("connection_id", fields.connection_id.value);
       if (fields.tag.value.trim()) query.set("tag", fields.tag.value.trim());
+      const condition = fieldCondition;
+      if (condition) {
+        query.set("field_id", condition.field_id);
+        query.set("field_operator", condition.field_operator);
+        if (condition.field_operator === "eq") query.set("field_value", JSON.stringify(condition.field_value));
+      }
     }
     contactsQuery = query.toString();
     byId("contacts-list").replaceChildren();
@@ -968,6 +1020,7 @@ byId("contacts-reload").addEventListener("click", () => {
   if (canReloadContacts()) {
     void loadContacts();
     void loadContactSegments();
+    void loadContactFields();
   }
 });
 byId("contacts-more").addEventListener("click", () => {
@@ -1017,6 +1070,11 @@ byId("contact-segment").addEventListener("change", (event) => {
   const fields = byId("contacts-filter").elements;
   fields.connection_id.value = segment?.connection_id || "";
   fields.tag.value = segment?.tag || "";
+  fields.field_id.value = segment?.field_id || "";
+  fields.field_operator.value = segment?.field_operator || "eq";
+  fieldFilterControls();
+  fields.field_value.value = segment?.field_operator === "eq" ? String(segment.field_value) : "";
+  fields.field_boolean.value = segment?.field_value === false ? "false" : "true";
   segmentControls();
   void loadContacts();
 });
@@ -1030,6 +1088,12 @@ byId("segment-save").addEventListener("submit", (event) => {
   const fields = byId("contacts-filter").elements;
   const name = byId("segment-save").elements.name.value;
   const payload = { name, connection_id: fields.connection_id.value || null, tag: fields.tag.value.trim() || null };
+  try {
+    Object.assign(payload, contactFieldCondition());
+  } catch (error) {
+    notice(error.message, true);
+    return;
+  }
   void action(event.currentTarget.querySelector("button"), async () => {
     segmentBusy = true;
     segmentControls();
@@ -1069,6 +1133,11 @@ byId("segment-archive").addEventListener("click", (event) => {
         const query = new URLSearchParams();
         if (segment.connection_id) query.set("connection_id", segment.connection_id);
         if (segment.tag) query.set("tag", segment.tag);
+        if (segment.field_id) {
+          query.set("field_id", segment.field_id);
+          query.set("field_operator", segment.field_operator);
+          if (segment.field_operator === "eq") query.set("field_value", JSON.stringify(segment.field_value));
+        }
         contactsQuery = query.toString();
       }
       if (activeSegmentId === id) activeSegmentId = "";
@@ -1083,3 +1152,250 @@ byId("segment-archive").addEventListener("click", (event) => {
     }
   }).finally(segmentControls);
 });
+
+const fieldTypeLabels = { text: "텍스트", number: "숫자", boolean: "예 / 아니요", date: "날짜" };
+function displayFieldValue(value) {
+  return value === true ? "예" : value === false ? "아니요" : value === "" ? "빈 텍스트" : String(value);
+}
+function typedFieldValue(field, raw) {
+  if (field.type === "number") {
+    if (!raw.trim() || !Number.isFinite(Number(raw))) throw new Error(errors.invalid_field_value);
+    return Number(raw);
+  }
+  if (field.type === "boolean") {
+    if (!["true", "false"].includes(raw)) throw new Error(errors.invalid_field_value);
+    return raw === "true";
+  }
+  return raw;
+}
+function configureFieldInput(input, field) {
+  input.type = field?.type === "number" ? "number" : field?.type === "date" ? "date" : "text";
+  input.step = "any";
+  input.required = Boolean(field && field.type !== "text" && field.type !== "boolean");
+  input.maxLength = 1000;
+  input.placeholder =
+    field?.type === "boolean"
+      ? "true = 예, false = 아니요"
+      : field?.type === "text"
+        ? "빈 텍스트도 저장할 수 있습니다"
+        : "";
+}
+function fieldFilterControls() {
+  const fields = byId("contacts-filter").elements;
+  const selected = Boolean(fields.field_id.value);
+  byId("field-filter-operator").hidden = !selected;
+  byId("field-filter-value").hidden = !selected || fields.field_operator.value !== "eq";
+  const field = contactFields.find((field) => field.id === fields.field_id.value);
+  configureFieldInput(fields.field_value, field);
+  fields.field_value.required =
+    selected && fields.field_operator.value === "eq" && Boolean(field && !["text", "boolean"].includes(field.type));
+  fields.field_value.hidden = field?.type === "boolean";
+  fields.field_boolean.hidden = field?.type !== "boolean";
+}
+function contactFieldCondition() {
+  const fields = byId("contacts-filter").elements;
+  if (!fields.field_id.value) return null;
+  const field = contactFields.find((item) => item.id === fields.field_id.value);
+  if (!field) throw new Error(errors.field_not_found);
+  return {
+    field_id: field.id,
+    field_operator: fields.field_operator.value,
+    ...(fields.field_operator.value === "eq"
+      ? {
+          field_value: typedFieldValue(
+            field,
+            field.type === "boolean" ? fields.field_boolean.value : fields.field_value.value,
+          ),
+        }
+      : {}),
+  };
+}
+byId("contacts-filter").addEventListener("change", fieldFilterControls);
+function fieldControls() {
+  for (const control of byId("field-create").elements) control.disabled = fieldBusy;
+  for (const button of byId("field-definitions").querySelectorAll("button")) button.disabled = fieldBusy;
+}
+async function loadContactFields(force = false) {
+  if (fieldBusy && !force) return;
+  const generation = fieldsGeneration;
+  const request = ++fieldsRequest;
+  try {
+    const result = await api("/api/contact-fields");
+    if (generation !== fieldsGeneration || request !== fieldsRequest) return;
+    contactFields = result.fields;
+    const select = byId("contacts-filter").elements.field_id;
+    const previous = select.value;
+    select.replaceChildren(new Option("조건 없음", ""));
+    for (const field of contactFields) select.add(new Option(field.name, field.id));
+    if (previous && !contactFields.some((field) => field.id === previous))
+      select.add(new Option("사용할 수 없는 필드", previous));
+    select.value = previous;
+    fieldFilterControls();
+    byId("field-definitions").replaceChildren();
+    for (const field of contactFields) {
+      const row = node("div", "", "field-definition");
+      row.append(node("span", `${field.name} · ${fieldTypeLabels[field.type]}`));
+      const archive = node("button", "보관", "secondary");
+      archive.type = "button";
+      archive.setAttribute("aria-label", `${field.name} 필드 보관`);
+      archive.addEventListener("click", () => archiveField(field, archive));
+      row.append(archive);
+      byId("field-definitions").append(row);
+    }
+    fieldControls();
+    byId("fields-status").textContent = contactFields.length
+      ? `활성 필드 ${contactFields.length}개 / 50개`
+      : "아직 필드가 없습니다. 연락처에 기록할 항목을 만들어 보세요.";
+  } catch (error) {
+    if (generation === fieldsGeneration && request === fieldsRequest)
+      byId("fields-status").textContent = `${error.message} 새로고침으로 다시 시도해 주세요.`;
+  }
+}
+byId("field-create").addEventListener("input", () => {
+  fieldNameDirty = Boolean(byId("field-create").elements.name.value);
+});
+byId("field-create").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (fieldBusy) return;
+  const generation = fieldsGeneration;
+  const fields = event.currentTarget.elements;
+  const payload = { name: fields.name.value, type: fields.type.value };
+  void action(event.currentTarget.querySelector("button"), async () => {
+    fieldBusy = true;
+    fieldControls();
+    try {
+      await api("/api/contact-fields", "POST", payload);
+      if (generation !== fieldsGeneration) return;
+      byId("field-create").reset();
+      fieldNameDirty = false;
+      await loadContactFields(true);
+      if (!contactsDirty.size && !contactsSaving) await loadContacts();
+      notice("필드를 만들었습니다. 연락처의 추가 정보 편집에서 값을 기록할 수 있습니다.");
+    } finally {
+      if (generation === fieldsGeneration) {
+        fieldBusy = false;
+        fieldControls();
+      }
+    }
+  }).finally(fieldControls);
+});
+function archiveField(field, button) {
+  if (!canReloadContacts() || !confirm(`${field.name} 필드를 보관할까요? 저장한 값은 유지됩니다.`)) return;
+  const generation = fieldsGeneration;
+  void action(button, async () => {
+    fieldBusy = true;
+    fieldControls();
+    try {
+      await api(`/api/contact-fields/${field.id}`, "DELETE");
+      if (generation !== fieldsGeneration) return;
+      await loadContactFields(true);
+      await loadContacts();
+      notice("필드를 보관했습니다. 저장한 값은 유지됩니다.");
+    } finally {
+      if (generation === fieldsGeneration) {
+        fieldBusy = false;
+        fieldControls();
+      }
+    }
+  }).finally(fieldControls);
+}
+function contactFieldEditor(contact, summary) {
+  const details = document.createElement("details");
+  details.className = "contact-field-editor";
+  details.append(node("summary", "추가 정보 편집"));
+  const editor = document.createElement("form");
+  const select = document.createElement("select");
+  for (const field of contactFields) select.add(new Option(`${field.name} · ${fieldTypeLabels[field.type]}`, field.id));
+  const label = node("label", "필드");
+  label.append(select);
+  const valueLabel = node("label", "값");
+  const input = document.createElement("input");
+  const booleanInput = document.createElement("select");
+  booleanInput.add(new Option("예", "true"));
+  booleanInput.add(new Option("아니요", "false"));
+  valueLabel.append(input, booleanInput);
+  const status = node("p", "", "hint");
+  status.setAttribute("role", "status");
+  const save = node("button", "값 저장");
+  save.type = "submit";
+  const clear = node("button", "값 제거", "secondary");
+  clear.type = "button";
+  editor.append(label, valueLabel, status, save, clear);
+  details.append(editor);
+  const key = `${contact.connection_id}:${contact.sender_id}:field`;
+  let selectedId = select.value;
+  let original = "";
+  const activeInput = () => (booleanInput.hidden ? input : booleanInput);
+  function populate() {
+    const field = contactFields.find((item) => item.id === select.value);
+    const value = contact.fields?.[select.value];
+    configureFieldInput(input, field);
+    booleanInput.hidden = field?.type !== "boolean";
+    input.hidden = !booleanInput.hidden;
+    input.value = value === undefined ? "" : String(value);
+    booleanInput.value = value === false ? "false" : "true";
+    original = activeInput().value;
+    status.textContent =
+      value === undefined ? "미입력. 값을 저장하면 입력된 상태가 됩니다." : `저장된 값: ${displayFieldValue(value)}`;
+    contactsDirty.delete(key);
+  }
+  populate();
+  editor.addEventListener("input", (event) => {
+    if (event.target === select) return;
+    if (activeInput().value === original) contactsDirty.delete(key);
+    else contactsDirty.add(key);
+  });
+  select.addEventListener("change", () => {
+    if (contactsDirty.has(key) && !confirm("저장하지 않은 추가 정보 변경 사항을 버릴까요?")) {
+      select.value = selectedId;
+      return;
+    }
+    selectedId = select.value;
+    populate();
+  });
+  async function persist(value, button) {
+    if (contactsSaving || contactsBusy || fieldBusy) return;
+    const generation = contactsGeneration;
+    const id = select.value;
+    await action(button, async () => {
+      contactsSaving = true;
+      for (const control of editor.elements) control.disabled = true;
+      try {
+        const saved = await api(
+          `/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}/fields/${id}`,
+          "PUT",
+          { value },
+        );
+        if (generation !== contactsGeneration) return;
+        contact.fields ||= {};
+        if (saved.value === null) delete contact.fields[id];
+        else contact.fields[id] = saved.value;
+        summary.replaceChildren();
+        for (const field of contactFields)
+          if (Object.hasOwn(contact.fields, field.id))
+            summary.append(node("p", `${field.name} · ${displayFieldValue(contact.fields[field.id])}`, "hint"));
+        populate();
+        notice(
+          value === null ? "값을 제거했습니다." : "값을 저장했습니다. 검색 결과는 필터를 다시 적용하면 갱신됩니다.",
+        );
+      } finally {
+        for (const control of editor.elements) control.disabled = false;
+        if (generation === contactsGeneration) contactsSaving = false;
+      }
+    });
+  }
+  editor.addEventListener("submit", (event) => {
+    event.preventDefault();
+    try {
+      const field = contactFields.find((item) => item.id === select.value);
+      if (!field) throw new Error(errors.field_not_found);
+      void persist(typedFieldValue(field, activeInput().value), save);
+    } catch (error) {
+      notice(error.message, true);
+    }
+  });
+  clear.addEventListener("click", () => {
+    void persist(null, clear);
+  });
+  return details;
+}
