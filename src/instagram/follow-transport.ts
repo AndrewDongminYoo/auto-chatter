@@ -63,7 +63,12 @@ export class InstagramFollowTransport implements FollowTransport {
     const message = confirmationMessage(text, context?.confirmationButtonTitle, context?.replyId);
     if (this.config.beforeSend) {
       if (!context) throw new PreSendVerificationError("block", "missing_send_context");
-      await this.config.beforeSend(context);
+      try {
+        await this.config.beforeSend(context);
+      } catch (error) {
+        if (error instanceof PreSendVerificationError) throw error;
+        throw new PreSendVerificationError("retry", "verification_unavailable");
+      }
     }
     const result = await this.request(`${this.config.accountId}/messages`, {
       recipient: { id: recipientId },

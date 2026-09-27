@@ -1718,3 +1718,72 @@ test("manual reply policy expires before a failing verification read can defer t
   assert.equal(reads, 0);
   assert.equal((await pool.query("SELECT status FROM instagram_manual_replies")).rows[0].status, "failed");
 });
+
+test("manual reply defers a transient final guard refusal with no provider POST", async () => {
+  const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
+  const { PreSendVerificationError } = await import("../instagram/reply-worker.ts");
+  await readyManual();
+  assert.equal((await manualRequest("POST", "", manualBody)).status, 202);
+  await processNextManualReply(
+    pool,
+    connectionId,
+    {
+      async verifyAccount() {
+        return true;
+      },
+      async send() {
+        throw new PreSendVerificationError("retry", "verification_unavailable");
+      },
+    },
+    "encrypted-test",
+  );
+  assert.deepEqual(
+    (await pool.query("SELECT status,failure_code,next_attempt_at>now() AS delayed FROM instagram_manual_replies"))
+      .rows[0],
+    { status: "pending", failure_code: "verification_unavailable", delayed: true },
+  );
+});
+
+test("manual reply transient DB guard failure defers before even verifying the account", async () => {
+  const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
+  await readyManual();
+  assert.equal((await manualRequest("POST", "", manualBody)).status, 202);
+  let once = true,
+    reads = 0,
+    sends = 0;
+  const intermittent = {
+    connect: pool.connect.bind(pool),
+    query: async (sql: string, values?: unknown[]) => {
+      if (once && sql.startsWith("SELECT r.workspace_id")) {
+        once = false;
+        throw new Error("database temporarily unavailable");
+      }
+      return pool.query(sql, values);
+    },
+  } as unknown as Pool;
+  assert.equal(
+    await processNextManualReply(
+      intermittent,
+      connectionId,
+      {
+        async verifyAccount() {
+          reads++;
+          return true;
+        },
+        async send() {
+          sends++;
+          return { messageId: "forbidden" };
+        },
+      },
+      "encrypted-test",
+    ),
+    true,
+  );
+  assert.equal(reads, 0);
+  assert.equal(sends, 0);
+  assert.deepEqual(
+    (await pool.query("SELECT status,failure_code,next_attempt_at>now() AS delayed FROM instagram_manual_replies"))
+      .rows[0],
+    { status: "pending", failure_code: "verification_unavailable", delayed: true },
+  );
+});

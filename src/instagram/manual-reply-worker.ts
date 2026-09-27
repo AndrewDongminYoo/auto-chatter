@@ -168,7 +168,8 @@ export async function processNextManualReply(
         await finish("failed", error.failureCode, true);
         return false;
       }
-      throw error;
+      await finish("pending", "verification_unavailable", false);
+      return false;
     }
   };
   if (!(await guarded())) return true;
@@ -201,9 +202,9 @@ export async function processNextManualReply(
     messageId = result.messageId;
   } catch (error) {
     if (error instanceof PreSendVerificationError) {
-      status = "failed";
+      status = error.disposition === "retry" ? "pending" : "failed";
       code = error.failureCode;
-      safe = true;
+      safe = error.disposition !== "retry";
     } else if (error instanceof ProviderRateLimitedError) {
       status = "failed";
       code = error.failureCode;
