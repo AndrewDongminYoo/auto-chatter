@@ -272,6 +272,37 @@ test("contacts API is authenticated and returns only the workspace list", async 
   assert.deepEqual(await response.json(), { contacts: [], after: null });
 });
 
+test("saved segment list is authenticated and workspace scoped", async () => {
+  const pool = {
+    query: async (sql: string) => ({ rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId }] : [] }),
+    end: async () => {},
+  } as unknown as Pool;
+  const response = await appApi(
+    new Request("https://app.test/api/contact-segments", { headers: { cookie: "__Host-ac-access=test" } }),
+    config,
+    () => pool,
+    mediaFetch(),
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { segments: [] });
+});
+
+test("segment writes reject cross-origin requests before opening the database", async () => {
+  for (const [path, method] of [
+    ["/api/contact-segments", "POST"],
+    ["/api/contact-segments/123", "DELETE"],
+  ]) {
+    const response = await appApi(
+      new Request(`https://app.test${path}`, { method, headers: { origin: "https://evil.test" } }),
+      config,
+      () => {
+        throw new Error("Database must not be reached");
+      },
+    );
+    assert.equal(response.status, 403);
+  }
+});
+
 test("contact mutations reject cross-origin writes and invalid tags before a write", async () => {
   const path = `https://app.test/api/connections/${connectionId}/contacts/888`;
   const open = () => {

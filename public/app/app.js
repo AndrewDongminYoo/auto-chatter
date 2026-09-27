@@ -7,6 +7,12 @@ let contactsBusy = false;
 let contactsSaving = false;
 let contactsQuery = "";
 const contactsDirty = new Set();
+let contactSegments = [];
+let segmentsGeneration = 0;
+let segmentsRequest = 0;
+let segmentBusy = false;
+let activeSegmentId = "";
+let segmentNameDirty = false;
 let refreshPromise;
 let editingRuleId;
 let dirty = false;
@@ -24,7 +30,10 @@ function editorState(
   if (byId("save-status").textContent !== message) byId("save-status").textContent = message;
 }
 function canDiscard() {
-  return (!dirty && !contactsDirty.size) || confirm("저장하지 않은 규칙·태그 변경 사항을 버릴까요?");
+  return (
+    (!dirty && !contactsDirty.size && !segmentNameDirty) ||
+    confirm("저장하지 않은 규칙·태그·필터 변경 사항을 버릴까요?")
+  );
 }
 function canDiscardRule() {
   return !dirty || confirm("저장하지 않은 규칙 변경 사항을 버릴까요?");
@@ -103,7 +112,7 @@ function markDirty() {
 form.addEventListener("input", markDirty);
 form.addEventListener("change", markDirty);
 window.addEventListener("beforeunload", (event) => {
-  if (dirty || contactsDirty.size) {
+  if (dirty || contactsDirty.size || segmentNameDirty) {
     event.preventDefault();
     event.returnValue = "";
   }
@@ -115,6 +124,16 @@ function resetSession() {
   contactsAfter = null;
   contactsBusy = false;
   contactsSaving = false;
+  segmentsGeneration++;
+  contactSegments = [];
+  segmentBusy = false;
+  activeSegmentId = "";
+  segmentNameDirty = false;
+  byId("contact-segment").replaceChildren(new Option("직접 조건 설정", ""));
+  byId("segment-archive").disabled = true;
+  byId("segment-save").reset();
+  byId("segments-status").textContent = "";
+  segmentControls();
   byId("contacts-list").replaceChildren();
   byId("contacts-filter").reset();
   byId("contacts-more").hidden = true;
@@ -158,6 +177,10 @@ const errors = {
   invalid_contact_tags: "태그는 한 줄에 하나씩 최대 20개, 각각 40자까지 입력해 주세요.",
   invalid_contact_request: "연락처 필터를 확인한 뒤 다시 불러와 주세요.",
   contact_not_found: "연락처에 접근할 수 없습니다. 목록을 다시 불러와 주세요.",
+  invalid_segment: "필터 이름은 1–60자이며 계정과 태그 조건을 확인해 주세요.",
+  segment_not_found: "필터에 접근할 수 없습니다. 저장된 필터를 다시 불러와 주세요.",
+  segment_name_exists: "같은 이름의 필터가 있습니다. 다른 이름으로 저장해 주세요.",
+  segment_limit_reached: "저장된 필터는 최대 50개입니다. 사용하지 않는 필터를 보관해 주세요.",
   invalid_keywords: "키워드는 최대 20개, 각각 100자까지 입력할 수 있습니다.",
   invalid_confirmation_button: "버튼 이름은 20자, 버튼 메시지는 640자 이내로 작성하고 팔로우 확인을 켜주세요.",
   invalid_rule: "게시물 선택, 답장 문구와 팔로우 조건을 확인해 주세요.",
@@ -400,6 +423,7 @@ async function loadWorkspace() {
   formConditions();
   void loadMedia();
   initializeContacts();
+  void loadContactSegments();
   if (!contactsDirty.size && !contactsSaving) void loadContacts();
   try {
     await loadActivity();
@@ -802,7 +826,9 @@ function initializeContacts() {
   if (connections.some((connection) => connection.id === previous)) select.value = previous;
 }
 function canReloadContacts() {
-  return !contactsSaving && (!contactsDirty.size || confirm("저장하지 않은 태그 변경 사항을 버릴까요?"));
+  return (
+    !segmentBusy && !contactsSaving && (!contactsDirty.size || confirm("저장하지 않은 태그 변경 사항을 버릴까요?"))
+  );
 }
 function contactCard(contact) {
   const item = node("article", "", "contact-row");
@@ -890,8 +916,11 @@ async function loadContacts(more = false) {
     contactsAfter = null;
     const fields = byId("contacts-filter").elements;
     const query = new URLSearchParams();
-    if (fields.connection_id.value) query.set("connection_id", fields.connection_id.value);
-    if (fields.tag.value.trim()) query.set("tag", fields.tag.value.trim());
+    if (activeSegmentId) query.set("segment_id", activeSegmentId);
+    else {
+      if (fields.connection_id.value) query.set("connection_id", fields.connection_id.value);
+      if (fields.tag.value.trim()) query.set("tag", fields.tag.value.trim());
+    }
     contactsQuery = query.toString();
     byId("contacts-list").replaceChildren();
     byId("contacts-more").hidden = true;
@@ -929,8 +958,121 @@ byId("contacts-filter").addEventListener("submit", (event) => {
   if (canReloadContacts()) void loadContacts();
 });
 byId("contacts-reload").addEventListener("click", () => {
-  if (canReloadContacts()) void loadContacts();
+  if (canReloadContacts()) {
+    void loadContacts();
+    void loadContactSegments();
+  }
 });
 byId("contacts-more").addEventListener("click", () => {
   void loadContacts(true);
+});
+
+function segmentControls() {
+  byId("contact-segment").disabled = segmentBusy;
+  byId("segment-archive").disabled = segmentBusy || !activeSegmentId;
+  byId("segment-save").elements.name.disabled = segmentBusy;
+  byId("segment-save").querySelector("button").disabled = segmentBusy;
+}
+async function loadContactSegments(force = false) {
+  if (segmentBusy && !force) return;
+  const generation = segmentsGeneration;
+  const request = ++segmentsRequest;
+  try {
+    const result = await api("/api/contact-segments");
+    if (generation !== segmentsGeneration || request !== segmentsRequest) return;
+    contactSegments = result.segments;
+    const select = byId("contact-segment");
+    select.replaceChildren(new Option("직접 조건 설정", ""));
+    for (const segment of contactSegments) select.add(new Option(segment.name, segment.id));
+    if (!contactSegments.some((segment) => segment.id === activeSegmentId)) activeSegmentId = "";
+    select.value = activeSegmentId;
+    segmentControls();
+    byId("segments-status").textContent = contactSegments.length
+      ? `저장된 필터 ${contactSegments.length}개. 조건에 맞는 연락처는 조회할 때 갱신됩니다.`
+      : "자주 쓰는 계정·태그 조건을 필터로 저장해 보세요.";
+  } catch (error) {
+    if (generation === segmentsGeneration && request === segmentsRequest)
+      byId("segments-status").textContent = `${error.message} 새로고침으로 다시 시도해 주세요.`;
+  }
+}
+byId("contacts-filter").addEventListener("input", () => {
+  activeSegmentId = "";
+  byId("contact-segment").value = "";
+  segmentControls();
+});
+byId("contact-segment").addEventListener("change", (event) => {
+  if (!canReloadContacts()) {
+    event.currentTarget.value = activeSegmentId;
+    return;
+  }
+  const segment = contactSegments.find((value) => value.id === event.currentTarget.value);
+  activeSegmentId = segment?.id || "";
+  const fields = byId("contacts-filter").elements;
+  fields.connection_id.value = segment?.connection_id || "";
+  fields.tag.value = segment?.tag || "";
+  segmentControls();
+  void loadContacts();
+});
+byId("segment-save").addEventListener("input", () => {
+  segmentNameDirty = Boolean(byId("segment-save").elements.name.value);
+});
+byId("segment-save").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (segmentBusy) return;
+  const generation = segmentsGeneration;
+  const fields = byId("contacts-filter").elements;
+  const name = byId("segment-save").elements.name.value;
+  const payload = { name, connection_id: fields.connection_id.value || null, tag: fields.tag.value.trim() || null };
+  void action(event.currentTarget.querySelector("button"), async () => {
+    segmentBusy = true;
+    segmentControls();
+    try {
+      await api("/api/contact-segments", "POST", payload);
+      if (generation !== segmentsGeneration) return;
+      byId("segment-save").reset();
+      segmentNameDirty = false;
+      await loadContactSegments(true);
+      notice("필터를 저장했습니다. 저장된 필터에서 선택해 다시 사용할 수 있습니다.");
+    } finally {
+      if (generation === segmentsGeneration) {
+        segmentBusy = false;
+        segmentControls();
+      }
+    }
+  }).finally(segmentControls);
+});
+byId("segment-archive").addEventListener("click", (event) => {
+  if (
+    !activeSegmentId ||
+    segmentBusy ||
+    contactsSaving ||
+    !confirm("이 필터를 보관할까요? 연락처와 태그는 유지됩니다.")
+  )
+    return;
+  const generation = segmentsGeneration;
+  const id = activeSegmentId;
+  const segment = contactSegments.find((value) => value.id === id);
+  void action(event.currentTarget, async () => {
+    segmentBusy = true;
+    segmentControls();
+    try {
+      await api(`/api/contact-segments/${id}`, "DELETE");
+      if (generation !== segmentsGeneration) return;
+      if (segment && new URLSearchParams(contactsQuery).get("segment_id") === id) {
+        const query = new URLSearchParams();
+        if (segment.connection_id) query.set("connection_id", segment.connection_id);
+        if (segment.tag) query.set("tag", segment.tag);
+        contactsQuery = query.toString();
+      }
+      if (activeSegmentId === id) activeSegmentId = "";
+      await loadContactSegments(true);
+      if (!contactsDirty.size && !contactsSaving) await loadContacts();
+      notice("필터를 보관했습니다. 연락처와 태그는 유지됩니다.");
+    } finally {
+      if (generation === segmentsGeneration) {
+        segmentBusy = false;
+        segmentControls();
+      }
+    }
+  }).finally(segmentControls);
 });

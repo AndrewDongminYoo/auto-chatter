@@ -286,6 +286,46 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.deepEqual(await saved.json(), { tags: ["lead"] });
     const filtered = await runtime.dispatchFetch("https://app.test/api/contacts?tag=lead", { headers });
     assert.equal((await filtered.json()).contacts.length, 1);
+    assert.equal(
+      (await pool.query("SELECT relrowsecurity FROM pg_class WHERE oid='instagram_contact_segments'::regclass")).rows[0]
+        .relrowsecurity,
+      true,
+    );
+    assert.equal(
+      (
+        await pool.query(
+          "SELECT has_table_privilege('auto_chatter_server','instagram_contact_segments','DELETE') AS allowed",
+        )
+      ).rows[0].allowed,
+      false,
+    );
+    const created = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Leads", connection_id: connection, tag: " Lead " }),
+    });
+    assert.equal(created.status, 201);
+    const segment = await created.json();
+    const segments = await runtime.dispatchFetch("https://app.test/api/contact-segments", { headers });
+    assert.equal((await segments.json()).segments[0].id, segment.id);
+    const selected = await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${segment.id}`, { headers });
+    assert.equal((await selected.json()).contacts[0].sender_id, "sender-1");
+    const hidden = await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${segment.id}`, {
+      headers: { ...headers, cookie: "__Host-ac-access=foreign" },
+    });
+    assert.equal(hidden.status, 404);
+    const foreignArchive = await runtime.dispatchFetch(`https://app.test/api/contact-segments/${segment.id}`, {
+      method: "DELETE",
+      headers: { ...headers, cookie: "__Host-ac-access=foreign" },
+    });
+    assert.equal(foreignArchive.status, 404);
+    const archived = await runtime.dispatchFetch(`https://app.test/api/contact-segments/${segment.id}`, {
+      method: "DELETE",
+      headers,
+    });
+    assert.equal(archived.status, 200);
+    const removed = await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${segment.id}`, { headers });
+    assert.equal(removed.status, 404);
     const other = await runtime.dispatchFetch(`https://app.test/api/connections/${connection}/contacts/sender-1`, {
       method: "PATCH",
       headers: { ...headers, cookie: "__Host-ac-access=foreign" },

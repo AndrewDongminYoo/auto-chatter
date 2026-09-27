@@ -33,13 +33,25 @@ function cursor(value: string | null): { connection_id: string; sender_id: strin
 }
 export async function listContacts(pool: Pool, user: User, options: URLSearchParams = new URLSearchParams()) {
   for (const key of options.keys())
-    if (!["connection_id", "tag", "after"].includes(key) || options.getAll(key).length !== 1)
+    if (!["connection_id", "tag", "after", "segment_id"].includes(key) || options.getAll(key).length !== 1)
       throw new ApiError(400, "invalid_contact_request");
-  const connectionId = options.get("connection_id");
+  let connectionId = options.get("connection_id");
   if (connectionId !== null && !isUuid(connectionId)) throw new ApiError(400, "invalid_contact_request");
-  const filterTag = options.has("tag") ? tag(options.get("tag")) : null;
+  let filterTag = options.has("tag") ? tag(options.get("tag")) : null;
+  const segmentId = options.get("segment_id");
+  if (segmentId !== null && (!isUuid(segmentId) || options.has("connection_id") || options.has("tag")))
+    throw new ApiError(400, "invalid_contact_request");
   const after = cursor(options.get("after"));
   const workspaceId = await workspaceFor(pool, user);
+  if (segmentId !== null) {
+    const segment = await pool.query<{ connection_id: string | null; tag: string | null }>(
+      "SELECT connection_id,tag FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
+      [workspaceId, segmentId],
+    );
+    if (!segment.rows[0]) throw new ApiError(404, "segment_not_found");
+    connectionId = segment.rows[0].connection_id;
+    filterTag = segment.rows[0].tag;
+  }
   const result = await pool.query<Contact>(
     `SELECT e.connection_id,e.sender_id,c.username,min(e.created_at) AS first_comment_at,
  max(e.created_at) AS last_comment_at,count(*)::text AS comment_count,coalesce(t.tags,'{}'::text[]) AS tags
@@ -82,4 +94,72 @@ export async function saveContactTags(pool: Pool, user: User, connectionId: stri
   );
   if (!result.rows[0]) throw new ApiError(404, "contact_not_found");
   return { tags: result.rows[0].tags };
+}
+
+export async function listContactSegments(pool: Pool, user: User) {
+  const workspace = await workspaceFor(pool, user);
+  return (
+    await pool.query(
+      "SELECT id,name,connection_id,tag FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived ORDER BY name,id",
+      [workspace],
+    )
+  ).rows;
+}
+
+export async function createContactSegment(pool: Pool, user: User, input: unknown) {
+  if (
+    !isRecord(input) ||
+    Object.keys(input).some((key) => !["name", "connection_id", "tag"].includes(key)) ||
+    typeof input.name !== "string" ||
+    input.name.length > 300
+  )
+    throw new ApiError(400, "invalid_segment");
+  const name = input.name.trim().normalize("NFC");
+  if (!name || name.length > 60 || /[\p{Cc}\p{Cf}]/u.test(name)) throw new ApiError(400, "invalid_segment");
+  const connectionId = input.connection_id ?? null;
+  if (connectionId !== null && !isUuid(connectionId)) throw new ApiError(400, "invalid_segment");
+  const filterTag = input.tag === undefined || input.tag === null || input.tag === "" ? null : tag(input.tag);
+  const workspace = await workspaceFor(pool, user);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Serialize creations so concurrent requests cannot exceed the active-segment limit.
+    await client.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [workspace]);
+    if (
+      connectionId !== null &&
+      !(
+        await client.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [
+          connectionId,
+          workspace,
+        ])
+      ).rows[0]
+    )
+      throw new ApiError(404, "connection_not_found");
+    const result = await client.query(
+      `INSERT INTO instagram_contact_segments(workspace_id,name,connection_id,tag)
+ SELECT $1,$2,$3,$4 WHERE (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived)<50
+ RETURNING id,name,connection_id,tag`,
+      [workspace, name, connectionId, filterTag],
+    );
+    if (!result.rows[0]) throw new ApiError(409, "segment_limit_reached");
+    await client.query("COMMIT");
+    return result.rows[0];
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (isRecord(error) && error.code === "23505") throw new ApiError(409, "segment_name_exists");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function archiveContactSegment(pool: Pool, user: User, id: string) {
+  if (!isUuid(id)) throw new ApiError(400, "invalid_segment");
+  const workspace = await workspaceFor(pool, user);
+  const result = await pool.query(
+    "UPDATE instagram_contact_segments SET archived=true WHERE workspace_id=$1 AND id=$2 RETURNING id",
+    [workspace, id],
+  );
+  if (!result.rows[0]) throw new ApiError(404, "segment_not_found");
+  return { id: result.rows[0].id };
 }

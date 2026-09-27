@@ -970,6 +970,15 @@ section {
   flex: 1 1 180px;
   margin: 0;
 }
+.segment-save {
+  margin-bottom: 20px;
+}
+.segment-save summary {
+  cursor: pointer;
+  min-height: 44px;
+  padding: 8px 0;
+  color: var(--color-brand);
+}
 .contact-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(180px, 320px);
