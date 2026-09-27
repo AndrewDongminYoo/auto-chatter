@@ -93,7 +93,7 @@
       <div id="workspace" hidden>
         <nav class="workspace-nav" aria-label="설정 구역">
           <a href="#accounts-section">연결 계정</a><a href="#automation-section">자동화 규칙</a
-          ><a href="#activity-section">처리 내역</a>
+          ><a href="#contacts-section">연락처</a><a href="#activity-section">처리 내역</a>
         </nav>
         <div id="delivery-banner" class="delivery-banner">
           <strong id="delivery-title">발송 상태</strong>
@@ -304,6 +304,27 @@
               </div>
             </aside>
           </div>
+        </section>
+        <section id="contacts-section" class="card" aria-labelledby="contacts-title">
+          <div class="section-heading">
+            <h2 id="contacts-title">연락처</h2>
+            <button id="contacts-reload" class="secondary">새로고침</button>
+          </div>
+          <p class="hint">
+            저장된 댓글 참여자입니다. 계정별로 구분하며, 댓글 참여만으로 DM 수신에 동의한 것은 아닙니다.
+          </p>
+          <form id="contacts-filter" class="contacts-filter">
+            <label
+              >Instagram 계정<select name="connection_id">
+                <option value="">모든 계정</option>
+              </select></label
+            >
+            <label>태그로 찾기<input name="tag" maxlength="40" placeholder="예: 관심" /></label>
+            <button type="submit" class="secondary">필터 적용</button>
+          </form>
+          <p id="contacts-status" class="hint" role="status" aria-live="polite"></p>
+          <div id="contacts-list" class="contacts-list"></div>
+          <button id="contacts-more" class="secondary" hidden>연락처 더 보기</button>
         </section>
         <section id="activity-section" class="card" aria-labelledby="activity-title">
           <div class="section-heading">

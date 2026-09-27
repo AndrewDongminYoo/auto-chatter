@@ -11,6 +11,7 @@ import {
   updateConnection,
 } from "./settings.ts";
 import { ApiError } from "./auth.ts";
+import { listContacts, saveContactTags } from "./contacts.ts";
 import { connectionMedia } from "./instagram-media.ts";
 import { sealSecret } from "./secrets.ts";
 
@@ -244,4 +245,156 @@ test("button migration upgrades existing rows with no button and is repeatable",
     await client.query("ROLLBACK");
     client.release();
   }
+});
+
+async function contactEvents() {
+  const { ingestComments } = await import("../instagram/store.ts");
+  await ingestComments(pool, [
+    { accountId: "123", commentId: "c1", postId: "12345", senderId: "888", text: "private comment text" },
+    { accountId: "123", commentId: "c2", postId: "54321", senderId: "888", text: "private comment text" },
+  ]);
+}
+test("contacts deduplicate comments and return no content or credentials across workspaces", async () => {
+  await contactEvents();
+  const page = await listContacts(pool, a);
+  assert.equal(page.contacts.length, 1);
+  assert.equal(page.contacts[0].sender_id, "888");
+  assert.equal(page.contacts[0].comment_count, "2");
+  assert.deepEqual(page.contacts[0].tags, []);
+  assert.equal(JSON.stringify(page).includes("private comment text"), false);
+  assert.equal(JSON.stringify(page).includes("encrypted-test"), false);
+  assert.deepEqual((await listContacts(pool, b)).contacts, []);
+});
+test("contact tags normalize, filter, clear and cannot target foreign or nonexistent contacts", async () => {
+  await contactEvents();
+  await saveContactTags(pool, a, connectionId, "888", { tags: [" Lead ", "lead", "관심"] });
+  assert.deepEqual((await listContacts(pool, a)).contacts[0].tags, ["lead", "관심"]);
+  assert.equal((await listContacts(pool, a, new URLSearchParams({ tag: " LEAD " }))).contacts.length, 1);
+  assert.equal((await listContacts(pool, a, new URLSearchParams({ tag: "customer" }))).contacts.length, 0);
+  await assert.rejects(
+    saveContactTags(pool, b, connectionId, "888", { tags: ["foreign"] }),
+    (e: unknown) => e instanceof ApiError && e.status === 404,
+  );
+  await assert.rejects(
+    saveContactTags(pool, a, connectionId, "999", { tags: ["new"] }),
+    (e: unknown) => e instanceof ApiError && e.status === 404,
+  );
+  for (const tags of [[""], ["x".repeat(41)], Array(21).fill("tag"), [null], "lead"])
+    await assert.rejects(
+      saveContactTags(pool, a, connectionId, "888", { tags }),
+      (e: unknown) => e instanceof ApiError && e.status === 400,
+    );
+  assert.deepEqual((await listContacts(pool, a)).contacts[0].tags, ["lead", "관심"]);
+  await saveContactTags(pool, a, connectionId, "888", { tags: [] });
+  assert.deepEqual((await listContacts(pool, a)).contacts[0].tags, []);
+});
+
+test("contact identity and tag filters stay separate for each account", async () => {
+  await contactEvents();
+  const wa = await ensureWorkspace(pool, a),
+    wb = await ensureWorkspace(pool, b);
+  const other = "44444444-4444-4444-8444-444444444444",
+    foreign = "55555555-5555-4555-8555-555555555555";
+  await pool.query(
+    "INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'124',true),($3,$4,'125',true)",
+    [other, wa, foreign, wb],
+  );
+  const { ingestComments } = await import("../instagram/store.ts");
+  await ingestComments(pool, [
+    { accountId: "124", commentId: "other", postId: "12345", senderId: "888", text: "other account" },
+    { accountId: "125", commentId: "foreign", postId: "12345", senderId: "888", text: "foreign" },
+  ]);
+  await saveContactTags(pool, a, connectionId, "888", { tags: ["lead"] });
+  assert.equal((await listContacts(pool, a)).contacts.length, 2);
+  const own = (await listContacts(pool, a, new URLSearchParams({ connection_id: other }))).contacts;
+  assert.equal(own.length, 1);
+  assert.deepEqual(own[0].tags, []);
+  assert.equal((await listContacts(pool, a, new URLSearchParams({ connection_id: foreign }))).contacts.length, 0);
+  assert.equal((await listContacts(pool, b, new URLSearchParams({ tag: "lead" }))).contacts.length, 0);
+});
+test("contact keyset pages visit every stable identity once and reject malformed requests", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  await pool.query(
+    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,'page-'||n,'12345',(900000+n)::text,'private' FROM generate_series(1,51) n",
+    [workspace, connectionId],
+  );
+  const first = await listContacts(pool, a);
+  assert.equal(first.contacts.length, 50);
+  assert.ok(first.after);
+  const second = await listContacts(pool, a, new URLSearchParams({ after: first.after }));
+  assert.equal(second.contacts.length, 1);
+  assert.equal(second.after, null);
+  assert.equal(new Set([...first.contacts, ...second.contacts].map((c) => c.sender_id)).size, 51);
+  for (const query of [
+    "after=broken",
+    "after=https://evil.test",
+    "tag=",
+    "tag=x&tag=y",
+    "connection_id=wrong",
+    "extra=1",
+  ])
+    await assert.rejects(
+      listContacts(pool, a, new URLSearchParams(query)),
+      (e: unknown) => e instanceof ApiError && e.status === 400,
+    );
+});
+test("contact migration is repeatable and creates a table when upgrading", async () => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DROP TABLE instagram_contact_tags");
+    await client.query("DROP INDEX IF EXISTS instagram_comment_events_contact_lookup_idx");
+    const migration = await readFile(
+      new URL("../../db/migrations/008_instagram_contact_tags.sql", import.meta.url),
+      "utf8",
+    );
+    await client.query(migration);
+    await client.query(migration);
+    await client.query(
+      "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id) SELECT workspace_id,id,'888' FROM instagram_connections WHERE id=$1",
+      [connectionId],
+    );
+    assert.deepEqual((await client.query("SELECT tags FROM instagram_contact_tags")).rows[0].tags, []);
+    assert.equal(
+      (await client.query("SELECT to_regclass('instagram_comment_events_contact_lookup_idx')::text AS name")).rows[0]
+        .name,
+      "instagram_comment_events_contact_lookup_idx",
+    );
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+});
+
+test("contact existence lookups can use the workspace/account/sender index", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Prove index eligibility, not a planner choice or production latency bound.
+    await client.query("SET LOCAL enable_seqscan=off");
+    const result = await client.query(
+      "EXPLAIN (FORMAT JSON) SELECT 1 FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3",
+      [workspace, connectionId, "sender-1"],
+    );
+    assert.ok(JSON.stringify(result.rows).includes("instagram_comment_events_contact_lookup_idx"));
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+});
+
+test("existing string sender identities can be tagged and used at a page boundary", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  await pool.query(
+    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,'string-'||n,'12345','sender-'||lpad(n::text,3,'0'),'private' FROM generate_series(1,51) n",
+    [workspace, connectionId],
+  );
+  const page = await listContacts(pool, a);
+  assert.equal(page.contacts.length, 50);
+  assert.ok(page.after);
+  const next = await listContacts(pool, a, new URLSearchParams({ after: page.after }));
+  assert.equal(next.contacts.length, 1);
+  assert.equal(next.contacts[0].sender_id, "sender-051");
+  await saveContactTags(pool, a, connectionId, "sender-050", { tags: ["lead"] });
 });

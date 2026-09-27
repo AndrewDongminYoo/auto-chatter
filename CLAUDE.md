@@ -171,3 +171,13 @@ The deployment job verifies signed-event persistence, replay protection, restric
 
 What has and has not been proven against real Meta accounts is tracked in README.md and `docs/notes/2026-09-25-meta-permissions-and-worker.md`.
 Type checks and mocked Graph tests do not prove live permissions or a live private-reply send; do not describe them as if they did.
+
+## Instagram contacts
+
+`GET /api/contacts` derives account-scoped contacts from stored comment events and returns metadata without comment text or credentials.
+`connection_id`, `tag`, and `after` filter a 50-row keyset page ordered by connection and sender ID.
+`PATCH /api/connections/:id/contacts/:senderId` replaces up to 20 normalized manual tags on an existing workspace-owned comment participant.
+Migration 008 creates `instagram_contact_tags`; the administrator migration runner applies it and the access script restricts it to server roles.
+Empty tag arrays remove tags without granting DELETE privileges.
+These records neither prove DM consent nor merge comment identities with DM identities.
+See `docs/specs/2026-09-27-instagram-contacts.md` and the parity backlog in `docs/notes/2026-09-27-manychat-parity.md`.

@@ -210,3 +210,91 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
     await pool.end();
   }
 });
+
+test("workerd contact API uses restricted server privileges and verified workspace ownership", async () => {
+  const databaseUrl = process.env.TEST_DATABASE_URL;
+  const url = new URL(databaseUrl);
+  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
+    throw new Error("Database tests require a local automations_test database");
+  const pool = new Pool({ connectionString: databaseUrl });
+  const workspace = "11111111-1111-4111-8111-111111111111",
+    user = "66666666-6666-4666-8666-666666666666",
+    foreign = "77777777-7777-4777-8777-777777777777",
+    connection = "22222222-2222-4222-8222-222222222222";
+  const serverUrl = new URL(databaseUrl);
+  serverUrl.username = "auto_chatter_server";
+  serverUrl.password = "runtime-test-only";
+  const config = JSON.parse(await readFile(new URL("../../wrangler.json", import.meta.url), "utf8"));
+  const runtime = new Miniflare({
+    modules: true,
+    scriptPath: ".wrangler/build/index.js",
+    compatibilityDate: config.compatibility_date,
+    compatibilityFlags: config.compatibility_flags,
+    hyperdrives: { HYPERDRIVE: serverUrl.href },
+    bindings: { SUPABASE_URL: "https://auth-test.supabase.co", SUPABASE_PUBLISHABLE_KEY: "synthetic-public-key" },
+    outboundService: async (request) => {
+      assert.equal(new URL(request.url).origin, "https://auth-test.supabase.co");
+      return Response.json({
+        id: request.headers.get("authorization") === "Bearer foreign" ? foreign : user,
+        email: "owner@example.test",
+        email_confirmed_at: "2026-09-27",
+      });
+    },
+  });
+  try {
+    await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
+    await pool.query("TRUNCATE workspaces CASCADE");
+    await pool.query("INSERT INTO workspaces VALUES($1),($2)", [workspace, foreign]);
+    await pool.query("INSERT INTO workspace_members VALUES($1,$2),($3,$3)", [user, workspace, foreign]);
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'123')", [
+      connection,
+      workspace,
+    ]);
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'comment','media','sender-1','private comment')",
+      [workspace, connection],
+    );
+    await pool.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8"));
+    await pool.query("ALTER ROLE auto_chatter_server LOGIN PASSWORD 'runtime-test-only'");
+    assert.equal(
+      (
+        await pool.query(
+          "SELECT has_table_privilege('auto_chatter_server','instagram_contact_tags','DELETE') AS allowed",
+        )
+      ).rows[0].allowed,
+      false,
+    );
+    assert.equal(
+      (await pool.query("SELECT relrowsecurity FROM pg_class WHERE oid='instagram_contact_tags'::regclass")).rows[0]
+        .relrowsecurity,
+      true,
+    );
+    const headers = {
+      cookie: "__Host-ac-access=owned",
+      origin: "https://app.test",
+      "content-type": "application/json",
+    };
+    const list = await runtime.dispatchFetch("https://app.test/api/contacts", { headers });
+    assert.equal(list.status, 200);
+    assert.equal((await list.json()).contacts[0].sender_id, "sender-1");
+    const saved = await runtime.dispatchFetch(`https://app.test/api/connections/${connection}/contacts/sender-1`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ tags: [" Lead "] }),
+    });
+    assert.equal(saved.status, 200);
+    assert.deepEqual(await saved.json(), { tags: ["lead"] });
+    const filtered = await runtime.dispatchFetch("https://app.test/api/contacts?tag=lead", { headers });
+    assert.equal((await filtered.json()).contacts.length, 1);
+    const other = await runtime.dispatchFetch(`https://app.test/api/connections/${connection}/contacts/sender-1`, {
+      method: "PATCH",
+      headers: { ...headers, cookie: "__Host-ac-access=foreign" },
+      body: JSON.stringify({ tags: ["foreign"] }),
+    });
+    assert.equal(other.status, 404);
+    assert.deepEqual((await pool.query("SELECT tags FROM instagram_contact_tags")).rows[0].tags, ["lead"]);
+  } finally {
+    await runtime.dispose();
+    await pool.end();
+  }
+});
