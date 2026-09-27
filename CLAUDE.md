@@ -205,3 +205,16 @@ Privacy and deletion pages disclose manually entered contact tags and field valu
 Workspace and activity readers reject late responses after session reset.
 These capabilities have local DB/workerd/browser evidence only; production migration and deployment have not been performed.
 Data collection, message interpolation, global bot fields and segment-driven sends remain backlog items.
+
+## Per-contact automation controls
+
+`instagram_contact_automation` stores the workspace/connection/comment-sender pause switch.
+The authenticated same-origin contact automation PUT accepts exactly `{paused: boolean}` for an existing owned comment participant.
+The contacts API returns `automation_paused`, default false.
+Apply migration 011 and the server-access transaction before deploying this reader.
+Private and follow claims, Cloudflare wake queries, verification checks and Node/Cloudflare final guards respect this switch.
+A post-claim pause returns unsent work to pending with `contact_paused` without spending a rate-limit retry.
+Paused confirmations retain receipt metadata, including paused non-waiting flows, but cannot activate a follow flow; activation UPDATE checks current pause state again.
+Resume retains queued work and original time windows; it never resets unknown, failed or blocked outcomes.
+Already admitted provider requests cannot be recalled.
+No inbox body retention, manual sends or operator assignment is implemented by this control.
