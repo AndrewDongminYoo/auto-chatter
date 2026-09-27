@@ -181,3 +181,13 @@ Migration 008 creates `instagram_contact_tags`; the administrator migration runn
 Empty tag arrays remove tags without granting DELETE privileges.
 These records neither prove DM consent nor merge comment identities with DM identities.
 See `docs/specs/2026-09-27-instagram-contacts.md` and the parity backlog in `docs/notes/2026-09-27-manychat-parity.md`.
+
+## Saved contact segments
+
+`GET/POST /api/contact-segments` lists or creates workspace-owned account/tag filters.
+`DELETE /api/contact-segments/:id` archives the filter without deleting contacts or requiring DELETE privileges.
+`GET /api/contacts?segment_id=<id>` resolves the saved filters in the authenticated workspace and uses current tags; mixing `segment_id` with manual `connection_id` or `tag` is invalid.
+Creation locks the workspace row before checking the 50-active-segment limit; normalized active names are unique within a workspace.
+Apply migration 009 and the existing server access script before deploying the feature.
+The UI preserves contact drafts when archiving filters and rejects late segment responses after session reset.
+Segments do not grant messaging consent or delivery eligibility; custom fields and segment-driven sends remain unimplemented.
