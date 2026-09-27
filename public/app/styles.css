@@ -719,9 +719,71 @@ select:disabled {
   width: 100%;
   margin-bottom: 8px;
 }
+#inbox-conversations button[aria-pressed="true"] {
+  border-color: var(--color-brand);
+  background: var(--color-soft);
+}
+.inbox-thread {
+  min-width: 0;
+  padding-left: 24px;
+  border-left: 1px solid var(--color-border);
+}
+.inbox-message {
+  max-width: 90%;
+  margin: 18px 0;
+}
+.outgoing-message {
+  margin-left: auto;
+}
+.inbox-composer {
+  border-top: 1px solid var(--color-border);
+  padding-top: 20px;
+  margin-top: 24px;
+}
+.inbox-composer h4 {
+  margin: 0;
+}
+.inbox-composer textarea,
+.reply-decision textarea {
+  width: 100%;
+}
+.composer-footer,
+.composer-actions {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.composer-actions {
+  justify-content: flex-end;
+}
+#inbox-reply-count {
+  font-variant-numeric: tabular-nums;
+}
+.reply-warning {
+  color: var(--color-warning);
+}
+.reply-decision {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  padding: 12px;
+}
+.reply-audit {
+  margin-top: 8px;
+}
 @media (max-width: 700px) {
   .inbox-layout {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .inbox-thread {
+    padding-left: 0;
+    border-left: 0;
+    border-top: 1px solid var(--color-border);
+    padding-top: 16px;
+  }
+  .inbox-message {
+    max-width: 100%;
   }
 }
 .bubble {

@@ -36,8 +36,8 @@ function editorState(
 }
 function canDiscard() {
   return (
-    (!dirty && !contactsDirty.size && !segmentNameDirty && !fieldNameDirty) ||
-    confirm("저장하지 않은 규칙·연락처·필터 변경 사항을 버릴까요?")
+    (!dirty && !contactsDirty.size && !segmentNameDirty && !fieldNameDirty && !inbox.hasDrafts()) ||
+    confirm("저장하지 않은 규칙·연락처·필터 변경 사항과 답장 초안을 버릴까요?")
   );
 }
 function canDiscardRule() {
@@ -117,7 +117,7 @@ function markDirty() {
 form.addEventListener("input", markDirty);
 form.addEventListener("change", markDirty);
 window.addEventListener("beforeunload", (event) => {
-  if (dirty || contactsDirty.size || segmentNameDirty || fieldNameDirty) {
+  if (dirty || contactsDirty.size || segmentNameDirty || fieldNameDirty || inbox.hasDrafts()) {
     event.preventDefault();
     event.returnValue = "";
   }
@@ -248,6 +248,7 @@ async function api(path, method = "GET", body, retry = true) {
   if (!response.ok) {
     const error = new Error(errors[result.error] ?? "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
     error.status = response.status;
+    error.code = result.error;
     throw error;
   }
   return result;
@@ -1515,135 +1516,16 @@ function contactFieldEditor(contact, summary) {
   return details;
 }
 
-let inboxGeneration = 0;
-let inboxMessageGeneration = 0;
-let inboxAfter = null;
-let inboxBefore = null;
-let inboxSelected = null;
-let inboxBusy = false;
-let inboxMessageBusy = false;
+const inbox = createInbox({ api, node, getConnections: () => connections });
 function resetInbox() {
-  inboxGeneration++;
-  inboxMessageGeneration++;
-  inboxAfter = inboxBefore = inboxSelected = null;
-  inboxBusy = inboxMessageBusy = false;
-  byId("inbox-account").replaceChildren(new Option("모든 계정", ""));
-  byId("inbox-conversations").replaceChildren();
-  byId("inbox-messages").replaceChildren();
-  byId("inbox-status").textContent = "";
-  byId("inbox-message-status").textContent = "";
-  byId("inbox-conversation-title").textContent = "대화를 선택하세요";
-  byId("inbox-more").hidden = byId("inbox-older").hidden = true;
+  inbox.reset();
 }
 function initializeInbox() {
-  const select = byId("inbox-account"),
-    previous = select.value;
-  select.replaceChildren(new Option("모든 계정", ""));
-  for (const account of connections) select.append(new Option(account.username ?? account.account_id, account.id));
-  if (connections.some((account) => account.id === previous)) select.value = previous;
-  void loadInbox();
+  inbox.initialize();
 }
-async function loadInbox(more = false) {
-  if (more && (inboxBusy || !inboxAfter)) return;
-  if (!more) {
-    inboxGeneration++;
-    inboxMessageGeneration++;
-    inboxSelected = inboxBefore = inboxAfter = null;
-    inboxMessageBusy = false;
-    byId("inbox-conversations").replaceChildren();
-    byId("inbox-messages").replaceChildren();
-    byId("inbox-conversation-title").textContent = "대화를 선택하세요";
-    byId("inbox-message-status").textContent = "";
-    byId("inbox-older").hidden = true;
-  }
-  const generation = inboxGeneration;
-  inboxBusy = true;
-  byId("inbox-more").disabled = true;
-  byId("inbox-more").hidden = true;
-  byId("inbox-status").textContent = "대화를 불러오고 있습니다…";
-  const query = new URLSearchParams();
-  if (byId("inbox-account").value) query.set("connection_id", byId("inbox-account").value);
-  if (more) query.set("after", inboxAfter);
-  try {
-    const page = await api(`/api/inbox?${query}`);
-    if (generation !== inboxGeneration) return;
-    for (const row of page.conversations) {
-      const button = node(
-        "button",
-        `@${row.username ?? "연결 계정"} · DM 사용자 ${row.recipient_id}\n${row.message_count}개 · 최근 ${new Date(row.last_message_at).toLocaleString("ko-KR")}`,
-        "secondary",
-      );
-      button.addEventListener("click", () => {
-        inboxSelected = row;
-        inboxMessageGeneration++;
-        inboxBefore = null;
-        inboxMessageBusy = false;
-        byId("inbox-messages").replaceChildren();
-        byId("inbox-conversation-title").textContent = `DM 사용자 ${row.recipient_id}`;
-        void loadInboxMessages();
-      });
-      byId("inbox-conversations").append(button);
-    }
-    inboxAfter = page.after;
-    byId("inbox-more").hidden = !inboxAfter;
-    byId("inbox-status").textContent = byId("inbox-conversations").children.length
-      ? "계정·DM 사용자 순서입니다. 대화를 선택하면 저장된 수신 메시지를 볼 수 있습니다."
-      : "보관한 DM이 없습니다. 연결 계정에서 보관을 켠 뒤 새 DM을 받아 주세요.";
-  } catch (error) {
-    if (generation === inboxGeneration)
-      byId("inbox-status").textContent = `${error.message} 새로고침으로 다시 시도하세요.`;
-  } finally {
-    if (generation === inboxGeneration) {
-      inboxBusy = false;
-      byId("inbox-more").disabled = false;
-      byId("inbox-more").hidden = !inboxAfter;
-    }
-  }
+function loadInbox(more = false) {
+  return inbox.loadList(more);
 }
-async function loadInboxMessages(older = false) {
-  if (!inboxSelected || inboxMessageBusy || (older && !inboxBefore)) return;
-  const generation = inboxMessageGeneration,
-    selected = inboxSelected;
-  inboxMessageBusy = true;
-  byId("inbox-older").disabled = true;
-  byId("inbox-older").hidden = true;
-  byId("inbox-message-status").textContent = "메시지를 불러오고 있습니다…";
-  try {
-    const page = await api(
-      `/api/connections/${selected.connection_id}/inbox/${selected.recipient_id}${older ? `?before=${encodeURIComponent(inboxBefore)}` : ""}`,
-    );
-    if (generation !== inboxMessageGeneration) return;
-    const fragment = document.createDocumentFragment();
-    for (const message of [...page.messages].reverse()) {
-      const item = node("div", "", "item");
-      item.append(node("p", message.text, "bubble incoming"));
-      item.append(
-        node(
-          "p",
-          `${message.kind === "postback" ? "확인 버튼 응답 · " : ""}${new Date(message.message_at).toLocaleString("ko-KR")}`,
-          "hint",
-        ),
-      );
-      fragment.append(item);
-    }
-    if (older) byId("inbox-messages").prepend(fragment);
-    else byId("inbox-messages").replaceChildren(fragment);
-    inboxBefore = page.before;
-    byId("inbox-message-status").textContent = page.messages.length
-      ? "수신한 순서로 표시합니다. 답장을 보내는 화면은 아닙니다."
-      : "보관한 메시지가 없습니다.";
-  } catch (error) {
-    if (generation === inboxMessageGeneration)
-      byId("inbox-message-status").textContent = `${error.message} 대화를 다시 선택해 주세요.`;
-  } finally {
-    if (generation === inboxMessageGeneration) {
-      inboxMessageBusy = false;
-      byId("inbox-older").disabled = false;
-      byId("inbox-older").hidden = !inboxBefore;
-    }
-  }
+function loadInboxMessages(older = false) {
+  return inbox.loadConversation(older);
 }
-byId("inbox-account").addEventListener("change", () => void loadInbox());
-byId("inbox-refresh").addEventListener("click", () => void loadInbox());
-byId("inbox-more").addEventListener("click", () => void loadInbox(true));
-byId("inbox-older").addEventListener("click", () => void loadInboxMessages(true));
