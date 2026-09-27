@@ -91,3 +91,53 @@ export async function inboxMessages(
   const messages = result.rows.slice(0, 50);
   return { messages, before: result.rows.length > 50 ? messages.at(-1)!.id : null };
 }
+
+export async function inboxContext(
+  pool: Pool,
+  user: User,
+  connection: string,
+  recipient: string,
+  query: URLSearchParams,
+) {
+  if (!isUuid(connection) || !/^\d{1,40}$/.test(recipient) || query.size)
+    throw new ApiError(400, "invalid_inbox_query");
+  const workspace = await workspaceFor(pool, user);
+  const result = await pool.query(
+    `WITH owned AS (
+       SELECT id,workspace_id,inbox_enabled_at FROM instagram_connections WHERE id=$1 AND workspace_id=$2
+     ), conversation AS (
+       SELECT max(message_at) AS last_message_at FROM instagram_inbox_messages
+       WHERE connection_id=$1 AND workspace_id=$2 AND recipient_id=$3
+     ), candidates AS (
+       SELECT reply.id,reply.sender_id,reply.sent_at,reply.sent_at>=owned.inbox_enabled_at AS fresh
+       FROM private_reply_outbox reply JOIN owned ON reply.connection_id=owned.id AND reply.workspace_id=owned.workspace_id
+       JOIN instagram_comment_events event ON event.id=reply.event_id AND event.connection_id=reply.connection_id
+         AND event.workspace_id=reply.workspace_id AND event.sender_id=reply.sender_id
+       CROSS JOIN conversation
+       WHERE reply.recipient_id=$3 AND reply.status='sent' AND length(btrim(reply.provider_message_id))>0
+         AND reply.sent_at<=now() AND reply.sent_at<=conversation.last_message_at
+     ), identity AS (
+       SELECT count(DISTINCT sender_id)::integer AS sender_count,min(sender_id) AS sender_id,bool_or(fresh) AS fresh
+       FROM candidates
+     )
+     SELECT conversation.last_message_at,identity.sender_count,identity.sender_id,identity.fresh,
+       (SELECT id::text FROM candidates WHERE fresh ORDER BY sent_at DESC,id DESC LIMIT 1) AS evidence_reply_id,
+       coalesce(automation.paused,false) AS automation_paused
+     FROM owned CROSS JOIN conversation CROSS JOIN identity
+     LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=owned.workspace_id
+       AND automation.connection_id=owned.id AND automation.sender_id=identity.sender_id`,
+    [connection, workspace, recipient],
+  );
+  const row = result.rows[0];
+  if (!row) throw new ApiError(404, "connection_not_found");
+  if (!row.last_message_at) throw new ApiError(404, "conversation_not_found");
+  const status =
+    row.sender_count === 0 ? "unmapped" : row.sender_count > 1 ? "ambiguous" : row.fresh ? "verified" : "stale";
+  return {
+    mapping_status: status,
+    comment_sender_id: status === "verified" ? row.sender_id : null,
+    evidence_reply_id: status === "verified" ? row.evidence_reply_id : null,
+    automation_paused: status === "verified" ? row.automation_paused : null,
+    last_message_at: row.last_message_at,
+  };
+}

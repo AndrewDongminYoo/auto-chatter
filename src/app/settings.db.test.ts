@@ -42,6 +42,167 @@ const input = {
   follow_gate_enabled: false,
 };
 
+async function identityInbox(recipient = "456", connection = connectionId, account = "123") {
+  await pool.query(
+    "UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now()-interval '1 hour' WHERE id=$1",
+    [connection],
+  );
+  await ingestMessages(pool, [
+    {
+      accountId: account,
+      senderId: recipient,
+      messageId: `inbound-${connection}-${recipient}`,
+      text: "private DM",
+      timestamp: new Date(Date.now() - 1000),
+    },
+  ]);
+}
+
+async function identityReply(
+  sender: string,
+  media: string,
+  options: { recipient?: string; status?: string; connection?: string; account?: string; user?: typeof a } = {},
+) {
+  const connection = options.connection ?? connectionId;
+  await saveRule(pool, options.user ?? a, { ...input, connection_id: connection, media_id: media });
+  const { ingestComments } = await import("../instagram/store.ts");
+  await ingestComments(pool, [
+    {
+      accountId: options.account ?? "123",
+      commentId: `identity-${connection}-${media}-${sender}`,
+      postId: media,
+      senderId: sender,
+      text: "Link private comment",
+    },
+  ]);
+  const result = await pool.query(
+    `UPDATE private_reply_outbox SET status=$4,recipient_id=$3,provider_message_id='provider-'||id,sent_at=now()-interval '10 minutes'
+     WHERE connection_id=$1 AND sender_id=$2 AND media_id=$5 RETURNING id::text`,
+    [connection, sender, options.recipient ?? "456", options.status ?? "sent", media],
+  );
+  assert.equal(result.rowCount, 1, "identity fixture needs an actual queued reply");
+  return result.rows[0].id as string;
+}
+
+const identityPath = (recipient = "456", connection = connectionId) =>
+  `/api/connections/${connection}/inbox/${recipient}/context`;
+
+test("inbox context derives a comment identity only from a successful provider bridge", async () => {
+  await identityInbox();
+  const evidence = await identityReply("888", "12345");
+  const response = await fieldRequest("GET", identityPath());
+  assert.equal(response.status, 200);
+  const context = await response.json();
+  assert.equal(context.mapping_status, "verified");
+  assert.equal(context.comment_sender_id, "888");
+  assert.equal(context.evidence_reply_id, evidence);
+  assert.equal(context.automation_paused, false);
+  assert.ok(context.last_message_at);
+  assert.equal(JSON.stringify(context).includes("private"), false);
+  assert.equal(JSON.stringify(context).includes("encrypted"), false);
+});
+
+test("inbox context never equates equal numeric comment and DM identities", async () => {
+  await identityInbox();
+  const workspace = await ensureWorkspace(pool, a);
+  await pool.query(
+    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'same-numeric-id','12345','456','private comment')",
+    [workspace, connectionId],
+  );
+  const response = await fieldRequest("GET", identityPath());
+  assert.equal(response.status, 200);
+  const context = await response.json();
+  assert.equal(context.mapping_status, "unmapped");
+  assert.equal(context.comment_sender_id, null);
+  assert.equal(context.evidence_reply_id, null);
+  assert.equal(context.automation_paused, null);
+});
+
+test("inbox context distinguishes old evidence and refuses conflicting senders", async () => {
+  await identityInbox();
+  await identityReply("888", "12345");
+  await pool.query("UPDATE instagram_connections SET inbox_enabled_at=NULL WHERE id=$1", [connectionId]);
+  assert.equal((await (await fieldRequest("GET", identityPath())).json()).mapping_status, "stale");
+  await pool.query("UPDATE instagram_connections SET inbox_enabled_at=now()-interval '5 minutes' WHERE id=$1", [
+    connectionId,
+  ]);
+  const stale = await fieldRequest("GET", identityPath());
+  assert.equal(stale.status, 200);
+  assert.equal((await stale.json()).mapping_status, "stale");
+  await identityReply("999", "54321");
+  await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '2 minutes' WHERE sender_id='999'");
+  const context = await (await fieldRequest("GET", identityPath())).json();
+  assert.equal(context.mapping_status, "ambiguous");
+  assert.equal(context.comment_sender_id, null);
+  assert.equal(context.evidence_reply_id, null);
+  assert.equal(context.automation_paused, null);
+});
+
+test("inbox context deduplicates evidence and reads current pause without changing it", async () => {
+  await identityInbox();
+  await identityReply("888", "12345");
+  const latest = await identityReply("888", "54321");
+  await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '5 minutes' WHERE id=$1", [latest]);
+  const first = await fieldRequest("GET", identityPath());
+  assert.equal(first.status, 200);
+  assert.equal((await first.json()).evidence_reply_id, latest);
+  await fieldRequest("PUT", `/api/connections/${connectionId}/contacts/888/automation`, { paused: true });
+  const context = await (await fieldRequest("GET", identityPath())).json();
+  assert.equal(context.mapping_status, "verified");
+  assert.equal(context.automation_paused, true);
+  assert.equal(
+    (await pool.query("SELECT paused FROM instagram_contact_automation WHERE sender_id='888'")).rows[0].paused,
+    true,
+  );
+  assert.equal((await pool.query("SELECT count(*) FROM private_reply_outbox")).rows[0].count, "2");
+});
+
+test("inbox context rejects failed unknown future and mismatched original identities as evidence", async () => {
+  await identityInbox();
+  for (const [index, status] of ["pending", "failed", "unknown"].entries())
+    await identityReply(`8${index}`, `1234${index}`, { status });
+  const future = await identityReply("900", "90000");
+  await pool.query("UPDATE private_reply_outbox SET sent_at=now()+interval '1 hour' WHERE id=$1", [future]);
+  const afterArrival = await identityReply("903", "90003");
+  await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '2 minutes'");
+  await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 minute' WHERE id=$1", [afterArrival]);
+  const mismatch = await identityReply("901", "90001");
+  await pool.query("UPDATE private_reply_outbox SET sender_id='forged' WHERE id=$1", [mismatch]);
+  const missing = await identityReply("902", "90002");
+  await pool.query("UPDATE private_reply_outbox SET provider_message_id=NULL WHERE id=$1", [missing]);
+  const response = await fieldRequest("GET", identityPath());
+  assert.equal(response.status, 200);
+  const context = await response.json();
+  assert.equal(context.mapping_status, "unmapped");
+  assert.equal(context.comment_sender_id, null);
+});
+
+test("inbox context scopes identical recipients by account and workspace", async () => {
+  await identityInbox();
+  const other = "44444444-4444-4444-8444-444444444444";
+  const workspace = await ensureWorkspace(pool, a);
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'999',true)", [
+    other,
+    workspace,
+  ]);
+  await identityInbox("456", other, "999");
+  await identityReply("777", "54321", { connection: other, account: "999" });
+  const response = await fieldRequest("GET", identityPath());
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).mapping_status, "unmapped");
+  const foreign = await fieldRequest("GET", identityPath("456", other), undefined, b);
+  assert.equal(foreign.status, 404);
+  assert.deepEqual(await foreign.json(), { error: "connection_not_found" });
+});
+
+test("inbox context refuses missing conversations malformed recipient IDs and query parameters", async () => {
+  await identityInbox();
+  assert.equal((await fieldRequest("GET", identityPath("999"))).status, 404);
+  assert.equal((await fieldRequest("GET", identityPath("9".repeat(41)))).status, 400);
+  assert.equal((await fieldRequest("GET", identityPath() + "?before=1")).status, 400);
+  assert.equal((await fieldRequest("GET", identityPath(), undefined, b)).status, 404);
+});
+
 test("inbox opt-in gates body storage and owns settings and readers", async () => {
   const path = `/api/connections/${connectionId}/inbox`;
   const message = {

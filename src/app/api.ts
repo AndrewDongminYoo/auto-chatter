@@ -20,7 +20,7 @@ import {
   saveContactAutomation,
 } from "./contacts.ts";
 import { connectionMedia } from "./instagram-media.ts";
-import { setInbox, listInbox, inboxMessages } from "./inbox.ts";
+import { setInbox, listInbox, inboxMessages, inboxContext } from "./inbox.ts";
 import { archiveContactField, createContactField, listContactFields, saveContactFieldValue } from "./contact-fields.ts";
 
 export async function appApi(
@@ -54,6 +54,9 @@ export async function appApi(
         return json({ connections: await listConnections(pool, user) });
       if (url.pathname === "/api/inbox" && request.method === "GET")
         return json(await listInbox(pool, user, url.searchParams));
+      const context = /^\/api\/connections\/([a-f0-9-]+)\/inbox\/(\d+)\/context$/.exec(url.pathname);
+      if (context && request.method === "GET")
+        return json(await inboxContext(pool, user, context[1]!, context[2]!, url.searchParams));
       const inbox = /^\/api\/connections\/([a-f0-9-]+)\/inbox(?:\/(\d+))?$/.exec(url.pathname);
       if (inbox && !inbox[2] && request.method === "PUT")
         return json(await setInbox(pool, user, inbox[1]!, await readJson(request)));

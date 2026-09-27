@@ -249,6 +249,12 @@ test("API rejects unauthenticated and cross-origin requests before opening a dat
   };
   const userResponse = await appApi(new Request("https://app.test/api/rules"), config, open);
   assert.equal(userResponse.status, 401);
+  const contextResponse = await appApi(
+    new Request(`https://app.test/api/connections/${connectionId}/inbox/456/context`),
+    config,
+    open,
+  );
+  assert.equal(contextResponse.status, 401);
   const crossOrigin = await appApi(
     new Request("https://app.test/api/rules", { method: "PUT", headers: { origin: "https://attacker.test" } }),
     config,

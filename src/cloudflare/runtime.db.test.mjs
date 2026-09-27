@@ -334,6 +334,21 @@ test("workerd contact API uses restricted server privileges and verified workspa
     const inboxPage = await runtime.dispatchFetch("https://app.test/api/inbox", { headers });
     assert.equal(inboxPage.status, 200);
     assert.equal((await inboxPage.json()).conversations[0].recipient_id, "456");
+    const inboxContext = await runtime.dispatchFetch(`${inboxPath}/456/context`, { headers });
+    assert.equal(inboxContext.status, 200);
+    const context = await inboxContext.json();
+    assert.equal(context.mapping_status, "unmapped");
+    assert.equal(context.comment_sender_id, null);
+    assert.equal(context.automation_paused, null);
+    assert.equal(JSON.stringify(context).includes("private body"), false);
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`${inboxPath}/456/context`, {
+          headers: { ...headers, cookie: "__Host-ac-access=foreign" },
+        })
+      ).status,
+      404,
+    );
     const inboxHistory = await runtime.dispatchFetch(`${inboxPath}/456`, { headers });
     assert.equal((await inboxHistory.json()).messages[0].text, "private body");
     assert.equal(

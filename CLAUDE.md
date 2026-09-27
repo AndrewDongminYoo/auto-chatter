@@ -228,5 +228,8 @@ Active receiving and explicit inbox opt-in are required; disabling keeps stored 
 `instagram_inbox_messages` deduplicates by connection and provider message ID in the existing confirmation transaction.
 `GET /api/inbox` pages account/DM-recipient keys; the owned connection inbox reader pages stored arrivals by descending ID.
 DM recipient IDs remain separate from comment participant IDs.
+`GET /api/connections/:connectionId/inbox/:recipientId/context` reads a stored provider-response bridge and current comment automation pause in one SQL snapshot.
+It masks identity and pause fields unless one fresh sender is verified; missing, stale and ambiguous evidence remain distinct.
+This read is advisory, not send authorization or a handoff mutation; see [the handoff contract](docs/specs/2026-09-27-inbox-handoff-contract.md).
 Echoes, attachments, edits, deletions, historical import, outbound history, manual replies and shared team roles remain unimplemented.
 No production migration or live inbox verification has been performed.
