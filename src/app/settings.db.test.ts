@@ -163,9 +163,6 @@ test("inbox context rejects failed unknown future and mismatched original identi
     await identityReply(`8${index}`, `1234${index}`, { status });
   const future = await identityReply("900", "90000");
   await pool.query("UPDATE private_reply_outbox SET sent_at=now()+interval '1 hour' WHERE id=$1", [future]);
-  const afterArrival = await identityReply("903", "90003");
-  await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '2 minutes'");
-  await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 minute' WHERE id=$1", [afterArrival]);
   const mismatch = await identityReply("901", "90001");
   await pool.query("UPDATE private_reply_outbox SET sender_id='forged' WHERE id=$1", [mismatch]);
   const missing = await identityReply("902", "90002");
@@ -175,6 +172,23 @@ test("inbox context rejects failed unknown future and mismatched original identi
   const context = await response.json();
   assert.equal(context.mapping_status, "unmapped");
   assert.equal(context.comment_sender_id, null);
+});
+
+test("inbox context accepts provider identity when inbound arrives before local send completion", async () => {
+  await identityInbox();
+  const evidence = await identityReply("903", "90003");
+  await pool.query(
+    "UPDATE instagram_inbox_messages SET message_at=date_trunc('milliseconds',now()-interval '2 minutes')",
+  );
+  await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 minute' WHERE id=$1", [evidence]);
+  const context = await (await fieldRequest("GET", identityPath())).json();
+  assert.equal(context.mapping_status, "verified");
+  assert.equal(context.evidence_reply_id, evidence);
+  await pool.query(
+    `UPDATE private_reply_outbox SET sent_at=(SELECT message_at+interval '500 microseconds' FROM instagram_inbox_messages LIMIT 1) WHERE id=$1`,
+    [evidence],
+  );
+  assert.equal((await (await fieldRequest("GET", identityPath())).json()).mapping_status, "verified");
 });
 
 test("inbox context scopes identical recipients by account and workspace", async () => {

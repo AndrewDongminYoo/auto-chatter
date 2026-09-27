@@ -113,9 +113,8 @@ export async function inboxContext(
        FROM private_reply_outbox reply JOIN owned ON reply.connection_id=owned.id AND reply.workspace_id=owned.workspace_id
        JOIN instagram_comment_events event ON event.id=reply.event_id AND event.connection_id=reply.connection_id
          AND event.workspace_id=reply.workspace_id AND event.sender_id=reply.sender_id
-       CROSS JOIN conversation
        WHERE reply.recipient_id=$3 AND reply.status='sent' AND length(btrim(reply.provider_message_id))>0
-         AND reply.sent_at<=now() AND reply.sent_at<=conversation.last_message_at
+         AND reply.sent_at<=now()
      ), identity AS (
        SELECT count(DISTINCT sender_id)::integer AS sender_count,min(sender_id) AS sender_id,bool_or(fresh) AS fresh
        FROM candidates

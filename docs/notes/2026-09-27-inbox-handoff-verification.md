@@ -17,7 +17,7 @@
 
 - `corepack pnpm check-types`: strict TypeScript 검사 통과.
 - `corepack pnpm test`: 인증·정책·전송 모의 계약 등 기존 테스트 101건 통과.
-- `TEST_DATABASE_URL=<isolated-local-db> corepack pnpm test:db`: 실제 PostgreSQL의 API·정책·중복·마이그레이션 검사 122건 통과.
+- `TEST_DATABASE_URL=<isolated-local-db> corepack pnpm test:db`: 실제 PostgreSQL의 API·정책·중복·마이그레이션 검사 123건 통과.
 - `TEST_DATABASE_URL=<isolated-local-db> corepack pnpm test:cloudflare`: 빌드한 Workers 코드·Hyperdrive·제한된 서버 역할·웹훅·큐 검사 25건 통과.
 - 문맥 경로 추가 후 `node --test --test-name-pattern='workerd contact API' src/cloudflare/runtime.db.test.mjs`: 실제 workerd에서 근거 없는 대화의 `unmapped`·민감 본문 제외·다른 작업 공간 404 확인.
 
@@ -35,7 +35,8 @@ Docker 대신 설치된 PostgreSQL 17.11로 전용 임시 클러스터와 `autom
 
 식별자·SQL·권한·개인정보 경계를 독립적으로 검토했고 구현 결함은 발견하지 못했습니다.
 마지막 수신 시각 상한과 보관 시작 시각 없음의 테스트 공백은 같은 DB 사례에 추가했습니다.
-`last_message_at < sent_at < now()` 근거의 시간 상한을 잠시 제거하면 예상한 `unmapped` 대신 `verified`가 되어 검사에 실패하며, 필터 복원 후 전체 DB 테스트 122건이 다시 통과했습니다.
+초기 구현에서는 마지막 수신보다 늦은 발송 기록을 제외하는 상한을 부정 검사로 확인했습니다.
+이 조건은 아래 호스팅 리뷰에서 공급자 전달 순서와 로컬 기록 순서를 혼동한 것으로 확인돼 제거했습니다.
 
 문서의 내부 링크·앵커 55개와 등록한 GitHub 작업 53건의 매트릭스 대응을 검사했습니다.
 존재하지 않는 링크·앵커와 누락된 작업의 부정 사례를 먼저 거부하는 것도 확인했습니다.
@@ -51,3 +52,10 @@ Trunk는 전체 파일 140개의 설정된 형식·Markdown·비밀값·의존�
 독립 계약·문서 검토에서 공급자별 상대 ID 누락 조건, 상태 판정 우선순위, 확인된 세션·멤버십·캐시 금지 경계의 설명 부족을 확인했습니다.
 현재 전송기·인증 코드와 대조한 뒤 명세에 보강했습니다.
 매트릭스의 53개 이슈 번호·제목과 조회 구현·쓰기 미구현 구분도 독립 검토에서 확인했습니다.
+
+## 호스팅 리뷰 수정
+
+[PR #65의 P2](https://github.com/AndrewDongminYoo/auto-chatter/pull/65#discussion_r4115203725)는 빠른 응답과 DB 시각 정밀도 차이로 정상 공급자 연결 근거가 누락될 수 있음을 지적했습니다.
+수신 시각을 로컬 성공 기록보다 앞서게 만든 회귀 테스트가 먼저 `unmapped`로 실패하는 것을 확인했습니다.
+공급자 성공 응답의 상대 ID 근거를 전달 순서와 분리하고, 미래 시각 제외·보관 시작 시각·충돌·소유권 검사는 유지했습니다.
+수신 후 성공 기록과 같은 밀리초의 500마이크로초 차이를 검사하며, 이 문맥을 발송 허가로 사용하는 계약은 추가하지 않았습니다.
