@@ -1051,12 +1051,19 @@ byId("segment-archive").addEventListener("click", (event) => {
     return;
   const generation = segmentsGeneration;
   const id = activeSegmentId;
+  const segment = contactSegments.find((value) => value.id === id);
   void action(event.currentTarget, async () => {
     segmentBusy = true;
     segmentControls();
     try {
       await api(`/api/contact-segments/${id}`, "DELETE");
       if (generation !== segmentsGeneration) return;
+      if (segment && new URLSearchParams(contactsQuery).get("segment_id") === id) {
+        const query = new URLSearchParams();
+        if (segment.connection_id) query.set("connection_id", segment.connection_id);
+        if (segment.tag) query.set("tag", segment.tag);
+        contactsQuery = query.toString();
+      }
       if (activeSegmentId === id) activeSegmentId = "";
       await loadContactSegments(true);
       if (!contactsDirty.size && !contactsSaving) await loadContacts();
