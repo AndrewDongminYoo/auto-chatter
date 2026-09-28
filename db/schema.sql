@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS instagram_connections (
   username text,
   access_token_encrypted text,
   token_expires_at timestamptz,
+  token_obtained_at timestamptz NOT NULL DEFAULT now(),
+  token_refresh_attempted_at timestamptz,
   send_paused_until timestamptz,
   UNIQUE (id, workspace_id)
 );
