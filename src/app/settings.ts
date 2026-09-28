@@ -85,7 +85,11 @@ export async function listConnections(pool: Pool, user: User) {
   const workspaceId = await workspaceFor(pool, user);
   return (
     await pool.query(
-      `SELECT id,account_id,username,active,send_enabled,inbox_enabled,token_expires_at,access_token_encrypted IS NOT NULL AS token_registered FROM instagram_connections WHERE workspace_id=$1 ORDER BY id`,
+      `SELECT id,account_id,username,active,send_enabled,inbox_enabled,token_expires_at,access_token_encrypted IS NOT NULL AS token_registered,
+        CASE WHEN access_token_encrypted IS NULL THEN 'missing'
+             WHEN token_expires_at IS NULL OR token_expires_at<=now() THEN 'expired'
+             ELSE 'valid' END AS credential_status
+       FROM instagram_connections WHERE workspace_id=$1 ORDER BY id`,
       [workspaceId],
     )
   ).rows;

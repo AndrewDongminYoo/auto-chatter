@@ -850,6 +850,21 @@ test("disconnect clears only owned credentials and disables its rules", async ()
   assert.equal((await listRules(pool, a))[0].enabled, false);
 });
 
+test("connection list distinguishes valid, expired, and missing local credentials within one workspace", async () => {
+  assert.equal((await listConnections(pool, a))[0].credential_status, "valid");
+  assert.deepEqual(await listConnections(pool, b), []);
+  await pool.query("UPDATE instagram_connections SET token_expires_at=now()-interval '1 second' WHERE id=$1", [
+    connectionId,
+  ]);
+  assert.equal((await listConnections(pool, a))[0].credential_status, "expired");
+  await pool.query("UPDATE instagram_connections SET token_expires_at=NULL WHERE id=$1", [connectionId]);
+  assert.equal((await listConnections(pool, a))[0].credential_status, "expired");
+  await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL WHERE id=$1", [
+    connectionId,
+  ]);
+  assert.equal((await listConnections(pool, a))[0].credential_status, "missing");
+});
+
 test("administrator ownership assignment requires confirmation and preserves existing owners", async () => {
   const client = await pool.connect();
   try {
