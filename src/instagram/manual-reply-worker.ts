@@ -27,7 +27,7 @@ export async function manualReplyStatus(
       JOIN instagram_comment_events e ON e.id=r.event_id AND e.workspace_id=r.workspace_id AND e.connection_id=r.connection_id AND e.sender_id=r.sender_id
       WHERE r.workspace_id=$1 AND r.connection_id=$2 AND r.recipient_id=$3 AND r.status='sent'
         AND r.provider_message_id IS NOT NULL AND length(btrim(r.provider_message_id))>0 AND r.sent_at<=clock_timestamp()
-    ) SELECT c.active AS connection_active,c.inbox_enabled,c.send_enabled,c.access_token_encrypted,c.token_expires_at>clock_timestamp() AS token_valid,c.send_paused_until>clock_timestamp() AS cooldown,c.account_id,h.active AS handoff_active,h.version,h.sender_id,a.handoff_paused,
+    ) SELECT c.active AS connection_active,c.inbox_enabled,c.send_enabled,c.access_token_encrypted,c.access_token_encrypted IS DISTINCT FROM $4::text AS token_changed,c.token_expires_at>clock_timestamp() AS token_valid,c.send_paused_until>clock_timestamp() AS cooldown,c.account_id,h.active AS handoff_active,h.version,h.sender_id,a.handoff_paused,
     (SELECT count(DISTINCT sender_id)=1 AND bool_or(fresh) AND min(sender_id)=h.sender_id FROM candidates) AS identity_verified,
     (SELECT max(message_at) FROM instagram_inbox_messages m WHERE m.workspace_id=c.workspace_id AND m.connection_id=c.id AND m.recipient_id=$3 AND m.kind='text') AS last_inbound,
     clock_timestamp() AS checked_at,
@@ -35,7 +35,6 @@ export async function manualReplyStatus(
     FROM instagram_connections c LEFT JOIN instagram_inbox_handoffs h ON h.workspace_id=c.workspace_id AND h.connection_id=c.id AND h.recipient_id=$3
     LEFT JOIN instagram_contact_automation a ON a.workspace_id=h.workspace_id AND a.connection_id=h.connection_id AND a.sender_id=h.sender_id
     WHERE c.workspace_id=$1 AND c.id=$2
-      AND ($4::text IS NULL OR c.access_token_encrypted=$4)
       AND ($5::uuid IS NULL OR EXISTS(SELECT 1 FROM instagram_manual_replies claim WHERE claim.id=$5 AND claim.attempt_id=$6 AND claim.status='sending' AND claim.workspace_id=c.workspace_id AND claim.connection_id=c.id AND claim.recipient_id=$3))`,
     [
       row.workspace_id,
@@ -58,6 +57,8 @@ export async function manualReplyStatus(
     blocked_by_unknown: current?.blocked_by_unknown === true,
   });
   if (!current && claim) return result("delivery_changed");
+  if (claim && current?.token_changed && current.connection_active && current.send_enabled && current.token_valid)
+    return result("token_rotated");
   if (!current || !current.connection_active || !current.inbox_enabled || !current.send_enabled)
     return result("connection_disabled");
   if (!current.access_token_encrypted || !current.token_valid) return result("token_unavailable");
@@ -86,14 +87,21 @@ export async function assertManualReplyAllowed(
   encryptedToken: string | null,
 ): Promise<void> {
   const result = await pool.query(
-    `SELECT r.workspace_id,r.connection_id,r.recipient_id,r.handoff_version FROM instagram_manual_replies r JOIN instagram_connections c ON c.id=r.connection_id AND c.workspace_id=r.workspace_id
-    WHERE r.id=$1 AND r.attempt_id=$2 AND r.status='sending' AND r.connection_id=$3 AND c.access_token_encrypted IS NOT DISTINCT FROM $4`,
+    `SELECT r.workspace_id,r.connection_id,r.recipient_id,r.handoff_version,
+      c.access_token_encrypted IS DISTINCT FROM $4::text AS token_changed,
+      c.active AND c.send_enabled AND c.token_expires_at>clock_timestamp() AS token_rotation_retryable
+    FROM instagram_manual_replies r JOIN instagram_connections c ON c.id=r.connection_id AND c.workspace_id=r.workspace_id
+    WHERE r.id=$1 AND r.attempt_id=$2 AND r.status='sending' AND r.connection_id=$3`,
     [id, attempt, connection, encryptedToken],
   );
   const row = result.rows[0];
   if (!row) throw new PreSendVerificationError("block", "delivery_changed");
+  if (row.token_changed)
+    throw row.token_rotation_retryable
+      ? new PreSendVerificationError("retry", "token_rotated")
+      : new PreSendVerificationError("block", "delivery_changed");
   const failure = await manualReplyEligibility(pool, row, { id, attempt, encryptedToken });
-  if (failure) throw new PreSendVerificationError("block", failure);
+  if (failure) throw new PreSendVerificationError(failure === "token_rotated" ? "retry" : "block", failure);
 }
 export async function processNextManualReply(
   pool: Pool,
@@ -186,7 +194,11 @@ export async function processNextManualReply(
       return true;
     } catch (error) {
       if (error instanceof PreSendVerificationError) {
-        await finish("failed", error.failureCode, true);
+        await finish(
+          error.disposition === "retry" ? "pending" : "failed",
+          error.failureCode,
+          error.disposition !== "retry",
+        );
         return false;
       }
       await finish("pending", "verification_unavailable", false);
