@@ -404,8 +404,10 @@ async function loadWorkspace() {
       action(healthButton, async () => {
         const result = await api(`/api/connections/${account.id}/health`);
         const message = {
-          fields_present: "Meta가 이 계정의 댓글·DM·확인 버튼 구독 필드를 반환했습니다. 이 앱으로 실제 이벤트가 오는지는 별도로 확인해야 합니다.",
-          fields_missing: "Meta 응답에서 필수 웹훅 구독 필드가 모두 확인되지 않았습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
+          fields_present:
+            "Meta가 이 계정의 댓글·DM·확인 버튼 구독 필드를 반환했습니다. 이 앱으로 실제 이벤트가 오는지는 별도로 확인해야 합니다.",
+          fields_missing:
+            "Meta 응답에서 필수 웹훅 구독 필드가 모두 확인되지 않았습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
           reconnect_required: "Meta에서 이 계정에 접근할 수 없습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
           unverified: "Meta 상태를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.",
           expired: "연결 토큰이 만료됐습니다. 같은 Instagram 계정을 다시 연결해 주세요.",

@@ -187,14 +187,19 @@ function healthFetch(me: Response, subscriptions?: Response) {
     assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer server-token");
     assert.equal(url.searchParams.has("access_token"), false);
     paths.push(url.pathname);
-    return url.pathname.endsWith("/me") ? me : subscriptions ?? Response.json({ data: [] });
+    return url.pathname.endsWith("/me") ? me : (subscriptions ?? Response.json({ data: [] }));
   }) as typeof fetch;
   return { fetchImpl, paths };
 }
 
 test("connection health is workspace scoped and never probes another account", async () => {
   const graph = healthFetch(Response.json({ user_id: "123" }));
-  const response = await appApi(healthRequest(), { ...mediaConfig, INSTAGRAM_OAUTH_APP_ID: "789" }, () => mediaPool(false), graph.fetchImpl);
+  const response = await appApi(
+    healthRequest(),
+    { ...mediaConfig, INSTAGRAM_OAUTH_APP_ID: "789" },
+    () => mediaPool(false),
+    graph.fetchImpl,
+  );
   assert.equal(response.status, 404);
   assert.deepEqual(graph.paths, []);
 });
@@ -214,14 +219,44 @@ test("connection health rate limit prevents Meta requests", async () => {
 test("connection health distinguishes token expiry, account access and webhook subscription", async () => {
   const env = { ...mediaConfig, INSTAGRAM_OAUTH_APP_ID: "789" };
   const cases: Array<[Response, Response | undefined, string, number]> = [
-    [Response.json({ user_id: "123" }), Response.json({ data: [{ id: "unmapped-subscription", subscribed_fields: ["comments", "messages", "messaging_postbacks"] }] }), "fields_present", 2],
-    [Response.json({ user_id: "123" }), Response.json({ data: [{ id: "unmapped-subscription", subscribed_fields: ["comments", "messages"] }] }), "fields_missing", 2],
+    [
+      Response.json({ user_id: "123" }),
+      Response.json({
+        data: [{ id: "unmapped-subscription", subscribed_fields: ["comments", "messages", "messaging_postbacks"] }],
+      }),
+      "fields_present",
+      2,
+    ],
+    [
+      Response.json({ user_id: "123" }),
+      Response.json({ data: [{ id: "unmapped-subscription", subscribed_fields: ["comments", "messages"] }] }),
+      "fields_missing",
+      2,
+    ],
     [Response.json({ user_id: "123" }), Response.json({ data: [{ id: "broken-subscription" }] }), "unverified", 2],
-    [Response.json({ user_id: "123" }), Response.json({ data: [{ id: "other", subscribed_fields: ["comments"] }], paging: { next: "https://graph.instagram.com/other" } }), "unverified", 2],
-    [Response.json({ user_id: "123" }), new Response(null, { status: 302, headers: { Location: "https://other.test" } }), "unverified", 2],
+    [
+      Response.json({ user_id: "123" }),
+      Response.json({
+        data: [{ id: "other", subscribed_fields: ["comments"] }],
+        paging: { next: "https://graph.instagram.com/other" },
+      }),
+      "unverified",
+      2,
+    ],
+    [
+      Response.json({ user_id: "123" }),
+      new Response(null, { status: 302, headers: { Location: "https://other.test" } }),
+      "unverified",
+      2,
+    ],
     [Response.json({ user_id: "999" }), undefined, "reconnect_required", 1],
     [new Response("server-token denied", { status: 401 }), undefined, "reconnect_required", 1],
-    [Response.json({ error: { code: 190, message: "server-token expired" } }, { status: 403 }), undefined, "reconnect_required", 1],
+    [
+      Response.json({ error: { code: 190, message: "server-token expired" } }, { status: 403 }),
+      undefined,
+      "reconnect_required",
+      1,
+    ],
     [new Response("server-token busy", { status: 429 }), undefined, "unverified", 1],
   ];
   for (const [me, subscriptions, expected, callCount] of cases) {
@@ -239,7 +274,11 @@ test("connection health distinguishes token expiry, account access and webhook s
   ] as const) {
     const graph = healthFetch(Response.json({ user_id: "123" }));
     const pool = {
-      query: async (sql: string) => ({ rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId }] : [{ ...connection, access_token_encrypted: token, token_expires_at: expiry }] }),
+      query: async (sql: string) => ({
+        rows: sql.includes("workspace_members")
+          ? [{ workspace_id: workspaceId }]
+          : [{ ...connection, access_token_encrypted: token, token_expires_at: expiry }],
+      }),
       end: async () => {},
     } as unknown as Pool;
     const response = await appApi(healthRequest(), env, () => pool, graph.fetchImpl);

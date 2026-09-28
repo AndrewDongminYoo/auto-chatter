@@ -58,11 +58,7 @@ export async function connectionHealth(
   if (!connection.access_token_encrypted) return { status: "missing", checked_at };
   const expiresAt = new Date(connection.token_expires_at ?? "").getTime();
   if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return { status: "expired", checked_at };
-  if (
-    !env.TOKEN_ENCRYPTION_KEY ||
-    !env.META_GRAPH_VERSION ||
-    !/^v\d+\.\d+$/.test(env.META_GRAPH_VERSION)
-  )
+  if (!env.TOKEN_ENCRYPTION_KEY || !env.META_GRAPH_VERSION || !/^v\d+\.\d+$/.test(env.META_GRAPH_VERSION))
     throw new ApiError(503, "instagram_not_configured");
   let token: string;
   try {
@@ -77,7 +73,8 @@ export async function connectionHealth(
   const base = `https://graph.instagram.com/${env.META_GRAPH_VERSION}`;
   const identity = await providerGet(fetchImpl, `${base}/me?fields=user_id`, token);
   if (identity.status !== "ok") return { status: identity.status, checked_at };
-  const account = isRecord(identity.value) && Array.isArray(identity.value.data) ? identity.value.data[0] : identity.value;
+  const account =
+    isRecord(identity.value) && Array.isArray(identity.value.data) ? identity.value.data[0] : identity.value;
   if (!isRecord(account) || typeof account.user_id !== "string") return { status: "unverified", checked_at };
   if (account.user_id !== connection.account_id) return { status: "reconnect_required", checked_at };
   const subscription = await providerGet(
@@ -92,11 +89,13 @@ export async function connectionHealth(
   if (entries.some((entry) => !isRecord(entry) || !Array.isArray(entry.subscribed_fields)))
     return { status: "unverified", checked_at };
   const required = ["comments", "messages", "messaging_postbacks"];
-  if (entries.some((entry) => {
-    if (!isRecord(entry)) return false;
-    const fields = entry.subscribed_fields;
-    return Array.isArray(fields) && required.every((field) => fields.includes(field));
-  }))
+  if (
+    entries.some((entry) => {
+      if (!isRecord(entry)) return false;
+      const fields = entry.subscribed_fields;
+      return Array.isArray(fields) && required.every((field) => fields.includes(field));
+    })
+  )
     return { status: "fields_present", checked_at };
   if (isRecord(subscription.value.paging) && subscription.value.paging.next)
     return { status: "unverified", checked_at };
