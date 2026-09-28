@@ -338,13 +338,13 @@ async function loadWorkspace() {
     const item = node("div", "");
     item.className = "item";
     item.append(node("strong", account.username ?? account.account_id));
-    const tokenValid = account.token_registered && Date.parse(account.token_expires_at) > Date.now();
-    const credentialStatus =
-      account.credential_status === "missing" || !account.token_registered
+    const credentialStatus = ["missing", "expired", "valid"].includes(account.credential_status)
+      ? account.credential_status
+      : !account.token_registered
         ? "missing"
-        : account.credential_status === "expired" || !tokenValid
-          ? "expired"
-          : "valid";
+        : Date.parse(account.token_expires_at) > Date.now()
+          ? "valid"
+          : "expired";
     const state = node("div", "", "badges");
     state.append(
       badge(
