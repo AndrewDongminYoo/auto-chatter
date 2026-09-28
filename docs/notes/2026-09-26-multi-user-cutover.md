@@ -110,8 +110,10 @@ OAuth 연결 이후 `auto-chatter OAuth 수신 테스트` 댓글이 `2026-09-26T
    첫 DM, 미팔로우, 팔로우, 확인 불가, 재응답·중복 이벤트를 수신 기기와 DB 상태로 대조합니다.
 
 ```plaintext
-https://auto-chatter.auto-chatter-ydm2790.workers.dev/api/instagram/callback
+https://auto-chat.donminzzi.kr/api/instagram/callback
 ```
+
+기존 workers.dev 콜백은 전환 중에도 Meta의 허용 목록에 유지합니다.
 
 ### Worker 설정
 

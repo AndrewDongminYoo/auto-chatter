@@ -109,7 +109,7 @@ A missing recipient ID after a successful first DM records `follow_recipient_una
 Inbound DM text is compared in memory for follow confirmation; receipt IDs and timestamps deduplicate confirmation events.
 The separate opt-in inbox persists eligible new text DMs and confirmation postbacks after its activation cutoff; see the received Instagram inbox section below.
 `SEND_ENABLED` must equal `true` to send; the committed configuration keeps it `false` and pins the provisioned personal Cloudflare account and Hyperdrive ID.
-The Worker is deployed on workers.dev with both webhook secrets registered; incorrect verification tokens and unsigned requests return 403.
+The Worker serves both workers.dev and `auto-chat.donminzzi.kr` with both webhook secrets registered; incorrect verification tokens and unsigned requests return 403.
 Public GET/HEAD routes `/privacy`, `/data-deletion`, and `/service` serve static Korean privacy policy, manual deletion instructions, and service terms without accessing secrets or database bindings.
 Their approved text lives in `src/cloudflare/public-pages.ts`; no automatic deletion or unauthenticated deletion API is provided.
 Wrangler serves `public/` as static assets before Worker routing; keep only public files in that directory.
