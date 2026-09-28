@@ -1,7 +1,7 @@
 import { queueManualReply, listManualReplies, resolveManualReply, readManualReplyStatus } from "./manual-replies.ts";
 import { inboxHandoff, saveInboxHandoff } from "./inbox-handoff.ts";
 import type { Pool } from "pg";
-import { ApiError, AuthClient, json, readJson, requireSameOrigin, type AuthEnv } from "./auth.ts";
+import { ApiError, AuthClient, json, readJson, requireSameOrigin, type AuthEnv, type User } from "./auth.ts";
 import { limitAuthRequest, type AuthRateLimitEnv } from "./auth-rate-limit.ts";
 import {
   listActivity,
@@ -26,6 +26,14 @@ import { connectionMedia } from "./instagram-media.ts";
 import { connectionHealth } from "./instagram-connection-health.ts";
 import { setInbox, listInbox, inboxMessages, inboxContext } from "./inbox.ts";
 import { archiveContactField, createContactField, listContactFields, saveContactFieldValue } from "./contact-fields.ts";
+
+function instagramConnectAvailable(user: User, env: InstagramOAuthEnv): boolean {
+  if (env.INSTAGRAM_PUBLIC_CONNECT_ENABLED === "true") return true;
+  if (!user.email) return false;
+  return (env.INSTAGRAM_INTERNAL_EMAILS ?? "")
+    .split(",")
+    .some((email) => email.trim() !== "" && email.trim().toLowerCase() === user.email.toLowerCase());
+}
 
 export async function appApi(
   request: Request,
@@ -57,7 +65,17 @@ export async function appApi(
     }
     const user = await auth.user(request);
     if (url.pathname === "/api/me" && request.method === "GET")
-      return json({ user, global_send_enabled: env.SEND_ENABLED === "true" });
+      return json({
+        user,
+        global_send_enabled: env.SEND_ENABLED === "true",
+        instagram_connect_available: instagramConnectAvailable(user, env),
+      });
+    if (
+      ((url.pathname === "/api/instagram/connect" && request.method === "POST") ||
+        (url.pathname === "/api/instagram/callback" && request.method === "GET")) &&
+      !instagramConnectAvailable(user, env)
+    )
+      throw new ApiError(403, "instagram_public_access_restricted");
     const pool = openPool();
     try {
       if (url.pathname === "/api/instagram/connect" && request.method === "POST")
@@ -231,6 +249,23 @@ export async function appApi(
       await pool.end();
     }
   } catch (error) {
+    if (
+      error instanceof ApiError &&
+      request.method === "GET" &&
+      new URL(request.url).pathname === "/api/instagram/callback" &&
+      ["instagram_authorization_denied", "instagram_permissions_required"].includes(error.message)
+    ) {
+      const response = new Response(null, {
+        status: 303,
+        headers: {
+          Location: new URL(`/app/?instagram=${error.message}`, request.url).toString(),
+          "Cache-Control": "no-store",
+          "Referrer-Policy": "no-referrer",
+        },
+      });
+      response.headers.append("Set-Cookie", "__Host-ac-oauth=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0");
+      return response;
+    }
     if (error instanceof ApiError) return json({ error: error.message }, error.status);
     // SQL/provider errors can contain submitted content or credentials.
     return json({ error: "service_unavailable" }, 503);

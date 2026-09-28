@@ -62,6 +62,152 @@ const mediaRequest = (suffix = "") =>
     headers: { cookie: "__Host-ac-access=test-session" },
   });
 
+test("Instagram review gate blocks public OAuth before database access and reports its reason", async () => {
+  const fetchImpl = (async () =>
+    Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
+  const noPool = () => {
+    throw new Error("review-blocked OAuth must not open the database");
+  };
+  const me = await appApi(
+    new Request("https://app.test/api/me", { headers: { cookie: "__Host-ac-access=test-session" } }),
+    config,
+    noPool,
+    fetchImpl,
+  );
+  assert.equal(me.status, 200);
+  assert.deepEqual(await me.json(), {
+    user: { id: userId, email: "a@example.test" },
+    global_send_enabled: false,
+    instagram_connect_available: false,
+  });
+  const emptyEmail = await appApi(
+    new Request("https://app.test/api/me", { headers: { cookie: "__Host-ac-access=test-session" } }),
+    config,
+    noPool,
+    (async () => Response.json({ id: userId, email: "", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+  );
+  assert.equal((await emptyEmail.json()).instagram_connect_available, false);
+  for (const [method, path] of [
+    ["POST", "/api/instagram/connect"],
+    ["GET", "/api/instagram/callback"],
+  ]) {
+    const response = await appApi(
+      new Request(`https://app.test${path}`, {
+        method,
+        headers: {
+          cookie: "__Host-ac-access=test-session",
+          ...(method === "POST" ? { origin: "https://app.test" } : {}),
+        },
+      }),
+      config,
+      noPool,
+      fetchImpl,
+    );
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: "instagram_public_access_restricted" });
+  }
+});
+
+test("Instagram review allowlist and explicit public switch permit OAuth", async () => {
+  const fetchImpl = (async () =>
+    Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
+  const pool = {
+    query: async (sql: string) => ({
+      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId }] : [],
+    }),
+    end: async () => {},
+  } as unknown as Pool;
+  const request = () =>
+    new Request("https://app.test/api/instagram/connect", {
+      method: "POST",
+      headers: { origin: "https://app.test", cookie: "__Host-ac-access=test-session" },
+    });
+  const oauth = {
+    ...config,
+    APP_ORIGIN: "https://app.test",
+    INSTAGRAM_OAUTH_APP_ID: "123",
+    INSTAGRAM_OAUTH_APP_SECRET: "synthetic-secret",
+    TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
+    META_GRAPH_VERSION: "v26.0",
+  };
+  for (const access of [
+    { INSTAGRAM_INTERNAL_EMAILS: "other@example.test, A@EXAMPLE.TEST " },
+    { INSTAGRAM_PUBLIC_CONNECT_ENABLED: "true" },
+  ]) {
+    const response = await appApi(request(), { ...oauth, ...access }, () => pool, fetchImpl);
+    assert.equal(response.status, 200);
+    const result = (await response.json()) as { url: string };
+    assert.equal(new URL(result.url).hostname, "www.instagram.com");
+  }
+  const disabled = await appApi(
+    request(),
+    { ...oauth, INSTAGRAM_PUBLIC_CONNECT_ENABLED: "TRUE" },
+    () => pool,
+    fetchImpl,
+  );
+  assert.equal(disabled.status, 403);
+});
+
+test("a denied Instagram callback returns to the app with a bounded reason", async () => {
+  const fetchImpl = (async (input: string | URL | Request) =>
+    Response.json(
+      String(input).includes("api.instagram.com")
+        ? { access_token: "synthetic-token", permissions: [] }
+        : { id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" },
+    )) as typeof fetch;
+  const pool = {
+    query: async (sql: string) => ({
+      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId }] : [{ state_hash: "consumed" }],
+      rowCount: 1,
+    }),
+    end: async () => {},
+  } as unknown as Pool;
+  const oauth = {
+    ...config,
+    APP_ORIGIN: "https://app.test",
+    INSTAGRAM_OAUTH_APP_ID: "123",
+    INSTAGRAM_OAUTH_APP_SECRET: "synthetic-secret",
+    TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
+    META_GRAPH_VERSION: "v26.0",
+    INSTAGRAM_INTERNAL_EMAILS: "a@example.test",
+  };
+  const state = "a".repeat(64);
+  const response = await appApi(
+    new Request(`https://app.test/api/instagram/callback?state=${state}&error=access_denied`, {
+      headers: { cookie: `__Host-ac-access=test-session; __Host-ac-oauth=${state}` },
+    }),
+    oauth,
+    () => pool,
+    fetchImpl,
+  );
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("Location"), "https://app.test/app/?instagram=instagram_authorization_denied");
+  assert.match(response.headers.get("Set-Cookie") ?? "", /__Host-ac-oauth=;.*Max-Age=0/);
+  const missingPermissions = await appApi(
+    new Request(`https://app.test/api/instagram/callback?state=${state}&code=test-code`, {
+      headers: { cookie: `__Host-ac-access=test-session; __Host-ac-oauth=${state}` },
+    }),
+    oauth,
+    () => pool,
+    fetchImpl,
+  );
+  assert.equal(missingPermissions.status, 303);
+  assert.equal(
+    missingPermissions.headers.get("Location"),
+    "https://app.test/app/?instagram=instagram_permissions_required",
+  );
+  const invalidState = await appApi(
+    new Request("https://app.test/api/instagram/callback?error=access_denied", {
+      headers: { cookie: "__Host-ac-access=test-session" },
+    }),
+    oauth,
+    () => pool,
+    fetchImpl,
+  );
+  assert.equal(invalidState.status, 400);
+  assert.deepEqual(await invalidState.json(), { error: "invalid_oauth_state" });
+});
+
 test("recovery endpoints require same-origin POST and never open the workspace database", async () => {
   const calls: string[] = [];
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {

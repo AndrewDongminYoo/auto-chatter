@@ -10,6 +10,8 @@ export interface InstagramOAuthEnv {
   INSTAGRAM_OAUTH_APP_SECRET?: string;
   TOKEN_ENCRYPTION_KEY?: string;
   META_GRAPH_VERSION?: string;
+  INSTAGRAM_PUBLIC_CONNECT_ENABLED?: string;
+  INSTAGRAM_INTERNAL_EMAILS?: string;
 }
 
 const permissions = [
