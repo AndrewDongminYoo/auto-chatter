@@ -39,6 +39,8 @@ export async function appApi(
     if (request.method === "POST") {
       if (url.pathname === "/api/auth/login") return await auth.login(await readJson(request));
       if (url.pathname === "/api/auth/signup") return await auth.signup(await readJson(request));
+      if (url.pathname === "/api/auth/recover") return await auth.recover(await readJson(request));
+      if (url.pathname === "/api/auth/reset-password") return await auth.resetPassword(await readJson(request));
       if (url.pathname === "/api/auth/refresh") return await auth.refresh(request);
       if (url.pathname === "/api/auth/logout") return await auth.logout(request);
     }

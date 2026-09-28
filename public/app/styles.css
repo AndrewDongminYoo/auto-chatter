@@ -243,7 +243,9 @@ body:has(#auth:not([hidden])) .page-heading {
   font-size: 12px;
   color: var(--color-muted);
 }
-#login-form {
+#login-form,
+#recovery-request-form,
+#password-reset-form {
   padding: 64px 48px;
   align-self: center;
 }
@@ -999,7 +1001,9 @@ section {
   .onboarding {
     display: none;
   }
-  #login-form {
+  #login-form,
+  #recovery-request-form,
+  #password-reset-form {
     padding: 0;
   }
   footer {

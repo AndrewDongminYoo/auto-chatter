@@ -56,6 +56,45 @@ const mediaRequest = (suffix = "") =>
     headers: { cookie: "__Host-ac-access=test-session" },
   });
 
+test("recovery endpoints require same-origin POST and never open the workspace database", async () => {
+  const calls: string[] = [];
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push(new URL(String(input)).pathname);
+    return new URL(String(input)).pathname.endsWith("/recover")
+      ? Response.json({})
+      : new URL(String(input)).pathname.endsWith("/user")
+        ? Response.json({ id: userId })
+        : new Response(null, { status: 204 });
+  }) as typeof fetch;
+  const noPool = () => {
+    throw new Error("authentication must not open product database");
+  };
+  const request = (path: string, body: unknown, origin = "https://app.test") =>
+    new Request("https://app.test" + path, {
+      method: "POST",
+      headers: { Origin: origin, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  const rejected = await appApi(
+    request("/api/auth/recover", { email: "x@example.test" }, "https://other.test"),
+    config,
+    noPool,
+    fetchImpl,
+  );
+  assert.equal(rejected.status, 403);
+  assert.deepEqual(calls, []);
+  const requested = await appApi(request("/api/auth/recover", { email: "x@example.test" }), config, noPool, fetchImpl);
+  assert.deepEqual(await requested.json(), { recovery_requested: true });
+  const updated = await appApi(
+    request("/api/auth/reset-password", { access_token: "recovery-token", password: "new-password-123" }),
+    config,
+    noPool,
+    fetchImpl,
+  );
+  assert.deepEqual(await updated.json(), { password_updated: true });
+  assert.deepEqual(calls, ["/auth/v1/recover", "/auth/v1/user", "/auth/v1/logout"]);
+});
+
 test("owned media list returns display metadata and an opaque cursor without credentials or provider URLs", async () => {
   const response = await appApi(mediaRequest(), mediaConfig, () => mediaPool(), mediaFetch());
   assert.equal(response.status, 200);
