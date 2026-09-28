@@ -368,9 +368,11 @@ async function loadWorkspace() {
     item.append(
       node(
         "p",
-        account.token_registered
-          ? `연결 유효기간: ${new Date(account.token_expires_at).toLocaleDateString("ko-KR")} · 만료 전에 다시 연결해 주세요.`
-          : "계정을 다시 연결해야 수신과 발송을 시작할 수 있습니다.",
+        account.token_registered && Date.parse(account.token_expires_at) > Date.now()
+          ? account.active
+            ? `토큰 만료일: ${new Date(account.token_expires_at).toLocaleDateString("ko-KR")} · 만료 30일 전부터 자동 갱신을 시도합니다.`
+            : `토큰 만료일: ${new Date(account.token_expires_at).toLocaleDateString("ko-KR")} · 수신 중지 중에는 자동 갱신하지 않습니다.`
+          : "토큰이 없거나 만료됐습니다. 계정을 다시 연결해 주세요.",
         "hint",
       ),
     );

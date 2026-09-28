@@ -148,10 +148,11 @@ The conversation finished as `sent / following` with two confirmation receipts a
 See `docs/notes/2026-09-26-live-follow-test.md` for the approved texts, evidence and shutdown procedure.
 Email confirmation-link behavior, multi-user live isolation, live unavailable-follow and duplicate-event cases, and Advanced Access remain unverified.
 Run `psql -f deploy/migrate-multi-user.sql` with an administrator connection before deploying this code.
-This runner owns the transaction for migrations 003–014 and the access script, stops on the first error, and rolls back on failure.
+This runner owns the transaction for migrations 003–015 and the access script, stops on the first error, and rolls back on failure.
 Do not apply these migration files individually without that transaction.
 Assign the existing workspace to a confirmed operator with `deploy/assign-workspace-owner.sql`; never claim legacy data automatically by email.
-Token renewal currently requires reconnecting the Instagram account before the displayed expiry.
+Active Instagram Login connections refresh valid long-lived tokens from 30 days before expiry, after the token is at least 24 hours old.
+Inactive, expired, or disconnected connections do not refresh; an expired token requires OAuth reconnection.
 Optional `confirmation_button_title` adds a single postback template button to the first DM and nonfollower response; empty defaults preserve text-only delivery.
 Apply migration 007 before deploying this feature; the existing administrator migration runner includes it.
 Button clicks are bound to the queued reply ID and validated against account, recipient and waiting flow; typed confirmation still works.
@@ -204,7 +205,7 @@ Apply migration 010 through the administrator runner before deployment; two new 
 Archived definitions retain stored values and names; the UI omits them, and permanent deletion remains the approved manual operator process.
 Privacy and deletion pages disclose manually entered contact tags and field values.
 Workspace and activity readers reject late responses after session reset.
-These capabilities have local DB/workerd/browser evidence only; production migration and deployment have not been performed.
+These capabilities have local DB/workerd/browser evidence; production migrations through 014 and the merged Worker were deployed on 2026-09-28, while live inbox verification remains pending.
 Data collection, message interpolation, global bot fields and segment-driven sends remain backlog items.
 
 ## Per-contact automation controls
@@ -252,4 +253,4 @@ The owned `GET /api/connections/:connectionId/inbox/:recipientId/reply-status` s
 The inbox controller in `public/app/inbox.js` keeps conversation drafts and independent inbound/outbound cursors, guards stale session/read responses, and replays uncertain reception with the same UUID and payload.
 It exposes handoff start/resume, safe failed-row retry and audited unknown `no_retry` resolution; see [the UI contract](docs/specs/2026-09-28-inbox-manual-reply-ui.md).
 Echoes, attachments, edits, deletions, historical import and shared team roles remain unimplemented.
-No production migration or live inbox verification has been performed.
+Production migrations through 014 were applied on 2026-09-28; live inbox verification remains pending.

@@ -5,6 +5,8 @@ import {
 } from "../instagram/manual-reply-worker.ts";
 import { parseMessageEvents } from "../instagram/message-events.ts";
 import { ingestMessages, processNextFollowReply, recoverStaleFollowReplies } from "../instagram/follow-flow.ts";
+import { readMetaGraphError } from "../instagram/meta-graph-error.ts";
+import { refreshDueInstagramTokens } from "../app/instagram-token-refresh.ts";
 export interface Env extends AuthEnv, InstagramOAuthEnv {
   AUTH_IP_LIMIT: { limit(input: { key: string }): Promise<{ success: boolean }> };
   AUTH_EMAIL_LIMIT: { limit(input: { key: string }): Promise<{ success: boolean }> };
@@ -33,6 +35,16 @@ function openPool(env: Env): Pool {
   });
   pool.on("error", () => console.error("Cloudflare database connection failed"));
   return pool;
+}
+
+async function tokenRotated(pool: Pool, connectionId: string, encryptedToken: string): Promise<boolean> {
+  const current = await pool.query<{ rotated: boolean }>(
+    `SELECT access_token_encrypted IS DISTINCT FROM $2 AS rotated FROM instagram_connections
+     WHERE id=$1 AND active AND send_enabled AND token_expires_at>now()
+       AND (send_paused_until IS NULL OR send_paused_until<=now())`,
+    [connectionId, encryptedToken],
+  );
+  return current.rows[0]?.rotated === true;
 }
 
 async function wakeDueReplies(
@@ -188,7 +200,10 @@ export default {
                   "SELECT 1 FROM instagram_connections WHERE id=$1 AND active AND send_enabled AND token_expires_at>now() AND access_token_encrypted=$2 AND (send_paused_until IS NULL OR send_paused_until<=now())",
                   [connectionId, connection.access_token_encrypted],
                 );
-                if (!current.rowCount) throw new PreSendVerificationError("block", "connection_changed");
+                if (!current.rowCount)
+                  throw (await tokenRotated(pool, connectionId, connection.access_token_encrypted))
+                    ? new PreSendVerificationError("retry", "token_rotated")
+                    : new PreSendVerificationError("block", "connection_changed");
                 const body = typeof init.body === "string" ? JSON.parse(init.body) : null;
                 if (body?.recipient?.comment_id) {
                   const rule = await pool.query(
@@ -203,7 +218,21 @@ export default {
                   if (!rule.rowCount) throw new PreSendVerificationError("block", "inactive_rule");
                 }
               }
-              return rawGraphFetch(input, init);
+              const response = await rawGraphFetch(input, init);
+              const postError =
+                init?.method === "POST" && response.status >= 400 && response.status < 500
+                  ? await readMetaGraphError(response.clone())
+                  : null;
+              const definitePostRejection = postError?.code != null && !postError.transient;
+              if (
+                !response.ok &&
+                (init?.method !== "POST" || definitePostRejection) &&
+                (await tokenRotated(pool, connectionId, connection.access_token_encrypted))
+              ) {
+                await response.body?.cancel();
+                throw new PreSendVerificationError("retry", "token_rotated");
+              }
+              return response;
             };
             const config = {
               graphVersion: env.META_GRAPH_VERSION,
@@ -218,7 +247,7 @@ export default {
               connectionId,
               new InstagramFollowTransport({
                 ...config,
-                fetchImpl: rawGraphFetch,
+                fetchImpl: graphFetch,
                 beforeSend: async (context) => {
                   if (env.SEND_ENABLED !== "true") throw new PreSendVerificationError("block", "global_send_disabled");
                   await assertManualReplyAllowed(
@@ -240,7 +269,7 @@ export default {
                 connectionId,
                 new InstagramFollowTransport({
                   ...config,
-                  fetchImpl: rawGraphFetch,
+                  fetchImpl: graphFetch,
                   beforeSend: async (context) => {
                     const permitted = await pool.query(
                       `SELECT NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
@@ -255,7 +284,10 @@ export default {
                     );
                     if (permitted.rows[0]?.automation_active === false)
                       throw new PreSendVerificationError("retry", "contact_paused");
-                    if (!permitted.rowCount) throw new PreSendVerificationError("block", "delivery_not_permitted");
+                    if (!permitted.rowCount)
+                      throw (await tokenRotated(pool, connectionId, connection.access_token_encrypted))
+                        ? new PreSendVerificationError("retry", "token_rotated")
+                        : new PreSendVerificationError("block", "delivery_not_permitted");
                   },
                 }),
               ))
@@ -279,10 +311,12 @@ export default {
     }
   },
   async scheduled(_controller: unknown, env: Env): Promise<void> {
-    if (env.SEND_ENABLED !== "true") return;
     try {
       const pool = openPool(env);
       try {
+        if (!env.TOKEN_ENCRYPTION_KEY) throw new Error("Token encryption not configured");
+        await refreshDueInstagramTokens(pool, env.TOKEN_ENCRYPTION_KEY, fetch, new Date(), env.META_GRAPH_VERSION);
+        if (env.SEND_ENABLED !== "true") return;
         await pool.query(
           "UPDATE private_reply_outbox SET status='unknown',failure_code='worker_interrupted' WHERE status='sending' AND attempt_started_at<now()-interval '10 minutes'",
         );

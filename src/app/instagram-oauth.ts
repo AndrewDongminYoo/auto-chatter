@@ -152,7 +152,7 @@ export async function finishInstagramOAuth(
     !long.access_token ||
     typeof long.expires_in !== "number" ||
     !Number.isFinite(long.expires_in) ||
-    long.expires_in <= 0 ||
+    long.expires_in <= 86400 ||
     long.expires_in > 90 * 86400
   )
     throw new ApiError(502, "instagram_connection_failed");
@@ -174,7 +174,9 @@ export async function finishInstagramOAuth(
     `INSERT INTO instagram_connections(id,workspace_id,account_id,username,active,send_enabled,access_token_encrypted,token_expires_at)
      VALUES($1,$2,$3,$4,false,false,$5,now()+make_interval(secs=>$6))
      ON CONFLICT(account_id) DO UPDATE SET username=EXCLUDED.username,active=false,send_enabled=false,
-       access_token_encrypted=EXCLUDED.access_token_encrypted,token_expires_at=EXCLUDED.token_expires_at
+       access_token_encrypted=EXCLUDED.access_token_encrypted,token_expires_at=EXCLUDED.token_expires_at,
+       token_obtained_at=now(),
+       token_refresh_attempted_at=NULL
      WHERE instagram_connections.workspace_id=$2 RETURNING id`,
     [randomUUID(), workspaceId, account.user_id, account.username, encrypted, Math.floor(long.expires_in)],
   );

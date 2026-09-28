@@ -14,5 +14,6 @@ BEGIN;
 \ir ../db/migrations/012_instagram_inbox.sql
 \ir ../db/migrations/013_inbox_handoffs.sql
 \ir ../db/migrations/014_manual_replies.sql
+\ir ../db/migrations/015_instagram_token_refresh.sql
 \ir supabase-access.sql
 COMMIT;

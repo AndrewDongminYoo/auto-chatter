@@ -1,5 +1,5 @@
 import { ingestMessages } from "../instagram/follow-flow.ts";
-import { sealSecret } from "../app/secrets.ts";
+import { openSecret, sealSecret } from "../app/secrets.ts";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -145,6 +145,40 @@ test("subscription verifies without a DB connection; invalid signatures cannot p
   assert.equal(await response.text(), "challenge");
   assert.equal((await worker.fetch(request("comment-1", "sender-1", false), env)).status, 403);
   assert.deepEqual(await rows(), []);
+});
+
+test("scheduled token refresh runs while global message sending is disabled", async () => {
+  env.SEND_ENABLED = "false";
+  await pool.query(
+    "UPDATE instagram_connections SET token_expires_at=now()+interval '20 days',token_obtained_at=now()-interval '2 days' WHERE id=$1",
+    [connectionId],
+  );
+  mock.restoreAll();
+  const calls: string[] = [];
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo) => {
+    const graphUrl = new URL(String(input));
+    calls.push(graphUrl.pathname);
+    if (graphUrl.pathname === "/refresh_access_token")
+      return Response.json({ access_token: "renewed-token", token_type: "bearer", expires_in: 5_184_000 });
+    return Response.json({ user_id: "123" });
+  });
+  await worker.scheduled(undefined, env);
+  const result = await pool.query(
+    "SELECT access_token_encrypted,token_expires_at FROM instagram_connections WHERE id=$1",
+    [connectionId],
+  );
+  assert.equal(
+    openSecret(
+      result.rows[0].access_token_encrypted,
+      env.TOKEN_ENCRYPTION_KEY!,
+      "11111111-1111-4111-8111-111111111111:123",
+    ),
+    "renewed-token",
+  );
+  assert.ok(result.rows[0].token_expires_at.getTime() > Date.now() + 59 * 86400_000);
+  assert.deepEqual(calls, ["/refresh_access_token", "/v24.0/me"]);
+  assert.equal(sends, 0);
+  assert.deepEqual(published, []);
 });
 
 test("duplicate webhook and queue delivery send one persisted reply", async () => {
@@ -515,6 +549,163 @@ test("Cloudflare private final POST guard sees a pause during second verificatio
   await consume();
   assert.equal(sends, 1);
 });
+
+test("Cloudflare private final POST guard retries after an Instagram token rotation", async () => {
+  let mediaReads = 0;
+  const providerFetch = globalThis.fetch;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/media-1") && ++mediaReads === 2)
+      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [
+        connectionId,
+        sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"),
+      ]);
+    return providerFetch(input, init);
+  });
+  await worker.fetch(request(), env);
+  await consume();
+  assert.equal(sends, 0);
+  assert.deepEqual((await rows())[0], { status: "pending", failure_code: "token_rotated", rate_limit_retries: 0 });
+  await pool.query("UPDATE private_reply_outbox SET next_attempt_at=now()");
+  await consume();
+  assert.equal(sends, 1);
+});
+
+test("Cloudflare verification retries when a rotated old token is rejected by Meta", async () => {
+  const providerFetch = globalThis.fetch;
+  let rotated = false;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    if (!rotated && init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/me")) {
+      rotated = true;
+      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [
+        connectionId,
+        sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"),
+      ]);
+      return Response.json({ error: { code: 190 } }, { status: 400 });
+    }
+    return providerFetch(input, init);
+  });
+  await worker.fetch(request(), env);
+  await consume();
+  assert.equal(sends, 0);
+  assert.equal((await rows())[0].status, "pending");
+  await pool.query("UPDATE private_reply_outbox SET next_attempt_at=now()");
+  await consume();
+  assert.equal(sends, 1);
+});
+
+test("Cloudflare retries a definite POST rejection after token rotation", async () => {
+  const providerFetch = globalThis.fetch;
+  let rejected = false;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    if (!rejected && init?.method === "POST") {
+      rejected = true;
+      sends++;
+      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [
+        connectionId,
+        sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"),
+      ]);
+      return Response.json({ error: { code: 190 } }, { status: 400 });
+    }
+    return providerFetch(input, init);
+  });
+  await worker.fetch(request(), env);
+  await consume();
+  assert.equal(sends, 1);
+  assert.deepEqual((await rows())[0], { status: "pending", failure_code: "token_rotated", rate_limit_retries: 0 });
+  await pool.query("UPDATE private_reply_outbox SET next_attempt_at=now()");
+  await consume();
+  assert.equal(sends, 2);
+  assert.equal((await rows())[0].status, "sent");
+});
+
+test("Cloudflare preserves Meta throttle backoff when a token rotates during POST", async () => {
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      sends++;
+      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [
+        connectionId,
+        sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"),
+      ]);
+      return Response.json({ error: { code: 4 } }, { status: 400 });
+    }
+    const graphUrl = new URL(String(input));
+    if (graphUrl.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (graphUrl.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
+    return Response.json({
+      id: "comment-1",
+      from: { id: "sender-1" },
+      media: { id: "media-1" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  await worker.fetch(request(), env);
+  await consume();
+  assert.equal(sends, 1);
+  assert.deepEqual((await rows())[0], { status: "pending", failure_code: "meta_error_4", rate_limit_retries: 1 });
+  assert.equal(
+    (
+      await pool.query("SELECT send_paused_until>now() AS paused FROM instagram_connections WHERE id=$1", [
+        connectionId,
+      ])
+    ).rows[0].paused,
+    true,
+  );
+});
+
+test("Cloudflare does not retry an ambiguous POST failure after token rotation", async () => {
+  let postCount = 0;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      postCount++;
+      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [
+        connectionId,
+        sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"),
+      ]);
+      return Response.json({ error: { code: 190 } }, { status: 503 });
+    }
+    if (new URL(String(input)).pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (new URL(String(input)).pathname.endsWith("/media-1"))
+      return Response.json({ id: "media-1", owner: { id: "123" } });
+    return Response.json({
+      id: "comment-1",
+      from: { id: "sender-1" },
+      media: { id: "media-1" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  await worker.fetch(request(), env);
+  await consume();
+  assert.equal(postCount, 1);
+  assert.equal((await rows())[0].status, "unknown");
+});
+
+test("Cloudflare keeps a transient 4xx POST outcome unknown after token rotation", async () => {
+  let postCount = 0;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      postCount++;
+      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [
+        connectionId,
+        sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"),
+      ]);
+      return Response.json({ error: { code: 2, is_transient: true } }, { status: 400 });
+    }
+    const graphUrl = new URL(String(input));
+    if (graphUrl.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (graphUrl.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
+    return Response.json({
+      id: "comment-1",
+      from: { id: "sender-1" },
+      media: { id: "media-1" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  await worker.fetch(request(), env);
+  await consume();
+  assert.equal(postCount, 1);
+  assert.equal((await rows())[0].status, "unknown");
+});
+
 test("Cloudflare follow final guard defers a pause after worker permissions", async () => {
   await pool.query(
     "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final',non_follower_reply_text='Follow'",
@@ -717,7 +908,10 @@ test("manual POST guard rejects token rotation handoff resume expiry and receive
     });
     assert.equal(await consume(), "ack");
     assert.equal(posts, 0);
-    assert.equal((await pool.query("SELECT status FROM instagram_manual_replies")).rows[0].status, "failed");
+    assert.equal(
+      (await pool.query("SELECT status FROM instagram_manual_replies")).rows[0].status,
+      change === "access_token_encrypted='rotated'" ? "pending" : "failed",
+    );
   }
 });
 
@@ -750,6 +944,7 @@ for (const [label, change] of [
   test(`manual cron repairs lost notification after ${label} without Graph requests`, async () => {
     await manualFixture();
     published = [];
+    await pool.query("UPDATE instagram_connections SET token_expires_at=now()+interval '60 days'");
     await pool.query(`UPDATE instagram_connections SET ${change}`);
     let graphRequests = 0;
     mock.method(globalThis, "fetch", async () => {

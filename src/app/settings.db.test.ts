@@ -1589,9 +1589,16 @@ test("manual reply final guard refuses handoff resume token change expired windo
       true,
     );
     assert.equal(posts, 0);
-    assert.equal(
-      (await pool.query("SELECT status,safe_to_retry FROM instagram_manual_replies")).rows[0].status,
-      "failed",
+    assert.deepEqual(
+      (await pool.query("SELECT status,safe_to_retry,failure_code FROM instagram_manual_replies")).rows[0],
+      index === 1
+        ? { status: "pending", safe_to_retry: false, failure_code: "token_rotated" }
+        : {
+            status: "failed",
+            safe_to_retry: true,
+            failure_code:
+              index === 0 ? "handoff_changed" : index === 2 ? "reply_window_closed" : "handoff_identity_unverified",
+          },
     );
   }
 });
