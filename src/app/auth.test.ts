@@ -190,7 +190,7 @@ test("authentication throttles use both trusted caller IP and normalized email w
     },
   );
   assert.equal(keys.length, 2);
-  assert.ok(keys[0]!.includes("203.0.113.10"));
+  assert.doesNotMatch(keys[0]!, /203\.0\.113\.10/);
   assert.doesNotMatch(keys.join(" "), /Owner@Example|owner@example/);
   assert.notEqual(keys[0], keys[1]);
 });
@@ -217,6 +217,32 @@ test("signup, recovery, and resend share one email allowance while login has a s
     );
   assert.equal(new Set(emailKeys.slice(0, 3)).size, 1);
   assert.notEqual(emailKeys[2], emailKeys[3]);
+});
+
+test("authentication throttle keys stay within the binding's 64-byte limit", async () => {
+  const keys: string[] = [];
+  const limiter = {
+    limit: async ({ key }: { key: string }) => {
+      keys.push(key);
+      assert.ok(new TextEncoder().encode(key).byteLength <= 64);
+      return { success: true };
+    },
+  };
+  const request = new Request("https://app.test/api/auth/login", {
+    method: "POST",
+    headers: { "CF-Connecting-IP": "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff" },
+  });
+  for (const pathname of ["/api/auth/login", "/api/auth/signup", "/api/auth/recover", "/api/auth/resend-confirmation"])
+    await limitAuthRequest(
+      request,
+      pathname,
+      { email: "Owner@Example.Test" },
+      {
+        AUTH_IP_LIMIT: limiter,
+        AUTH_EMAIL_LIMIT: limiter,
+      },
+    );
+  assert.equal(keys.length, 8);
 });
 
 test("authentication throttles reject excess attempts and missing bindings before provider calls", async () => {
