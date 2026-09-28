@@ -186,6 +186,12 @@ corepack pnpm exec wrangler secret put INSTAGRAM_OAUTH_APP_SECRET --env-file /de
 corepack pnpm exec wrangler secret put TOKEN_ENCRYPTION_KEY --env-file /dev/null
 ```
 
+검수용 이메일의 Meta 앱 역할을 확인했다면 #14 연결 제한 코드 배포 전에 다음 secret을 등록합니다.
+
+```bash
+corepack pnpm exec wrangler secret put INSTAGRAM_INTERNAL_EMAILS --env-file /dev/null
+```
+
 | 이름                               | 위치                     | 용도                                                                       |
 | ---------------------------------- | ------------------------ | -------------------------------------------------------------------------- |
 | `APP_ORIGIN`                       | `wrangler.json`의 `vars` | 경로·끝 슬래시 없는 정확한 HTTPS 서비스 origin                             |
