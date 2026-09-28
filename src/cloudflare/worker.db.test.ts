@@ -618,6 +618,40 @@ test("Cloudflare retries a definite POST rejection after token rotation", async 
   assert.equal((await rows())[0].status, "sent");
 });
 
+test("Cloudflare preserves Meta throttle backoff when a token rotates during POST", async () => {
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      sends++;
+      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [
+        connectionId,
+        sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"),
+      ]);
+      return Response.json({ error: { code: 4 } }, { status: 400 });
+    }
+    const graphUrl = new URL(String(input));
+    if (graphUrl.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (graphUrl.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
+    return Response.json({
+      id: "comment-1",
+      from: { id: "sender-1" },
+      media: { id: "media-1" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  await worker.fetch(request(), env);
+  await consume();
+  assert.equal(sends, 1);
+  assert.deepEqual((await rows())[0], { status: "pending", failure_code: "meta_error_4", rate_limit_retries: 1 });
+  assert.equal(
+    (
+      await pool.query("SELECT send_paused_until>now() AS paused FROM instagram_connections WHERE id=$1", [
+        connectionId,
+      ])
+    ).rows[0].paused,
+    true,
+  );
+});
+
 test("Cloudflare does not retry an ambiguous POST failure after token rotation", async () => {
   let postCount = 0;
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
@@ -644,6 +678,34 @@ test("Cloudflare does not retry an ambiguous POST failure after token rotation",
   assert.equal(postCount, 1);
   assert.equal((await rows())[0].status, "unknown");
 });
+
+test("Cloudflare keeps a transient 4xx POST outcome unknown after token rotation", async () => {
+  let postCount = 0;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      postCount++;
+      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [
+        connectionId,
+        sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"),
+      ]);
+      return Response.json({ error: { code: 2, is_transient: true } }, { status: 400 });
+    }
+    const graphUrl = new URL(String(input));
+    if (graphUrl.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (graphUrl.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
+    return Response.json({
+      id: "comment-1",
+      from: { id: "sender-1" },
+      media: { id: "media-1" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  await worker.fetch(request(), env);
+  await consume();
+  assert.equal(postCount, 1);
+  assert.equal((await rows())[0].status, "unknown");
+});
+
 test("Cloudflare follow final guard defers a pause after worker permissions", async () => {
   await pool.query(
     "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final',non_follower_reply_text='Follow'",

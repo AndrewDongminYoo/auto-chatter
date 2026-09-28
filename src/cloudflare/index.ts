@@ -219,11 +219,11 @@ export default {
                 }
               }
               const response = await rawGraphFetch(input, init);
-              const definitePostRejection =
-                init?.method === "POST" &&
-                response.status >= 400 &&
-                response.status < 500 &&
-                (await readMetaGraphError(response.clone()))?.code != null;
+              const postError =
+                init?.method === "POST" && response.status >= 400 && response.status < 500
+                  ? await readMetaGraphError(response.clone())
+                  : null;
+              const definitePostRejection = postError?.code != null && !postError.transient;
               if (
                 !response.ok &&
                 (init?.method !== "POST" || definitePostRejection) &&
