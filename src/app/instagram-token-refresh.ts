@@ -74,7 +74,11 @@ export async function refreshDueInstagramTokens(
       method: "GET",
       headers: { Authorization: `Bearer ${value.access_token}` },
     });
-    if (!profile || typeof profile !== "object" || !("user_id" in profile) || profile.user_id !== connection.account_id)
+    const account =
+      profile && typeof profile === "object" && "data" in profile && Array.isArray(profile.data)
+        ? profile.data[0]
+        : profile;
+    if (!account || typeof account !== "object" || !("user_id" in account) || account.user_id !== connection.account_id)
       continue;
     const encrypted =
       value.access_token === accessToken

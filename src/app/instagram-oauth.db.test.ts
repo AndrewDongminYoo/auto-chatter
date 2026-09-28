@@ -263,6 +263,23 @@ test("refreshes a due Instagram token and keeps it encrypted for the same accoun
   assert.equal(await refreshDueInstagramTokens(pool, env.TOKEN_ENCRYPTION_KEY, provider), 0);
 });
 
+test("refresh accepts a same-account profile wrapped in Graph data", async () => {
+  const connection = "33333333-3333-4333-8333-333333333333";
+  const context = `${workspaceId}:98765`;
+  await pool.query(
+    "INSERT INTO instagram_connections(id,workspace_id,account_id,active,access_token_encrypted,token_expires_at,token_obtained_at) VALUES($1,$2,'98765',true,$3,now()+interval '20 days',now()-interval '2 days')",
+    [connection, workspaceId, sealSecret("old-token", env.TOKEN_ENCRYPTION_KEY, context)],
+  );
+  const provider: typeof fetch = async (input) =>
+    String(input).includes("refresh_access_token")
+      ? Response.json({ access_token: "new-token", expires_in: 5_184_000 })
+      : Response.json({ data: [{ user_id: "98765" }] });
+  assert.equal(await refreshDueInstagramTokens(pool, env.TOKEN_ENCRYPTION_KEY, provider), 1);
+  const row = (await pool.query("SELECT access_token_encrypted FROM instagram_connections WHERE id=$1", [connection]))
+    .rows[0];
+  assert.equal(openSecret(row.access_token_encrypted, env.TOKEN_ENCRYPTION_KEY, context), "new-token");
+});
+
 test("does not refresh unexpired tokens before the threshold or tokens that already expired", async () => {
   await pool.query(
     "INSERT INTO instagram_connections(id,workspace_id,account_id,active,access_token_encrypted,token_expires_at) VALUES($1,$2,'98765',true,'ciphertext',now()+interval '40 days')",
