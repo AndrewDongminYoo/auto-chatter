@@ -89,6 +89,34 @@
             </button>
           </div>
           <p class="hint">처음 가입하면 이메일 인증을 완료한 뒤 로그인하세요.</p>
+          <button type="button" id="forgot-password" class="secondary">비밀번호를 잊으셨나요?</button>
+        </form>
+        <form id="recovery-request-form" hidden>
+          <label for="recovery-email">가입한 이메일</label>
+          <input id="recovery-email" name="email" type="email" autocomplete="email" required maxlength="254" />
+          <p class="hint">가입한 이메일로 비밀번호 변경 링크를 보내드립니다.</p>
+          <div class="auth-actions">
+            <button type="submit" data-loading-label="링크 요청 중…">변경 링크 받기</button>
+            <button type="button" id="recovery-back" class="secondary">로그인으로 돌아가기</button>
+          </div>
+        </form>
+        <form id="password-reset-form" hidden>
+          <label for="new-password">새 비밀번호</label>
+          <input
+            id="new-password"
+            name="password"
+            type="password"
+            autocomplete="new-password"
+            required
+            minlength="8"
+            maxlength="256"
+            aria-describedby="new-password-help"
+          />
+          <p id="new-password-help" class="hint">8자 이상 입력하세요.</p>
+          <div class="auth-actions">
+            <button type="submit" data-loading-label="변경 중…">비밀번호 변경</button>
+            <button type="button" id="reset-restart" class="secondary">새 링크 요청하기</button>
+          </div>
         </form>
       </section>
       <div id="workspace" hidden>

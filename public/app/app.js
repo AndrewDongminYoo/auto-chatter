@@ -217,6 +217,12 @@ const errors = {
     "브라우저에서 로그아웃했습니다. 서버 세션 종료를 확인하지 못했으니 다시 로그인해 로그아웃하거나 운영자에게 문의해 주세요.",
   instagram_not_configured: "Instagram 연결 서비스를 준비 중입니다.",
   invalid_credentials: "이메일과 8자 이상의 비밀번호를 입력해 주세요.",
+  invalid_recovery_email: "이메일 주소를 확인해 주세요.",
+  invalid_recovery_link: "변경 링크를 다시 요청해 주세요.",
+  recovery_link_invalid: "변경 링크가 만료되었거나 유효하지 않습니다. 새 링크를 요청해 주세요.",
+  password_rejected: "새 비밀번호가 보안 기준을 충족하지 않습니다. 다른 비밀번호로 다시 시도해 주세요.",
+  password_updated_logout_unconfirmed:
+    "비밀번호는 변경됐지만 다른 세션 종료를 확인하지 못했습니다. 새 비밀번호로 로그인한 뒤 계정 상태를 확인해 주세요.",
 };
 
 async function api(path, method = "GET", body, retry = true) {
@@ -691,6 +697,62 @@ byId("signup").addEventListener("click", (event) =>
     notice("가입할 수 있는 이메일이면 인증 안내가 전송됩니다. 이메일을 확인한 뒤 로그인해 주세요.");
   }),
 );
+let recoveryToken = null;
+let authLinkNotice = null;
+function showAuthMode(mode) {
+  byId("login-form").hidden = mode !== "login";
+  byId("recovery-request-form").hidden = mode !== "recover";
+  byId("password-reset-form").hidden = mode !== "reset";
+  byId("auth-title").textContent =
+    mode === "reset" ? "새 비밀번호 설정" : mode === "recover" ? "비밀번호 찾기" : "내 계정으로 로그인";
+}
+byId("forgot-password").addEventListener("click", () => {
+  byId("recovery-request-form").elements.email.value = byId("login-form").elements.email.value;
+  showAuthMode("recover");
+  byId("recovery-email").focus();
+});
+byId("recovery-back").addEventListener("click", () => {
+  showAuthMode("login");
+  byId("email").focus();
+});
+byId("reset-restart").addEventListener("click", () => {
+  recoveryToken = null;
+  byId("password-reset-form").reset();
+  showAuthMode("recover");
+  byId("recovery-email").focus();
+});
+byId("recovery-request-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const recovery = event.currentTarget;
+  action(recovery.querySelector("button[type=submit]"), async () => {
+    await api("/api/auth/recover", "POST", { email: recovery.elements.email.value });
+    notice("가입한 이메일이면 변경 링크를 보내드립니다. 메일을 확인해 주세요.");
+  });
+});
+byId("password-reset-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const reset = event.currentTarget;
+  action(reset.querySelector("button[type=submit]"), async () => {
+    if (!recoveryToken) throw new Error(errors.recovery_link_invalid);
+    try {
+      await api("/api/auth/reset-password", "POST", {
+        access_token: recoveryToken,
+        password: reset.elements.password.value,
+      });
+    } catch (error) {
+      if (error.status === 401 || error.code === "password_updated_logout_unconfirmed") {
+        recoveryToken = null;
+        reset.reset();
+        showAuthMode(error.status === 401 ? "recover" : "login");
+      }
+      throw error;
+    }
+    recoveryToken = null;
+    reset.reset();
+    showAuthMode("login");
+    notice("비밀번호를 변경했습니다. 새 비밀번호로 로그인해 주세요.");
+  });
+});
 byId("logout").addEventListener("click", (event) =>
   action(event.currentTarget, async () => {
     if (!canDiscard()) return;
@@ -788,11 +850,25 @@ form.addEventListener("submit", (event) => {
   });
 });
 async function start() {
+  const fragment = new URLSearchParams(location.hash.slice(1));
+  if (fragment.has("access_token") || fragment.has("error") || fragment.has("type")) {
+    history.replaceState(null, "", location.pathname + location.search);
+    if (fragment.get("type") === "recovery" && fragment.get("access_token")) {
+      recoveryToken = fragment.get("access_token");
+      showAuthMode("reset");
+    } else if (fragment.has("error")) authLinkNotice = errors.recovery_link_invalid;
+    else if (fragment.get("type") === "signup") authLinkNotice = "이메일 인증을 마쳤습니다. 로그인해 주세요.";
+  }
   byId("retry-load").hidden = true;
   byId("startup").hidden = false;
   try {
     if (location.protocol === "file:")
       throw new Error("미리보기에서는 로그인할 수 없습니다. 서비스 웹사이트에서 이용해 주세요.");
+    if (recoveryToken) {
+      byId("auth").hidden = false;
+      byId("new-password").focus();
+      return;
+    }
     await loadWorkspace();
   } catch (error) {
     if (error.status !== 401) {
@@ -802,6 +878,7 @@ async function start() {
     byId("auth").hidden = false;
   } finally {
     byId("startup").hidden = true;
+    if (authLinkNotice) notice(authLinkNotice, authLinkNotice === errors.recovery_link_invalid);
   }
 }
 byId("retry-load").addEventListener("click", (event) => action(event.currentTarget, start));
