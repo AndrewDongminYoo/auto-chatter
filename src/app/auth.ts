@@ -190,8 +190,28 @@ export class AuthClient {
   }
 
   async signup(input: unknown): Promise<Response> {
-    await this.call("/signup", "POST", this.credentials(input));
+    try {
+      await this.call("/signup", "POST", this.credentials(input));
+    } catch (error) {
+      if (!(error instanceof ApiError) || (error.status !== 401 && error.status !== 429)) throw error;
+    }
     return json({ confirmation_required: true });
+  }
+
+  async resendConfirmation(input: unknown): Promise<Response> {
+    if (
+      !isRecord(input) ||
+      typeof input.email !== "string" ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email.trim()) ||
+      input.email.length > 254
+    )
+      throw new ApiError(400, "invalid_recovery_email");
+    try {
+      await this.call("/resend", "POST", { type: "signup", email: input.email.trim() });
+    } catch (error) {
+      if (!(error instanceof ApiError) || (error.status !== 401 && error.status !== 429)) throw error;
+    }
+    return json({ confirmation_requested: true });
   }
 
   async recover(input: unknown): Promise<Response> {

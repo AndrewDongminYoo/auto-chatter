@@ -178,6 +178,7 @@ function resetSession() {
 function notice(message, error = false) {
   byId("notice").textContent = message;
   byId("notice").classList.toggle("error", error);
+  byId("notice").setAttribute("aria-live", error ? "assertive" : "polite");
   if (error && message) byId("notice").focus({ preventScroll: false });
 }
 
@@ -218,6 +219,7 @@ const errors = {
   instagram_not_configured: "Instagram 연결 서비스를 준비 중입니다.",
   invalid_credentials: "이메일과 8자 이상의 비밀번호를 입력해 주세요.",
   invalid_recovery_email: "이메일 주소를 확인해 주세요.",
+  auth_rate_limited: "요청이 많습니다. 잠시 기다린 뒤 다시 시도해 주세요.",
   invalid_recovery_link: "변경 링크를 다시 요청해 주세요.",
   recovery_link_invalid: "변경 링크가 만료되었거나 유효하지 않습니다. 새 링크를 요청해 주세요.",
   password_rejected: "새 비밀번호가 보안 기준을 충족하지 않습니다. 다른 비밀번호로 다시 시도해 주세요.",
@@ -697,6 +699,14 @@ byId("signup").addEventListener("click", (event) =>
     notice("가입할 수 있는 이메일이면 인증 안내가 전송됩니다. 이메일을 확인한 뒤 로그인해 주세요.");
   }),
 );
+byId("resend-confirmation").addEventListener("click", (event) =>
+  action(event.currentTarget, async () => {
+    const email = byId("email");
+    if (!email.reportValidity()) return;
+    await api("/api/auth/resend-confirmation", "POST", { email: email.value });
+    notice("인증이 필요한 이메일이면 새 인증 메일을 보내드립니다. 메일을 확인해 주세요.");
+  }),
+);
 let recoveryToken = null;
 let authLinkNotice = null;
 function showAuthMode(mode) {
@@ -856,8 +866,10 @@ async function start() {
     if (fragment.get("type") === "recovery" && fragment.get("access_token")) {
       recoveryToken = fragment.get("access_token");
       showAuthMode("reset");
-    } else if (fragment.has("error")) authLinkNotice = errors.recovery_link_invalid;
-    else if (fragment.get("type") === "signup") authLinkNotice = "이메일 인증을 마쳤습니다. 로그인해 주세요.";
+    } else if (fragment.has("error") || (fragment.get("type") === "signup" && !fragment.get("access_token")))
+      authLinkNotice =
+        "인증 또는 변경 링크가 만료되었거나 유효하지 않습니다. 인증 메일을 다시 받거나 비밀번호 변경 링크를 요청해 주세요.";
+    else if (fragment.get("type") === "signup") authLinkNotice = "인증 링크를 처리했습니다. 로그인해 주세요.";
   }
   byId("retry-load").hidden = true;
   byId("startup").hidden = false;
@@ -878,7 +890,7 @@ async function start() {
     byId("auth").hidden = false;
   } finally {
     byId("startup").hidden = true;
-    if (authLinkNotice) notice(authLinkNotice, authLinkNotice === errors.recovery_link_invalid);
+    if (authLinkNotice) notice(authLinkNotice, authLinkNotice.startsWith("인증 또는 변경 링크"));
   }
 }
 byId("retry-load").addEventListener("click", (event) => action(event.currentTarget, start));

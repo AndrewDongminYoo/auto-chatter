@@ -3,7 +3,12 @@ import { test } from "node:test";
 import { appApi } from "./api.ts";
 import type { Pool } from "pg";
 import { sealSecret } from "./secrets.ts";
-const config = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "public-test-key" };
+const config = {
+  SUPABASE_URL: "https://project.supabase.co",
+  SUPABASE_PUBLISHABLE_KEY: "public-test-key",
+  AUTH_IP_LIMIT: { limit: async () => ({ success: true }) },
+  AUTH_EMAIL_LIMIT: { limit: async () => ({ success: true }) },
+};
 const userId = "11111111-1111-4111-8111-111111111111";
 const workspaceId = "22222222-2222-4222-8222-222222222222";
 const connectionId = "33333333-3333-4333-8333-333333333333";
@@ -93,6 +98,56 @@ test("recovery endpoints require same-origin POST and never open the workspace d
   );
   assert.deepEqual(await updated.json(), { password_updated: true });
   assert.deepEqual(calls, ["/auth/v1/recover", "/auth/v1/user", "/auth/v1/logout"]);
+});
+
+test("rate-limited public auth requests never reach Supabase and cross-origin requests spend no allowance", async () => {
+  const keys: string[] = [];
+  let providerCalls = 0;
+  const env = {
+    ...config,
+    AUTH_IP_LIMIT: {
+      limit: async ({ key }: { key: string }) => {
+        keys.push(key);
+        return { success: false };
+      },
+    },
+  };
+  const provider = (async () => {
+    providerCalls++;
+    throw new Error("provider must not be called");
+  }) as typeof fetch;
+  const request = (origin: string) =>
+    new Request("https://app.test/api/auth/login", {
+      method: "POST",
+      headers: { Origin: origin, "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.9" },
+      body: JSON.stringify({ email: "person@example.test", password: "example-password" }),
+    });
+  assert.equal(
+    (
+      await appApi(
+        request("https://other.test"),
+        env,
+        () => {
+          throw new Error("no db");
+        },
+        provider,
+      )
+    ).status,
+    403,
+  );
+  assert.deepEqual(keys, []);
+  const rejected = await appApi(
+    request("https://app.test"),
+    env,
+    () => {
+      throw new Error("no db");
+    },
+    provider,
+  );
+  assert.equal(rejected.status, 429);
+  assert.deepEqual(await rejected.json(), { error: "auth_rate_limited" });
+  assert.equal(keys.length, 1);
+  assert.equal(providerCalls, 0);
 });
 
 test("owned media list returns display metadata and an opaque cursor without credentials or provider URLs", async () => {

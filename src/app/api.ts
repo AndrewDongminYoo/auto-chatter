@@ -2,6 +2,7 @@ import { queueManualReply, listManualReplies, resolveManualReply, readManualRepl
 import { inboxHandoff, saveInboxHandoff } from "./inbox-handoff.ts";
 import type { Pool } from "pg";
 import { ApiError, AuthClient, json, readJson, requireSameOrigin, type AuthEnv } from "./auth.ts";
+import { limitAuthRequest, type AuthRateLimitEnv } from "./auth-rate-limit.ts";
 import {
   listActivity,
   disconnectConnection,
@@ -27,7 +28,7 @@ import { archiveContactField, createContactField, listContactFields, saveContact
 
 export async function appApi(
   request: Request,
-  env: AuthEnv & InstagramOAuthEnv & { SEND_ENABLED?: string },
+  env: AuthEnv & AuthRateLimitEnv & InstagramOAuthEnv & { SEND_ENABLED?: string },
   openPool: () => Pool,
   fetchImpl: typeof fetch = fetch,
   notifyReply?: (connectionId: string) => Promise<void>,
@@ -37,9 +38,18 @@ export async function appApi(
     if (request.method !== "GET") requireSameOrigin(request);
     const auth = new AuthClient(env, fetchImpl);
     if (request.method === "POST") {
-      if (url.pathname === "/api/auth/login") return await auth.login(await readJson(request));
-      if (url.pathname === "/api/auth/signup") return await auth.signup(await readJson(request));
-      if (url.pathname === "/api/auth/recover") return await auth.recover(await readJson(request));
+      if (
+        ["/api/auth/login", "/api/auth/signup", "/api/auth/recover", "/api/auth/resend-confirmation"].includes(
+          url.pathname,
+        )
+      ) {
+        const input = await readJson(request);
+        await limitAuthRequest(request, url.pathname, input, env);
+        if (url.pathname === "/api/auth/login") return await auth.login(input);
+        if (url.pathname === "/api/auth/signup") return await auth.signup(input);
+        if (url.pathname === "/api/auth/recover") return await auth.recover(input);
+        return await auth.resendConfirmation(input);
+      }
       if (url.pathname === "/api/auth/reset-password") return await auth.resetPassword(await readJson(request));
       if (url.pathname === "/api/auth/refresh") return await auth.refresh(request);
       if (url.pathname === "/api/auth/logout") return await auth.logout(request);

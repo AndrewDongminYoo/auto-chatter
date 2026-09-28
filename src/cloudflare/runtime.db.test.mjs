@@ -53,6 +53,15 @@ test("workerd auth routes call the provider with the native fetch receiver", asy
     scriptPath: ".wrangler/build/index.js",
     compatibilityDate: config.compatibility_date,
     compatibilityFlags: config.compatibility_flags,
+    ratelimits: Object.fromEntries(
+      config.ratelimits.map(({ name, namespace_id, simple }) => [
+        name,
+        {
+          namespace_id,
+          simple: { ...simple, limit: name === "AUTH_EMAIL_LIMIT" ? 2 : simple.limit },
+        },
+      ]),
+    ),
     bindings: {
       SUPABASE_URL: "https://auth-test.supabase.co",
       SUPABASE_PUBLISHABLE_KEY: "synthetic-public-key",
@@ -62,9 +71,17 @@ test("workerd auth routes call the provider with the native fetch receiver", asy
       assert.equal(url.origin, "https://auth-test.supabase.co");
       assert.equal(request.method, "POST");
       assert.equal(request.headers.get("apikey"), "synthetic-public-key");
-      assert.deepEqual(await request.json(), { email: "owner@example.test", password: "example-password" });
-      if (url.pathname === "/auth/v1/signup") return Response.json({ user: { id: "synthetic-user" } });
+      const body = await request.json();
+      if (url.pathname === "/auth/v1/signup") {
+        assert.deepEqual(body, { email: "owner@example.test", password: "example-password" });
+        return Response.json({ user: { id: "synthetic-user" } });
+      }
+      if (url.pathname === "/auth/v1/recover") {
+        assert.deepEqual(body, { email: "owner@example.test" });
+        return Response.json({});
+      }
       assert.equal(url.pathname + url.search, "/auth/v1/token?grant_type=password");
+      assert.deepEqual(body, { email: "owner@example.test", password: "example-password" });
       return Response.json({ error_code: "invalid_credentials" }, { status: 400 });
     },
   });
@@ -79,6 +96,18 @@ test("workerd auth routes call the provider with the native fetch receiver", asy
         body: JSON.stringify({ email: "owner@example.test", password: "example-password" }),
       });
       assert.equal(response.status, status, `${route}: ${await response.clone().text()}`);
+      assert.deepEqual(await response.json(), body);
+    }
+    for (const [route, status, body] of [
+      ["recover", 200, { recovery_requested: true }],
+      ["resend-confirmation", 429, { error: "auth_rate_limited" }],
+    ]) {
+      const response = await runtime.dispatchFetch(`https://app.test/api/auth/${route}`, {
+        method: "POST",
+        headers: { Origin: "https://app.test", "Content-Type": "application/json" },
+        body: JSON.stringify({ email: "owner@example.test" }),
+      });
+      assert.equal(response.status, status);
       assert.deepEqual(await response.json(), body);
     }
   } finally {
