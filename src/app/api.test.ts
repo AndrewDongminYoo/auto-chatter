@@ -53,6 +53,7 @@ function mediaFetch(
     assert.equal(url.hostname, "graph.instagram.com");
     assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer server-token");
     assert.equal(url.searchParams.has("access_token"), false);
+    assert.equal(init?.redirect, "manual");
     return Response.json(url.pathname.endsWith("/me") ? { id: "999", user_id: "123" } : media);
   }) as typeof fetch;
 }
@@ -169,6 +170,124 @@ test("another workspace's connection cannot trigger a Graph read", async () => {
   const response = await appApi(mediaRequest(), mediaConfig, () => mediaPool(false), fetchImpl);
   assert.equal(response.status, 404);
   assert.deepEqual(await response.json(), { error: "connection_not_found" });
+});
+
+const healthRequest = () =>
+  new Request(`https://app.test/api/connections/${connectionId}/health`, {
+    headers: { cookie: "__Host-ac-access=test-session" },
+  });
+
+function healthFetch(me: Response, subscriptions?: Response) {
+  const paths: string[] = [];
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.hostname === "project.supabase.co")
+      return Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" });
+    assert.equal(url.hostname, "graph.instagram.com");
+    assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer server-token");
+    assert.equal(url.searchParams.has("access_token"), false);
+    paths.push(url.pathname);
+    return url.pathname.endsWith("/me") ? me : (subscriptions ?? Response.json({ data: [] }));
+  }) as typeof fetch;
+  return { fetchImpl, paths };
+}
+
+test("connection health is workspace scoped and never probes another account", async () => {
+  const graph = healthFetch(Response.json({ user_id: "123" }));
+  const response = await appApi(
+    healthRequest(),
+    { ...mediaConfig, INSTAGRAM_OAUTH_APP_ID: "789" },
+    () => mediaPool(false),
+    graph.fetchImpl,
+  );
+  assert.equal(response.status, 404);
+  assert.deepEqual(graph.paths, []);
+});
+
+test("connection health rate limit prevents Meta requests", async () => {
+  const graph = healthFetch(Response.json({ user_id: "123" }));
+  const response = await appApi(
+    healthRequest(),
+    { ...mediaConfig, AUTH_IP_LIMIT: { limit: async () => ({ success: false }) } },
+    () => mediaPool(),
+    graph.fetchImpl,
+  );
+  assert.equal(response.status, 429);
+  assert.deepEqual(graph.paths, []);
+});
+
+test("connection health distinguishes token expiry, account access and webhook subscription", async () => {
+  const env = { ...mediaConfig, INSTAGRAM_OAUTH_APP_ID: "789" };
+  const cases: Array<[Response, Response | undefined, string, number]> = [
+    [
+      Response.json({ user_id: "123" }),
+      Response.json({
+        data: [{ id: "unmapped-subscription", subscribed_fields: ["comments", "messages", "messaging_postbacks"] }],
+      }),
+      "fields_present",
+      2,
+    ],
+    [
+      Response.json({ user_id: "123" }),
+      Response.json({ data: [{ id: "unmapped-subscription", subscribed_fields: ["comments", "messages"] }] }),
+      "fields_missing",
+      2,
+    ],
+    [Response.json({ user_id: "123" }), Response.json({ data: [{ id: "broken-subscription" }] }), "unverified", 2],
+    [
+      Response.json({ user_id: "123" }),
+      Response.json({
+        data: [{ id: "other", subscribed_fields: ["comments"] }],
+        paging: { next: "https://graph.instagram.com/other" },
+      }),
+      "unverified",
+      2,
+    ],
+    [
+      Response.json({ user_id: "123" }),
+      new Response(null, { status: 302, headers: { Location: "https://other.test" } }),
+      "unverified",
+      2,
+    ],
+    [Response.json({ user_id: "999" }), undefined, "reconnect_required", 1],
+    [new Response("server-token denied", { status: 401 }), undefined, "reconnect_required", 1],
+    [Response.json({ error: { code: 10 } }, { status: 400 }), undefined, "reconnect_required", 1],
+    [Response.json({ error: { code: 200 } }, { status: 403 }), undefined, "reconnect_required", 1],
+    [
+      Response.json({ error: { code: 190, message: "server-token expired" } }, { status: 403 }),
+      undefined,
+      "reconnect_required",
+      1,
+    ],
+    [Response.json({ error: { code: 4 } }, { status: 403 }), undefined, "unverified", 1],
+    [new Response("server-token busy", { status: 429 }), undefined, "unverified", 1],
+  ];
+  for (const [me, subscriptions, expected, callCount] of cases) {
+    const graph = healthFetch(me, subscriptions);
+    const response = await appApi(healthRequest(), env, () => mediaPool(), graph.fetchImpl);
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.status, expected);
+    assert.equal(graph.paths.length, callCount);
+    assert.equal(JSON.stringify(result).includes("server-token"), false);
+  }
+  for (const [token, expiry, expected] of [
+    [null, new Date(Date.now() + 86400000), "missing"],
+    [connection.access_token_encrypted, new Date(Date.now() - 1000), "expired"],
+  ] as const) {
+    const graph = healthFetch(Response.json({ user_id: "123" }));
+    const pool = {
+      query: async (sql: string) => ({
+        rows: sql.includes("workspace_members")
+          ? [{ workspace_id: workspaceId }]
+          : [{ ...connection, access_token_encrypted: token, token_expires_at: expiry }],
+      }),
+      end: async () => {},
+    } as unknown as Pool;
+    const response = await appApi(healthRequest(), env, () => pool, graph.fetchImpl);
+    assert.equal((await response.json()).status, expected);
+    assert.deepEqual(graph.paths, []);
+  }
 });
 
 test("media detail rejects a different owner even when numeric IDs are valid", async () => {

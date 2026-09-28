@@ -19,6 +19,7 @@ import {
   saveContactTags,
 } from "./contacts.ts";
 import { connectionMedia } from "./instagram-media.ts";
+import { connectionHealth } from "./instagram-connection-health.ts";
 import { sealSecret } from "./secrets.ts";
 import { appApi } from "./api.ts";
 import { ingestMessages } from "../instagram/follow-flow.ts";
@@ -863,6 +864,18 @@ test("connection list distinguishes valid, expired, and missing local credential
     connectionId,
   ]);
   assert.equal((await listConnections(pool, a))[0].credential_status, "missing");
+});
+
+test("connection health refuses a connection owned by another workspace before any provider request", async () => {
+  let providerCalls = 0;
+  await assert.rejects(
+    connectionHealth(pool, b, connectionId, {}, (async () => {
+      providerCalls++;
+      throw new Error("provider must not be called");
+    }) as typeof fetch),
+    (error: unknown) => error instanceof ApiError && error.status === 404,
+  );
+  assert.equal(providerCalls, 0);
 });
 
 test("administrator ownership assignment requires confirmation and preserves existing owners", async () => {

@@ -217,6 +217,8 @@ const errors = {
   remote_logout_unconfirmed:
     "브라우저에서 로그아웃했습니다. 서버 세션 종료를 확인하지 못했으니 다시 로그인해 로그아웃하거나 운영자에게 문의해 주세요.",
   instagram_not_configured: "Instagram 연결 서비스를 준비 중입니다.",
+  health_rate_limited: "상태 확인 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
+  health_unavailable: "지금은 Meta 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.",
   invalid_credentials: "이메일과 8자 이상의 비밀번호를 입력해 주세요.",
   invalid_recovery_email: "이메일 주소를 확인해 주세요.",
   auth_rate_limited: "요청이 많습니다. 잠시 기다린 뒤 다시 시도해 주세요.",
@@ -393,6 +395,31 @@ async function loadWorkspace() {
         "hint",
       ),
     );
+    const healthStatus = node("p", "Meta 계정과 웹훅 구독 상태는 아직 확인하지 않았습니다.", "hint");
+    healthStatus.setAttribute("role", "status");
+    const healthButton = node("button", "Meta 상태 확인", "secondary");
+    healthButton.disabled = credentialStatus !== "valid";
+    healthButton.dataset.loadingLabel = "확인 중…";
+    healthButton.addEventListener("click", () =>
+      action(healthButton, async () => {
+        const result = await api(`/api/connections/${account.id}/health`);
+        const message = {
+          fields_present:
+            "Meta가 이 계정의 댓글·DM·확인 버튼 구독 필드를 반환했습니다. 이 앱으로 실제 이벤트가 오는지는 별도로 확인해야 합니다.",
+          fields_missing:
+            "Meta 응답에서 필수 웹훅 구독 필드가 모두 확인되지 않았습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
+          reconnect_required:
+            "Meta가 계정 접근이나 앱 권한을 거부했습니다. 앱 권한을 확인하고 필요한 경우 같은 Instagram 계정을 다시 연결해 주세요.",
+          unverified: "Meta 상태를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+          expired: "연결 토큰이 만료됐습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
+          missing: "연결 토큰이 없습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
+        }[result.status];
+        healthStatus.textContent = message
+          ? `${new Date(result.checked_at).toLocaleTimeString("ko-KR")} 확인 · ${message}`
+          : "Meta 상태 응답을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.";
+      }),
+    );
+    item.append(healthButton, healthStatus);
     for (const [label, active, send_enabled] of [
       [account.send_enabled ? "발송 끄기" : "발송 켜기", true, !account.send_enabled],
       [account.active ? "수신 중지" : "수신 재개", !account.active, false],

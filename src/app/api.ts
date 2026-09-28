@@ -23,6 +23,7 @@ import {
   saveContactAutomation,
 } from "./contacts.ts";
 import { connectionMedia } from "./instagram-media.ts";
+import { connectionHealth } from "./instagram-connection-health.ts";
 import { setInbox, listInbox, inboxMessages, inboxContext } from "./inbox.ts";
 import { archiveContactField, createContactField, listContactFields, saveContactFieldValue } from "./contact-fields.ts";
 
@@ -67,6 +68,13 @@ export async function appApi(
         return json({ workspace_id: await ensureWorkspace(pool, user) });
       if (url.pathname === "/api/connections" && request.method === "GET")
         return json({ connections: await listConnections(pool, user) });
+      const health = /^\/api\/connections\/([a-f0-9-]+)\/health$/.exec(url.pathname);
+      if (health && request.method === "GET") {
+        if (!env.AUTH_IP_LIMIT) throw new ApiError(503, "health_unavailable");
+        const allowance = await env.AUTH_IP_LIMIT.limit({ key: `connection-health:${user.id}` });
+        if (!allowance.success) throw new ApiError(429, "health_rate_limited");
+        return json(await connectionHealth(pool, user, health[1]!, env, fetchImpl));
+      }
       if (url.pathname === "/api/inbox" && request.method === "GET")
         return json(await listInbox(pool, user, url.searchParams));
       const replyStatus = /^\/api\/connections\/([a-f0-9-]+)\/inbox\/(\d+)\/reply-status$/.exec(url.pathname);
