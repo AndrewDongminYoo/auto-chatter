@@ -251,12 +251,15 @@ test("connection health distinguishes token expiry, account access and webhook s
     ],
     [Response.json({ user_id: "999" }), undefined, "reconnect_required", 1],
     [new Response("server-token denied", { status: 401 }), undefined, "reconnect_required", 1],
+    [Response.json({ error: { code: 10 } }, { status: 400 }), undefined, "reconnect_required", 1],
+    [Response.json({ error: { code: 200 } }, { status: 403 }), undefined, "reconnect_required", 1],
     [
       Response.json({ error: { code: 190, message: "server-token expired" } }, { status: 403 }),
       undefined,
       "reconnect_required",
       1,
     ],
+    [Response.json({ error: { code: 4 } }, { status: 403 }), undefined, "unverified", 1],
     [new Response("server-token busy", { status: 429 }), undefined, "unverified", 1],
   ];
   for (const [me, subscriptions, expected, callCount] of cases) {

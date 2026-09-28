@@ -26,7 +26,8 @@ async function providerGet(fetchImpl: typeof fetch, url: string, token: string):
       } else {
         await response.body?.cancel();
       }
-      return { status: response.status === 401 || code === 190 ? "reconnect_required" : "unverified" };
+      const denied = code === 10 || code === 190 || (typeof code === "number" && code >= 200 && code <= 299);
+      return { status: response.status === 401 || denied ? "reconnect_required" : "unverified" };
     }
     return { status: "ok", value: await response.json() };
   } catch {
