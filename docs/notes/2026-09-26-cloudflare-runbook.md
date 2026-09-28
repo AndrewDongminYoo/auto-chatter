@@ -14,7 +14,8 @@ Meta Instagram Login의 OAuth 콜백에는 새 도메인 주소를 추가하고 
 동일한 Worker 코드의 설정 버전 `29e958e0-57bb-47b6-b4c4-753a0df4783c`을 100% 활성화해 운영 `APP_ORIGIN`을 `https://auto-chat.donminzzi.kr`로 바꿨으며 `SEND_ENABLED=false`를 유지했습니다.
 운영자가 Meta 웹훅 콜백을 새 도메인으로 변경했고, 2026-09-28 Meta 설정 재조회에서 새 주소와 `comments`·`messages` 구독 및 `ai.you.wanted` 계정 구독을 확인했습니다.
 2026-09-28 새 도메인 로그인 후 게시한 `auto-chatter 도메인 수신 테스트` 댓글이 운영 `instagram_comment_events`에 `2026-09-28 03:53:26.961295+00` 시각으로 저장된 것을 Supabase Table Editor에서 확인했습니다.
-새 주소로 실제 메시지 이벤트가 도착하는지는 아직 확인하지 않았습니다.
+2026-09-28 운영자가 `ai.you.wanted`에 테스트 DM을 보낸 직후 Worker 실시간 로그에서 `POST /webhooks/instagram`의 HTTP 200 응답을 확인했습니다.
+현재 운영 코드는 일반 DM 본문을 저장하지 않으므로 이 로그만으로 개별 메시지 내용까지 대조하지는 못했습니다.
 기본 배포 설정은 `SEND_ENABLED=false`입니다.
 승인된 단일 게시물의 첫 DM 테스트에서 실제 수신과 DB의 `sent` 행·공급자 메시지 ID를 확인한 뒤 전역·계정·규칙 발송을 모두 중지했습니다.
 테스트 승인 범위와 중지 절차는 [첫 실발송 테스트 기록](2026-09-26-first-live-reply-test.md)에 있습니다.
