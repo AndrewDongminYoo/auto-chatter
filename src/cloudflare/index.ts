@@ -5,6 +5,7 @@ import {
 } from "../instagram/manual-reply-worker.ts";
 import { parseMessageEvents } from "../instagram/message-events.ts";
 import { ingestMessages, processNextFollowReply, recoverStaleFollowReplies } from "../instagram/follow-flow.ts";
+import { readMetaGraphError } from "../instagram/meta-graph-error.ts";
 import { refreshDueInstagramTokens } from "../app/instagram-token-refresh.ts";
 export interface Env extends AuthEnv, InstagramOAuthEnv {
   AUTH_IP_LIMIT: { limit(input: { key: string }): Promise<{ success: boolean }> };
@@ -218,9 +219,14 @@ export default {
                 }
               }
               const response = await rawGraphFetch(input, init);
+              const definitePostRejection =
+                init?.method === "POST" &&
+                response.status >= 400 &&
+                response.status < 500 &&
+                (await readMetaGraphError(response.clone()))?.code != null;
               if (
-                init?.method !== "POST" &&
                 !response.ok &&
+                (init?.method !== "POST" || definitePostRejection) &&
                 (await tokenRotated(pool, connectionId, connection.access_token_encrypted))
               ) {
                 await response.body?.cancel();
