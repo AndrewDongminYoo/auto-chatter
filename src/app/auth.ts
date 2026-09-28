@@ -94,7 +94,13 @@ export class AuthClient {
     this.fetchImpl = (input, init) => fetchImpl(input, init);
   }
 
-  private async call(path: string, method: string, body?: unknown, accessToken?: string): Promise<unknown> {
+  private async call(
+    path: string,
+    method: string,
+    body?: unknown,
+    accessToken?: string,
+    clientErrorStatus: 400 | 401 = 401,
+  ): Promise<unknown> {
     let response: Response;
     try {
       response = await this.fetchImpl(this.origin + "/auth/v1" + path, {
@@ -114,7 +120,13 @@ export class AuthClient {
     if (!response.ok) {
       await response.body?.cancel();
       throw new ApiError(
-        response.status === 429 ? 429 : response.status >= 500 || response.status < 400 ? 503 : 401,
+        response.status === 429
+          ? 429
+          : response.status >= 500 || response.status < 400
+            ? 503
+            : (response.status === 400 || response.status === 422) && clientErrorStatus === 400
+              ? 400
+              : 401,
         "authentication_failed",
       );
     }
@@ -180,6 +192,47 @@ export class AuthClient {
   async signup(input: unknown): Promise<Response> {
     await this.call("/signup", "POST", this.credentials(input));
     return json({ confirmation_required: true });
+  }
+
+  async recover(input: unknown): Promise<Response> {
+    if (
+      !isRecord(input) ||
+      typeof input.email !== "string" ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email.trim()) ||
+      input.email.length > 254
+    )
+      throw new ApiError(400, "invalid_recovery_email");
+    try {
+      await this.call("/recover", "POST", { email: input.email.trim() });
+    } catch (error) {
+      if (!(error instanceof ApiError) || (error.status !== 401 && error.status !== 429)) throw error;
+    }
+    return json({ recovery_requested: true });
+  }
+
+  async resetPassword(input: unknown): Promise<Response> {
+    if (
+      !isRecord(input) ||
+      typeof input.access_token !== "string" ||
+      !/^[A-Za-z0-9._~-]{1,3500}$/.test(input.access_token) ||
+      typeof input.password !== "string" ||
+      input.password.length < 8 ||
+      input.password.length > 256
+    )
+      throw new ApiError(400, "invalid_recovery_link");
+    try {
+      await this.call("/user", "PUT", { password: input.password }, input.access_token, 400);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) throw new ApiError(401, "recovery_link_invalid");
+      if (error instanceof ApiError && error.status === 400) throw new ApiError(400, "password_rejected");
+      throw error;
+    }
+    try {
+      await this.call("/logout?scope=global", "POST", undefined, input.access_token);
+    } catch {
+      return clearSession(json({ error: "password_updated_logout_unconfirmed" }, 503));
+    }
+    return clearSession(json({ password_updated: true }));
   }
 
   async refresh(request: Request): Promise<Response> {

@@ -129,3 +129,87 @@ test("rejected refresh expires both cookies while transient failures retain them
     } else await assert.rejects(client.refresh(request), ApiError);
   }
 });
+
+test("password recovery request hides account existence and provider rejection", async () => {
+  for (const providerStatus of [200, 400, 429]) {
+    let calls = 0;
+    const client = new AuthClient(config, async (input, init) => {
+      calls++;
+      assert.equal(String(input), "https://project.supabase.co/auth/v1/recover");
+      assert.equal(init?.method, "POST");
+      assert.deepEqual(JSON.parse(String(init?.body)), { email: "owner@example.test" });
+      return Response.json({}, { status: providerStatus });
+    });
+    const response = await client.recover({ email: " owner@example.test " });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { recovery_requested: true });
+    assert.equal(calls, 1);
+  }
+});
+
+test("password recovery rejects malformed input and reports provider outages without leaking details", async () => {
+  const client = new AuthClient(config, async () => new Response("secret provider body", { status: 503 }));
+  await assert.rejects(
+    client.recover({ email: "invalid" }),
+    (error: unknown) => error instanceof ApiError && error.status === 400,
+  );
+  await assert.rejects(
+    client.recover({ email: "owner@example.test" }),
+    (error: unknown) => error instanceof ApiError && error.status === 503 && !error.message.includes("secret"),
+  );
+});
+
+test("reset uses only the supplied access token, clears cookies, and never returns credentials", async () => {
+  const calls: string[] = [];
+  const client = new AuthClient(config, async (input, init) => {
+    calls.push(String(input));
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer recovery-access");
+    if (String(input).endsWith("/user")) {
+      assert.equal(init?.method, "PUT");
+      assert.deepEqual(JSON.parse(String(init?.body)), { password: "new-password-123" });
+      return Response.json({ id: userId });
+    }
+    assert.ok(String(input).endsWith("/logout?scope=global"));
+    return new Response(null, { status: 204 });
+  });
+  const response = await client.resetPassword({ access_token: "recovery-access", password: "new-password-123" });
+  assert.deepEqual(calls.length, 2);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { password_updated: true });
+  assert.ok(response.headers.getSetCookie().every((value) => value.includes("Max-Age=0")));
+});
+
+test("invalid recovery tokens never update a password and expired tokens get a generic error", async () => {
+  let calls = 0;
+  const client = new AuthClient(config, async () => {
+    calls++;
+    return new Response("provider details", { status: 401 });
+  });
+  await assert.rejects(client.resetPassword({ access_token: "bad token", password: "new-password-123" }), ApiError);
+  assert.equal(calls, 0);
+  await assert.rejects(
+    client.resetPassword({ access_token: "expired-token", password: "new-password-123" }),
+    (error: unknown) => error instanceof ApiError && error.status === 401 && error.message === "recovery_link_invalid",
+  );
+  assert.equal(calls, 1);
+});
+
+test("provider password policy rejection is distinct from an expired recovery link", async () => {
+  const client = new AuthClient(config, async () => new Response("secret password policy", { status: 422 }));
+  await assert.rejects(
+    client.resetPassword({ access_token: "recovery-access", password: "new-password-123" }),
+    (error: unknown) => error instanceof ApiError && error.status === 400 && error.message === "password_rejected",
+  );
+});
+
+test("password update never claims confirmed logout when provider refuses revocation", async () => {
+  for (const status of [400, 401, 403, 503]) {
+    const client = new AuthClient(config, async (input) =>
+      String(input).endsWith("/user") ? Response.json({ id: userId }) : new Response(null, { status }),
+    );
+    const response = await client.resetPassword({ access_token: "recovery-access", password: "new-password-123" });
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { error: "password_updated_logout_unconfirmed" });
+    assert.ok(response.headers.getSetCookie().every((value) => value.includes("Max-Age=0")));
+  }
+});
