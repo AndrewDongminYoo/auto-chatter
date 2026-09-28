@@ -338,10 +338,27 @@ async function loadWorkspace() {
     const item = node("div", "");
     item.className = "item";
     item.append(node("strong", account.username ?? account.account_id));
+    const tokenValid = account.token_registered && Date.parse(account.token_expires_at) > Date.now();
+    const credentialStatus =
+      account.credential_status === "missing" || !account.token_registered
+        ? "missing"
+        : account.credential_status === "expired" || !tokenValid
+          ? "expired"
+          : "valid";
     const state = node("div", "", "badges");
     state.append(
-      badge(account.active ? "수신 중" : "수신 중지", account.active ? "success" : ""),
-      badge(account.send_enabled ? "계정 발송 켜짐" : "계정 발송 꺼짐", account.send_enabled ? "success" : ""),
+      badge(
+        credentialStatus === "valid" ? "토큰 만료 전" : credentialStatus === "expired" ? "토큰 만료" : "토큰 없음",
+        credentialStatus === "valid" ? "" : "warning",
+      ),
+      badge(
+        account.active ? "수신 설정 켜짐" : "수신 설정 꺼짐",
+        account.active && credentialStatus === "valid" ? "success" : "",
+      ),
+      badge(
+        account.send_enabled ? "발송 설정 켜짐" : "발송 설정 꺼짐",
+        account.send_enabled && credentialStatus === "valid" ? "success" : "",
+      ),
     );
     item.append(state);
     const inboxToggle = node("button", account.inbox_enabled ? "DM 보관 끄기" : "DM 보관 켜기", "secondary");
@@ -368,11 +385,11 @@ async function loadWorkspace() {
     item.append(
       node(
         "p",
-        account.token_registered && Date.parse(account.token_expires_at) > Date.now()
+        credentialStatus === "valid"
           ? account.active
-            ? `토큰 만료일: ${new Date(account.token_expires_at).toLocaleDateString("ko-KR")} · 만료 30일 전부터 자동 갱신을 시도합니다.`
-            : `토큰 만료일: ${new Date(account.token_expires_at).toLocaleDateString("ko-KR")} · 수신 중지 중에는 자동 갱신하지 않습니다.`
-          : "토큰이 없거나 만료됐습니다. 계정을 다시 연결해 주세요.",
+            ? `토큰 만료일: ${new Date(account.token_expires_at).toLocaleDateString("ko-KR")} · 만료 30일 전부터 갱신을 시도합니다. 철회·권한·구독 여부는 확인되지 않았습니다.`
+            : `토큰 만료일: ${new Date(account.token_expires_at).toLocaleDateString("ko-KR")} · 수신 중지 중에는 갱신하지 않습니다. 철회·권한·구독 여부는 확인되지 않았습니다.`
+          : `${credentialStatus === "expired" ? "토큰이 만료됐습니다." : "연결 토큰이 없습니다."} 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`,
         "hint",
       ),
     );
@@ -382,6 +399,7 @@ async function loadWorkspace() {
     ]) {
       const button = node("button", label);
       button.className = "secondary";
+      button.disabled = credentialStatus !== "valid" && (active || send_enabled);
       button.addEventListener("click", () =>
         action(button, async () => {
           await api(`/api/connections/${account.id}`, "PATCH", { active, send_enabled });
