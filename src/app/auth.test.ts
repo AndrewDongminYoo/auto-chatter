@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AuthClient, ApiError, requireSameOrigin } from "./auth.ts";
+import { limitAuthRequest } from "./auth-rate-limit.ts";
 
 const config = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "public-test-key" };
 const userId = "11111111-1111-4111-8111-111111111111";
@@ -145,6 +146,96 @@ test("password recovery request hides account existence and provider rejection",
     assert.deepEqual(await response.json(), { recovery_requested: true });
     assert.equal(calls, 1);
   }
+});
+
+test("signup and confirmation resend hide provider account state and cooldowns", async () => {
+  for (const providerStatus of [200, 400, 422, 429]) {
+    const paths: string[] = [];
+    const client = new AuthClient(config, async (input) => {
+      paths.push(new URL(String(input)).pathname);
+      return Response.json({}, { status: providerStatus });
+    });
+    assert.deepEqual(
+      await (await client.signup({ email: "owner@example.test", password: "example-password" })).json(),
+      {
+        confirmation_required: true,
+      },
+    );
+    assert.deepEqual(await (await client.resendConfirmation({ email: "owner@example.test" })).json(), {
+      confirmation_requested: true,
+    });
+    assert.deepEqual(paths, ["/auth/v1/signup", "/auth/v1/resend"]);
+  }
+});
+
+test("authentication throttles use both trusted caller IP and normalized email without forwarding credentials", async () => {
+  const keys: string[] = [];
+  const limiter = {
+    limit: async ({ key }: { key: string }) => {
+      keys.push(key);
+      return { success: true };
+    },
+  };
+  const request = new Request("https://app.test/api/auth/login", {
+    method: "POST",
+    headers: { Origin: "https://app.test", "CF-Connecting-IP": "203.0.113.10" },
+  });
+  await limitAuthRequest(
+    request,
+    "/api/auth/login",
+    { email: " Owner@Example.Test " },
+    {
+      AUTH_IP_LIMIT: limiter,
+      AUTH_EMAIL_LIMIT: limiter,
+    },
+  );
+  assert.equal(keys.length, 2);
+  assert.ok(keys[0]!.includes("203.0.113.10"));
+  assert.doesNotMatch(keys.join(" "), /Owner@Example|owner@example/);
+  assert.notEqual(keys[0], keys[1]);
+});
+
+test("signup, recovery, and resend share one email allowance while login has a separate allowance", async () => {
+  const emailKeys: string[] = [];
+  const allow = { limit: async () => ({ success: true }) };
+  const emailLimit = {
+    limit: async ({ key }: { key: string }) => {
+      emailKeys.push(key);
+      return { success: true };
+    },
+  };
+  const request = new Request("https://app.test/api/auth/signup", { method: "POST" });
+  for (const pathname of ["/api/auth/signup", "/api/auth/recover", "/api/auth/resend-confirmation", "/api/auth/login"])
+    await limitAuthRequest(
+      request,
+      pathname,
+      { email: " Owner@Example.Test " },
+      {
+        AUTH_IP_LIMIT: allow,
+        AUTH_EMAIL_LIMIT: emailLimit,
+      },
+    );
+  assert.equal(new Set(emailKeys.slice(0, 3)).size, 1);
+  assert.notEqual(emailKeys[2], emailKeys[3]);
+});
+
+test("authentication throttles reject excess attempts and missing bindings before provider calls", async () => {
+  const request = new Request("https://app.test/api/auth/signup", { method: "POST" });
+  const allow = { limit: async () => ({ success: true }) };
+  const refuse = { limit: async () => ({ success: false }) };
+  await assert.rejects(
+    limitAuthRequest(
+      request,
+      "/api/auth/signup",
+      { email: "x@example.test" },
+      { AUTH_IP_LIMIT: refuse, AUTH_EMAIL_LIMIT: allow },
+    ),
+    (error: unknown) => error instanceof ApiError && error.status === 429,
+  );
+  await assert.rejects(
+    limitAuthRequest(request, "/api/auth/signup", { email: "x@example.test" }, { AUTH_IP_LIMIT: allow }),
+    (error: unknown) => error instanceof ApiError && error.status === 503,
+  );
 });
 
 test("password recovery rejects malformed input and reports provider outages without leaking details", async () => {

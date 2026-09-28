@@ -17,6 +17,10 @@
     "META_GRAPH_VERSION": "v26.0"
   },
   "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "026b7ba593a24852bbfd182456ff1c03" }],
+  "ratelimits": [
+    { "name": "AUTH_IP_LIMIT", "namespace_id": "281501", "simple": { "limit": 30, "period": 60 } },
+    { "name": "AUTH_EMAIL_LIMIT", "namespace_id": "281502", "simple": { "limit": 5, "period": 60 } }
+  ],
   "queues": {
     "producers": [{ "binding": "REPLY_QUEUE", "queue": "auto-chatter-replies" }],
     "consumers": [

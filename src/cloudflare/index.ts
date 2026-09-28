@@ -6,6 +6,8 @@ import {
 import { parseMessageEvents } from "../instagram/message-events.ts";
 import { ingestMessages, processNextFollowReply, recoverStaleFollowReplies } from "../instagram/follow-flow.ts";
 export interface Env extends AuthEnv, InstagramOAuthEnv {
+  AUTH_IP_LIMIT: { limit(input: { key: string }): Promise<{ success: boolean }> };
+  AUTH_EMAIL_LIMIT: { limit(input: { key: string }): Promise<{ success: boolean }> };
   HYPERDRIVE: { connectionString: string };
   REPLY_QUEUE: { send(body: { connectionId: string }): Promise<void> };
   INSTAGRAM_APP_SECRET: string;
