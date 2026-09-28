@@ -12,7 +12,8 @@ Supabase Auth의 Site URL을 `https://auto-chat.donminzzi.kr/app/`로 변경하�
 확인 이메일의 실제 복귀는 아직 실사용 계정으로 검증하지 않았습니다.
 Meta Instagram Login의 OAuth 콜백에는 새 도메인 주소를 추가하고 기존 workers.dev 주소도 유지했습니다.
 동일한 Worker 코드의 설정 버전 `29e958e0-57bb-47b6-b4c4-753a0df4783c`을 100% 활성화해 운영 `APP_ORIGIN`을 `https://auto-chat.donminzzi.kr`로 바꿨으며 `SEND_ENABLED=false`를 유지했습니다.
-Meta 웹훅 콜백은 검증 토큰을 다시 입력해 저장하기 전까지 기존 workers.dev 주소를 사용합니다.
+운영자가 Meta 웹훅 콜백을 새 도메인으로 변경했고, 2026-09-28 Meta 설정 재조회에서 새 주소와 `comments`·`messages` 구독 및 `ai.you.wanted` 계정 구독을 확인했습니다.
+새 주소로 실제 서명된 댓글·메시지 이벤트가 도착하는지는 아직 확인하지 않았습니다.
 기본 배포 설정은 `SEND_ENABLED=false`입니다.
 승인된 단일 게시물의 첫 DM 테스트에서 실제 수신과 DB의 `sent` 행·공급자 메시지 ID를 확인한 뒤 전역·계정·규칙 발송을 모두 중지했습니다.
 테스트 승인 범위와 중지 절차는 [첫 실발송 테스트 기록](2026-09-26-first-live-reply-test.md)에 있습니다.
@@ -53,7 +54,7 @@ OAuth 연결 확인 시점에는 계정 수신 활성화·발송 비활성화·�
 | Queue             | `auto-chatter-replies`, 메시지 보관 86,400초                  |
 | 최초 Worker 버전  | `b4760d1d-4b21-4207-96da-52e0e4a881d7`                        |
 
-웹훅 주소는 `https://auto-chatter.auto-chatter-ydm2790.workers.dev/webhooks/instagram`입니다.
+현재 Meta 웹훅 주소는 `https://auto-chat.donminzzi.kr/webhooks/instagram`입니다.
 두 웹훅 secrets 등록 후 검증 매개변수 누락·잘못된 Verify token·서명 없는 POST 요청이 모두 403으로 거부되는 것을 확인했습니다.
 정상 구독 확인은 Meta 대시보드에 같은 Verify token을 입력하고 Verify and Save를 실행해 확인합니다.
 Instagram Login 경로는 공통 Webhooks 메뉴 대신 **Instagram 로그인이 포함된 API 설정 → Webhooks 구성**에서 설정합니다.
@@ -76,9 +77,7 @@ Graph 버전은 `wrangler.json`의 `META_GRAPH_VERSION=v26.0`으로 지정되어
 
 운영자가 Meta 앱은 아직 개발·미게시 상태이며 개인정보처리방침 URL 누락으로 게시가 막혔다고 확인했습니다.
 이후 개인정보 안내 페이지 배포를 마친 뒤 운영자가 Meta 앱 게시 완료를 알렸습니다.
-Meta의 개인정보처리방침 URL에는 `https://auto-chatter.auto-chatter-ydm2790.workers.dev/privacy`를 사용합니다.
-서비스 약관 URL에는 `https://auto-chatter.auto-chatter-ydm2790.workers.dev/service`를 사용합니다.
-사용자 데이터 삭제 안내 URL을 요구하는 항목에는 `https://auto-chatter.auto-chatter-ydm2790.workers.dev/data-deletion`을 사용합니다.
+2026-09-28 Meta 앱 설정 재조회에서 개인정보처리방침 URL은 `https://auto-chat.donminzzi.kr/privacy`, 서비스 약관 URL은 `https://auto-chat.donminzzi.kr/service`, 사용자 데이터 삭제 안내 URL은 `https://auto-chat.donminzzi.kr/data-deletion`로 확인했습니다.
 삭제 안내 페이지는 이메일 기반 수동 요청 절차이며 자동 삭제 콜백 URL이 아닙니다.
 세 페이지는 로그인·DB·Meta secrets 없이 열리고, 승인된 운영자 연락처와 보관·삭제 정책 및 서비스 이용 조건을 안내합니다.
 구현 범위와 수동 삭제 절차는 [개인정보 안내 페이지 계획](../plans/2026-09-26-public-privacy-pages.md)에 기록합니다.
