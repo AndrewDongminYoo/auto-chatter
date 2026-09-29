@@ -39,10 +39,6 @@
 | [#37](https://github.com/AndrewDongminYoo/auto-chatter/issues/37) | 채널 이벤트·대화·발송 capability 계약과 정책 경계             | 미구현                     | 미검증                                                             | 미검증                       | 완료하지 않음 |
 | [#38](https://github.com/AndrewDongminYoo/auto-chatter/issues/38) | Facebook Messenger Page 연결·수신·정책 적용 발송              | 미구현                     | 미검증                                                             | 미검증                       | 완료하지 않음 |
 | [#39](https://github.com/AndrewDongminYoo/auto-chatter/issues/39) | Telegram Bot 연결·수신·버튼·플로·수신 거부                    | 미구현                     | 미검증                                                             | 미검증                       | 완료하지 않음 |
-| [#40](https://github.com/AndrewDongminYoo/auto-chatter/issues/40) | WhatsApp Business 연결·번호·웹훅·서비스 답장                  | 미구현                     | 미검증                                                             | 미검증                       | 완료하지 않음 |
-| [#41](https://github.com/AndrewDongminYoo/auto-chatter/issues/41) | WhatsApp 템플릿 승인·변수·동의·비용 한도                      | 미구현                     | 미검증                                                             | 미검증                       | 완료하지 않음 |
-| [#42](https://github.com/AndrewDongminYoo/auto-chatter/issues/42) | TikTok Business Messaging 지역·사업자·API 승인 관문 검증      | 미구현                     | 미검증                                                             | 미검증                       | 완료하지 않음 |
-| [#43](https://github.com/AndrewDongminYoo/auto-chatter/issues/43) | 승인된 TikTok 계정의 인박스·답장·플로 어댑터                  | 미구현                     | 미검증                                                             | 미검증                       | 완료하지 않음 |
 | [#44](https://github.com/AndrewDongminYoo/auto-chatter/issues/44) | 이메일 채널·발신 인증·반송·수신 거부·비용 상한                | 미구현                     | 미검증                                                             | 미검증                       | 완료하지 않음 |
 | [#45](https://github.com/AndrewDongminYoo/auto-chatter/issues/45) | SMS 출시 국가·발신번호·동의·요금 공급자 결정                  | 미구현                     | 미검증                                                             | 미검증                       | 완료하지 않음 |
 | [#46](https://github.com/AndrewDongminYoo/auto-chatter/issues/46) | SMS 발송·수신·STOP 처리·전달 결과 어댑터                      | 미구현                     | 미검증                                                             | 미검증                       | 완료하지 않음 |
@@ -68,8 +64,9 @@
 ## 공개 제공과 최종 완료 조건
 
 현재 구현 채널은 Instagram이며 운영자 계정에서 제한된 첫 DM·팔로우 분기를 확인했습니다.
-추가 사용자의 Advanced Access, 수신 인박스의 운영 적용, 실제 확인 버튼 표시는 별도 완료 조건입니다.
-TikTok 등 승인과 지역에 제약이 있는 채널은 승인이 없으면 차단 상태를 표시하며 완료로 처리하지 않습니다.
+추가 사용자의 Advanced Access와 수신 인박스의 남은 운영 검증은 별도 완료 조건입니다.
+확인 버튼은 모바일 Instagram 앱에서 표시되고 postback이 보관됐지만, 발송을 켠 상태의 팔로우 분기와 Chrome 웹의 표시 차이는 아직 검증하지 않았습니다.
+WhatsApp·TikTok 이슈 #40–#43은 `unplanned`로 보관하며 현재 수용 범위에서 제외합니다.
 Email·SMS·결제는 출시 국가·사업자·통화·비용·동의 정책을 운영자가 확정한 뒤 실제 제공 범위를 기록합니다.
 FAQ AI는 오프라인 평가·초안 모드와 예산·인계가 확인되기 전 자동 발송을 허용하지 않습니다.
 
@@ -77,7 +74,7 @@ FAQ AI는 오프라인 평가·초안 모드와 예산·인계가 확인되기 �
 네이티브 앱·고급 A/B 실험·특정 CRM SDK는 최초 제품 명세의 후순위 또는 수요 검증 대상으로 유지하며 필요성이 확정되면 #12와 로드맵에 별도 필수 이슈를 추가합니다.
 이들 항목을 이미 제공한다고 표시하거나 지원하지 않는 기능까지 포함한 동등성을 선언하지 않습니다.
 
-[최종 검증 #64](https://github.com/AndrewDongminYoo/auto-chatter/issues/64)는 모든 등록 작업과 새로 추가한 필수 기능에 수용 증거가 있어야 통과합니다.
+[최종 검증 #64](https://github.com/AndrewDongminYoo/auto-chatter/issues/64)는 계획된 필수 작업과 새로 추가한 필수 기능에 수용 증거가 있어야 통과합니다.
 제약 때문에 제공할 수 없는 필수 기능이 있으면 운영자가 범위 변경을 명시적으로 결정하기 전에는 전체 완료를 선언하지 않습니다.
 상표·정확한 가격·비공식 API·동의 없는 채널 식별자 병합은 비목표로 유지합니다.
 이 표를 만들었다는 사실만으로 제품 검증이나 #64 완료를 의미하지 않습니다.

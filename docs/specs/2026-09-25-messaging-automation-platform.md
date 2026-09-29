@@ -24,7 +24,7 @@ ManyChat의 공개 기능 기준은 [조사 보고서의 플랜 비교](../notes
 
 ### 목표
 
-1. 공식 API와 승인된 권한으로 Instagram, Facebook Messenger, WhatsApp, TikTok, Telegram, Email, SMS를 단계적으로 연결합니다.
+1. 공식 API와 승인된 권한으로 Instagram, Facebook Messenger, Telegram, Email, SMS를 단계적으로 연결합니다.
 2. 시각적 플로에서 트리거, 조건, 메시지, 지연, 태그·필드 변경, 웹훅, 상담원 전환을 조합합니다.
 3. 채널별 수신 허용, 발송 창, 템플릿, 속도 제한을 발송 시점에 검사합니다.
 4. 하나의 작업 공간에서 연락처, 대화, 전달 상태, 자동화 실행, 팀 작업과 구독 사용량을 추적합니다.
@@ -39,19 +39,20 @@ ManyChat의 공개 기능 기준은 [조사 보고서의 플랜 비교](../notes
 - 자체 통신망·카드 결제망·범용 CRM·광고 관리자 전체를 만들지 않습니다.
 - 첫 배포에서 모든 채널, 모든 국가, 모바일 앱, 고급 A/B 분석과 엔터프라이즈 전용 기능을 동시에 제공하지 않습니다.
 - ChatbotX 또는 Chatwoot의 별도 상용 라이선스 파일을 Community Edition에 포함시키지 않습니다.
+- WhatsApp과 TikTok 연동은 현재 구현·출시 계획에 포함하지 않습니다. 관련 이슈는 재검토용으로 보관합니다.
 
 ## 기능 범위와 순서
 
-| 단계     | 포함 기능                                                                                 | 수용 기준                                                                                          |
-| -------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| 검증     | 후보 CE 로컬 실행, Instagram 계정 권한, 댓글·DM 웹훅 왕복                                 | 공식 테스트 계정에서 댓글 이벤트 하나가 정확히 한 번의 허용된 개인 응답으로 이어집니다.            |
-| 첫 배포  | 작업 공간, Instagram 플로, 키워드·조건·태그, 공유 인박스, 수동 전환, 실행·실패 로그       | 관리자와 상담원이 같은 대화를 중복 발송 없이 이어받고 실패를 재처리할 수 있습니다.                 |
-| 유료 MVP | Telegram·WhatsApp, 템플릿과 옵트인, 세그먼트 발송, 활성 연락처 집계, 플랜 권한, 구독 결제 | 청구월 경계·중복 이벤트·결제 실패를 테스트하고 사용량과 청구 금액을 대조할 수 있습니다.            |
-| 확장     | TikTok 승인 후 연동, Email·SMS, Google Sheets·CRM 웹훅, AI 응답, 고급 라우팅              | 각 채널의 정책 검사와 비용 한도가 작동하고, 승인되지 않은 기능은 UI와 API 모두에서 비활성화됩니다. |
+| 단계     | 포함 기능                                                                           | 수용 기준                                                                                          |
+| -------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| 검증     | 후보 CE 로컬 실행, Instagram 계정 권한, 댓글·DM 웹훅 왕복                           | 공식 테스트 계정에서 댓글 이벤트 하나가 정확히 한 번의 허용된 개인 응답으로 이어집니다.            |
+| 첫 배포  | 작업 공간, Instagram 플로, 키워드·조건·태그, 공유 인박스, 수동 전환, 실행·실패 로그 | 관리자와 상담원이 같은 대화를 중복 발송 없이 이어받고 실패를 재처리할 수 있습니다.                 |
+| 유료 MVP | Telegram, 템플릿과 옵트인, 세그먼트 발송, 활성 연락처 집계, 플랜 권한, 구독 결제    | 청구월 경계·중복 이벤트·결제 실패를 테스트하고 사용량과 청구 금액을 대조할 수 있습니다.            |
+| 확장     | Email·SMS, Google Sheets·CRM 웹훅, AI 응답, 고급 라우팅                             | 각 채널의 정책 검사와 비용 한도가 작동하고, 승인되지 않은 기능은 UI와 API 모두에서 비활성화됩니다. |
 
-TikTok과 Instagram의 권한 승인은 제품 코드만으로 보장할 수 없습니다.
+Instagram의 권한 승인은 제품 코드만으로 보장할 수 없습니다.
 승인을 받지 못한 채널은 공개 플랜에서 지원한다고 표시하지 않습니다.
-[공식 TikTok Business Messaging 문서](https://business-api.tiktok.com/gateway/docs/index?identify_key=c0138ffadd90a955c1f0670a56fe348d1d40680b3c89461e09f78ed26785164b&language=ENGLISH), [Meta Instagram API 문서](https://www.postman.com/meta/instagram/folder/1z5vxzu/instagram-api-with-instagram-login).
+[Meta Instagram API 문서](https://www.postman.com/meta/instagram/folder/1z5vxzu/instagram-api-with-instagram-login).
 
 ## 기술 스택 결정
 
@@ -61,8 +62,8 @@ ChatbotX Community Edition을 [고정 커밋에서 검증](../notes/2026-09-25-c
 현재 코드는 Node.js 24의 타입 제거 실행 기능을 사용해 웹훅 수신 서버와 PostgreSQL 이벤트·outbox 저장, 발송 정책과 워커 모듈을 구현했습니다.
 Facebook Login과 Instagram Login용 발송 어댑터와 별도 워커 명령을 구현했습니다.
 Supabase Auth 기반 사용자 화면과 Instagram OAuth 연결을 구현했으며, Cloudflare 워커의 댓글 비공개 답장 및 응답 후 팔로우 분기를 실계정에서 검증했습니다.
-연락처·태그·필터·필드·자동화 중지·선택 보관 수신 인박스는 구현 및 로컬 검증을 마쳤으나 해당 기능의 운영 적용은 남아 있습니다.
-공유 팀 인박스·수동 답장·시각적 플로·다른 운영 채널·구독 과금·AI는 아직 구현하지 않았습니다.
+연락처·태그·필터·필드·자동화 중지·선택 보관 수신 인박스는 구현 및 로컬 검증을 마쳤고, 운영에서 새 텍스트 DM 두 건과 확인 버튼 postback 한 건을 보관했습니다.
+수신 인박스의 상담 전환·수동 답장 기반은 구현했으나 팀 역할·담당자, 수동 답장 실발송, 시각적 플로·다른 운영 채널·구독 과금·AI는 아직 검증 또는 구현이 남아 있습니다.
 
 | 계층            | 선택                                    | 이유와 도입 조건                                                                                                      |
 | --------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
@@ -106,7 +107,8 @@ flowchart LR
 Facebook Login 어댑터는 Meta 토큰 권한과 Page 연결, 댓글·미디어 정보를 조회하고 허용된 개인 답장을 요청합니다.
 Instagram Login 어댑터는 Instagram 사용자 토큰의 전문 계정 ID와 댓글·미디어 소유를 조회하고 허용된 개인 답장을 요청합니다.
 현재 Instagram Login 경로의 첫 비공개 답장과 팔로우 분기는 [실발송 기록](../notes/2026-09-26-live-follow-test.md)으로 확인했습니다.
-다른 실제 사용자 계정과 Advanced Access·권한 심사, 확인 버튼의 실제 표시는 별도 검증이 필요합니다.
+확인 버튼은 모바일 Instagram 앱의 실제 첫 DM에서 표시됐고 postback이 보관됐습니다.
+Chrome 웹에서는 버튼이 보이지 않았으며 발송을 켠 상태의 버튼 후속 분기, 다른 실제 사용자 계정과 Advanced Access·권한 심사는 별도 검증이 필요합니다.
 이후 워커는 이벤트를 정규화하고 저장된 플로 버전을 실행합니다.
 현재 개인 답장 발송은 정책 검사를 통과해야 합니다.
 외부 API 호출 결과가 불명확하면 `unknown`으로 보관하고 자동 재시도하지 않습니다.
@@ -130,10 +132,8 @@ Instagram Login 어댑터는 Instagram 사용자 토큰의 전문 계정 ID와 �
 ## 채널 정책과 장애 처리
 
 Instagram과 Messenger는 이용자 선대화 및 허용된 답장 범위를 확인합니다.
-WhatsApp은 고객 서비스 창, 마케팅 동의, 승인된 템플릿과 범주별 비용을 확인합니다.
-TikTok은 계정·지역 권한과 답장 창을 확인합니다.
 Telegram·Email·SMS는 각각 구독·수신 거부, 속도 제한과 비용 한도를 확인합니다.
-[Instagram Send API](https://www.postman.com/meta/instagram/folder/uxudqu0/send-api), [Messenger Send API](https://www.postman.com/meta/messenger-platform-api/folder/vilwbh4/send-api), [WhatsApp 가격·서비스 창](https://whatsappbusiness.com/products/platform-pricing/), [TikTok 채널 제한](https://www.chatwoot.com/hc/user-guide/en/categories/other-channels), [Telegram FAQ](https://core.telegram.org/bots/faq).
+[Instagram Send API](https://www.postman.com/meta/instagram/folder/uxudqu0/send-api), [Messenger Send API](https://www.postman.com/meta/messenger-platform-api/folder/vilwbh4/send-api), [Telegram FAQ](https://core.telegram.org/bots/faq).
 
 재시도 가능한 응답에는 지수 백오프와 공급자별 속도 제한을 적용합니다.
 권한 거부, 만료된 답장 창, 수신 거부, 유효하지 않은 템플릿은 재시도하지 않고 운영자에게 원인을 표시합니다.
