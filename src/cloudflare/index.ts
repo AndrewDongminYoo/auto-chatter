@@ -7,6 +7,7 @@ import { parseMessageEvents } from "../instagram/message-events.ts";
 import { ingestMessages, processNextFollowReply, recoverStaleFollowReplies } from "../instagram/follow-flow.ts";
 import { readMetaGraphError } from "../instagram/meta-graph-error.ts";
 import { refreshDueInstagramTokens } from "../app/instagram-token-refresh.ts";
+import { deliveryRecipientOptedOut } from "../instagram/channel-consent.ts";
 export interface Env extends AuthEnv, InstagramOAuthEnv {
   AUTH_IP_LIMIT: { limit(input: { key: string }): Promise<{ success: boolean }> };
   AUTH_EMAIL_LIMIT: { limit(input: { key: string }): Promise<{ success: boolean }> };
@@ -207,7 +208,8 @@ export default {
                 const body = typeof init.body === "string" ? JSON.parse(init.body) : null;
                 if (body?.recipient?.comment_id) {
                   const rule = await pool.query(
-                    `SELECT NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
+                    `SELECT reply.workspace_id::text,reply.sender_id,reply.recipient_id,
+                      NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
                       AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused)) AS automation_active
                      FROM private_reply_outbox reply JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
                     WHERE reply.connection_id=$1 AND reply.comment_id=$2 AND rule.enabled AND reply.status='sending'`,
@@ -216,6 +218,20 @@ export default {
                   if (rule.rows[0]?.automation_active === false)
                     throw new PreSendVerificationError("retry", "contact_paused");
                   if (!rule.rowCount) throw new PreSendVerificationError("block", "inactive_rule");
+                  const reply = rule.rows[0];
+                  try {
+                    if (
+                      await deliveryRecipientOptedOut(pool, {
+                        workspaceId: reply.workspace_id,
+                        connectionId,
+                        senderId: reply.sender_id,
+                      })
+                    )
+                      throw new PreSendVerificationError("block", "recipient_opted_out");
+                  } catch (error) {
+                    if (error instanceof PreSendVerificationError) throw error;
+                    throw new PreSendVerificationError("retry", "consent_unavailable");
+                  }
                 }
               }
               const response = await rawGraphFetch(input, init);
@@ -272,7 +288,8 @@ export default {
                   fetchImpl: graphFetch,
                   beforeSend: async (context) => {
                     const permitted = await pool.query(
-                      `SELECT NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
+                      `SELECT reply.workspace_id::text,reply.sender_id,flow.recipient_id,
+                        NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
                   AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused)) AS automation_active
                 FROM instagram_follow_conversations flow
                 JOIN private_reply_outbox reply ON reply.id=flow.reply_id JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
@@ -288,6 +305,20 @@ export default {
                       throw (await tokenRotated(pool, connectionId, connection.access_token_encrypted))
                         ? new PreSendVerificationError("retry", "token_rotated")
                         : new PreSendVerificationError("block", "delivery_not_permitted");
+                    const reply = permitted.rows[0];
+                    try {
+                      if (
+                        await deliveryRecipientOptedOut(pool, {
+                          workspaceId: reply.workspace_id,
+                          connectionId,
+                          senderId: reply.sender_id,
+                        })
+                      )
+                        throw new PreSendVerificationError("block", "recipient_opted_out");
+                    } catch (error) {
+                      if (error instanceof PreSendVerificationError) throw error;
+                      throw new PreSendVerificationError("retry", "consent_unavailable");
+                    }
                   },
                 }),
               ))

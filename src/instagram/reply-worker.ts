@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { Pool } from "pg";
 import { processNextFollowReply, recoverStaleFollowReplies } from "./follow-flow.ts";
 import type { FollowTransport } from "./follow-transport.ts";
+import { deliveryRecipientOptedOut } from "./channel-consent.ts";
 import { evaluatePrivateReply } from "./reply-policy.ts";
 
 export interface PrivateReplyRequest {
@@ -91,6 +92,14 @@ async function updateClaim(pool: Pool, sql: string, parameters: readonly unknown
   if (result.rowCount !== 1) throw new Error("Private reply claim was lost");
 }
 
+async function privateReplyRecipientOptedOut(pool: Pool, row: ClaimedRow): Promise<boolean> {
+  return deliveryRecipientOptedOut(pool, {
+    workspaceId: row.workspace_id,
+    connectionId: row.connection_id,
+    senderId: row.sender_id,
+  });
+}
+
 export async function processNextPrivateReply(
   pool: Pool,
   transport: PrivateReplyTransport,
@@ -125,6 +134,27 @@ export async function processNextPrivateReply(
   );
   const row = claimed.rows[0];
   if (!row) return false;
+  const stopForConsent = async (): Promise<boolean> => {
+    let optedOut: boolean;
+    try {
+      optedOut = await privateReplyRecipientOptedOut(pool, row);
+    } catch {
+      await updateClaim(
+        pool,
+        "UPDATE private_reply_outbox SET status='pending',attempt_id=NULL,attempt_started_at=NULL,next_attempt_at=now()+interval '1 minute',failure_code='consent_unavailable' WHERE id=$1 AND status='sending' AND attempt_id=$2",
+        [row.id, attemptId],
+      );
+      return true;
+    }
+    if (!optedOut) return false;
+    await updateClaim(
+      pool,
+      "UPDATE private_reply_outbox SET status='blocked',failure_code='recipient_opted_out' WHERE id=$1 AND status='sending' AND attempt_id=$2",
+      [row.id, attemptId],
+    );
+    return true;
+  };
+  if (await stopForConsent()) return true;
   if (row.follow_config && transport.supportsFollowReplies === false) {
     await updateClaim(
       pool,
@@ -199,6 +229,8 @@ export async function processNextPrivateReply(
     );
     return true;
   }
+
+  if (await stopForConsent()) return true;
 
   const contactDeferred = await pool.query(
     `UPDATE private_reply_outbox reply SET status='pending',attempt_id=NULL,attempt_started_at=NULL,

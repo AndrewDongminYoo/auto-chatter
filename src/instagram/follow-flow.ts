@@ -3,6 +3,7 @@ import type { Pool } from "pg";
 import type { InstagramMessage } from "./message-events.ts";
 import type { FollowTransport } from "./follow-transport.ts";
 import { storeInboxMessage } from "./inbox.ts";
+import { deliveryRecipientOptedOut } from "./channel-consent.ts";
 import { PreSendVerificationError, ProviderRateLimitedError, ProviderRejectedError } from "./reply-worker.ts";
 
 const normalized = (text: string) => text.normalize("NFC").trim().toLowerCase();
@@ -91,6 +92,19 @@ export async function processNextFollowReply(
   );
   const row = claimed.rows[0];
   if (!row) return false;
+  const replyScope = (
+    await pool.query("SELECT workspace_id::text,sender_id FROM private_reply_outbox WHERE id=$1 AND connection_id=$2", [
+      row.reply_id,
+      connectionId,
+    ])
+  ).rows[0];
+  if (!replyScope) throw new Error("Claimed follow reply has no private reply");
+  const optedOut = () =>
+    deliveryRecipientOptedOut(pool, {
+      workspaceId: replyScope.workspace_id,
+      connectionId,
+      senderId: replyScope.sender_id,
+    });
   const update = async (
     status: string,
     code: string | null,
@@ -109,6 +123,11 @@ export async function processNextFollowReply(
   const permitted = async () => {
     if (!(row.confirmed_at instanceof Date) || now().getTime() - row.confirmed_at.getTime() >= 24 * 3600000)
       return "denied";
+    try {
+      if (await optedOut()) return "opted_out";
+    } catch {
+      return "consent_unavailable";
+    }
     const result = await pool.query(
       `SELECT NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
      AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused)) AS automation_active
@@ -129,9 +148,15 @@ export async function processNextFollowReply(
     const permission = await permitted();
     if (permission === "allowed") return true;
     await update(
-      permission === "paused" ? "pending" : "blocked",
-      permission === "paused" ? "contact_paused" : "delivery_not_permitted",
-      permission === "paused" ? 60 : 0,
+      permission === "paused" || permission === "consent_unavailable" ? "pending" : "blocked",
+      permission === "paused"
+        ? "contact_paused"
+        : permission === "consent_unavailable"
+          ? "consent_unavailable"
+          : permission === "opted_out"
+            ? "recipient_opted_out"
+            : "delivery_not_permitted",
+      permission === "paused" || permission === "consent_unavailable" ? 60 : 0,
     );
     return false;
   };

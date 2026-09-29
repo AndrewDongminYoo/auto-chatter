@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import { InstagramFollowTransport } from "./follow-transport.ts";
 import { PreSendVerificationError, type PrivateReplyRequest } from "./reply-worker.ts";
+import { deliveryRecipientOptedOut } from "./channel-consent.ts";
 
 // Environment credentials belong to one explicitly configured, non-OAuth connection.
 export function createNodeFollowTransport(
@@ -18,7 +19,8 @@ export function createNodeFollowTransport(
     beforeSend: async (context) => {
       const permitted = await pool
         .query(
-          `SELECT NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
+          `SELECT reply.workspace_id::text,reply.sender_id,flow.recipient_id,
+             NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
            AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused)) AS automation_active
          FROM instagram_follow_conversations flow
          JOIN private_reply_outbox reply ON reply.id=flow.reply_id
@@ -36,6 +38,20 @@ export function createNodeFollowTransport(
         });
       if (permitted.rows[0]?.automation_active === false) throw new PreSendVerificationError("retry", "contact_paused");
       if (!permitted.rowCount) throw new PreSendVerificationError("block", "delivery_not_permitted");
+      const row = permitted.rows[0];
+      try {
+        if (
+          await deliveryRecipientOptedOut(pool, {
+            workspaceId: row.workspace_id,
+            connectionId: config.connectionId,
+            senderId: row.sender_id,
+          })
+        )
+          throw new PreSendVerificationError("block", "recipient_opted_out");
+      } catch (error) {
+        if (error instanceof PreSendVerificationError) throw error;
+        throw new PreSendVerificationError("retry", "consent_unavailable");
+      }
     },
   });
 }
@@ -47,7 +63,8 @@ export async function assertNodePrivateReplyAllowed(
 ): Promise<void> {
   const permitted = await pool
     .query(
-      `SELECT NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
+      `SELECT reply.workspace_id::text,reply.sender_id,reply.recipient_id,
+         NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
        AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused)) AS automation_active
      FROM private_reply_outbox reply
      JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
@@ -63,4 +80,18 @@ export async function assertNodePrivateReplyAllowed(
     });
   if (permitted.rows[0]?.automation_active === false) throw new PreSendVerificationError("retry", "contact_paused");
   if (!permitted.rowCount) throw new PreSendVerificationError("block", "delivery_not_permitted");
+  const row = permitted.rows[0];
+  try {
+    if (
+      await deliveryRecipientOptedOut(pool, {
+        workspaceId: row.workspace_id,
+        connectionId: config.connectionId,
+        senderId: row.sender_id,
+      })
+    )
+      throw new PreSendVerificationError("block", "recipient_opted_out");
+  } catch (error) {
+    if (error instanceof PreSendVerificationError) throw error;
+    throw new PreSendVerificationError("retry", "consent_unavailable");
+  }
 }
