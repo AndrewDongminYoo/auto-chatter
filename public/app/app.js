@@ -217,6 +217,10 @@ const errors = {
   remote_logout_unconfirmed:
     "브라우저에서 로그아웃했습니다. 서버 세션 종료를 확인하지 못했으니 다시 로그인해 로그아웃하거나 운영자에게 문의해 주세요.",
   instagram_not_configured: "Instagram 연결 서비스를 준비 중입니다.",
+  instagram_public_access_restricted:
+    "일반 사용자의 Instagram 연결에 필요한 Meta 승인을 확인하지 못해 계정 연결을 제한합니다. 검수에 참여하는 계정만 연결할 수 있습니다.",
+  instagram_authorization_denied: "Instagram 연결이 완료되지 않았습니다. 권한 동의를 취소했거나 요청이 거부됐습니다.",
+  instagram_permissions_required: "필수 Instagram 권한을 받지 못했습니다. 계정과 앱 권한을 확인해 주세요.",
   health_rate_limited: "상태 확인 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
   health_unavailable: "지금은 Meta 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.",
   invalid_credentials: "이메일과 8자 이상의 비밀번호를 입력해 주세요.",
@@ -327,14 +331,22 @@ async function loadWorkspace() {
   byId("auth").hidden = true;
   byId("workspace").hidden = false;
   byId("logout").hidden = false;
+  const connectAvailable = me.instagram_connect_available === true;
   byId("delivery-status").textContent = me.global_send_enabled
     ? "계정별로 발송을 켜고 규칙을 활성화하면 자동화를 시작합니다."
-    : "계정 연결과 규칙 저장은 가능합니다. 전체 발송이 재개되기 전에는 메시지가 전송되지 않습니다.";
+    : connectAvailable
+      ? "계정 연결과 규칙 저장은 가능합니다. 전체 발송이 재개되기 전에는 메시지가 전송되지 않습니다."
+      : "전체 발송이 재개되기 전에는 메시지가 전송되지 않습니다. 새 Instagram 연결은 현재 제한됩니다.";
+  byId("connect").disabled = !connectAvailable;
+  byId("connect-help").hidden = connectAvailable;
+  byId("connect-help").textContent = connectAvailable ? "" : errors.instagram_public_access_restricted;
   byId("connections").replaceChildren();
   form.elements.connection_id.replaceChildren();
   if (!connections.length)
     byId("connections").append(
-      emptyState("첫 Instagram 계정을 연결하세요", "관리하는 전문 계정을 연결하면 댓글 자동화를 만들 수 있습니다."),
+      connectAvailable
+        ? emptyState("첫 Instagram 계정을 연결하세요", "관리하는 전문 계정을 연결하면 댓글 자동화를 만들 수 있습니다.")
+        : emptyState("새 Instagram 계정을 연결할 수 없습니다", "위의 연결 제한 사유를 확인해 주세요."),
     );
   for (const account of connections) {
     const item = node("div", "");
@@ -907,6 +919,11 @@ form.addEventListener("submit", (event) => {
   });
 });
 async function start() {
+  const instagramResult = new URLSearchParams(location.search).get("instagram");
+  if (instagramResult === "instagram_authorization_denied" || instagramResult === "instagram_permissions_required") {
+    authLinkNotice = errors[instagramResult];
+    history.replaceState(null, "", location.pathname + location.hash);
+  }
   const fragment = new URLSearchParams(location.hash.slice(1));
   if (fragment.has("access_token") || fragment.has("error") || fragment.has("type")) {
     history.replaceState(null, "", location.pathname + location.search);
@@ -937,7 +954,13 @@ async function start() {
     byId("auth").hidden = false;
   } finally {
     byId("startup").hidden = true;
-    if (authLinkNotice) notice(authLinkNotice, authLinkNotice.startsWith("인증 또는 변경 링크"));
+    if (authLinkNotice)
+      notice(
+        authLinkNotice,
+        authLinkNotice.startsWith("인증 또는 변경 링크") ||
+          instagramResult === "instagram_authorization_denied" ||
+          instagramResult === "instagram_permissions_required",
+      );
   }
 }
 byId("retry-load").addEventListener("click", (event) => action(event.currentTarget, start));

@@ -11,6 +11,7 @@
   "assets": { "directory": "./public" },
   "vars": {
     "SEND_ENABLED": "false",
+    "INSTAGRAM_PUBLIC_CONNECT_ENABLED": "false",
     "APP_ORIGIN": "https://auto-chat.donminzzi.kr",
     "SUPABASE_URL": "https://asjjftrioaxzspkbtebf.supabase.co",
     "INSTAGRAM_OAUTH_APP_ID": "1822350878757042",

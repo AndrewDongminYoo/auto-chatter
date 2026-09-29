@@ -145,6 +145,9 @@ ALTER ROLE auto_chatter_server LOGIN;
 전체 DB 덤프는 로컬 Docker가 실행 중이지 않아 생성하지 못했습니다.
 PR #72 병합 커밋 `f4511c0bd9375dc2237945db1280016444b3da12`은 Worker 버전 `9b1df9ee-39c1-401a-ac77-0b90ca4860c2`로 배포했습니다.
 배포 확인에서 전역 `SEND_ENABLED=false`, 활성 규칙 0개, 공개 페이지 200, 로그인하지 않은 `/api/me` 401, `/app/app.js`의 로컬 파일과 원격 파일의 SHA-256 일치를 확인했습니다.
+PR #73 병합 커밋 `6c7f91421d817acc06ab50fb7ac1f52a7b5d00aa`은 2026-09-29에 Worker 버전 `9c424163-508b-460e-9b36-fb8f167deb71`로 배포하고 100% 활성 상태를 조회했습니다.
+이 배포에는 DB 마이그레이션이 없으며 `SEND_ENABLED=false`입니다.
+`/service`, `/privacy`, `/data-deletion`, `/app/`는 200, 로그인하지 않은 `/api/me`와 임의 연결 상태 조회는 401을 반환했고 `/app/app.js`의 운영 응답과 로컬 파일 SHA-256이 일치했습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
@@ -183,18 +186,31 @@ corepack pnpm exec wrangler secret put INSTAGRAM_OAUTH_APP_SECRET --env-file /de
 corepack pnpm exec wrangler secret put TOKEN_ENCRYPTION_KEY --env-file /dev/null
 ```
 
-| 이름                         | 위치                     | 용도                                                    |
-| ---------------------------- | ------------------------ | ------------------------------------------------------- |
-| `APP_ORIGIN`                 | `wrangler.json`의 `vars` | 경로·끝 슬래시 없는 정확한 HTTPS 서비스 origin          |
-| `SUPABASE_URL`               | `wrangler.json`의 `vars` | Supabase 프로젝트 URL                                   |
-| `INSTAGRAM_OAUTH_APP_ID`     | `wrangler.json`의 `vars` | Instagram 비즈니스 로그인 앱 ID, 메인 Meta 앱 ID와 구별 |
-| `META_GRAPH_VERSION`         | `wrangler.json`의 `vars` | 실제 앱에서 사용할 Graph 버전                           |
-| `SEND_ENABLED`               | `wrangler.json`의 `vars` | 전역 발송 스위치, 최초 배포는 문자열 `false`            |
-| `SUPABASE_PUBLISHABLE_KEY`   | Worker secret            | Supabase Auth 호출용 공개 키                            |
-| `INSTAGRAM_OAUTH_APP_SECRET` | Worker secret            | Instagram OAuth 앱 secret                               |
-| `TOKEN_ENCRYPTION_KEY`       | Worker secret            | 32바이트 무작위 키의 canonical base64                   |
-| `INSTAGRAM_APP_SECRET`       | Worker secret            | 웹훅 서명 검증                                          |
-| `INSTAGRAM_VERIFY_TOKEN`     | Worker secret            | 웹훅 URL 구독 확인                                      |
+검수용 이메일의 Meta 앱 역할을 확인했다면 #14 연결 제한 코드 배포 전에 다음 secret을 등록합니다.
+
+```bash
+corepack pnpm exec wrangler secret put INSTAGRAM_INTERNAL_EMAILS --env-file /dev/null
+```
+
+| 이름                               | 위치                     | 용도                                                                       |
+| ---------------------------------- | ------------------------ | -------------------------------------------------------------------------- |
+| `APP_ORIGIN`                       | `wrangler.json`의 `vars` | 경로·끝 슬래시 없는 정확한 HTTPS 서비스 origin                             |
+| `SUPABASE_URL`                     | `wrangler.json`의 `vars` | Supabase 프로젝트 URL                                                      |
+| `INSTAGRAM_OAUTH_APP_ID`           | `wrangler.json`의 `vars` | Instagram 비즈니스 로그인 앱 ID, 메인 Meta 앱 ID와 구별                    |
+| `META_GRAPH_VERSION`               | `wrangler.json`의 `vars` | 실제 앱에서 사용할 Graph 버전                                              |
+| `SEND_ENABLED`                     | `wrangler.json`의 `vars` | 전역 발송 스위치, 최초 배포는 문자열 `false`                               |
+| `INSTAGRAM_PUBLIC_CONNECT_ENABLED` | `wrangler.json`의 `vars` | 일반 사용자 OAuth 연결 허용 스위치, 승인·실계정 검증 전에는 문자열 `false` |
+| `SUPABASE_PUBLISHABLE_KEY`         | Worker secret            | Supabase Auth 호출용 공개 키                                               |
+| `INSTAGRAM_OAUTH_APP_SECRET`       | Worker secret            | Instagram OAuth 앱 secret                                                  |
+| `INSTAGRAM_INTERNAL_EMAILS`        | Worker secret            | 검수용으로 허용할 확인된 이메일의 쉼표 구분 목록                           |
+| `TOKEN_ENCRYPTION_KEY`             | Worker secret            | 32바이트 무작위 키의 canonical base64                                      |
+| `INSTAGRAM_APP_SECRET`             | Worker secret            | 웹훅 서명 검증                                                             |
+| `INSTAGRAM_VERIFY_TOKEN`           | Worker secret            | 웹훅 URL 구독 확인                                                         |
+
+`INSTAGRAM_INTERNAL_EMAILS`는 #14 일반 사용자 연결 제한 코드를 운영에 배포하기 전에 검수용 사용자 이메일만 쉼표로 구분해 등록합니다.
+등록한 이메일의 Meta 앱 역할은 별도로 확인해야 합니다.
+이 비밀값이 없으면 `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`에서 모든 새 OAuth 연결이 제한됩니다.
+일반 사용자 공개 스위치는 [연결 공개 조건](../specs/2026-09-29-instagram-public-access.md)의 실계정·승인 확인 전에는 바꾸지 않습니다.
 
 `TOKEN_ENCRYPTION_KEY`는 `openssl rand -base64 32`로 생성하고 안전하게 백업합니다.
 키를 잃거나 교체하면 기존 계정 토큰을 복호화할 수 없어 재연결 또는 별도 키 이전이 필요합니다.

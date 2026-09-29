@@ -137,8 +137,9 @@
             <div>
               <h2 id="accounts-title">Instagram 계정 <span id="account-count" class="count">0</span></h2>
             </div>
-            <button id="connect" data-loading-label="연결 준비 중…">계정 연결</button>
+            <button id="connect" data-loading-label="연결 준비 중…" aria-describedby="connect-help">계정 연결</button>
           </div>
+          <p id="connect-help" class="hint" role="status" hidden></p>
           <div id="connections" class="account-list"></div>
         </section>
         <section id="automation-section" aria-labelledby="automation-title">
