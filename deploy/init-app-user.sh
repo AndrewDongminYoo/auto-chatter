@@ -10,6 +10,7 @@ GRANT USAGE ON SCHEMA public TO automations_app;
 GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO automations_app;
 REVOKE UPDATE ON instagram_manual_reply_events FROM automations_app;
 REVOKE UPDATE ON instagram_inbox_handoff_events FROM automations_app;
+REVOKE UPDATE ON channel_consent_events FROM automations_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO automations_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE ON TABLES TO automations_app;

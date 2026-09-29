@@ -13,7 +13,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
   const client = await pool.connect();
   try {
     await client.query(
-      "DROP TABLE IF EXISTS instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await client.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await client.query(
@@ -35,6 +35,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("UPDATE instagram_manual_reply_events SET kind=kind"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_manual_reply_events"), { code: "42501" });
     await assert.rejects(client.query("UPDATE instagram_inbox_handoff_events SET active=active"), { code: "42501" });
+    await assert.rejects(client.query("UPDATE channel_consent_events SET decision=decision"), { code: "42501" });
     await client.query("RESET ROLE");
     await client.query("GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role");
     await client.query("GRANT CREATE ON SCHEMA public TO PUBLIC");
@@ -42,6 +43,8 @@ test("Supabase roles cannot read product data; the server role has DML without D
     for (const role of ["anon", "authenticated", "service_role"]) {
       await client.query(`SET ROLE ${role}`);
       for (const table of [
+        "channel_consent_state",
+        "channel_consent_events",
         "workspaces",
         "instagram_manual_replies",
         "instagram_manual_reply_events",
@@ -69,12 +72,51 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await client.query(
       "INSERT INTO workspace_members VALUES ('33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111')",
     );
+    await client.query(
+      "INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES('44444444-4444-4444-8444-444444444444','11111111-1111-4111-8111-111111111111','access-account')",
+    );
+    const consentEventId = (
+      await client.query(
+        `INSERT INTO channel_consent_events(request_key,workspace_id,connection_id,channel,identity_kind,identity_value,purpose,decision,evidence_kind,evidence_reference,occurred_at,actor_id)
+         VALUES('55555555-5555-4555-8555-555555555555','11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','instagram','comment_sender','access-recipient','marketing','grant','explicit','access:test',now(),'33333333-3333-4333-8333-333333333333') RETURNING id`,
+      )
+    ).rows[0].id;
+    await client.query(
+      `INSERT INTO channel_consent_state(workspace_id,connection_id,channel,identity_kind,identity_value,purpose,decision,evidence_kind,occurred_at,recorded_at,last_event_id)
+       SELECT workspace_id,connection_id,channel,identity_kind,identity_value,purpose,decision,evidence_kind,occurred_at,recorded_at,id
+       FROM channel_consent_events WHERE id=$1`,
+      [consentEventId],
+    );
+    await assert.rejects(client.query("UPDATE channel_consent_state SET decision='revoke'"), { code: "23514" });
+    const revokeEventId = (
+      await client.query(
+        `INSERT INTO channel_consent_events(request_key,workspace_id,connection_id,channel,identity_kind,identity_value,purpose,decision,evidence_kind,evidence_reference,occurred_at,actor_id)
+         VALUES('55555555-5555-4555-8555-555555555556','11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','instagram','comment_sender','access-recipient','marketing','revoke','explicit','access:revoke',now(),'33333333-3333-4333-8333-333333333333') RETURNING id`,
+      )
+    ).rows[0].id;
+    assert.equal(
+      (
+        await client.query(
+          `UPDATE channel_consent_state state SET
+             decision=event.decision,evidence_kind=event.evidence_kind,occurred_at=event.occurred_at,
+             recorded_at=event.recorded_at,last_event_id=event.id
+           FROM channel_consent_events event
+           WHERE event.id=$1 AND state.identity_value='access-recipient'`,
+          [revokeEventId],
+        )
+      ).rowCount,
+      1,
+    );
+    assert.equal((await client.query("SELECT count(*) FROM channel_consent_state")).rows[0].count, "1");
     assert.equal((await client.query("SELECT count(*) FROM workspaces")).rows[0].count, "1");
     await assert.rejects(client.query("DELETE FROM workspaces"), { code: "42501" });
     await assert.rejects(client.query("UPDATE instagram_manual_reply_events SET kind=kind"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_manual_reply_events"), { code: "42501" });
     await assert.rejects(client.query("UPDATE instagram_inbox_handoff_events SET active=active"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_handoff_events"), { code: "42501" });
+    await assert.rejects(client.query("UPDATE channel_consent_events SET decision=decision"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM channel_consent_events"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM channel_consent_state"), { code: "42501" });
     await assert.rejects(client.query("CREATE TABLE public.forbidden(id int)"), { code: "42501" });
     await client.query("RESET ROLE");
     await client.query("SET ROLE automations_app");
@@ -90,13 +132,53 @@ test("Supabase roles cannot read product data; the server role has DML without D
     assert.equal((await client.query("SELECT count(*) FROM workspaces")).rows[0].count, "1");
     await client.query("INSERT INTO workspaces VALUES ('22222222-2222-4222-8222-222222222222')");
     await client.query("UPDATE workspaces SET id=id");
+    const composeConsentEventId = (
+      await client.query(
+        `INSERT INTO channel_consent_events(request_key,workspace_id,connection_id,channel,identity_kind,identity_value,purpose,decision,evidence_kind,evidence_reference,occurred_at,actor_id)
+         VALUES('66666666-6666-4666-8666-666666666666','11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','instagram','dm_recipient','compose-recipient','service_reply','revoke','explicit','compose:test',now(),'33333333-3333-4333-8333-333333333333') RETURNING id`,
+      )
+    ).rows[0].id;
+    await client.query(
+      `INSERT INTO channel_consent_state(workspace_id,connection_id,channel,identity_kind,identity_value,purpose,decision,evidence_kind,occurred_at,recorded_at,last_event_id)
+       SELECT workspace_id,connection_id,channel,identity_kind,identity_value,purpose,decision,evidence_kind,occurred_at,recorded_at,id
+       FROM channel_consent_events WHERE id=$1`,
+      [composeConsentEventId],
+    );
+    await assert.rejects(
+      client.query("UPDATE channel_consent_state SET decision='grant' WHERE identity_value='compose-recipient'"),
+      { code: "23514" },
+    );
+    const composeGrantEventId = (
+      await client.query(
+        `INSERT INTO channel_consent_events(request_key,workspace_id,connection_id,channel,identity_kind,identity_value,purpose,decision,evidence_kind,evidence_reference,occurred_at,actor_id)
+         VALUES('66666666-6666-4666-8666-666666666667','11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','instagram','dm_recipient','compose-recipient','service_reply','grant','explicit','compose:grant',now(),'33333333-3333-4333-8333-333333333333') RETURNING id`,
+      )
+    ).rows[0].id;
+    assert.equal(
+      (
+        await client.query(
+          `UPDATE channel_consent_state state SET
+             decision=event.decision,evidence_kind=event.evidence_kind,occurred_at=event.occurred_at,
+             recorded_at=event.recorded_at,last_event_id=event.id
+           FROM channel_consent_events event
+           WHERE event.id=$1 AND state.identity_value='compose-recipient'`,
+          [composeGrantEventId],
+        )
+      ).rowCount,
+      1,
+    );
     await assert.rejects(client.query("DELETE FROM workspaces"), { code: "42501" });
     await assert.rejects(client.query("UPDATE instagram_manual_reply_events SET kind=kind"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_manual_reply_events"), { code: "42501" });
     await assert.rejects(client.query("UPDATE instagram_inbox_handoff_events SET active=active"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_handoff_events"), { code: "42501" });
+    await assert.rejects(client.query("UPDATE channel_consent_events SET decision=decision"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM channel_consent_events"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM channel_consent_state"), { code: "42501" });
     await assert.rejects(client.query("CREATE TABLE public.forbidden_compose(id int)"), { code: "42501" });
     for (const table of [
+      "channel_consent_state",
+      "channel_consent_events",
       "instagram_manual_replies",
       "instagram_manual_reply_events",
       "instagram_inbox_handoffs",
@@ -113,9 +195,9 @@ test("Supabase roles cannot read product data; the server role has DML without D
       await client.query(`SELECT * FROM ${table}`);
     await client.query("RESET ROLE");
     const protectedTables = await client.query(
-      "SELECT relname FROM pg_class WHERE relnamespace='public'::regnamespace AND relrowsecurity AND relname IN ('instagram_manual_replies','instagram_manual_reply_events','instagram_inbox_handoffs','instagram_inbox_handoff_events','instagram_inbox_messages','instagram_contact_automation','instagram_contact_fields','instagram_contact_field_values','workspaces','workspace_members','instagram_oauth_states','instagram_follow_conversations','instagram_message_receipts','instagram_connections','instagram_comment_rules','instagram_comment_events','private_reply_outbox')",
+      "SELECT relname FROM pg_class WHERE relnamespace='public'::regnamespace AND relrowsecurity AND relname IN ('channel_consent_state','channel_consent_events','instagram_manual_replies','instagram_manual_reply_events','instagram_inbox_handoffs','instagram_inbox_handoff_events','instagram_inbox_messages','instagram_contact_automation','instagram_contact_fields','instagram_contact_field_values','workspaces','workspace_members','instagram_oauth_states','instagram_follow_conversations','instagram_message_receipts','instagram_connections','instagram_comment_rules','instagram_comment_events','private_reply_outbox')",
     );
-    assert.equal(protectedTables.rowCount, 17);
+    assert.equal(protectedTables.rowCount, 19);
     // Exercise RLS independently of table grants: an accidental future grant must not expose rows.
     await client.query("GRANT SELECT ON workspaces TO anon");
     await client.query("SET ROLE anon");
