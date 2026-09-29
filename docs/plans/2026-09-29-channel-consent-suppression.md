@@ -83,7 +83,7 @@ Critical path: Task 1 -> Task 3
 > Implementation + Test = ONE task.
 > 각 task는 RED를 먼저 관찰하고 해당 구현과 GREEN 검증을 같은 task에서 완료합니다.
 
-- [ ] 1. 채널별 원장과 보수적 판정 계약을 추가합니다.
+- [x] 1. 채널별 원장과 보수적 판정 계약을 추가합니다.
 
   What to do: `src/instagram/channel-consent.test.ts`와 `src/instagram/channel-consent.db.test.ts`의 RED test를 먼저 추가하고 `package.json`의 unit·DB 명시 목록에 등록합니다.
   `src/instagram/channel-consent.ts`, `db/migrations/016_channel_consent.sql`, `db/schema.sql`, `deploy/migrate-multi-user.sql`, `deploy/supabase-access.sql`, `deploy/init-app-user.sh`를 최소 범위로 갱신합니다.
@@ -136,7 +136,7 @@ Critical path: Task 1 -> Task 3
 
   Commit: NO | Message: `feat(consent): add channel consent ledger` | Files: [`src/instagram/channel-consent.ts`, `src/instagram/channel-consent.test.ts`, `src/instagram/channel-consent.db.test.ts`, `db/migrations/016_channel_consent.sql`, `db/schema.sql`, `deploy/migrate-multi-user.sql`, `deploy/supabase-access.sql`, `deploy/init-app-user.sh`, `src/cloudflare/access.db.test.ts`, `package.json`]
 
-- [ ] 2. 인증된 API로 철회와 재동의 근거를 기록합니다.
+- [x] 2. 인증된 API로 철회와 재동의 근거를 기록합니다.
 
   What to do: `src/app/api.test.ts`와 새 `src/app/channel-consent.db.test.ts`에 RED test를 먼저 추가하고 DB script에 등록합니다.
   `src/app/channel-consent.ts`에서 `POST /api/connections/:connectionId/channel-consent-events`를 구현하고 `src/app/api.ts`에 route를 연결합니다.
@@ -183,7 +183,7 @@ Critical path: Task 1 -> Task 3
 
   Commit: NO | Message: `feat(api): record channel consent events` | Files: [`src/app/channel-consent.ts`, `src/app/channel-consent.db.test.ts`, `src/app/api.ts`, `src/app/api.test.ts`, `package.json`]
 
-- [ ] 3. 현재 Instagram 발송 경로의 대기 행과 최종 POST를 수신 거부로 차단합니다.
+- [x] 3. 현재 Instagram 발송 경로의 대기 행과 최종 POST를 수신 거부로 차단합니다.
 
   What to do: `src/instagram/reply-worker.db.test.ts`, `src/instagram/follow-flow.db.test.ts`, `src/cloudflare/worker.db.test.ts`에 각 경로의 RED race test를 먼저 추가합니다.
   첫 private reply는 outbox의 `sender_id` service-reply state를 검사하고, follow reply는 linked outbox `sender_id`와 known `recipient_id` 중 하나라도 revoked이면 차단합니다.
@@ -244,22 +244,21 @@ Critical path: Task 1 -> Task 3
 
 > 이 변경은 core delivery와 DB/RLS를 함께 건드리므로 independent review와 adversarial race cross-check가 필요합니다.
 
-- [ ] `corepack pnpm check-types`를 실행해 TypeScript error 0을 확인합니다.
-- [ ] `corepack pnpm test`를 실행해 새 named policy/API tests가 포함되고 failure 0인지 확인합니다.
-- [ ] `TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:55433/automations_test corepack pnpm test:db`를 실행해 새 ledger/API/Node guard tests가 포함되고 failure 0인지 확인합니다.
-- [ ] `TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:55433/automations_test corepack pnpm test:cloudflare`를 실행해 workerd/Hyperdrive/Queue와 access tests가 failure 0인지 확인합니다.
-- [ ] 새 opt-out race fixture에서 revoke insert를 제거해 named test가 provider POST count assertion으로 실패하는지 확인한 뒤 fixture를 복구하고 GREEN을 다시 확인합니다.
-- [ ] `trunk check --ci`를 실행해 formatter, markdown, security, secret scan 결과를 확인합니다.
-- [ ] reviewer는 event/state atomicity, 서버 기록 순서와 클라이언트 발생 시각의 분리, idempotency conflict, exact identity/channel/purpose matching, append-only privilege, claim 이후 race, terminal no-replay를 구조화된 한 번의 pass로 검사합니다.
-- [ ] adversarial cross-check는 revocation commit을 provider lookup 전, lookup 후, final guard 후 세 지점에 배치하고 final guard 후 이미 시작된 POST만 회수 불가라는 기존 한계를 정확히 남겼는지 확인합니다.
-- [ ] `git -C /Users/dongminyu/Development/01_personal/auto-chatter status --short`와 `git -C /Users/dongminyu/Development/01_personal/auto-chatter diff --check`로 authorized file 외 변경과 whitespace error가 없음을 확인합니다.
-- [ ] migration, schema, runner, access array, test cleanup/TRUNCATE 목록이 모두 새 두 table을 포함하고 `SEND_ENABLED`, `send_enabled`, rule `enabled` 값이나 deployment artifact가 변경되지 않았는지 diff를 확인합니다.
+- [x] `corepack pnpm check-types`를 실행해 TypeScript error 0을 확인합니다.
+- [x] `corepack pnpm test`를 실행해 새 named policy/API tests가 포함되고 failure 0인지 확인합니다.
+- [x] `TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:55433/automations_test corepack pnpm test:db`를 실행해 새 ledger/API/Node guard tests가 포함되고 failure 0인지 확인합니다.
+- [x] `TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:55433/automations_test corepack pnpm test:cloudflare`를 실행해 workerd/Hyperdrive/Queue와 access tests가 failure 0인지 확인합니다.
+- [x] 단일 DB 읽기 검사에서 철회 기록을 제거했을 때 `false !== true`로 실패하고, 복구 후 다시 통과하는지 확인합니다.
+- [x] `trunk check --ci`를 실행해 formatter, markdown, security, secret scan 결과를 확인합니다.
+- [x] reviewer가 event/state atomicity, 서버 기록 순서와 클라이언트 발생 시각의 분리, idempotency conflict, exact identity/channel/purpose matching, append-only privilege, claim 이후 race, terminal no-replay를 검사합니다.
+- [x] 적대적 검토에서 발견한 비명시적 재동의, 확인된 수신자 연결 누락, 동의 DB 오류 분류와 두 SQL 읽기 사이의 경쟁 조건을 수정하고 재검토합니다.
+- [x] `git status --short`와 `git diff --check`로 허가된 범위 밖의 변경과 공백 오류가 없는지 확인합니다.
+- [x] migration, schema, runner, access 정책과 DB 테스트 초기화 목록을 확인하고 발송 스위치 및 배포 설정이 변경되지 않았는지 검사합니다.
 
 ## Commit strategy
 
-- 이 계획 요청은 commit을 승인하지 않았으므로 구현 executor는 stage하거나 commit하지 않습니다.
-- 추후 commit 권한이 주어지면 Task 1, Task 2, Task 3을 각각 독립적인 conventional commit으로 분리하고 migration/schema/access 변경은 Task 1 commit에 함께 둡니다.
-- 계획 단계에서는 stage하거나 commit하지 않습니다.
+- 원장, API, 재동의 검증, 발송 가드와 문서는 각각 의미에 맞는 conventional commit으로 분리합니다.
+- GitHub push, 운영 migration, 배포와 실제 메시지 발송은 이 로컬 구현 결과에 포함하지 않습니다.
 
 ## Success criteria
 

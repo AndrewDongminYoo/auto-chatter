@@ -176,6 +176,19 @@ The deployment job verifies signed-event persistence, replay protection, restric
 What has and has not been proven against real Meta accounts is tracked in README.md and `docs/notes/2026-09-25-meta-permissions-and-worker.md`.
 Type checks and mocked Graph tests do not prove live permissions or a live private-reply send; do not describe them as if they did.
 
+## Channel consent and opt-out
+
+Migration 016 creates append-only `channel_consent_events` and exact-scope `channel_consent_state` for Instagram.
+The authenticated same-origin `POST /api/connections/:connectionId/channel-consent-events` records evidence for a workspace-owned connection; repeated UUID/payload pairs replay, while changed payloads conflict.
+`service_reply` grants require explicit evidence, `all` events can only revoke, and marketing without an exact explicit grant is denied.
+Client `occurred_at` is evidence, not state ordering; the connection lock serializes event writes and the projection is updated in the same transaction.
+Private, follow and manual delivery check active service revokes after claim and immediately before the provider POST.
+The comment sender and every DM recipient supported by a provider-acknowledged, same-sender prior reply are checked in one DB statement; unacknowledged or mismatched bridges are ignored.
+An opt-out is terminal and never replays an old row after re-consent; a consent read error is deferred before sending.
+The final DB check cannot recall a provider request that begins before a later revoke.
+See `docs/specs/2026-09-29-channel-consent.md` for the contract.
+The code and isolated tests are local only; production migration 016, Worker deployment and live Meta behavior have not been verified.
+
 ## Instagram contacts
 
 `GET /api/contacts` derives account-scoped contacts from stored comment events and returns metadata without comment text or credentials.
