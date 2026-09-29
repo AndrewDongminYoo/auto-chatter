@@ -6,6 +6,7 @@ import { ingestComments } from "./store.ts";
 import { ingestMessages, processNextFollowReply } from "./follow-flow.ts";
 import { createNodeFollowTransport, assertNodePrivateReplyAllowed } from "./node-delivery.ts";
 import { ProviderRateLimitedError, runPrivateReplyWorker, processNextPrivateReply } from "./reply-worker.ts";
+import { recordChannelConsentEvent } from "./channel-consent.ts";
 const url = new URL(process.env.TEST_DATABASE_URL ?? "http://invalid");
 if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
   throw new Error("Database tests require a local automations_test database");
@@ -61,6 +62,27 @@ const incoming = (id = "mid-1", text = "확인", timestamp = new Date()) => ({
 });
 const state = async () =>
   (await pool.query("SELECT * FROM instagram_follow_conversations WHERE reply_id=$1", [replyId])).rows[0];
+async function recordConsent(
+  identityKind: "comment_sender" | "dm_recipient",
+  identityValue: string,
+  decision: "grant" | "revoke",
+  requestKey: string,
+) {
+  await recordChannelConsentEvent(pool, {
+    requestKey,
+    workspaceId: workspace,
+    connectionId: connection,
+    channel: "instagram",
+    identityKind,
+    identityValue,
+    purpose: "service_reply",
+    decision,
+    evidenceKind: "explicit",
+    evidenceReference: `test:${decision}`,
+    occurredAt: new Date(),
+    actorId: "99999999-9999-4999-8999-999999999999",
+  });
+}
 test("only matching inbound confirmation starts work; old, future, foreign and replay events do not", async () => {
   await ingestMessages(pool, [
     incoming("old", "확인", new Date(Date.now() - 2 * 3600000)),
@@ -728,4 +750,197 @@ test("handoff is checked by Node follow final authorization", async () => {
     failureCode: "contact_paused",
   });
   assert.equal(sends, 0);
+});
+
+test("opt-out committed after authorization blocks Node private and follow final POST", async () => {
+  const privateEvent = (
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'private-race','111','789','link') RETURNING id",
+      [workspace, connection],
+    )
+  ).rows[0].id;
+  const privateReply = (
+    await pool.query(
+      "INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text) VALUES($1,$2,$3,$4,'private-race','111','789','Private') RETURNING id",
+      [workspace, connection, privateEvent, rule],
+    )
+  ).rows[0].id;
+  await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL");
+  let privatePosts = 0;
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: async () => ({
+        commentCreatedAt: new Date(),
+        authorizationVerified: true,
+        mediaOwned: true,
+      }),
+      send: async (request) => {
+        await recordConsent("comment_sender", "789", "revoke", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+        await assertNodePrivateReplyAllowed(pool, { connectionId: connection, accountId: "123" }, request);
+        privatePosts++;
+        return { messageId: "must-not-send" };
+      },
+    },
+    () => new Date(),
+    connection,
+  );
+  assert.equal(privatePosts, 0);
+  assert.deepEqual(
+    (await pool.query("SELECT status,failure_code FROM private_reply_outbox WHERE id=$1", [privateReply])).rows[0],
+    { status: "blocked", failure_code: "recipient_opted_out" },
+  );
+
+  await pool.query(
+    "UPDATE instagram_follow_conversations SET status='pending',confirmed_at=now(),next_attempt_at=now(),attempt_id=NULL,attempt_started_at=NULL WHERE reply_id=$1",
+    [replyId],
+  );
+  await pool.query("UPDATE private_reply_outbox SET provider_message_id='follow-bridge-ack' WHERE id=$1", [replyId]);
+  let followPosts = 0;
+  let revokedBeforeFinalGuard = false;
+  const nodeFollowTransport = createNodeFollowTransport(pool, {
+    accountId: "123",
+    connectionId: connection,
+    accessToken: "synthetic",
+    graphVersion: "v26.0",
+    fetchImpl: async (input, init) => {
+      if (init?.method === "POST") {
+        followPosts++;
+        return Response.json({ message_id: "must-not-send" });
+      }
+      if (new URL(String(input)).pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+      if (new URL(String(input)).pathname.endsWith("/456")) return Response.json({ is_user_follow_business: true });
+      throw new Error("Unexpected Graph request");
+    },
+  });
+  const followTransport = {
+    followStatus: (recipientId: string) => nodeFollowTransport.followStatus(recipientId),
+    send: async (recipientId: string, text: string, context?: { replyId: string; attemptId: string }) => {
+      await recordConsent("dm_recipient", "456", "revoke", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+      revokedBeforeFinalGuard = true;
+      return nodeFollowTransport.send(recipientId, text, context);
+    },
+  };
+  assert.equal(await processNextFollowReply(pool, connection, followTransport, () => new Date(), "123"), true);
+  assert.equal(revokedBeforeFinalGuard, true);
+  assert.equal(followPosts, 0);
+  assert.deepEqual(
+    await pool
+      .query("SELECT status,failure_code FROM instagram_follow_conversations WHERE reply_id=$1", [replyId])
+      .then((result) => result.rows[0]),
+    { status: "blocked", failure_code: "recipient_opted_out" },
+  );
+});
+
+test("consent read failures defer Node private and follow final POSTs", async () => {
+  const privateEvent = (
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'private-consent-fault','111','789','link') RETURNING id",
+      [workspace, connection],
+    )
+  ).rows[0].id;
+  const privateReply = (
+    await pool.query(
+      "INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text) VALUES($1,$2,$3,$4,'private-consent-fault','111','789','Private') RETURNING id",
+      [workspace, connection, privateEvent, rule],
+    )
+  ).rows[0].id;
+  await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL");
+  const consentFailurePool = {
+    query: (sql: string, values?: unknown[]) => {
+      if (sql.includes("FROM channel_consent_state state")) throw new Error("consent database unavailable");
+      return pool.query(sql, values);
+    },
+  } as Pool;
+  let privatePosts = 0;
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: async () => ({
+        commentCreatedAt: new Date(),
+        authorizationVerified: true,
+        mediaOwned: true,
+      }),
+      send: async (request) => {
+        await assertNodePrivateReplyAllowed(
+          consentFailurePool,
+          { connectionId: connection, accountId: "123" },
+          request,
+        );
+        privatePosts++;
+        return { messageId: "must-not-send" };
+      },
+    },
+    () => new Date(),
+    connection,
+  );
+  assert.equal(privatePosts, 0);
+  assert.deepEqual(
+    (await pool.query("SELECT status,failure_code,attempt_id FROM private_reply_outbox WHERE id=$1", [privateReply]))
+      .rows[0],
+    { status: "pending", failure_code: "consent_unavailable", attempt_id: null },
+  );
+
+  await pool.query(
+    "UPDATE instagram_follow_conversations SET status='pending',confirmed_at=now(),next_attempt_at=now(),attempt_id=NULL,attempt_started_at=NULL WHERE reply_id=$1",
+    [replyId],
+  );
+  let followPosts = 0;
+  const followTransport = createNodeFollowTransport(consentFailurePool, {
+    accountId: "123",
+    connectionId: connection,
+    accessToken: "synthetic",
+    graphVersion: "v26.0",
+    fetchImpl: async (input, init) => {
+      if (init?.method === "POST") {
+        followPosts++;
+        return Response.json({ message_id: "must-not-send" });
+      }
+      if (new URL(String(input)).pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+      if (new URL(String(input)).pathname.endsWith("/456")) return Response.json({ is_user_follow_business: true });
+      throw new Error("Unexpected Graph request");
+    },
+  });
+  assert.equal(await processNextFollowReply(pool, connection, followTransport, () => new Date(), "123"), true);
+  assert.equal(followPosts, 0);
+  assert.deepEqual(
+    await pool
+      .query("SELECT status,failure_code,attempt_id FROM instagram_follow_conversations WHERE reply_id=$1", [replyId])
+      .then((result) => result.rows[0]),
+    { status: "pending", failure_code: "consent_unavailable", attempt_id: null },
+  );
+});
+
+test("consent read failure at follow admission defers claimed work", async () => {
+  await pool.query(
+    "UPDATE instagram_follow_conversations SET status='pending',confirmed_at=now(),next_attempt_at=now() WHERE reply_id=$1",
+    [replyId],
+  );
+  const consentFailurePool = {
+    query: (sql: string, values?: unknown[]) => {
+      if (sql.includes("FROM channel_consent_state state")) throw new Error("consent database unavailable");
+      return pool.query(sql, values);
+    },
+  } as Pool;
+  let providerCalls = 0;
+  assert.equal(
+    await processNextFollowReply(consentFailurePool, connection, {
+      followStatus: async () => {
+        providerCalls++;
+        return true;
+      },
+      send: async () => {
+        providerCalls++;
+        return { messageId: "must-not-send" };
+      },
+    }),
+    true,
+  );
+  assert.equal(providerCalls, 0);
+  assert.deepEqual(
+    await pool
+      .query("SELECT status,failure_code,attempt_id FROM instagram_follow_conversations WHERE reply_id=$1", [replyId])
+      .then((result) => result.rows[0]),
+    { status: "pending", failure_code: "consent_unavailable", attempt_id: null },
+  );
 });
