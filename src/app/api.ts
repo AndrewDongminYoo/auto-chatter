@@ -27,6 +27,7 @@ import { connectionHealth } from "./instagram-connection-health.ts";
 import { setInbox, listInbox, inboxMessages, inboxContext } from "./inbox.ts";
 import { archiveContactField, createContactField, listContactFields, saveContactFieldValue } from "./contact-fields.ts";
 import { recordConsentEvent } from "./channel-consent.ts";
+import { deleteConnectionData, listDataDeletions } from "./data-deletion.ts";
 import {
   FLOW_REQUEST_BYTES,
   archiveFlow,
@@ -275,6 +276,11 @@ export async function appApi(
           ),
         );
       }
+      const deletion = /^\/api\/connections\/([a-f0-9-]+)\/(data-deletion|data-deletions)$/.exec(url.pathname);
+      if (deletion?.[2] === "data-deletion" && request.method === "POST")
+        return json(await deleteConnectionData(pool, user, deletion[1]!, await readJson(request)));
+      if (deletion?.[2] === "data-deletions" && request.method === "GET")
+        return json({ deletions: await listDataDeletions(pool, user, deletion[1]!) });
       const connection = /^\/api\/connections\/([a-f0-9-]+)$/.exec(url.pathname);
       if (connection && request.method === "DELETE")
         return json(await disconnectConnection(pool, user, connection[1]!));

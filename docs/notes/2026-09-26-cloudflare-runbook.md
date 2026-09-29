@@ -142,7 +142,7 @@ ALTER ROLE auto_chatter_server LOGIN;
 연결의 `active`는 수신 허용 여부입니다.
 발송 준비 전에는 연결의 `send_enabled`, 규칙의 `enabled`와 전역 `SEND_ENABLED`를 false로 유지합니다.
 기존 DB에는 신규 초기화 명령 대신 백업 후 `deploy/migrate-multi-user.sql`을 관리자 연결로 실행합니다.
-이 실행 스크립트가 003–017 마이그레이션과 접근 권한 갱신을 한 트랜잭션으로 처리하며, 자세한 순서는 [다중 사용자 배포 전환](2026-09-26-multi-user-cutover.md)을 따릅니다.
+이 실행 스크립트가 003–018 마이그레이션과 접근 권한 갱신을 한 트랜잭션으로 처리하며, 자세한 순서는 [다중 사용자 배포 전환](2026-09-26-multi-user-cutover.md)을 따릅니다.
 운영 DB에는 2026-09-29에 015까지 적용했습니다.
 015 적용 전에 연결 테이블의 기존 1행을 Git에서 제외된 `deploy/secrets/backups/2026-09-29-pr72/instagram-connections.json`에 보관했고, 적용 후 두 신규 컬럼을 운영 DB에서 재조회했습니다.
 전체 DB 덤프는 로컬 Docker가 실행 중이지 않아 생성하지 못했습니다.

@@ -12,6 +12,8 @@ REVOKE UPDATE ON instagram_manual_reply_events FROM automations_app;
 REVOKE UPDATE ON instagram_inbox_handoff_events FROM automations_app;
 REVOKE UPDATE ON channel_consent_events FROM automations_app;
 REVOKE UPDATE ON flow_versions FROM automations_app;
+REVOKE INSERT, UPDATE ON data_deletion_records FROM automations_app;
+GRANT EXECUTE ON FUNCTION public.delete_connection_data(uuid,uuid,uuid,text) TO automations_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO automations_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE ON TABLES TO automations_app;
