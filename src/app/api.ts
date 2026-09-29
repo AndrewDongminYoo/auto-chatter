@@ -27,6 +27,17 @@ import { connectionHealth } from "./instagram-connection-health.ts";
 import { setInbox, listInbox, inboxMessages, inboxContext } from "./inbox.ts";
 import { archiveContactField, createContactField, listContactFields, saveContactFieldValue } from "./contact-fields.ts";
 import { recordConsentEvent } from "./channel-consent.ts";
+import {
+  FLOW_REQUEST_BYTES,
+  archiveFlow,
+  createFlow,
+  getFlow,
+  getFlowVersion,
+  listFlowVersions,
+  listFlows,
+  publishFlow,
+  saveFlowDraft,
+} from "./flows.ts";
 
 function instagramConnectAvailable(user: User, env: InstagramOAuthEnv): boolean {
   if (env.INSTAGRAM_PUBLIC_CONNECT_ENABLED === "true") return true;
@@ -218,6 +229,25 @@ export async function appApi(
         }
         return json(await saveContactTags(pool, user, contact[1]!, senderId, await readJson(request)));
       }
+      if (url.pathname === "/api/flows" && request.method === "GET")
+        return json({ flows: await listFlows(pool, user) });
+      if (url.pathname === "/api/flows" && request.method === "POST")
+        return json(await createFlow(pool, user, await readJson(request, FLOW_REQUEST_BYTES)), 201);
+      const flow = /^\/api\/flows\/([a-f0-9-]+)(?:\/(publish|versions)(?:\/(\d{1,9}))?)?$/.exec(url.pathname);
+      if (flow && !flow[2] && request.method === "GET") return json(await getFlow(pool, user, flow[1]!));
+      if (flow && !flow[2] && request.method === "PUT")
+        return json(await saveFlowDraft(pool, user, flow[1]!, await readJson(request, FLOW_REQUEST_BYTES)));
+      if (flow && !flow[2] && request.method === "DELETE") return json(await archiveFlow(pool, user, flow[1]!));
+      if (flow?.[2] === "publish" && !flow[3] && request.method === "POST") {
+        const published = await publishFlow(pool, user, flow[1]!, await readJson(request));
+        return "errors" in published
+          ? json({ error: "flow_invalid", errors: published.errors }, 422)
+          : json(published, published.replayed ? 200 : 201);
+      }
+      if (flow?.[2] === "versions" && !flow[3] && request.method === "GET")
+        return json({ versions: await listFlowVersions(pool, user, flow[1]!) });
+      if (flow?.[2] === "versions" && flow[3] && request.method === "GET")
+        return json(await getFlowVersion(pool, user, flow[1]!, flow[3]));
       if (url.pathname === "/api/activity" && request.method === "GET")
         return json({ activity: await listActivity(pool, user) });
       if (url.pathname === "/api/rules" && request.method === "GET")

@@ -106,34 +106,60 @@ export async function listRules(pool: Pool, user: User) {
 export async function saveRule(pool: Pool, user: User, input: unknown) {
   const rule = parseRule(input);
   const workspaceId = await workspaceFor(pool, user);
-  const result = await pool.query(
-    rule.id
-      ? `UPDATE instagram_comment_rules SET keyword=$5,keywords=$6,excluded_keywords=$7,match_mode=$8,
+  const write = async (db: Pick<Pool, "query">) => {
+    const result = await db.query(
+      rule.id
+        ? `UPDATE instagram_comment_rules SET keyword=$5,keywords=$6,excluded_keywords=$7,match_mode=$8,
  private_reply_text=$9,enabled=$10,follow_gate_enabled=$11,follower_reply_text=$12,non_follower_reply_text=$13,confirmation_keyword=$14,confirmation_button_title=$15
  WHERE id=$1 AND workspace_id=$2 AND connection_id=$3 AND media_id=$4 RETURNING id`
-      : `INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,keywords,excluded_keywords,match_mode,private_reply_text,enabled,follow_gate_enabled,follower_reply_text,non_follower_reply_text,confirmation_keyword,confirmation_button_title)
+        : `INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,keywords,excluded_keywords,match_mode,private_reply_text,enabled,follow_gate_enabled,follower_reply_text,non_follower_reply_text,confirmation_keyword,confirmation_button_title)
  SELECT $1,$2,c.id,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15 FROM instagram_connections c WHERE c.id=$3 AND c.workspace_id=$2
  ON CONFLICT(connection_id,media_id) DO UPDATE SET keyword=EXCLUDED.keyword,keywords=EXCLUDED.keywords,excluded_keywords=EXCLUDED.excluded_keywords,match_mode=EXCLUDED.match_mode,private_reply_text=EXCLUDED.private_reply_text,enabled=EXCLUDED.enabled,follow_gate_enabled=EXCLUDED.follow_gate_enabled,follower_reply_text=EXCLUDED.follower_reply_text,non_follower_reply_text=EXCLUDED.non_follower_reply_text,confirmation_keyword=EXCLUDED.confirmation_keyword,confirmation_button_title=EXCLUDED.confirmation_button_title WHERE instagram_comment_rules.workspace_id=$2 RETURNING id`,
-    [
-      rule.id ?? randomUUID(),
-      workspaceId,
+      [
+        rule.id ?? randomUUID(),
+        workspaceId,
+        rule.connection_id,
+        rule.media_id,
+        rule.keywords[0] ?? "*",
+        rule.keywords,
+        rule.excluded_keywords,
+        rule.match_mode,
+        rule.private_reply_text,
+        rule.enabled,
+        rule.follow_gate_enabled,
+        rule.follower_reply_text,
+        rule.non_follower_reply_text,
+        rule.confirmation_keyword,
+        rule.confirmation_button_title,
+      ],
+    );
+    if (!result.rows[0]) throw new ApiError(404, "connection_not_found");
+    return { id: result.rows[0].id };
+  };
+  if (!rule.enabled) return write(pool);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Flow publish takes the same connection lock, so a rule and a published flow never share one media.
+    await client.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR NO KEY UPDATE", [
       rule.connection_id,
-      rule.media_id,
-      rule.keywords[0] ?? "*",
-      rule.keywords,
-      rule.excluded_keywords,
-      rule.match_mode,
-      rule.private_reply_text,
-      rule.enabled,
-      rule.follow_gate_enabled,
-      rule.follower_reply_text,
-      rule.non_follower_reply_text,
-      rule.confirmation_keyword,
-      rule.confirmation_button_title,
-    ],
-  );
-  if (!result.rows[0]) throw new ApiError(404, "connection_not_found");
-  return { id: result.rows[0].id };
+      workspaceId,
+    ]);
+    const conflict = await client.query(
+      `SELECT 1 FROM flows f JOIN flow_versions v ON v.id=f.published_version_id
+       WHERE f.workspace_id=$1 AND NOT f.archived AND v.trigger_connection_id=$2 AND v.trigger_media_id=$3 LIMIT 1`,
+      [workspaceId, rule.connection_id, rule.media_id],
+    );
+    if (conflict.rows[0]) throw new ApiError(409, "flow_trigger_conflict");
+    const saved = await write(client);
+    await client.query("COMMIT");
+    return saved;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 export async function updateConnection(pool: Pool, user: User, id: string, input: unknown) {
   if (!isUuid(id) || !isRecord(input) || typeof input.active !== "boolean" || typeof input.send_enabled !== "boolean")
