@@ -148,7 +148,7 @@ The conversation finished as `sent / following` with two confirmation receipts a
 See `docs/notes/2026-09-26-live-follow-test.md` for the approved texts, evidence and shutdown procedure.
 Email confirmation-link behavior, multi-user live isolation, live unavailable-follow and duplicate-event cases, and Advanced Access remain unverified.
 Run `psql -f deploy/migrate-multi-user.sql` with an administrator connection before deploying this code.
-This runner owns the transaction for migrations 003–015 and the access script, stops on the first error, and rolls back on failure.
+This runner owns the transaction for migrations 003–016 and the access script, stops on the first error, and rolls back on failure.
 Do not apply these migration files individually without that transaction.
 Assign the existing workspace to a confirmed operator with `deploy/assign-workspace-owner.sql`; never claim legacy data automatically by email.
 Active Instagram Login connections refresh valid long-lived tokens from 30 days before expiry, after the token is at least 24 hours old.
