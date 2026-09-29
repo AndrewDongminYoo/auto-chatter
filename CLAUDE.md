@@ -157,7 +157,9 @@ Optional `confirmation_button_title` adds a single postback template button to t
 Apply migration 007 before deploying this feature; the existing administrator migration runner includes it.
 Button clicks are bound to the queued reply ID and validated against account, recipient and waiting flow; typed confirmation still works.
 OAuth subscribes `messaging_postbacks` as well as comments/messages, so existing accounts must reconnect and the app must subscribe that webhook field.
-The service caps button labels at 20 and button-message text at 640; actual private-reply template support and client rendering require a separate approved live test.
+The service caps button labels at 20 and button-message text at 640.
+An approved live private reply rendered its button in the mobile Instagram app, and a matching postback was stored; Chrome web showed the message without the button.
+The cause of that client difference and the follow branch after a button press with sending enabled remain unverified.
 
 `Dockerfile` runs the sources as the non-root `node` user with production dependencies only.
 `compose.yaml` starts PostgreSQL and ingress by default; profiles `send` and `public` enable the real worker and Caddy proxy respectively.
@@ -205,7 +207,8 @@ Apply migration 010 through the administrator runner before deployment; two new 
 Archived definitions retain stored values and names; the UI omits them, and permanent deletion remains the approved manual operator process.
 Privacy and deletion pages disclose manually entered contact tags and field values.
 Workspace and activity readers reject late responses after session reset.
-These capabilities have local DB/workerd/browser evidence; production migrations through 014 and the merged Worker were deployed on 2026-09-28, while live inbox verification remains pending.
+These capabilities have local DB/workerd/browser evidence; production migrations through 014 and the merged Worker were deployed on 2026-09-28.
+On 2026-09-29, two new text DMs and one confirmation postback were stored in the production inbox; real webhook replay and cross-user isolation remain unverified.
 Data collection, message interpolation, global bot fields and segment-driven sends remain backlog items.
 
 ## Per-contact automation controls
@@ -253,4 +256,5 @@ The owned `GET /api/connections/:connectionId/inbox/:recipientId/reply-status` s
 The inbox controller in `public/app/inbox.js` keeps conversation drafts and independent inbound/outbound cursors, guards stale session/read responses, and replays uncertain reception with the same UUID and payload.
 It exposes handoff start/resume, safe failed-row retry and audited unknown `no_retry` resolution; see [the UI contract](docs/specs/2026-09-28-inbox-manual-reply-ui.md).
 Echoes, attachments, edits, deletions, historical import and shared team roles remain unimplemented.
-Production migrations through 014 were applied on 2026-09-28; live inbox verification remains pending.
+Production migrations through 014 were applied on 2026-09-28; two new text DMs and one confirmation postback were stored on 2026-09-29.
+Real webhook replay and manual-reply delivery remain unverified.
