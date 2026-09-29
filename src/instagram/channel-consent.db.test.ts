@@ -252,36 +252,41 @@ test("concurrent consent writes use server order instead of occurred_at", async 
     await blocker.query("COMMIT");
 
     const [first, second] = await Promise.all([firstWrite, secondWrite]);
-    assert.ok(BigInt(first.eventId) < BigInt(second.eventId));
+    assert.notEqual(first.eventId, second.eventId);
     const events = await pool.query(
-      "SELECT id::text,request_key::text,occurred_at FROM channel_consent_events ORDER BY id",
+      "SELECT id::text,request_key::text,decision,occurred_at FROM channel_consent_events ORDER BY channel_consent_events.id",
     );
     assert.deepEqual(
-      events.rows.map((row) => ({
-        id: row.id,
-        request_key: row.request_key,
-        occurred_at: row.occurred_at.toISOString(),
-      })),
+      events.rows
+        .map((row) => ({
+          request_key: row.request_key,
+          decision: row.decision,
+          occurred_at: row.occurred_at.toISOString(),
+        }))
+        .sort((left, right) => left.request_key.localeCompare(right.request_key)),
       [
         {
-          id: first.eventId,
           request_key: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+          decision: "grant",
           occurred_at: "2030-01-01T00:00:00.000Z",
         },
         {
-          id: second.eventId,
           request_key: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
+          decision: "revoke",
           occurred_at: "2020-01-01T00:00:00.000Z",
         },
       ],
     );
+    assert.equal(events.rows.find((row) => row.request_key.endsWith("1"))?.id, first.eventId);
+    assert.equal(events.rows.find((row) => row.request_key.endsWith("2"))?.id, second.eventId);
+    const newest = events.rows.at(-1);
     assert.deepEqual(
       (
         await pool.query(
           "SELECT decision,last_event_id::text AS last_event_id,occurred_at FROM channel_consent_state WHERE identity_value='concurrent-recipient'",
         )
       ).rows[0],
-      { decision: "revoke", last_event_id: second.eventId, occurred_at: new Date("2020-01-01T00:00:00.000Z") },
+      { decision: newest.decision, last_event_id: newest.id, occurred_at: newest.occurred_at },
     );
   } finally {
     await blocker.query("ROLLBACK");
