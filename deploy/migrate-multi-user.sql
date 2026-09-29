@@ -17,5 +17,6 @@ BEGIN;
 \ir ../db/migrations/015_instagram_token_refresh.sql
 \ir ../db/migrations/016_channel_consent.sql
 \ir ../db/migrations/017_flow_versions.sql
+\ir ../db/migrations/018_connection_data_deletion.sql
 \ir supabase-access.sql
 COMMIT;
