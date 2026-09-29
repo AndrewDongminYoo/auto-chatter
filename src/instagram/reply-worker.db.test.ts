@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { ingestComments } from "./store.ts";
+import { deliveryRecipientOptedOut, recordChannelConsentEvent } from "./channel-consent.ts";
 import {
   PreSendVerificationError,
   ProviderRateLimitedError,
@@ -44,6 +45,74 @@ async function queueReply(): Promise<void> {
   ]);
 }
 
+async function recordCommentConsent(decision: "grant" | "revoke", requestKey: string): Promise<void> {
+  await recordDeliveryConsent("comment_sender", "sender-1", decision, requestKey);
+}
+
+async function recordDeliveryConsent(
+  identityKind: "comment_sender" | "dm_recipient",
+  identityValue: string,
+  decision: "grant" | "revoke",
+  requestKey: string,
+): Promise<void> {
+  await recordChannelConsentEvent(pool, {
+    requestKey,
+    workspaceId,
+    connectionId,
+    channel: "instagram",
+    identityKind,
+    identityValue,
+    purpose: "service_reply",
+    decision,
+    evidenceKind: "explicit",
+    evidenceReference: `test:${decision}`,
+    occurredAt: new Date(),
+    actorId: "99999999-9999-4999-8999-999999999999",
+  });
+}
+
+async function insertReplyFixture(input: {
+  ruleId: string;
+  commentId: string;
+  mediaId: string;
+  senderId: string;
+  eventSenderId?: string;
+  status?: "pending" | "sent" | "failed";
+  recipientId?: string;
+  providerMessageId?: string;
+}): Promise<string> {
+  await pool.query(
+    "INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES($1,$2,$3,$4,'bridge','Bridge',true)",
+    [input.ruleId, workspaceId, connectionId, input.mediaId],
+  );
+  const eventId = (
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,$3,$4,$5,'bridge') RETURNING id",
+      [workspaceId, connectionId, input.commentId, input.mediaId, input.eventSenderId ?? input.senderId],
+    )
+  ).rows[0].id;
+  const reply = await pool.query(
+    `INSERT INTO private_reply_outbox(
+       workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text,
+       status,recipient_id,provider_message_id,sent_at
+     ) VALUES($1,$2,$3,$4,$5,$6,$7,'Bridge',$8,$9,$10,CASE WHEN $8='sent' THEN now() ELSE NULL END)
+     RETURNING id::text`,
+    [
+      workspaceId,
+      connectionId,
+      eventId,
+      input.ruleId,
+      input.commentId,
+      input.mediaId,
+      input.senderId,
+      input.status ?? "pending",
+      input.recipientId ?? null,
+      input.providerMessageId ?? null,
+    ],
+  );
+  return reply.rows[0].id;
+}
+
 async function outbox(): Promise<{
   status: string;
   provider_message_id: string | null;
@@ -61,7 +130,7 @@ async function outbox(): Promise<{
 
 before(async () => {
   await pool.query(
-    "DROP TABLE IF EXISTS instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+    "DROP TABLE IF EXISTS channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
   );
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
 });
@@ -849,4 +918,177 @@ test("handoff during private verification defers before provider send", async ()
   );
   assert.equal(sends, 0);
   assert.equal((await outbox()).failure_code, "contact_paused");
+});
+
+test("opt-out blocks queued private reply and re-consent does not replay it", async () => {
+  await queueReply();
+  await recordCommentConsent("revoke", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+  let verificationReads = 0;
+  let providerPosts = 0;
+  const transport: PrivateReplyTransport = {
+    verify: async (request) => {
+      verificationReads++;
+      return verified(request);
+    },
+    send: async () => {
+      providerPosts++;
+      return { messageId: "must-not-send" };
+    },
+  };
+
+  assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), true);
+  assert.equal(verificationReads, 0);
+  assert.equal(providerPosts, 0);
+  assert.deepEqual(
+    await pool.query("SELECT status,failure_code FROM private_reply_outbox").then((result) => result.rows[0]),
+    { status: "blocked", failure_code: "recipient_opted_out" },
+  );
+
+  await recordCommentConsent("grant", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+  assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), false);
+  assert.equal(providerPosts, 0);
+  assert.deepEqual(
+    await pool.query("SELECT status,failure_code FROM private_reply_outbox").then((result) => result.rows[0]),
+    { status: "blocked", failure_code: "recipient_opted_out" },
+  );
+});
+
+test("private delivery uses every acknowledged recipient bridge and ignores unacknowledged recipients", async () => {
+  await insertReplyFixture({
+    ruleId: "20000000-0000-4000-8000-000000000001",
+    commentId: "bridge-comment-1",
+    mediaId: "bridge-media-1",
+    senderId: "bridge-sender",
+    status: "sent",
+    recipientId: "456",
+    providerMessageId: "ack-1",
+  });
+  await insertReplyFixture({
+    ruleId: "20000000-0000-4000-8000-000000000002",
+    commentId: "bridge-comment-2",
+    mediaId: "bridge-media-2",
+    senderId: "bridge-sender",
+    status: "sent",
+    recipientId: "457",
+    providerMessageId: "ack-2",
+  });
+  await insertReplyFixture({
+    ruleId: "20000000-0000-4000-8000-000000000003",
+    commentId: "bridge-comment-3",
+    mediaId: "bridge-media-3",
+    senderId: "bridge-sender",
+    status: "failed",
+    recipientId: "458",
+  });
+  await insertReplyFixture({
+    ruleId: "20000000-0000-4000-8000-000000000006",
+    commentId: "bridge-comment-6",
+    mediaId: "bridge-media-6",
+    senderId: "bridge-sender",
+    eventSenderId: "different-event-sender",
+    status: "sent",
+    recipientId: "459",
+    providerMessageId: "malformed-ack",
+  });
+  const blockedReplyId = await insertReplyFixture({
+    ruleId: "20000000-0000-4000-8000-000000000004",
+    commentId: "bridge-comment-4",
+    mediaId: "bridge-media-4",
+    senderId: "bridge-sender",
+  });
+  await recordDeliveryConsent("dm_recipient", "457", "revoke", "30000000-0000-4000-8000-000000000001");
+  await recordDeliveryConsent("dm_recipient", "458", "revoke", "30000000-0000-4000-8000-000000000002");
+  await recordDeliveryConsent("dm_recipient", "459", "revoke", "30000000-0000-4000-8000-000000000004");
+  let providerPosts = 0;
+  const transport: PrivateReplyTransport = {
+    verify: verified,
+    send: async () => {
+      providerPosts++;
+      return { messageId: `bridge-send-${providerPosts}` };
+    },
+  };
+
+  assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), true);
+  assert.equal(providerPosts, 0);
+  assert.deepEqual(
+    (await pool.query("SELECT status,failure_code FROM private_reply_outbox WHERE id=$1", [blockedReplyId])).rows[0],
+    { status: "blocked", failure_code: "recipient_opted_out" },
+  );
+
+  await recordDeliveryConsent("dm_recipient", "457", "grant", "30000000-0000-4000-8000-000000000003");
+  const sentReplyId = await insertReplyFixture({
+    ruleId: "20000000-0000-4000-8000-000000000005",
+    commentId: "bridge-comment-5",
+    mediaId: "bridge-media-5",
+    senderId: "bridge-sender",
+  });
+  assert.equal(await processNextPrivateReply(pool, transport, () => now, connectionId), true);
+  assert.equal(providerPosts, 1);
+  assert.equal(
+    (await pool.query("SELECT status FROM private_reply_outbox WHERE id=$1", [sentReplyId])).rows[0].status,
+    "sent",
+  );
+});
+
+test("consent read failure defers private reply before provider POST", async () => {
+  await queueReply();
+  const consentFailurePool = {
+    query: (sql: string, values?: unknown[]) => {
+      if (sql.includes("FROM channel_consent_state state")) throw new Error("consent database unavailable");
+      return pool.query(sql, values);
+    },
+  } as Pool;
+  let providerPosts = 0;
+  assert.equal(
+    await processNextPrivateReply(
+      consentFailurePool,
+      {
+        verify: verified,
+        send: async () => {
+          providerPosts++;
+          return { messageId: "must-not-send" };
+        },
+      },
+      () => now,
+      connectionId,
+    ),
+    true,
+  );
+  assert.equal(providerPosts, 0);
+  assert.deepEqual(
+    await pool
+      .query("SELECT status,failure_code,attempt_id FROM private_reply_outbox")
+      .then((result) => result.rows[0]),
+    { status: "pending", failure_code: "consent_unavailable", attempt_id: null },
+  );
+});
+
+test("delivery opt-out resolves verified bridge and revoke in one database snapshot", async () => {
+  await insertReplyFixture({
+    ruleId: "20000000-0000-4000-8000-000000000007",
+    commentId: "snapshot-comment",
+    mediaId: "snapshot-media",
+    senderId: "snapshot-sender",
+    status: "sent",
+    recipientId: "777",
+    providerMessageId: "snapshot-ack",
+  });
+  await recordDeliveryConsent("dm_recipient", "777", "revoke", "30000000-0000-4000-8000-000000000005");
+  let statements = 0;
+  const observedPool = {
+    query: (sql: string, values?: unknown[]) => {
+      statements++;
+      return pool.query(sql, values);
+    },
+  } as Pool;
+
+  assert.equal(
+    await deliveryRecipientOptedOut(observedPool, {
+      workspaceId,
+      connectionId,
+      senderId: "snapshot-sender",
+    }),
+    true,
+  );
+  assert.equal(statements, 1);
 });

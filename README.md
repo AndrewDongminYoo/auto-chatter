@@ -20,6 +20,7 @@ Instagram Login과 Facebook Login용 Meta Graph 어댑터와 별도 발송 워�
 - [Instagram 수신 검증](docs/notes/2026-09-25-ingress-validation.md): 실제 PostgreSQL 통합 테스트와 적대적 검토 결과를 기록했습니다.
 - [Meta 권한과 발송 워커](docs/notes/2026-09-25-meta-permissions-and-worker.md): 공식 권한 조건, 발송 상태, 실제 계정 확인에 남은 조건을 기록했습니다.
 - [제품·기술 명세](docs/specs/2026-09-25-messaging-automation-platform.md): 목표와 비목표, 기술 스택, 아키텍처, 과금과 AI 에이전트 경계를 정의했습니다.
+- [Instagram 동의·수신 거부 계약](docs/specs/2026-09-29-channel-consent.md): 동의 근거의 범위와 재동의 조건, 발송 직전 차단 및 운영 미적용 상태를 정리했습니다.
 - [다중 사용자 자동화](docs/specs/2026-09-26-multi-user-automations.md): 사용자별 계정 연결과 응답 후 팔로우 확인 흐름입니다.
 - [다중 사용자 배포 전환](docs/notes/2026-09-26-multi-user-cutover.md): 검증 결과, 외부 설정, 마이그레이션과 수동 삭제 절차입니다.
 - [첫 실발송 테스트](docs/notes/2026-09-26-first-live-reply-test.md): 실제 수신·공급자 응답 대조, 소유권 ID 수정과 테스트 후 발송 중지 결과입니다.
@@ -38,6 +39,8 @@ ChatbotX Community Edition의 현재 고정 커밋은 채택을 보류하고 최
 수동 답장·상담 시작·자동화 재개 화면과 대화별 초안·발신 상태 안내를 구현하고 합성 브라우저로 검증했습니다.
 수동 답장 서버 API·outbox·발신 이력과 감사 재시도를 구현했습니다.
 상담 전환이 활성화된 저장 대화와 24시간 안의 텍스트 DM만 허용하며 결과가 불명확한 발송은 자동 재시도하지 않습니다.
+채널별 동의 원장과 Instagram 자동·수동 답장의 수신 거부 가드를 로컬에서 구현했습니다.
+철회한 기존 대기 발송은 자동 재동의 후에도 재생하지 않으며, 운영 migration 016과 배포는 아직 적용하지 않았습니다.
 팀 배정·운영 적용·실발송은 남아 있으며 [서버 계약](docs/specs/2026-09-27-inbox-manual-replies.md)과 [화면 계약](docs/specs/2026-09-28-inbox-manual-reply-ui.md)에 경계를 정리했습니다.
 최신 기능별 검증 범위는 [대체제 기준과 격차](docs/notes/2026-09-27-manychat-parity.md)를 따릅니다.
 같은 댓글은 하나의 이벤트로 기록하고 같은 계정·게시물·발신자에게는 개인 답장 요청을 하나만 보관합니다.
@@ -75,7 +78,7 @@ docker exec -i automations-postgres psql -U postgres -d automations < db/schema.
 ```
 
 기존 스키마로 만든 DB에는 아직 적용하지 않은 001·002 마이그레이션을 먼저 적용합니다.
-이후 003–015와 서버 접근 정책은 전용 실행 파일로 한 트랜잭션에서 적용합니다.
+이후 003–016과 서버 접근 정책은 전용 실행 파일로 한 트랜잭션에서 적용합니다.
 오류가 나면 전체 트랜잭션이 롤백되며, 성공하기 전에는 새 수신기와 워커를 배포하지 않습니다.
 
 ```bash

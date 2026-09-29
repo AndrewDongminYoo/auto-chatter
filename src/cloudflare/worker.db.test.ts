@@ -1,4 +1,5 @@
 import { ingestMessages } from "../instagram/follow-flow.ts";
+import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 import { openSecret, sealSecret } from "../app/secrets.ts";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
@@ -68,9 +69,80 @@ async function rows() {
     .rows;
 }
 
+async function resetStoredFixture() {
+  await pool.query(
+    "TRUNCATE private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+  );
+  await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
+  await pool.query(
+    "INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES ($1,'11111111-1111-4111-8111-111111111111','123',true)",
+    [connectionId],
+  );
+  await pool.query(
+    "UPDATE instagram_connections SET send_enabled=true,token_expires_at=now()+interval '1 day',access_token_encrypted=$1",
+    [sealSecret("synthetic", Buffer.alloc(32, 1).toString("base64"), "11111111-1111-4111-8111-111111111111:123")],
+  );
+  await pool.query(
+    "INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES ('33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111',$1,'media-1','hello','reply',true)",
+    [connectionId],
+  );
+}
+
+async function recordConsent(
+  identityKind: "comment_sender" | "dm_recipient",
+  identityValue: string,
+  requestKey: string,
+  decision: "grant" | "revoke" = "revoke",
+) {
+  await recordChannelConsentEvent(pool, {
+    requestKey,
+    workspaceId: "11111111-1111-4111-8111-111111111111",
+    connectionId,
+    channel: "instagram",
+    identityKind,
+    identityValue,
+    purpose: "service_reply",
+    decision,
+    evidenceKind: "explicit",
+    evidenceReference: `test:${decision}`,
+    occurredAt: new Date(),
+    actorId: "99999999-9999-4999-8999-999999999999",
+  });
+}
+
+function mockDefaultGraphFetch() {
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const graphUrl = new URL(String(input));
+    assert.equal(graphUrl.hostname, "graph.instagram.com");
+    if (init?.method === "POST") {
+      sends++;
+      return Response.json({ message_id: "message-1" });
+    }
+    if (graphUrl.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (graphUrl.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
+    return Response.json({
+      id: graphUrl.pathname.split("/").at(-1),
+      from: { id: "sender-1" },
+      media: { id: "media-1" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+}
+
+function failConsentRead(failAt: number): () => number {
+  const originalQuery = Pool.prototype.query;
+  let consentReads = 0;
+  mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    if (sql.includes("FROM channel_consent_state state") && ++consentReads === failAt)
+      throw new Error("consent database unavailable");
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  return () => consentReads;
+}
+
 before(async () => {
   await pool.query(
-    "DROP TABLE IF EXISTS instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+    "DROP TABLE IF EXISTS channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
   );
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
 });
@@ -96,38 +168,8 @@ beforeEach(async () => {
     SEND_ENABLED: "true",
     TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
   };
-  await pool.query(
-    "TRUNCATE private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
-  );
-  await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
-  await pool.query(
-    "INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES ($1,'11111111-1111-4111-8111-111111111111','123',true)",
-    [connectionId],
-  );
-  await pool.query(
-    "UPDATE instagram_connections SET send_enabled=true,token_expires_at=now()+interval '1 day',access_token_encrypted=$1",
-    [sealSecret("synthetic", Buffer.alloc(32, 1).toString("base64"), "11111111-1111-4111-8111-111111111111:123")],
-  );
-  await pool.query(
-    "INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES ('33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111',$1,'media-1','hello','reply',true)",
-    [connectionId],
-  );
-  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
-    const graphUrl = new URL(String(input));
-    assert.equal(graphUrl.hostname, "graph.instagram.com");
-    if (init?.method === "POST") {
-      sends++;
-      return Response.json({ message_id: "message-1" });
-    }
-    if (graphUrl.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
-    if (graphUrl.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
-    return Response.json({
-      id: graphUrl.pathname.split("/").at(-1),
-      from: { id: "sender-1" },
-      media: { id: "media-1" },
-      timestamp: new Date().toISOString(),
-    });
-  });
+  await resetStoredFixture();
+  mockDefaultGraphFetch();
 });
 after(async () => {
   mock.restoreAll();
@@ -863,6 +905,221 @@ async function manualFixture() {
   );
   return { user, reply };
 }
+
+test("Cloudflare opt-out final guards block private follow and manual POST", async () => {
+  const { user } = await manualFixture();
+  let manualPosts = 0;
+  let manualRevokeRecorded = false;
+  mock.method(globalThis, "fetch", async (_input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      manualPosts++;
+      return Response.json({ message_id: "must-not-send" });
+    }
+    if (!manualRevokeRecorded) {
+      await recordConsent("dm_recipient", "456", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+      manualRevokeRecorded = true;
+    }
+    return Response.json({ user_id: "123" });
+  });
+  assert.equal(await consume(), "ack");
+  assert.equal(manualRevokeRecorded, true);
+  assert.equal(manualPosts, 0);
+  assert.deepEqual(
+    (await pool.query("SELECT status,failure_code,safe_to_retry FROM instagram_manual_replies")).rows[0],
+    { status: "failed", failure_code: "recipient_opted_out", safe_to_retry: false },
+  );
+  const { queueManualReply } = await import("../app/manual-replies.ts");
+  await assert.rejects(
+    queueManualReply(
+      pool,
+      user,
+      connectionId,
+      "456",
+      new URLSearchParams(),
+      { request_key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", text: "Blocked", expected_handoff_version: 1 },
+      true,
+    ),
+    (error: unknown) => error instanceof Error && error.message === "recipient_opted_out",
+  );
+
+  mock.restoreAll();
+  published = [];
+  sends = 0;
+  await resetStoredFixture();
+  const bridgeEvent = (
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES('11111111-1111-4111-8111-111111111111',$1,'prior-bridge','prior-media','sender-1','hello') RETURNING id",
+      [connectionId],
+    )
+  ).rows[0].id;
+  await pool.query(
+    "INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text,status,recipient_id,provider_message_id,sent_at) VALUES('11111111-1111-4111-8111-111111111111',$1,$2,'33333333-3333-4333-8333-333333333333','prior-bridge','prior-media','sender-1','reply','sent','777','prior-ack',now()-interval '1 minute')",
+    [connectionId, bridgeEvent],
+  );
+  let privateMediaReads = 0;
+  let privatePosts = 0;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const graphUrl = new URL(String(input));
+    if (init?.method === "POST") {
+      privatePosts++;
+      return Response.json({ message_id: "must-not-send" });
+    }
+    if (graphUrl.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (graphUrl.pathname.endsWith("/media-1")) {
+      privateMediaReads++;
+      if (privateMediaReads === 2) await recordConsent("dm_recipient", "777", "cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+      return Response.json({ id: "media-1", owner: { id: "123" } });
+    }
+    return Response.json({
+      id: graphUrl.pathname.split("/").at(-1),
+      from: { id: "sender-1" },
+      media: { id: "media-1" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  assert.equal((await worker.fetch(request(), env)).status, 200);
+  assert.equal(await consume(), "ack");
+  assert.equal(privateMediaReads, 2);
+  assert.equal(privatePosts, 0);
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT status,failure_code,rate_limit_retries FROM private_reply_outbox WHERE comment_id='comment-1'",
+      )
+    ).rows[0],
+    { status: "blocked", failure_code: "recipient_opted_out", rate_limit_retries: 0 },
+  );
+
+  mock.restoreAll();
+  published = [];
+  sends = 0;
+  await resetStoredFixture();
+  await pool.query(
+    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final',non_follower_reply_text='Follow'",
+  );
+  let followPosts = 0;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const graphUrl = new URL(String(input));
+    if (init?.method === "POST") {
+      followPosts++;
+      return Response.json({ message_id: `follow-${followPosts}`, recipient_id: "456" });
+    }
+    if (graphUrl.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (graphUrl.pathname.endsWith("/456")) return Response.json({ is_user_follow_business: true });
+    if (graphUrl.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
+    return Response.json({
+      id: graphUrl.pathname.split("/").at(-1),
+      from: { id: "456" },
+      media: { id: "media-1" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  assert.equal((await worker.fetch(request("follow-race", "456"), env)).status, 200);
+  assert.equal(await consume(), "ack");
+  assert.equal(followPosts, 1);
+  await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 second'");
+  await ingestMessages(pool, [
+    { accountId: "123", senderId: "456", messageId: "follow-confirm", text: "확인", timestamp: new Date() },
+  ]);
+  const originalQuery = Pool.prototype.query;
+  let followRevokeRecorded = false;
+  mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    if (
+      !followRevokeRecorded &&
+      sql.includes("flow.confirmed_at>now()-interval '24 hours'") &&
+      sql.includes("c.access_token_encrypted=$4")
+    ) {
+      await recordConsent("dm_recipient", "456", "dddddddd-dddd-4ddd-8ddd-dddddddddddd");
+      followRevokeRecorded = true;
+    }
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  followPosts = 0;
+  assert.equal(await consume(), "ack");
+  assert.equal(followRevokeRecorded, true);
+  assert.equal(followPosts, 0);
+  assert.deepEqual((await pool.query("SELECT status,failure_code FROM instagram_follow_conversations")).rows[0], {
+    status: "blocked",
+    failure_code: "recipient_opted_out",
+  });
+});
+
+test("Cloudflare consent read failures defer private follow and manual before POST", async () => {
+  assert.equal((await worker.fetch(request("private-consent-fault"), env)).status, 200);
+  const privateConsentReads = failConsentRead(3);
+  assert.equal(await consume(), "ack");
+  assert.equal(privateConsentReads(), 3);
+  assert.equal(sends, 0);
+  assert.deepEqual((await rows())[0], {
+    status: "pending",
+    failure_code: "consent_unavailable",
+    rate_limit_retries: 0,
+  });
+
+  mock.restoreAll();
+  published = [];
+  sends = 0;
+  await resetStoredFixture();
+  await pool.query(
+    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final',non_follower_reply_text='Follow'",
+  );
+  let followPosts = 0;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const graphUrl = new URL(String(input));
+    if (init?.method === "POST") {
+      followPosts++;
+      return Response.json({ message_id: `follow-fault-${followPosts}`, recipient_id: "456" });
+    }
+    if (graphUrl.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (graphUrl.pathname.endsWith("/456")) return Response.json({ is_user_follow_business: true });
+    if (graphUrl.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
+    return Response.json({
+      id: graphUrl.pathname.split("/").at(-1),
+      from: { id: "456" },
+      media: { id: "media-1" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  assert.equal((await worker.fetch(request("follow-consent-fault", "456"), env)).status, 200);
+  assert.equal(await consume(), "ack");
+  assert.equal(followPosts, 1);
+  await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 second'");
+  await ingestMessages(pool, [
+    { accountId: "123", senderId: "456", messageId: "follow-fault-confirm", text: "확인", timestamp: new Date() },
+  ]);
+  followPosts = 0;
+  const followConsentReads = failConsentRead(3);
+  assert.equal(await consume(), "ack");
+  assert.equal(followConsentReads(), 3);
+  assert.equal(followPosts, 0);
+  assert.deepEqual(
+    (await pool.query("SELECT status,failure_code,attempt_id FROM instagram_follow_conversations")).rows[0],
+    { status: "pending", failure_code: "consent_unavailable", attempt_id: null },
+  );
+
+  mock.restoreAll();
+  published = [];
+  sends = 0;
+  await resetStoredFixture();
+  mockDefaultGraphFetch();
+  await manualFixture();
+  let manualPosts = 0;
+  mock.method(globalThis, "fetch", async (_input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      manualPosts++;
+      return Response.json({ message_id: "must-not-send" });
+    }
+    return Response.json({ user_id: "123" });
+  });
+  const manualConsentReads = failConsentRead(3);
+  assert.equal(await consume(), "ack");
+  assert.equal(manualConsentReads(), 3);
+  assert.equal(manualPosts, 0);
+  assert.deepEqual(
+    (await pool.query("SELECT status,failure_code,safe_to_retry FROM instagram_manual_replies")).rows[0],
+    { status: "pending", failure_code: "consent_unavailable", safe_to_retry: false },
+  );
+});
 
 test("manual queued reply wakes on cron and duplicate queue messages send once", async () => {
   await manualFixture();

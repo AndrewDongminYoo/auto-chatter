@@ -11,7 +11,7 @@
 
 | 작업                                                              | 요구 또는 검증                                                | 현재 코드                  | 로컬 증거                                                          | 공급자·실계정                | 운영 완료     |
 | ----------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------ | ---------------------------- | ------------- |
-| [#12](https://github.com/AndrewDongminYoo/auto-chatter/issues/12) | ManyChat 대체 범위와 기능별 검증 매트릭스 확정                | 매트릭스 작성              | 53건 이슈 대응 확인                                                | 미검증                       | 완료하지 않음 |
+| [#12](https://github.com/AndrewDongminYoo/auto-chatter/issues/12) | ManyChat 대체 범위와 기능별 검증 매트릭스 확정                | 범위 계약 문서             | 53건 이슈와 아래 출시 제한·결정 담당자 대응 확인                   | 해당 없음                    | 해당 없음     |
 | [#13](https://github.com/AndrewDongminYoo/auto-chatter/issues/13) | 병합된 연락처·필터·필드·자동화 중지·수신 인박스 운영 적용     | 부분 기반                  | 기존 증거 있음, 추가 검증 필요                                     | 미검증                       | 완료하지 않음 |
 | [#14](https://github.com/AndrewDongminYoo/auto-chatter/issues/14) | Instagram App Review·Advanced Access 및 추가 사용자 연결 검증 | 부분 기반                  | 기존 증거 있음, 추가 검증 필요                                     | 운영자 Instagram 일부만 확인 | 완료하지 않음 |
 | [#15](https://github.com/AndrewDongminYoo/auto-chatter/issues/15) | 회원가입·이메일 확인·비밀번호 복구·세션 만료 경로 완성        | 부분 기반                  | 기존 증거 있음, 추가 검증 필요                                     | 미검증                       | 완료하지 않음 |
@@ -69,6 +69,18 @@
 WhatsApp·TikTok 이슈 #40–#43은 `unplanned`로 보관하며 현재 수용 범위에서 제외합니다.
 Email·SMS·결제는 출시 국가·사업자·통화·비용·동의 정책을 운영자가 확정한 뒤 실제 제공 범위를 기록합니다.
 FAQ AI는 오프라인 평가·초안 모드와 예산·인계가 확인되기 전 자동 발송을 허용하지 않습니다.
+
+| 제공 범위                         | 현재 제한 사유                                                                                      | 공개 여부의 결정 담당자와 조건                                                                                                                                                                                           |
+| --------------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 다른 사용자의 Instagram 연결      | 저장소의 공개 연결 기본 설정은 꺼져 있고, 추가 사용자 권한 심사와 실계정 검증이 끝나지 않았습니다.  | 운영자가 [#14](https://github.com/AndrewDongminYoo/auto-chatter/issues/14)의 승인·실계정 결과를 확인한 뒤 공개 연결을 결정합니다.                                                                                        |
+| Instagram 팔로우 조건과 확인 버튼 | 제한된 실계정 결과만 있으며, 확인 불가·중복 이벤트와 버튼 응답 뒤의 실제 발송 분기는 남아 있습니다. | 운영자가 [#14](https://github.com/AndrewDongminYoo/auto-chatter/issues/14)의 남은 결과와 [#13](https://github.com/AndrewDongminYoo/auto-chatter/issues/13)의 운영 증거를 확인합니다.                                     |
+| Messenger·Telegram                | 채널 어댑터와 채널별 정책 검사가 구현되지 않았습니다.                                               | 구현자는 [#37](https://github.com/AndrewDongminYoo/auto-chatter/issues/37)–[#39](https://github.com/AndrewDongminYoo/auto-chatter/issues/39)를 검증하고, 운영자가 필요한 공급자 권한을 확인한 뒤 제공 여부를 결정합니다. |
+| Email·SMS                         | 발신 인증, 출시 국가, 동의와 비용 정책 및 발송 어댑터가 확정되지 않았습니다.                        | 운영자가 [#44](https://github.com/AndrewDongminYoo/auto-chatter/issues/44)–[#46](https://github.com/AndrewDongminYoo/auto-chatter/issues/46)의 공급자·지역 결정을 확인한 뒤 제공합니다.                                  |
+| 구독 결제                         | 판매 플랜·사업자·결제 공급자와 실패·환불 정책이 확정되지 않았습니다.                                | 운영자가 [#53](https://github.com/AndrewDongminYoo/auto-chatter/issues/53)을 결정하고 [#54](https://github.com/AndrewDongminYoo/auto-chatter/issues/54)의 원장을 검증합니다.                                             |
+| AI 자동 답변                      | 근거 평가, 비용 상한과 상담원 인계가 구현·검증되지 않았습니다.                                      | 구현자와 운영자가 [#55](https://github.com/AndrewDongminYoo/auto-chatter/issues/55)–[#57](https://github.com/AndrewDongminYoo/auto-chatter/issues/57)의 오프라인 평가와 발송 정책을 확인합니다.                          |
+
+제한 사유가 해소되기 전에는 해당 기능을 공개 지원으로 표시하거나 관련 발송을 활성화하지 않습니다.
+이 표는 출시 범위의 결정 기준이며 공급자 승인 또는 운영 배포가 완료됐다는 증거는 아닙니다.
 
 모바일 사용 사례는 반응형 웹에서 우선 검증합니다.
 네이티브 앱·고급 A/B 실험·특정 CRM SDK는 최초 제품 명세의 후순위 또는 수요 검증 대상으로 유지하며 필요성이 확정되면 #12와 로드맵에 별도 필수 이슈를 추가합니다.

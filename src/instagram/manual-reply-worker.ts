@@ -2,6 +2,7 @@ import { PreSendVerificationError, ProviderRateLimitedError, ProviderRejectedErr
 import { randomUUID } from "node:crypto";
 import type { FollowSendContext } from "./follow-transport.ts";
 import type { Pool } from "pg";
+import { deliveryRecipientOptedOut, type ConsentQueryable } from "./channel-consent.ts";
 export interface ManualReplyScope {
   workspace_id: string;
   connection_id: string;
@@ -9,14 +10,14 @@ export interface ManualReplyScope {
   handoff_version: number;
 }
 export async function manualReplyEligibility(
-  pool: Pick<Pool, "query">,
+  pool: ConsentQueryable,
   row: ManualReplyScope,
   claim?: { id: string; attempt: string; encryptedToken: string | null },
 ): Promise<string | null> {
   return (await manualReplyStatus(pool, row, claim)).failure_code;
 }
 export async function manualReplyStatus(
-  pool: Pick<Pool, "query">,
+  pool: ConsentQueryable,
   row: Omit<ManualReplyScope, "handoff_version"> & { handoff_version?: number },
   claim?: { id: string; attempt: string; encryptedToken: string | null },
 ) {
@@ -27,7 +28,7 @@ export async function manualReplyStatus(
       JOIN instagram_comment_events e ON e.id=r.event_id AND e.workspace_id=r.workspace_id AND e.connection_id=r.connection_id AND e.sender_id=r.sender_id
       WHERE r.workspace_id=$1 AND r.connection_id=$2 AND r.recipient_id=$3 AND r.status='sent'
         AND r.provider_message_id IS NOT NULL AND length(btrim(r.provider_message_id))>0 AND r.sent_at<=clock_timestamp()
-    ) SELECT c.active AS connection_active,c.inbox_enabled,c.send_enabled,c.access_token_encrypted,c.access_token_encrypted IS DISTINCT FROM $4::text AS token_changed,c.token_expires_at>clock_timestamp() AS token_valid,c.send_paused_until>clock_timestamp() AS cooldown,c.account_id,h.active AS handoff_active,h.version,h.sender_id,a.handoff_paused,
+    ) SELECT c.workspace_id::text,c.id::text AS connection_id,c.active AS connection_active,c.inbox_enabled,c.send_enabled,c.access_token_encrypted,c.access_token_encrypted IS DISTINCT FROM $4::text AS token_changed,c.token_expires_at>clock_timestamp() AS token_valid,c.send_paused_until>clock_timestamp() AS cooldown,c.account_id,h.active AS handoff_active,h.version,h.sender_id,a.handoff_paused,
     (SELECT count(DISTINCT sender_id)=1 AND bool_or(fresh) AND min(sender_id)=h.sender_id FROM candidates) AS identity_verified,
     (SELECT max(message_at) FROM instagram_inbox_messages m WHERE m.workspace_id=c.workspace_id AND m.connection_id=c.id AND m.recipient_id=$3 AND m.kind='text') AS last_inbound,
     clock_timestamp() AS checked_at,
@@ -73,6 +74,18 @@ export async function manualReplyStatus(
   const now = current.checked_at.getTime();
   if (!Number.isFinite(last) || last > now || now - last >= 24 * 60 * 60_000) return result("reply_window_closed");
   if (!current.identity_verified) return result("handoff_identity_unverified");
+  try {
+    if (
+      await deliveryRecipientOptedOut(pool, {
+        workspaceId: current.workspace_id,
+        connectionId: current.connection_id,
+        senderId: current.sender_id,
+      })
+    )
+      return result("recipient_opted_out");
+  } catch {
+    return result("consent_unavailable");
+  }
   return result(null);
 }
 export interface ManualReplyTransport {
@@ -80,7 +93,7 @@ export interface ManualReplyTransport {
   send(recipient: string, text: string, context: FollowSendContext): Promise<{ messageId: string }>;
 }
 export async function assertManualReplyAllowed(
-  pool: Pick<Pool, "query">,
+  pool: ConsentQueryable,
   id: string,
   attempt: string,
   connection: string,
@@ -101,7 +114,11 @@ export async function assertManualReplyAllowed(
       ? new PreSendVerificationError("retry", "token_rotated")
       : new PreSendVerificationError("block", "delivery_changed");
   const failure = await manualReplyEligibility(pool, row, { id, attempt, encryptedToken });
-  if (failure) throw new PreSendVerificationError(failure === "token_rotated" ? "retry" : "block", failure);
+  if (failure)
+    throw new PreSendVerificationError(
+      failure === "token_rotated" || failure === "consent_unavailable" ? "retry" : "block",
+      failure,
+    );
 }
 export async function processNextManualReply(
   pool: Pool,
@@ -197,7 +214,7 @@ export async function processNextManualReply(
         await finish(
           error.disposition === "retry" ? "pending" : "failed",
           error.failureCode,
-          error.disposition !== "retry",
+          error.failureCode === "recipient_opted_out" ? false : error.disposition !== "retry",
         );
         return false;
       }
@@ -237,7 +254,7 @@ export async function processNextManualReply(
     if (error instanceof PreSendVerificationError) {
       status = error.disposition === "retry" ? "pending" : "failed";
       code = error.failureCode;
-      safe = error.disposition !== "retry";
+      safe = error.failureCode === "recipient_opted_out" ? false : error.disposition !== "retry";
     } else if (error instanceof ProviderRateLimitedError) {
       status = "failed";
       code = error.failureCode;

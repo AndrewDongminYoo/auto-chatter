@@ -148,7 +148,7 @@ The conversation finished as `sent / following` with two confirmation receipts a
 See `docs/notes/2026-09-26-live-follow-test.md` for the approved texts, evidence and shutdown procedure.
 Email confirmation-link behavior, multi-user live isolation, live unavailable-follow and duplicate-event cases, and Advanced Access remain unverified.
 Run `psql -f deploy/migrate-multi-user.sql` with an administrator connection before deploying this code.
-This runner owns the transaction for migrations 003–015 and the access script, stops on the first error, and rolls back on failure.
+This runner owns the transaction for migrations 003–016 and the access script, stops on the first error, and rolls back on failure.
 Do not apply these migration files individually without that transaction.
 Assign the existing workspace to a confirmed operator with `deploy/assign-workspace-owner.sql`; never claim legacy data automatically by email.
 Active Instagram Login connections refresh valid long-lived tokens from 30 days before expiry, after the token is at least 24 hours old.
@@ -175,6 +175,19 @@ The deployment job verifies signed-event persistence, replay protection, restric
 
 What has and has not been proven against real Meta accounts is tracked in README.md and `docs/notes/2026-09-25-meta-permissions-and-worker.md`.
 Type checks and mocked Graph tests do not prove live permissions or a live private-reply send; do not describe them as if they did.
+
+## Channel consent and opt-out
+
+Migration 016 creates append-only `channel_consent_events` and exact-scope `channel_consent_state` for Instagram.
+The authenticated same-origin `POST /api/connections/:connectionId/channel-consent-events` records evidence for a workspace-owned connection; repeated UUID/payload pairs replay, while changed payloads conflict.
+`service_reply` grants require explicit evidence, `all` events can only revoke, and marketing without an exact explicit grant is denied.
+Client `occurred_at` is evidence, not state ordering; the connection lock serializes event writes and the projection is updated in the same transaction.
+Private, follow and manual delivery check active service revokes after claim and immediately before the provider POST.
+The comment sender and every DM recipient supported by a provider-acknowledged, same-sender prior reply are checked in one DB statement; unacknowledged or mismatched bridges are ignored.
+An opt-out is terminal and never replays an old row after re-consent; a consent read error is deferred before sending.
+The final DB check cannot recall a provider request that begins before a later revoke.
+See `docs/specs/2026-09-29-channel-consent.md` for the contract.
+The code and isolated tests are local only; production migration 016, Worker deployment and live Meta behavior have not been verified.
 
 ## Instagram contacts
 

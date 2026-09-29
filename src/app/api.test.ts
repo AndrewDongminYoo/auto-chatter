@@ -642,6 +642,49 @@ test("API rejects unauthenticated and cross-origin requests before opening a dat
   assert.equal(crossOrigin.status, 403);
 });
 
+test("consent mutation rejects unauthenticated and cross-origin requests before DB access", async () => {
+  let openCount = 0;
+  const open = () => {
+    openCount += 1;
+    return { end: async () => {} } as unknown as Pool;
+  };
+  const path = `https://app.test/api/connections/${connectionId}/channel-consent-events`;
+  const unauthenticated = await appApi(
+    new Request(path, { method: "POST", headers: { origin: "https://app.test" } }),
+    config,
+    open,
+  );
+  assert.equal(unauthenticated.status, 401);
+  const crossOrigin = await appApi(
+    new Request(path, {
+      method: "POST",
+      headers: { origin: "https://attacker.test", cookie: "__Host-ac-access=test" },
+    }),
+    config,
+    open,
+  );
+  assert.equal(crossOrigin.status, 403);
+  assert.equal(openCount, 0);
+
+  const malformed = await appApi(
+    new Request(path, {
+      method: "POST",
+      headers: {
+        origin: "https://app.test",
+        cookie: "__Host-ac-access=test",
+        "content-type": "application/json",
+      },
+      body: "{}",
+    }),
+    config,
+    open,
+    (async () =>
+      Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+  );
+  assert.equal(malformed.status, 400);
+  assert.equal(openCount, 1);
+});
+
 test("contacts API is authenticated and returns only the workspace list", async () => {
   const pool = {
     query: async (sql: string) => ({ rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId }] : [] }),
