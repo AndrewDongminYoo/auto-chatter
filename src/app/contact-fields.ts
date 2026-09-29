@@ -177,6 +177,11 @@ export async function saveContactFieldValue(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    // Same connection lock as lockContactConnection in contacts.ts, which serializes with data deletion.
+    await client.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR SHARE", [
+      connectionId,
+      workspace,
+    ]);
     const field = (
       await client.query<{ type: string }>(
         "SELECT type FROM instagram_contact_fields WHERE workspace_id=$1 AND id=$2 AND NOT archived FOR SHARE",

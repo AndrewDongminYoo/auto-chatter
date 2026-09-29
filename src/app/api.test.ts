@@ -800,14 +800,16 @@ test("contact mutations reject cross-origin writes and invalid tags before a wri
 
 test("contact routes accept encoded string sender IDs without changing identity", async () => {
   const sender = "sender/one% test";
+  const query = async (sql: string, values: unknown[] = []) => ({
+    rows: sql.includes("workspace_members")
+      ? [{ workspace_id: workspaceId }]
+      : values[2] === sender
+        ? [{ tags: ["lead"] }]
+        : [],
+  });
   const pool = {
-    query: async (sql: string, values: unknown[]) => ({
-      rows: sql.includes("workspace_members")
-        ? [{ workspace_id: workspaceId }]
-        : values[2] === sender
-          ? [{ tags: ["lead"] }]
-          : [],
-    }),
+    query,
+    connect: async () => ({ query, release: () => {} }),
     end: async () => {},
   } as unknown as Pool;
   const request = new Request(

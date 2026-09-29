@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { workspaceFor } from "./settings.ts";
 import { parseFieldCondition, validateFieldCondition } from "./contact-fields.ts";
@@ -19,6 +19,14 @@ function tag(value: unknown): string {
   const result = value.trim().normalize("NFC").toLowerCase();
   if (!result || result.length > 40 || /[\p{Cc}\p{Cf}]/u.test(result)) throw new ApiError(400, "invalid_contact_tags");
   return result;
+}
+// Contact writes share the connection row lock with delete_connection_data (FOR NO KEY UPDATE),
+// so a write either finishes before a deletion or re-checks the contact after it.
+export async function lockContactConnection(client: PoolClient, workspace: string, connectionId: string) {
+  await client.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR SHARE", [
+    connectionId,
+    workspace,
+  ]);
 }
 function senderIdentity(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -138,14 +146,25 @@ export async function saveContactTags(pool: Pool, user: User, connectionId: stri
     throw new ApiError(400, "invalid_contact_tags");
   const tags = [...new Set(input.tags.map(tag))].sort();
   const workspaceId = await workspaceFor(pool, user);
-  const result = await pool.query(
-    `INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags)
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await lockContactConnection(client, workspaceId, connectionId);
+    const result = await client.query(
+      `INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags)
  SELECT $1,$2,$3,$4::text[] WHERE EXISTS(SELECT 1 FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3)
  ON CONFLICT(workspace_id,connection_id,sender_id) DO UPDATE SET tags=EXCLUDED.tags RETURNING tags`,
-    [workspaceId, connectionId, senderId, tags],
-  );
-  if (!result.rows[0]) throw new ApiError(404, "contact_not_found");
-  return { tags: result.rows[0].tags };
+      [workspaceId, connectionId, senderId, tags],
+    );
+    if (!result.rows[0]) throw new ApiError(404, "contact_not_found");
+    await client.query("COMMIT");
+    return { tags: result.rows[0].tags };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function listContactSegments(pool: Pool, user: User) {
@@ -260,21 +279,32 @@ export async function saveContactAutomation(
   )
     throw new ApiError(400, "invalid_contact_automation");
   const workspace = await workspaceFor(pool, user);
-  const result = await pool.query(
-    `INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused)
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await lockContactConnection(client, workspace, connectionId);
+    const result = await client.query(
+      `INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused)
      SELECT $1,$2,$3,$4 WHERE EXISTS(SELECT 1 FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3)
      ON CONFLICT(workspace_id,connection_id,sender_id) DO UPDATE SET paused=EXCLUDED.paused,updated_at=now()
        WHERE NOT instagram_contact_automation.handoff_paused OR EXCLUDED.paused
      RETURNING (paused OR handoff_paused) AS automation_paused`,
-    [workspace, connectionId, senderId, input.paused],
-  );
-  if (!result.rows[0]) {
-    const exists = await pool.query(
-      "SELECT 1 FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3 LIMIT 1",
-      [workspace, connectionId, senderId],
+      [workspace, connectionId, senderId, input.paused],
     );
-    if (exists.rowCount && !input.paused) throw new ApiError(409, "handoff_active");
-    throw new ApiError(404, "contact_not_found");
+    if (!result.rows[0]) {
+      const exists = await client.query(
+        "SELECT 1 FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3 LIMIT 1",
+        [workspace, connectionId, senderId],
+      );
+      if (exists.rowCount && !input.paused) throw new ApiError(409, "handoff_active");
+      throw new ApiError(404, "contact_not_found");
+    }
+    await client.query("COMMIT");
+    return result.rows[0];
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
-  return result.rows[0];
 }
