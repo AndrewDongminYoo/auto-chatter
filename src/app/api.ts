@@ -26,6 +26,7 @@ import { connectionMedia } from "./instagram-media.ts";
 import { connectionHealth } from "./instagram-connection-health.ts";
 import { setInbox, listInbox, inboxMessages, inboxContext } from "./inbox.ts";
 import { archiveContactField, createContactField, listContactFields, saveContactFieldValue } from "./contact-fields.ts";
+import { recordConsentEvent } from "./channel-consent.ts";
 
 function instagramConnectAvailable(user: User, env: InstagramOAuthEnv): boolean {
   if (env.INSTAGRAM_PUBLIC_CONNECT_ENABLED === "true") return true;
@@ -86,6 +87,11 @@ export async function appApi(
         return json({ workspace_id: await ensureWorkspace(pool, user) });
       if (url.pathname === "/api/connections" && request.method === "GET")
         return json({ connections: await listConnections(pool, user) });
+      const consentEvent = /^\/api\/connections\/([^/]+)\/channel-consent-events$/.exec(url.pathname);
+      if (consentEvent && request.method === "POST") {
+        const result = await recordConsentEvent(pool, user, consentEvent[1]!, await readJson(request));
+        return json(result, result.applied ? 201 : 200);
+      }
       const health = /^\/api\/connections\/([a-f0-9-]+)\/health$/.exec(url.pathname);
       if (health && request.method === "GET") {
         if (!env.AUTH_IP_LIMIT) throw new ApiError(503, "health_unavailable");

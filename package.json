@@ -12,7 +12,7 @@
     "meta:check": "node src/instagram/worker-main.ts --check-permissions",
     "check-types": "tsc --noEmit",
     "test": "node --test src/instagram/webhook.test.ts src/instagram/comment-rule.test.ts src/instagram/reply-policy.test.ts src/instagram/channel-consent.test.ts src/instagram/facebook-private-reply.test.ts src/instagram/instagram-login-private-reply.test.ts src/instagram/worker-main.test.ts src/cloudflare/public-pages.test.ts src/app/auth.test.ts src/app/secrets.test.ts src/instagram/follow-flow.test.ts src/app/api.test.ts",
-    "test:db": "node --test --test-concurrency=1 src/instagram/http.db.test.ts src/instagram/reply-worker.db.test.ts src/instagram/channel-consent.db.test.ts src/app/settings.db.test.ts src/app/instagram-oauth.db.test.ts src/instagram/follow-flow.db.test.ts",
+    "test:db": "node --test --test-concurrency=1 src/instagram/http.db.test.ts src/instagram/reply-worker.db.test.ts src/instagram/channel-consent.db.test.ts src/app/channel-consent.db.test.ts src/app/settings.db.test.ts src/app/instagram-oauth.db.test.ts src/instagram/follow-flow.db.test.ts",
     "build:cloudflare": "wrangler deploy --dry-run --env-file /dev/null --outdir .wrangler/build",
     "test:cloudflare": "pnpm build:cloudflare && node --test --test-concurrency=1 src/cloudflare/worker.db.test.ts src/cloudflare/access.db.test.ts src/cloudflare/runtime.db.test.mjs"
   },
