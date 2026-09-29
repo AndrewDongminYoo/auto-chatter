@@ -179,6 +179,18 @@ test("consent ledger preserves revoke and re-consent evidence", async () => {
     true,
   );
 
+  await assert.rejects(
+    recordChannelConsentEvent(pool, {
+      ...grant,
+      requestKey: "99999999-9999-4999-8999-999999999999",
+      purpose: "service_reply",
+      evidenceKind: "import",
+      evidenceReference: "import:old-list",
+    }),
+    (error: unknown) => (error as { code?: string }).code === "23514",
+  );
+  assert.equal(await recipientOptedOut(pool, [recipientScope]), true);
+
   const serviceReconsent = await recordChannelConsentEvent(pool, {
     ...grant,
     requestKey: "88888888-8888-4888-8888-888888888888",

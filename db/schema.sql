@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS channel_consent_events (
   recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   UNIQUE(workspace_id,request_key),
   FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id),
-  CHECK(purpose<>'all' OR decision='revoke')
+  CHECK(purpose<>'all' OR decision='revoke'),
+  CHECK(purpose<>'service_reply' OR decision<>'grant' OR evidence_kind='explicit')
 );
 CREATE INDEX IF NOT EXISTS channel_consent_events_scope_idx
   ON channel_consent_events(workspace_id,connection_id,channel,identity_kind,identity_value,id);

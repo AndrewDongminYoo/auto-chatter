@@ -46,6 +46,7 @@ export async function recordConsentEvent(pool: Pool, user: User, connectionId: s
   const decision = oneOf(input.decision, decisions);
   if (purpose === "all" && decision !== "revoke") invalid();
   const evidenceKind = oneOf(input.evidence_kind, evidenceKinds);
+  if (purpose === "service_reply" && decision === "grant" && evidenceKind !== "explicit") invalid();
   if (
     typeof input.evidence_reference !== "string" ||
     !input.evidence_reference.trim() ||

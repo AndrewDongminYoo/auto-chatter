@@ -120,6 +120,39 @@ test("owned consent API records idempotent revoke and scoped re-consent", async 
   assert.equal(whitespaceConflict.status, 409);
   assert.deepEqual(await whitespaceConflict.json(), { error: "consent_request_conflict" });
 
+  for (const [evidenceKind, requestKey] of [
+    ["import", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1"],
+    ["comment", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2"],
+    ["inbound_dm", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb3"],
+  ]) {
+    const nonExplicitGrant = await consentRequest(connectionId, {
+      ...revokeBody,
+      request_key: requestKey,
+      purpose: "service_reply",
+      decision: "grant",
+      evidence_kind: evidenceKind,
+    });
+    assert.equal(nonExplicitGrant.status, 400);
+    assert.deepEqual(await nonExplicitGrant.json(), { error: "invalid_consent_event" });
+  }
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT purpose,decision,last_event_id::text AS last_event_id FROM channel_consent_state WHERE workspace_id=$1 AND connection_id=$2 AND identity_value='123456' ORDER BY purpose",
+        [workspaceId, connectionId],
+      )
+    ).rows,
+    [
+      { purpose: "marketing", decision: "revoke", last_event_id: firstBody.event_id },
+      { purpose: "service_reply", decision: "revoke", last_event_id: firstBody.event_id },
+    ],
+  );
+  assert.equal(
+    (await pool.query("SELECT count(*)::int AS count FROM channel_consent_events WHERE workspace_id=$1", [workspaceId]))
+      .rows[0].count,
+    1,
+  );
+
   const serviceGrant = await consentRequest(connectionId, {
     ...revokeBody,
     request_key: "88888888-8888-4888-8888-888888888888",
