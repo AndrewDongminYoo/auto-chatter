@@ -157,10 +157,10 @@ Meta 자체의 앱 권한 철회는 Instagram 설정에서 별도로 수행할 �
 전체 데이터 삭제는 기존에 승인한 운영자 수동 처리 정책을 따릅니다.
 
 작업 공간 전체의 관리자 삭제 절차는 계정 수신·발송과 인박스 보관을 먼저 중지하고 진행 중인 요청이 없는지 확인한 뒤 수행합니다.
-삭제 범위의 workspace·연결 ID를 확인하고 한 트랜잭션에서 `instagram_inbox_handoff_events` → `instagram_inbox_handoffs` → `instagram_inbox_messages`·`instagram_contact_automation`·`instagram_contact_tags`·`instagram_contact_field_values`·`instagram_contact_segments` → `instagram_contact_fields` → `instagram_message_receipts`·`instagram_follow_conversations` → `private_reply_outbox` → `channel_consent_state` → `channel_consent_events` → 댓글 이벤트·규칙 → 연결 → 해당 workspace의 OAuth state → membership → workspace 순으로 처리합니다.
+삭제 범위의 workspace·연결 ID를 확인하고 한 트랜잭션에서 `instagram_manual_reply_events` → `instagram_manual_replies` → `instagram_inbox_handoff_events` → `instagram_inbox_handoffs` → `instagram_inbox_messages`·`instagram_contact_automation`·`instagram_contact_tags`·`instagram_contact_field_values`·`instagram_contact_segments` → `instagram_contact_fields` → `instagram_message_receipts`·`instagram_follow_conversations` → `private_reply_outbox` → `channel_consent_state` → `channel_consent_events` → 댓글 이벤트·규칙 → 연결 → 해당 workspace의 OAuth state → membership → workspace 순으로 처리합니다.
 다른 작업 공간의 행은 삭제 대상에 포함하지 않으며, 단일 연락처나 연결만 삭제하는 요청은 해당 범위와 참조 관계를 별도로 확인합니다.
 로그인 계정 삭제 요청이면 관련 작업 공간 데이터를 처리한 뒤 Supabase Auth 사용자도 관리자 권한으로 삭제합니다.
-별도 인박스 보관을 켠 연결의 수신 DM 본문과 확인 버튼 응답, 연락처 태그·필드·필터·직접 중지와 상담 중지 상태, 상담 전환 버전·운영자·근거·감사 기록, 발송 문구, 확인 메시지 식별자·시각, 팔로우 확인 상태는 삭제 대상에 포함합니다.
+별도 인박스 보관을 켠 연결의 수신 DM 본문과 확인 버튼 응답, 연락처 태그·필드·필터·직접 중지와 상담 중지 상태, 상담 전환 버전·운영자·근거·감사 기록, 수동 답장 문구·전송 상태·감사 기록, 발송 문구, 확인 메시지 식별자·시각, 팔로우 확인 상태는 삭제 대상에 포함합니다.
 서버 역할에 DELETE 권한을 추가하지 않습니다.
 
 `unknown`은 자동 재발송하지 않고 운영자가 공급자 상태를 확인합니다.
