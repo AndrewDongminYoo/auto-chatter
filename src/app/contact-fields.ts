@@ -29,20 +29,22 @@ export function parseFieldCondition(input: Record<string, unknown>): FieldCondit
   };
 }
 
+export function isValidFieldValue(type: string, value: unknown): boolean {
+  return type === "text"
+    ? typeof value === "string" && value.length <= 1000 && !/[\p{Cc}\p{Cf}]/u.test(value.replace(/[\n\r\t]/g, ""))
+    : type === "number"
+      ? typeof value === "number" && Number.isFinite(value)
+      : type === "boolean"
+        ? typeof value === "boolean"
+        : type === "date" &&
+          typeof value === "string" &&
+          /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+          Number.isFinite(Date.parse(value)) &&
+          new Date(value).toISOString().slice(0, 10) === value;
+}
+
 function validateValue(type: string, value: unknown) {
-  const valid =
-    type === "text"
-      ? typeof value === "string" && value.length <= 1000 && !/[\p{Cc}\p{Cf}]/u.test(value.replace(/[\n\r\t]/g, ""))
-      : type === "number"
-        ? typeof value === "number" && Number.isFinite(value)
-        : type === "boolean"
-          ? typeof value === "boolean"
-          : type === "date" &&
-            typeof value === "string" &&
-            /^\d{4}-\d{2}-\d{2}$/.test(value) &&
-            Number.isFinite(Date.parse(value)) &&
-            new Date(value).toISOString().slice(0, 10) === value;
-  if (!valid) throw new ApiError(400, "invalid_field_value");
+  if (!isValidFieldValue(type, value)) throw new ApiError(400, "invalid_field_value");
 }
 
 export async function validateFieldCondition(
@@ -125,6 +127,16 @@ export async function archiveContactField(pool: Pool, user: User, id: string) {
       (
         await client.query(
           "SELECT id FROM instagram_contact_segments WHERE workspace_id=$1 AND field_id=$2 AND NOT archived LIMIT 1",
+          [workspace, id],
+        )
+      ).rows[0]
+    )
+      throw new ApiError(409, "field_in_use");
+    if (
+      (
+        await client.query(
+          `SELECT 1 FROM flows f JOIN flow_versions v ON v.id=f.published_version_id
+           WHERE f.workspace_id=$1 AND NOT f.archived AND $2::uuid=ANY(v.field_ids) LIMIT 1`,
           [workspace, id],
         )
       ).rows[0]

@@ -35,7 +35,7 @@ export function requireSameOrigin(request: Request): void {
   if (request.headers.get("origin") !== new URL(request.url).origin) throw new ApiError(403, "origin_rejected");
 }
 
-export async function readJson(request: Request): Promise<unknown> {
+export async function readJson(request: Request, maxBytes = 16_384): Promise<unknown> {
   if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json"))
     throw new ApiError(415, "json_required");
   if (!request.body) throw new ApiError(400, "invalid_json");
@@ -47,7 +47,7 @@ export async function readJson(request: Request): Promise<unknown> {
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > 16_384) {
+      if (size > maxBytes) {
         await reader.cancel();
         throw new ApiError(413, "request_too_large");
       }
