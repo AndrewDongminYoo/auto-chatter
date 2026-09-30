@@ -5,11 +5,11 @@
 [이슈 #83](https://github.com/AndrewDongminYoo/auto-chatter/issues/83)의 첫 번째 PR입니다.
 로그인한 멤버는 설정 화면에서 자신의 작업 공간 데이터를 JSON 파일 하나로 내려받습니다.
 작업 공간·로그인 계정 전체 삭제와 그에 따른 공개 문구 변경은 이어지는 PR에서 다룹니다.
-#21 전까지는 작업 공간마다 멤버가 한 명이고 그 멤버가 소유자이므로, 역할 검사는 두지 않습니다.
+관리자 이상만 내보낼 수 있으며, 역할은 [작업 공간 역할 계약](2026-09-30-workspace-roles.md)을 따릅니다.
 
 ## API
 
-`GET /api/workspace/export`는 내보내기 트랜잭션 안에서 호출자의 `workspace_members` 행으로 작업 공간을 찾고, 멤버십이 없으면 `403 workspace_required`를 반환합니다.
+`GET /api/workspace/export`는 내보내기 트랜잭션 안에서 호출자의 `workspace_members` 행으로 작업 공간을 찾고, 멤버십이 없으면 `403 workspace_required`, 상담원이면 `403 role_forbidden`을 반환합니다.
 응답은 `Cache-Control: no-store`와 `Content-Disposition: attachment; filename="auto-chatter-export-<UTC 날짜>.json"`을 가집니다.
 본문은 `format`(`auto-chatter-workspace-export`), `version`(1), `exported_at`, `workspace_id`, `excluded`, `tables`로 구성됩니다.
 `tables`의 각 값은 해당 테이블의 행을 열 이름 그대로 담은 배열입니다.
