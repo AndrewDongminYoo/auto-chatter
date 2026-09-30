@@ -395,9 +395,15 @@ test("person deletion migration replays and the function is not a security defin
     new URL("../../db/migrations/019_person_data_deletion.sql", import.meta.url),
     "utf8",
   );
+  // Replay in runner order: 021 redefines the function, so replaying 019 alone would leave the older body
+  // (without flow run deletes) in place for any test that runs after this one.
+  const flowRuns = await readFile(new URL("../../db/migrations/021_flow_runs.sql", import.meta.url), "utf8");
   await pool.query(migration);
+  await pool.query(flowRuns);
   await pool.query(migration);
-  const fn = await pool.query("SELECT prosecdef FROM pg_proc WHERE proname='delete_person_data'");
+  await pool.query(flowRuns);
+  const fn = await pool.query("SELECT prosecdef, prosrc FROM pg_proc WHERE proname='delete_person_data'");
   assert.equal(fn.rows[0].prosecdef, false);
+  assert.match(fn.rows[0].prosrc, /flow_step_runs/);
   assert.equal((await pool.query("SELECT count(*) FROM data_deletion_records WHERE scope IS NULL")).rows[0].count, "0");
 });
