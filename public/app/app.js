@@ -24,6 +24,8 @@ let refreshPromise;
 let currentUserId;
 let currentRole;
 let pendingInvite = null;
+// Set when acceptPendingInvite reports an outcome, so the login notice does not overwrite it.
+let inviteNoticeShown = false;
 let activityRequest = 0;
 let editingRuleId;
 let dirty = false;
@@ -535,6 +537,7 @@ async function acceptPendingInvite() {
     if (error.status) rememberInvite(null);
     notice(error.message, true);
   }
+  inviteNoticeShown = true;
 }
 
 function memberItem(member) {
@@ -1063,8 +1066,9 @@ byId("login-form").addEventListener("submit", (event) => {
     } finally {
       login.elements.password.value = "";
     }
+    inviteNoticeShown = false;
     await loadWorkspace();
-    notice("로그인했습니다.");
+    if (!inviteNoticeShown) notice("로그인했습니다.");
   });
 });
 byId("signup").addEventListener("click", (event) =>
