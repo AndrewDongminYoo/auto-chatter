@@ -77,7 +77,7 @@ async function errorOf(response: Response): Promise<string | undefined> {
   return ((await response.clone().json()) as { error?: string }).error;
 }
 
-test("agents are refused every administrative route that admins can reach", async () => {
+test("agents are refused the administrative routes that admins can reach", async () => {
   const draft = await flow("draft");
   const archived = await flow("archived");
   const routes: [string, string, unknown?][] = [

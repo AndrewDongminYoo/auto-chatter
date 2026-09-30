@@ -152,6 +152,36 @@ test("Instagram review allowlist and explicit public switch permit OAuth", async
   assert.equal(disabled.status, 403);
 });
 
+test("an agent cannot start an Instagram connection", async () => {
+  const fetchImpl = (async () =>
+    Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
+  const pool = {
+    query: async (sql: string) => ({
+      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "agent" }] : [],
+    }),
+    end: async () => {},
+  } as unknown as Pool;
+  const response = await appApi(
+    new Request("https://app.test/api/instagram/connect", {
+      method: "POST",
+      headers: { origin: "https://app.test", cookie: "__Host-ac-access=test-session" },
+    }),
+    {
+      ...config,
+      APP_ORIGIN: "https://app.test",
+      INSTAGRAM_OAUTH_APP_ID: "123",
+      INSTAGRAM_OAUTH_APP_SECRET: "synthetic-secret",
+      TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
+      META_GRAPH_VERSION: "v26.0",
+      INSTAGRAM_PUBLIC_CONNECT_ENABLED: "true",
+    },
+    () => pool,
+    fetchImpl,
+  );
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), { error: "role_forbidden" });
+});
+
 test("a denied Instagram callback returns to the app with a bounded reason", async () => {
   const fetchImpl = (async (input: string | URL | Request) =>
     Response.json(
