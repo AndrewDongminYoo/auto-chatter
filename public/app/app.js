@@ -7,6 +7,8 @@ let contactsBusy = false;
 let contactsSaving = false;
 let contactsQuery = "";
 const contactsDirty = new Set();
+// Connections deleted since the current contact list generation began; later pages drop their contacts.
+const purgedContactConnections = new Set();
 let contactSegments = [];
 let segmentsGeneration = 0;
 let segmentsRequest = 0;
@@ -130,6 +132,7 @@ function resetSession() {
   currentUserId = undefined;
   contactsGeneration++;
   contactsDirty.clear();
+  purgedContactConnections.clear();
   contactsAfter = null;
   contactsBusy = false;
   contactsSaving = false;
@@ -370,6 +373,7 @@ function deletionRecord(record) {
 
 // Removes the deleted connection's contacts, inbox drafts and activity from the screen, then reloads those views.
 function forgetDeletedConnection(connectionId) {
+  purgedContactConnections.add(connectionId);
   for (const key of contactsDirty) if (key.startsWith(`${connectionId}:`)) contactsDirty.delete(key);
   for (const card of byId("contacts-list").querySelectorAll(".contact-row"))
     if (card.dataset.connectionId === connectionId) card.remove();
@@ -1382,6 +1386,7 @@ function clearContactResults() {
   contactsAfter = null;
   contactsQuery = "";
   contactsDirty.clear();
+  purgedContactConnections.clear();
   contactsBusy = false;
   byId("contacts-list").replaceChildren();
   byId("contacts-more").hidden = true;
@@ -1403,6 +1408,7 @@ async function loadContacts(more = false) {
   if (!more) {
     contactsGeneration++;
     contactsDirty.clear();
+    purgedContactConnections.clear();
     contactsAfter = null;
     const fields = byId("contacts-filter").elements;
     const query = new URLSearchParams();
@@ -1430,7 +1436,8 @@ async function loadContacts(more = false) {
   try {
     const page = await api(`/api/contacts?${query}`);
     if (generation !== contactsGeneration) return;
-    for (const contact of page.contacts) byId("contacts-list").append(contactCard(contact));
+    for (const contact of page.contacts)
+      if (!purgedContactConnections.has(contact.connection_id)) byId("contacts-list").append(contactCard(contact));
     contactsAfter = page.after;
     byId("contacts-more").hidden = !contactsAfter;
     byId("contacts-status").textContent =
