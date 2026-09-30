@@ -22,6 +22,8 @@ let fieldBusy = false;
 let fieldNameDirty = false;
 let refreshPromise;
 let currentUserId;
+let currentRole;
+let pendingInvite = null;
 let activityRequest = 0;
 let editingRuleId;
 let dirty = false;
@@ -130,6 +132,12 @@ function resetSession() {
   resetInbox();
   connections = [];
   currentUserId = undefined;
+  currentRole = undefined;
+  byId("members-section").hidden = true;
+  byId("members").replaceChildren();
+  byId("invites").replaceChildren();
+  byId("invite-result").hidden = true;
+  byId("invite-link").value = "";
   contactsGeneration++;
   contactsDirty.clear();
   purgedContactConnections.clear();
@@ -189,6 +197,22 @@ function notice(message, error = false) {
 }
 
 const errors = {
+  role_forbidden: "이 작업을 할 권한이 없습니다. 작업 공간 소유자에게 역할 변경을 요청해 주세요.",
+  workspace_required: "작업 공간에 참여하고 있지 않습니다. 페이지를 새로 고치거나 새 초대를 요청해 주세요.",
+  invalid_email: "초대할 이메일 주소를 확인해 주세요.",
+  invalid_role: "역할을 다시 선택해 주세요.",
+  already_member: "이미 작업 공간의 멤버입니다.",
+  invite_limit_reached: "대기 중인 초대가 너무 많습니다. 사용하지 않는 초대를 취소한 뒤 다시 시도해 주세요.",
+  invite_not_found: "초대 링크를 확인할 수 없습니다. 링크 전체를 복사했는지 확인하거나 새 초대를 요청해 주세요.",
+  invite_used: "이미 사용한 초대 링크입니다. 새 초대를 요청해 주세요.",
+  invite_revoked: "취소된 초대 링크입니다. 새 초대를 요청해 주세요.",
+  invite_expired: "만료된 초대 링크입니다. 새 초대를 요청해 주세요.",
+  invite_email_mismatch: "초대받은 이메일과 로그인한 계정의 이메일이 다릅니다. 초대받은 이메일로 로그인해 주세요.",
+  workspace_not_empty:
+    "지금 작업 공간에 데이터나 다른 멤버가 있어 초대를 수락할 수 없습니다. 기존 작업 공간을 정리한 뒤 다시 시도해 주세요.",
+  cannot_change_self: "자신의 역할은 바꾸거나 제거할 수 없습니다.",
+  cannot_change_owner: "소유자의 역할은 바꾸거나 제거할 수 없습니다.",
+  member_not_found: "멤버를 찾을 수 없습니다. 목록을 새로 고쳐 주세요.",
   authentication_failed: "로그인 정보를 확인하거나 잠시 후 다시 시도해 주세요.",
   auth_not_configured: "로그인 서비스를 준비 중입니다.",
   confirmed_email_required: "이메일 인증을 완료해 주세요.",
@@ -486,12 +510,130 @@ function connectionData(account, generation) {
   return section;
 }
 
+const roleLabels = { owner: "소유자", admin: "관리자", agent: "상담원" };
+const roleLabelsAs = { owner: "소유자로", admin: "관리자로", agent: "상담원으로" };
+
+// The link carries the token in its fragment; it is kept for this tab until the user signs in.
+function rememberInvite(token) {
+  pendingInvite = token;
+  try {
+    if (token) sessionStorage.setItem("pending-invite", token);
+    else sessionStorage.removeItem("pending-invite");
+  } catch {
+    // Storage can be unavailable; the token then lasts only for this page load.
+  }
+}
+
+async function acceptPendingInvite() {
+  const token = pendingInvite;
+  try {
+    const joined = await api("/api/invites/accept", "POST", { token });
+    rememberInvite(null);
+    notice(`초대를 수락했습니다. ${roleLabelsAs[joined.role] ?? "멤버로"} 작업 공간에 참여했습니다.`);
+  } catch (error) {
+    // A refused invite will not succeed on retry; a network failure keeps the token for the next load.
+    if (error.status) rememberInvite(null);
+    notice(error.message, true);
+  }
+}
+
+function memberItem(member) {
+  const item = node("div", "", "item");
+  item.append(node("strong", member.email ?? "이메일 미기록"));
+  const badges = node("div", "", "badges");
+  badges.append(badge(roleLabels[member.role] ?? member.role), ...(member.is_self ? [badge("나")] : []));
+  item.append(badges);
+  if (member.is_self || member.role === "owner") return item;
+  const role = document.createElement("select");
+  role.setAttribute("aria-label", `${member.email ?? "멤버"} 역할`);
+  for (const value of ["agent", "admin"]) {
+    const option = node("option", roleLabels[value]);
+    option.value = value;
+    option.selected = member.role === value;
+    role.append(option);
+  }
+  role.addEventListener("change", async () => {
+    role.disabled = true;
+    try {
+      await api(`/api/workspace/members/${member.user_id}`, "PATCH", { role: role.value });
+      notice(
+        `멤버(${member.email ?? "이메일 미기록"})의 역할을 ${roleLabelsAs[role.value]} 바꿨습니다. 다음 요청부터 적용됩니다.`,
+      );
+    } catch (error) {
+      role.value = member.role;
+      notice(error.message, true);
+    } finally {
+      role.disabled = false;
+      void loadMembers();
+    }
+  });
+  const remove = node("button", "멤버 제거", "secondary danger");
+  remove.addEventListener("click", () =>
+    action(remove, async () => {
+      if (
+        !confirm(
+          `이 멤버(${member.email ?? "이메일 미기록"})를 작업 공간에서 제거할까요? 다음 요청부터 접근할 수 없습니다.`,
+        )
+      )
+        return;
+      await api(`/api/workspace/members/${member.user_id}`, "DELETE");
+      notice("멤버를 작업 공간에서 제거했습니다.");
+      await loadMembers();
+    }),
+  );
+  item.append(role, remove);
+  return item;
+}
+
+function inviteItem(invite) {
+  const item = node("div", "", "item");
+  item.append(node("strong", invite.email));
+  const badges = node("div", "", "badges");
+  badges.append(
+    badge(roleLabels[invite.role] ?? invite.role),
+    badge(
+      invite.expired ? "만료됨" : `${new Date(invite.expires_at).toLocaleDateString("ko-KR")}까지`,
+      invite.expired ? "warning" : "",
+    ),
+  );
+  const revoke = node("button", "초대 취소", "secondary");
+  revoke.addEventListener("click", () =>
+    action(revoke, async () => {
+      await api(`/api/workspace/invites/${invite.id}`, "DELETE");
+      notice("초대를 취소했습니다. 이 링크는 더 이상 사용할 수 없습니다.");
+      await loadMembers();
+    }),
+  );
+  item.append(badges, revoke);
+  return item;
+}
+
+async function loadMembers() {
+  const generation = segmentsGeneration;
+  try {
+    const [members, invites] = await Promise.all([api("/api/workspace/members"), api("/api/workspace/invites")]);
+    if (generation !== segmentsGeneration) return;
+    byId("member-count").textContent = members.members.length;
+    byId("members").replaceChildren(...members.members.map(memberItem));
+    byId("invites").replaceChildren(
+      ...(invites.invites.length ? invites.invites.map(inviteItem) : [node("p", "대기 중인 초대가 없습니다.", "hint")]),
+    );
+  } catch (error) {
+    if (generation === segmentsGeneration) notice(error.message, true);
+  }
+}
+
 async function loadWorkspace() {
   const generation = segmentsGeneration;
   const me = await api("/api/me");
   if (generation !== segmentsGeneration) return;
   currentUserId = me.user?.id;
-  await api("/api/workspace", "POST");
+  if (pendingInvite) await acceptPendingInvite();
+  if (generation !== segmentsGeneration) return;
+  const membership = await api("/api/workspace", "POST");
+  currentRole = membership.role;
+  byId("members-section").hidden = currentRole !== "owner";
+  if (currentRole === "owner") void loadMembers();
   if (generation !== segmentsGeneration) return;
   const [accounts, settings] = await Promise.all([api("/api/connections"), api("/api/rules")]);
   if (generation !== segmentsGeneration) return;
@@ -1026,6 +1168,32 @@ byId("connect").addEventListener("click", (event) =>
     location.assign(url.href);
   }),
 );
+byId("invite-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const inviteForm = event.currentTarget;
+  action(inviteForm.querySelector("button[type=submit]"), async () => {
+    const created = await api("/api/workspace/invites", "POST", {
+      email: inviteForm.elements.email.value,
+      role: inviteForm.elements.role.value,
+    });
+    byId("invite-link").value = created.link;
+    byId("invite-result").hidden = false;
+    byId("invite-link").select();
+    inviteForm.reset();
+    notice(`${created.email} 초대 링크를 만들었습니다. 이 화면을 벗어나면 링크를 다시 볼 수 없습니다.`);
+    await loadMembers();
+  });
+});
+byId("copy-invite").addEventListener("click", async () => {
+  const link = byId("invite-link");
+  try {
+    await navigator.clipboard.writeText(link.value);
+    notice("초대 링크를 복사했습니다.");
+  } catch {
+    link.select();
+    notice("링크를 선택했습니다. 직접 복사해 주세요.", true);
+  }
+});
 byId("export-data").addEventListener("click", (event) =>
   action(event.currentTarget, async () => {
     const generation = segmentsGeneration;
@@ -1123,6 +1291,16 @@ async function start() {
     history.replaceState(null, "", location.pathname + location.hash);
   }
   const fragment = new URLSearchParams(location.hash.slice(1));
+  if (fragment.has("invite")) {
+    rememberInvite(fragment.get("invite"));
+    history.replaceState(null, "", location.pathname + location.search);
+  } else if (!pendingInvite) {
+    try {
+      pendingInvite = sessionStorage.getItem("pending-invite");
+    } catch {
+      pendingInvite = null;
+    }
+  }
   if (fragment.has("access_token") || fragment.has("error") || fragment.has("type")) {
     history.replaceState(null, "", location.pathname + location.search);
     if (fragment.get("type") === "recovery" && fragment.get("access_token")) {
@@ -1150,6 +1328,9 @@ async function start() {
       byId("retry-load").hidden = location.protocol !== "file:" ? false : true;
     }
     byId("auth").hidden = false;
+    if (error.status === 401 && pendingInvite)
+      authLinkNotice ??=
+        "초대 링크를 받았습니다. 초대받은 이메일로 로그인하면 작업 공간에 참여합니다. 새로 가입했다면 이메일 인증을 마친 뒤 초대 링크를 다시 열어 주세요.";
   } finally {
     byId("startup").hidden = true;
     if (authLinkNotice)

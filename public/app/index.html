@@ -151,6 +151,42 @@
             </p>
           </div>
         </section>
+        <section id="members-section" class="card" aria-labelledby="members-title" hidden>
+          <div class="section-heading">
+            <div>
+              <h2 id="members-title">멤버 <span id="member-count" class="count">0</span></h2>
+            </div>
+          </div>
+          <p class="hint">
+            관리자는 멤버 관리를 뺀 모든 설정을 바꿀 수 있고, 상담원은 인박스·연락처 업무와 설정 조회만 할 수 있습니다.
+          </p>
+          <div id="members" class="account-list"></div>
+          <form id="invite-form" class="invite-form">
+            <label>
+              초대할 이메일
+              <input name="email" type="email" required maxlength="320" autocomplete="off" />
+            </label>
+            <label>
+              역할
+              <select name="role">
+                <option value="agent">상담원</option>
+                <option value="admin">관리자</option>
+              </select>
+            </label>
+            <button type="submit" data-loading-label="만드는 중…">초대 링크 만들기</button>
+          </form>
+          <p class="hint">
+            초대 링크는 입력한 이메일로 가입하고 이메일 인증을 마친 계정만 한 번 사용할 수 있으며 7일 뒤 만료됩니다.
+            링크는 만들 때 한 번만 보여 주므로 복사해 직접 전달해 주세요.
+          </p>
+          <div id="invite-result" class="invite-result" hidden>
+            <label for="invite-link">새 초대 링크</label>
+            <input id="invite-link" readonly />
+            <button id="copy-invite" type="button" class="secondary">복사</button>
+          </div>
+          <h3 id="invites-title">대기 중인 초대</h3>
+          <div id="invites" class="account-list" aria-labelledby="invites-title"></div>
+        </section>
         <section id="automation-section" aria-labelledby="automation-title">
           <div class="section-heading section-intro">
             <div>
