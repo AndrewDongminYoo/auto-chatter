@@ -128,6 +128,32 @@ test("refuses while any delivery is sending and deletes nothing", async () => {
   }
 });
 
+test("waits for an uncommitted claim and refuses once it commits as sending", async () => {
+  await pool.query("UPDATE private_reply_outbox SET status='pending' WHERE workspace_id=$1", [workspaceId]);
+  const claim = await pool.connect();
+  try {
+    await claim.query("BEGIN");
+    await claim.query(
+      "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE workspace_id=$1",
+      [workspaceId],
+    );
+    const outcome = deleteWorkspace().then(
+      () => "deleted",
+      (error: { code?: string }) => error.code,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await claim.query("COMMIT");
+    assert.equal(await outcome, "AC003");
+  } finally {
+    claim.release();
+  }
+  const kept = await pool.query("SELECT status FROM private_reply_outbox WHERE workspace_id=$1", [workspaceId]);
+  assert.deepEqual(
+    kept.rows.map((row) => row.status),
+    ["sending"],
+  );
+});
+
 test("rejects an unknown workspace and a missing administrator", async () => {
   await assert.rejects(deleteWorkspace("88888888-8888-4888-8888-888888888888"), { code: "AC001" });
   await assert.rejects(pool.query("SELECT public.delete_workspace_data($1,NULL)", [workspaceId]), { code: "AC006" });

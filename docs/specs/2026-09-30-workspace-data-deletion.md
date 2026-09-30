@@ -48,6 +48,7 @@
 ## 동시 쓰기와 권한
 
 함수는 작업 공간 행과 모든 연결 행을 `FOR UPDATE`로 잠급니다.
+발송 상태를 확인하기 전에 비공개 답장, 팔로우 후속 메시지, 수동 답장 행도 `FOR UPDATE`로 잠급니다. 아직 커밋되지 않은 발송 선점이 있으면 그 결과를 기다린 뒤 `sending`이면 `AC003`으로 거부하며, DB 테스트가 이 경합을 재현합니다.
 따라서 연결을 참조하는 새 행의 삽입과 연결 행을 `FOR SHARE`로 잠그는 쓰기는 삭제가 끝날 때까지 기다리며, 삭제 뒤에는 참조할 행이 없어 실패합니다.
 `delete_workspace_data`는 SECURITY INVOKER 함수이고, PUBLIC과 서버·API 역할의 EXECUTE를 모두 회수합니다.
 `workspace_deletion_records`는 RLS를 켜고 서버·API 역할의 모든 권한을 회수합니다.
