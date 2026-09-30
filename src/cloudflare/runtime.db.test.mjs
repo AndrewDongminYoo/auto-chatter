@@ -156,6 +156,14 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
       }
       if (graphUrl.pathname.endsWith("/me")) return Response.json({ id: "987", user_id: "123" });
       if (graphUrl.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "987" } });
+      if (graphUrl.pathname.endsWith("/1789")) return Response.json({ id: "1789", owner: { id: "987" } });
+      if (graphUrl.pathname.endsWith("/comment-flow"))
+        return Response.json({
+          id: "comment-flow",
+          from: { id: "sender-flow" },
+          media: { id: "1789" },
+          timestamp: new Date().toISOString(),
+        });
       return Response.json({
         id: "comment-1",
         from: { id: "sender-1" },
@@ -166,7 +174,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
   });
   try {
     await pool.query(
-      "DROP TABLE IF EXISTS data_deletion_records, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS data_deletion_records, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
@@ -315,8 +323,84 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
     ]);
     assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_reply_events")).rows[0].count, "3");
     assert.equal(sends, 2);
+    // An enabled flow answers through the same outbox, ingestion and final guard as a rule.
+    const flowId = "77777777-7777-4777-8777-777777777777";
+    const versionId = "88888888-8888-4888-8888-888888888888";
+    const definition = {
+      schema_version: 1,
+      nodes: [
+        {
+          id: "start",
+          type: "instagram_comment",
+          config: {
+            connection_id: connection,
+            media_id: "1789",
+            keywords: [],
+            match_mode: "all",
+            excluded_keywords: [],
+          },
+        },
+        { id: "reply", type: "instagram_message", config: { text: "Flow workerd reply" } },
+      ],
+      edges: [{ from: "start", port: "next", to: "reply" }],
+    };
+    await pool.query(
+      "INSERT INTO flows(id,workspace_id,name,draft) VALUES($1,'11111111-1111-4111-8111-111111111111','Flow',$2)",
+      [flowId, definition],
+    );
+    await pool.query(
+      `INSERT INTO flow_versions(id,flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,published_by)
+       VALUES($1,$2,'11111111-1111-4111-8111-111111111111',1,0,$3,$4,'1789',$5)`,
+      [versionId, flowId, definition, connection, operator.id],
+    );
+    await pool.query("UPDATE flows SET published_version_id=$2,enabled=true WHERE id=$1", [flowId, versionId]);
+    const flowBody = JSON.stringify({
+      object: "instagram",
+      entry: [
+        {
+          id: "123",
+          field: "comments",
+          value: { id: "comment-flow", text: "anything", from: { id: "sender-flow" }, media: { id: "1789" } },
+        },
+      ],
+    });
+    assert.equal(
+      (
+        await runtime.dispatchFetch("https://example.test/webhooks/instagram", {
+          method: "POST",
+          body: flowBody,
+          headers: {
+            "x-hub-signature-256": `sha256=${createHmac("sha256", "runtime-secret").update(flowBody).digest("hex")}`,
+          },
+        })
+      ).status,
+      200,
+    );
+    await consumer.queue("auto-chatter-replies", [
+      { id: "flow", timestamp: new Date(), body: { connectionId: connection }, attempts: 1 },
+    ]);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (
+        (await pool.query("SELECT status FROM private_reply_outbox WHERE flow_run_id IS NOT NULL")).rows[0]?.status ===
+        "sent"
+      )
+        break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.deepEqual(
+      (
+        await pool.query(
+          `SELECT reply.status,reply.private_reply_text,run.status AS run_status,
+             (SELECT count(*)::int FROM flow_step_runs step WHERE step.run_id=run.id) AS steps
+           FROM private_reply_outbox reply JOIN flow_runs run ON run.id=reply.flow_run_id`,
+        )
+      ).rows,
+      [{ status: "sent", private_reply_text: "Flow workerd reply", run_status: "delivering", steps: 2 }],
+      JSON.stringify(graphPaths),
+    );
+    assert.equal(sends, 3);
     await consumer.scheduled({ scheduledTime: Date.now(), cron: "* * * * *" });
-    assert.equal(sends, 2);
+    assert.equal(sends, 3);
   } finally {
     await runtime.dispose();
     await pool.end();

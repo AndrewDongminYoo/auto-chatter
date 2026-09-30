@@ -178,11 +178,27 @@ export async function updateConnection(pool: Pool, user: User, id: string, input
 export async function disconnectConnection(pool: Pool, user: User, id: string) {
   if (!isUuid(id)) throw new ApiError(400, "invalid_connection");
   const workspaceId = await workspaceFor(pool, user);
-  await pool.query(
-    `WITH disconnected AS (UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL,token_expires_at=NULL
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Flows first: enabling a flow locks the flow row before its trigger connection row.
+    await client.query(
+      `UPDATE flows f SET enabled=false,updated_at=clock_timestamp() FROM flow_versions v
+       WHERE v.id=f.published_version_id AND v.trigger_connection_id=$1 AND f.workspace_id=$2 AND f.enabled`,
+      [id, workspaceId],
+    );
+    await client.query(
+      `WITH disconnected AS (UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL,token_expires_at=NULL
  WHERE id=$1 AND workspace_id=$2 RETURNING id) UPDATE instagram_comment_rules SET enabled=false WHERE connection_id IN(SELECT id FROM disconnected) AND workspace_id=$2`,
-    [id, workspaceId],
-  );
+      [id, workspaceId],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
   return { disconnected: true };
 }
 export async function listActivity(pool: Pool, user: User) {

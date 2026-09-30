@@ -35,10 +35,12 @@ import {
   createFlow,
   getFlow,
   getFlowVersion,
+  listFlowRuns,
   listFlowVersions,
   listFlows,
   publishFlow,
   saveFlowDraft,
+  setFlowEnabled,
 } from "./flows.ts";
 
 function instagramConnectAvailable(user: User, env: InstagramOAuthEnv): boolean {
@@ -246,7 +248,9 @@ export async function appApi(
         return json({ flows: await listFlows(pool, user) });
       if (url.pathname === "/api/flows" && request.method === "POST")
         return json(await createFlow(pool, user, await readJson(request, FLOW_REQUEST_BYTES)), 201);
-      const flow = /^\/api\/flows\/([a-f0-9-]+)(?:\/(publish|versions)(?:\/(\d{1,9}))?)?$/.exec(url.pathname);
+      const flow = /^\/api\/flows\/([a-f0-9-]+)(?:\/(publish|versions|enable|disable|runs)(?:\/(\d{1,9}))?)?$/.exec(
+        url.pathname,
+      );
       if (flow && !flow[2] && request.method === "GET") return json(await getFlow(pool, user, flow[1]!));
       if (flow && !flow[2] && request.method === "PUT")
         return json(await saveFlowDraft(pool, user, flow[1]!, await readJson(request, FLOW_REQUEST_BYTES)));
@@ -261,6 +265,14 @@ export async function appApi(
         return json({ versions: await listFlowVersions(pool, user, flow[1]!) });
       if (flow?.[2] === "versions" && flow[3] && request.method === "GET")
         return json(await getFlowVersion(pool, user, flow[1]!, flow[3]));
+      if ((flow?.[2] === "enable" || flow?.[2] === "disable") && !flow[3] && request.method === "POST") {
+        const switched = await setFlowEnabled(pool, user, flow[1]!, flow[2] === "enable");
+        return "errors" in switched
+          ? json({ error: "flow_not_executable", errors: switched.errors }, 422)
+          : json(switched);
+      }
+      if (flow?.[2] === "runs" && !flow[3] && request.method === "GET")
+        return json({ runs: await listFlowRuns(pool, user, flow[1]!) });
       if (url.pathname === "/api/activity" && request.method === "GET")
         return json({ activity: await listActivity(pool, user) });
       if (url.pathname === "/api/rules" && request.method === "GET")
