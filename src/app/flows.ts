@@ -51,7 +51,7 @@ function onlyKeys(input: unknown, keys: string[]): Record<string, unknown> {
 }
 
 export async function listFlows(pool: Pool, user: User) {
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   return (
     await pool.query(
       `SELECT ${SUMMARY} FROM flows f LEFT JOIN flow_versions v ON v.id=f.published_version_id
@@ -65,7 +65,7 @@ export async function createFlow(pool: Pool, user: User, input: unknown) {
   const body = onlyKeys(input, ["name", "draft"]);
   const name = flowName(body.name);
   const draft = body.draft === undefined ? EMPTY_FLOW : flowDocument(body.draft);
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "admin");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -89,7 +89,7 @@ export async function createFlow(pool: Pool, user: User, input: unknown) {
 
 export async function getFlow(pool: Pool, user: User, id: string) {
   if (!isUuid(id)) throw new ApiError(400, "invalid_flow");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   const flow = (
     await pool.query(
       `SELECT ${SUMMARY},f.draft FROM flows f LEFT JOIN flow_versions v ON v.id=f.published_version_id
@@ -107,7 +107,7 @@ export async function saveFlowDraft(pool: Pool, user: User, id: string, input: u
   const expected = revision(body.expected_revision);
   const draft = flowDocument(body.draft);
   const name = body.name === undefined ? null : flowName(body.name);
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "admin");
   const saved = await pool.query(
     `UPDATE flows SET draft=$4::jsonb,name=coalesce($5,name),draft_revision=draft_revision+1,updated_at=clock_timestamp()
      WHERE id=$1 AND workspace_id=$2 AND NOT archived AND draft_revision=$3 RETURNING draft_revision`,
@@ -128,7 +128,7 @@ export async function publishFlow(
 ): Promise<{ version_no: number; published_at: Date; replayed: boolean } | { errors: FlowError[] }> {
   if (!isUuid(id)) throw new ApiError(400, "invalid_flow");
   const expected = revision(onlyKeys(input, ["expected_revision"]).expected_revision);
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "admin");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -222,7 +222,7 @@ export async function publishFlow(
 
 export async function archiveFlow(pool: Pool, user: User, id: string) {
   if (!isUuid(id)) throw new ApiError(400, "invalid_flow");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "admin");
   const archived = await pool.query(
     `UPDATE flows SET archived=true,enabled=false,published_version_id=NULL,updated_at=clock_timestamp()
      WHERE id=$1 AND workspace_id=$2 RETURNING id`,
@@ -234,7 +234,7 @@ export async function archiveFlow(pool: Pool, user: User, id: string) {
 
 export async function listFlowVersions(pool: Pool, user: User, id: string) {
   if (!isUuid(id)) throw new ApiError(400, "invalid_flow");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   const flow = (
     await pool.query("SELECT published_version_id FROM flows WHERE id=$1 AND workspace_id=$2", [id, workspace])
   ).rows[0];
@@ -250,7 +250,7 @@ export async function listFlowVersions(pool: Pool, user: User, id: string) {
 
 export async function getFlowVersion(pool: Pool, user: User, id: string, versionNo: string) {
   if (!isUuid(id) || !/^\d{1,9}$/.test(versionNo)) throw new ApiError(400, "invalid_flow");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   const version = (
     await pool.query(
       `SELECT version_no,definition,published_at,published_by FROM flow_versions
@@ -269,7 +269,7 @@ export async function setFlowEnabled(
   enabled: boolean,
 ): Promise<{ enabled: boolean } | { errors: FlowError[] }> {
   if (!isUuid(id)) throw new ApiError(400, "invalid_flow");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "admin");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -320,7 +320,7 @@ export async function setFlowEnabled(
 // Sender IDs and comment text stay out of the history.
 export async function listFlowRuns(pool: Pool, user: User, id: string) {
   if (!isUuid(id)) throw new ApiError(400, "invalid_flow");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   if (!(await pool.query("SELECT 1 FROM flows WHERE id=$1 AND workspace_id=$2", [id, workspace])).rowCount)
     throw new ApiError(404, "flow_not_found");
   return (

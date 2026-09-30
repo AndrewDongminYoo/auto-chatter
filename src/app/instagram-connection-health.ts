@@ -43,7 +43,7 @@ export async function connectionHealth(
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ status: HealthStatus; checked_at: string }> {
   if (!isUuid(connectionId)) throw new ApiError(400, "invalid_connection");
-  const workspaceId = await workspaceFor(pool, user);
+  const workspaceId = await workspaceFor(pool, user, "agent");
   const result = await pool.query<{
     account_id: string;
     access_token_encrypted: string | null;

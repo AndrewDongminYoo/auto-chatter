@@ -66,7 +66,7 @@ export async function connectionMedia(
     (options.mediaId !== undefined && !/^\d{1,40}$/.test(options.mediaId))
   )
     throw new ApiError(400, "invalid_media_request");
-  const workspaceId = await workspaceFor(pool, user);
+  const workspaceId = await workspaceFor(pool, user, "agent");
   const result = await pool.query<{
     account_id: string;
     access_token_encrypted: string | null;

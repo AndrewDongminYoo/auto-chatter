@@ -57,7 +57,7 @@ export async function recordConsentEvent(pool: Pool, user: User, connectionId: s
   const occurredAt = new Date(input.occurred_at);
   if (!Number.isFinite(occurredAt.getTime()) || occurredAt.toISOString() !== input.occurred_at) invalid();
 
-  const workspaceId = await workspaceFor(pool, user);
+  const workspaceId = await workspaceFor(pool, user, "agent");
   try {
     const result = await recordChannelConsentEvent(pool, {
       requestKey: input.request_key,
