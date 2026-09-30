@@ -134,3 +134,15 @@ END $$;
 REVOKE ALL ON FUNCTION public.delete_connection_data(uuid,uuid,uuid,text) FROM PUBLIC;
 DROP POLICY IF EXISTS server_insert ON public.data_deletion_records;
 DROP POLICY IF EXISTS server_update ON public.data_deletion_records;
+
+-- Person deletion is administrator-only: no runtime or API role may execute it.
+DO $$
+DECLARE any_role text;
+BEGIN
+  FOREACH any_role IN ARRAY ARRAY['auto_chatter_server','automations_app','anon','authenticated','service_role'] LOOP
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname=any_role) THEN
+      EXECUTE format('REVOKE ALL ON FUNCTION public.delete_person_data(uuid,uuid,uuid,text,text) FROM %I',any_role);
+    END IF;
+  END LOOP;
+END $$;
+REVOKE ALL ON FUNCTION public.delete_person_data(uuid,uuid,uuid,text,text) FROM PUBLIC;

@@ -156,6 +156,7 @@ psql "$ADMIN_DATABASE_URL" -v user_id="$VERIFIED_USER_ID" -v workspace_id="$LEGA
 Meta 자체의 앱 권한 철회는 Instagram 설정에서 별도로 수행할 수 있습니다.
 전체 데이터 삭제는 기존에 승인한 운영자 수동 처리 정책을 따릅니다.
 연결 하나의 기록만 지우는 요청은 연결을 해제한 뒤 앱 API나 `public.delete_connection_data` 함수로 처리하며, 범위와 보관 예외는 [연결 단위 데이터 삭제 계약](../specs/2026-09-29-connection-data-deletion.md)을 따릅니다.
+앱 사용자가 아닌 Instagram 이용자 한 사람의 삭제 요청은 본인 확인 뒤 관리자 연결에서 `public.delete_person_data`로 처리하며, 절차는 [이용자 단위 데이터 삭제 계약](../specs/2026-09-30-person-data-deletion.md)을 따릅니다.
 
 작업 공간 전체의 관리자 삭제 절차는 계정 수신·발송과 인박스 보관을 먼저 중지하고 진행 중인 요청이 없는지 확인한 뒤 수행합니다.
 삭제 범위의 workspace·연결 ID를 확인하고 한 트랜잭션에서 `flows`의 `published_version_id`를 NULL로 바꾼 뒤 `flow_versions` → `flows` → `instagram_manual_reply_events` → `instagram_manual_replies` → `instagram_inbox_handoff_events` → `instagram_inbox_handoffs` → `instagram_inbox_messages`·`instagram_contact_automation`·`instagram_contact_tags`·`instagram_contact_field_values`·`instagram_contact_segments` → `instagram_contact_fields` → `instagram_message_receipts`·`instagram_follow_conversations` → `private_reply_outbox` → `channel_consent_state` → `channel_consent_events` → 댓글 이벤트·규칙 → `data_deletion_records` → 연결 → 해당 workspace의 OAuth state → membership → workspace 순으로 처리합니다.

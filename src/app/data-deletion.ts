@@ -44,7 +44,7 @@ export async function listDataDeletions(pool: Pool, user: User, connectionId: st
   if (!owned.rows[0]) throw new ApiError(404, "connection_not_found");
   return (
     await pool.query(
-      `SELECT id,requested_by,completed_at,deleted_counts,retained_counts FROM data_deletion_records
+      `SELECT id,scope,requested_by,completed_at,deleted_counts,retained_counts FROM data_deletion_records
        WHERE workspace_id=$1 AND connection_id=$2 ORDER BY completed_at DESC,id LIMIT 50`,
       [workspace, connectionId],
     )
