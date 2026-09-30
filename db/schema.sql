@@ -524,11 +524,16 @@ BEGIN
   IF target.active OR target.send_enabled OR target.access_token_encrypted IS NOT NULL THEN
     RAISE EXCEPTION 'connection_active' USING ERRCODE='AC002';
   END IF;
-  -- Lock the delivery rows first: an uncommitted claim would otherwise still read as pending here,
-  -- and the deletes below would remove the row after the claim commits it as sending.
-  PERFORM 1 FROM public.private_reply_outbox WHERE connection_id=p_connection ORDER BY id FOR UPDATE;
-  PERFORM 1 FROM public.instagram_follow_conversations WHERE connection_id=p_connection ORDER BY reply_id FOR UPDATE;
-  PERFORM 1 FROM public.instagram_manual_replies WHERE connection_id=p_connection ORDER BY id FOR UPDATE;
+  -- Lock the delivery rows before the check: an uncommitted claim would otherwise still read as pending,
+  -- and the deletes below would remove the row after the claim commits it as sending. NOWAIT refuses
+  -- instead of waiting, because a send being finalized holds its row and then waits for this connection lock.
+  BEGIN
+    PERFORM 1 FROM public.private_reply_outbox WHERE connection_id=p_connection ORDER BY id FOR UPDATE NOWAIT;
+    PERFORM 1 FROM public.instagram_follow_conversations WHERE connection_id=p_connection ORDER BY reply_id FOR UPDATE NOWAIT;
+    PERFORM 1 FROM public.instagram_manual_replies WHERE connection_id=p_connection ORDER BY id FOR UPDATE NOWAIT;
+  EXCEPTION WHEN lock_not_available THEN
+    RAISE EXCEPTION 'sending_in_progress' USING ERRCODE='AC003';
+  END;
   IF EXISTS(SELECT 1 FROM public.private_reply_outbox WHERE connection_id=p_connection AND status='sending')
     OR EXISTS(SELECT 1 FROM public.instagram_follow_conversations WHERE connection_id=p_connection AND status='sending')
     OR EXISTS(SELECT 1 FROM public.instagram_manual_replies WHERE connection_id=p_connection AND status='sending')
@@ -916,11 +921,16 @@ BEGIN
     AND (active OR send_enabled OR access_token_encrypted IS NOT NULL)) THEN
     RAISE EXCEPTION 'connection_active' USING ERRCODE='AC002';
   END IF;
-  -- Lock the delivery rows first: an uncommitted claim would otherwise still read as pending here,
-  -- and the DELETE below would remove the row after the claim commits it as sending.
-  PERFORM 1 FROM public.private_reply_outbox WHERE workspace_id=p_workspace ORDER BY id FOR UPDATE;
-  PERFORM 1 FROM public.instagram_follow_conversations WHERE connection_id=ANY(connections) ORDER BY reply_id FOR UPDATE;
-  PERFORM 1 FROM public.instagram_manual_replies WHERE workspace_id=p_workspace ORDER BY id FOR UPDATE;
+  -- Lock the delivery rows before the check: an uncommitted claim would otherwise still read as pending,
+  -- and the DELETE below would remove the row after the claim commits it as sending. NOWAIT refuses
+  -- instead of waiting, because a send being finalized holds its row and then waits for a connection lock.
+  BEGIN
+    PERFORM 1 FROM public.private_reply_outbox WHERE workspace_id=p_workspace ORDER BY id FOR UPDATE NOWAIT;
+    PERFORM 1 FROM public.instagram_follow_conversations WHERE connection_id=ANY(connections) ORDER BY reply_id FOR UPDATE NOWAIT;
+    PERFORM 1 FROM public.instagram_manual_replies WHERE workspace_id=p_workspace ORDER BY id FOR UPDATE NOWAIT;
+  EXCEPTION WHEN lock_not_available THEN
+    RAISE EXCEPTION 'sending_in_progress' USING ERRCODE='AC003';
+  END;
   IF EXISTS(SELECT 1 FROM public.private_reply_outbox WHERE workspace_id=p_workspace AND status='sending')
     OR EXISTS(SELECT 1 FROM public.instagram_follow_conversations WHERE connection_id=ANY(connections) AND status='sending')
     OR EXISTS(SELECT 1 FROM public.instagram_manual_replies WHERE workspace_id=p_workspace AND status='sending') THEN

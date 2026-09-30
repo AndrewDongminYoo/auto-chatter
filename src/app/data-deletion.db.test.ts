@@ -469,3 +469,57 @@ test("deletion waits for a concurrently inserted delivery row and refuses once i
     ["sending"],
   );
 });
+
+test("deletion refuses instead of deadlocking with a follow-gated send being finalized", async () => {
+  const rule = (await pool.query("SELECT id FROM instagram_comment_rules WHERE connection_id=$1", [connectionId]))
+    .rows[0].id;
+  const event = (
+    await pool.query(
+      `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+       VALUES($1,$2,'final-comment','1789','final-sender','final comment') RETURNING id`,
+      [workspaceId, connectionId],
+    )
+  ).rows[0].id;
+  const reply = (
+    await pool.query(
+      `INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text,status,attempt_id,attempt_started_at)
+       VALUES($1,$2,$3,$4,'final-comment','1789','final-sender','final reply','sending',gen_random_uuid(),now()) RETURNING id`,
+      [workspaceId, connectionId, event, rule],
+    )
+  ).rows[0].id;
+  // The worker's finalization locks the outbox row, then inserts a follow conversation (a key-share lock on the connection).
+  const finalize = await pool.connect();
+  try {
+    await finalize.query("BEGIN");
+    await finalize.query(
+      "UPDATE private_reply_outbox SET status='sent',attempt_id=NULL,attempt_started_at=NULL,sent_at=now(),recipient_id='901' WHERE id=$1",
+      [reply],
+    );
+    const outcome = pool
+      .query("SELECT public.delete_connection_data($1,$2,$3,'account-deleted')", [workspaceId, connectionId, userId])
+      .then(
+        () => "deleted",
+        (error: { code?: string }) => error.code,
+      );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const inserted = await finalize
+      .query(
+        `INSERT INTO instagram_follow_conversations(reply_id,connection_id,recipient_id,confirmation_keyword,follower_reply_text,non_follower_reply_text,status)
+         VALUES($1,$2,'901','ok','yes','no','waiting')`,
+        [reply, connectionId],
+      )
+      .then(
+        () => "inserted",
+        (error: { code?: string }) => error.code,
+      );
+    assert.equal(inserted, "inserted");
+    await finalize.query("COMMIT");
+    assert.equal(await outcome, "AC003");
+  } finally {
+    finalize.release();
+  }
+  assert.equal(
+    (await pool.query("SELECT status FROM private_reply_outbox WHERE id=$1", [reply])).rows[0].status,
+    "sent",
+  );
+});
