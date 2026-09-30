@@ -439,6 +439,8 @@ function connectionData(account, generation) {
           if (generation !== segmentsGeneration) return;
           input.value = "";
           removal.open = false;
+          // The focused control is now inside a closed <details>; keep keyboard users on the records that open next.
+          history.querySelector("summary").focus();
           notice(
             `${account.username ?? account.account_id} 연결의 기록 ${countTotal(result.deleted_counts).toLocaleString("ko-KR")}건을 삭제했습니다. 항목별 건수는 삭제 기록에서 확인할 수 있습니다.`,
           );
