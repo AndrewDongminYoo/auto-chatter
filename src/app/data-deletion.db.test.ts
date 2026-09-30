@@ -312,12 +312,17 @@ test("invalid deletion requests are rejected before touching data", async () => 
 });
 
 test("deletion migration replays and the function stays owned outside server roles", async () => {
-  const migration = await readFile(
-    new URL("../../db/migrations/018_connection_data_deletion.sql", import.meta.url),
-    "utf8",
+  // Replay every migration that (re)defines the function, in runner order, so later tests keep the current body.
+  for (const file of ["018_connection_data_deletion.sql", "021_flow_runs.sql", "023_connection_deletion_locks.sql"]) {
+    const migration = await readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8");
+    await pool.query(migration);
+    await pool.query(migration);
+  }
+  const body = await pool.query(
+    "SELECT pg_get_functiondef('public.delete_connection_data(uuid,uuid,uuid,text)'::regprocedure) AS body",
   );
-  await pool.query(migration);
-  await pool.query(migration);
+  assert.match(body.rows[0].body, /ORDER BY id FOR UPDATE/);
+  assert.match(body.rows[0].body, /flow_step_runs/);
   const definer = await pool.query(
     "SELECT prosecdef, pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE proname='delete_connection_data'",
   );
@@ -395,5 +400,126 @@ test("contact writes wait for an in-progress deletion and then find no contact",
     (await pool.query("SELECT count(*) FROM instagram_contact_tags WHERE connection_id=$1", [connectionId])).rows[0]
       .count,
     "0",
+  );
+});
+
+test("deletion waits for an uncommitted claim and refuses once it commits as sending", async () => {
+  await pool.query("UPDATE private_reply_outbox SET status='pending' WHERE connection_id=$1", [connectionId]);
+  const claim = await pool.connect();
+  try {
+    await claim.query("BEGIN");
+    await claim.query(
+      "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE connection_id=$1",
+      [connectionId],
+    );
+    const outcome = pool
+      .query("SELECT public.delete_connection_data($1,$2,$3,'account-deleted')", [workspaceId, connectionId, userId])
+      .then(
+        () => "deleted",
+        (error: { code?: string }) => error.code,
+      );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await claim.query("COMMIT");
+    assert.equal(await outcome, "AC003");
+  } finally {
+    claim.release();
+  }
+  const kept = await pool.query("SELECT DISTINCT status FROM private_reply_outbox WHERE connection_id=$1", [
+    connectionId,
+  ]);
+  assert.deepEqual(
+    kept.rows.map((row) => row.status),
+    ["sending"],
+  );
+});
+
+test("deletion waits for a concurrently inserted delivery row and refuses once it commits as sending", async () => {
+  const rule = (await pool.query("SELECT id FROM instagram_comment_rules WHERE connection_id=$1", [connectionId]))
+    .rows[0].id;
+  const event = (
+    await pool.query(
+      `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+       VALUES($1,$2,'late-comment','1789','late-sender','late comment') RETURNING id`,
+      [workspaceId, connectionId],
+    )
+  ).rows[0].id;
+  const ingress = await pool.connect();
+  try {
+    await ingress.query("BEGIN");
+    await ingress.query(
+      `INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text,status,attempt_id,attempt_started_at)
+       VALUES($1,$2,$3,$4,'late-comment','1789','late-sender','late reply','sending',gen_random_uuid(),now())`,
+      [workspaceId, connectionId, event, rule],
+    );
+    const outcome = pool
+      .query("SELECT public.delete_connection_data($1,$2,$3,'account-deleted')", [workspaceId, connectionId, userId])
+      .then(
+        () => "deleted",
+        (error: { code?: string }) => error.code,
+      );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await ingress.query("COMMIT");
+    assert.equal(await outcome, "AC003");
+  } finally {
+    ingress.release();
+  }
+  const late = await pool.query("SELECT status FROM private_reply_outbox WHERE comment_id='late-comment'");
+  assert.deepEqual(
+    late.rows.map((row) => row.status),
+    ["sending"],
+  );
+});
+
+test("deletion refuses instead of deadlocking with a follow-gated send being finalized", async () => {
+  const rule = (await pool.query("SELECT id FROM instagram_comment_rules WHERE connection_id=$1", [connectionId]))
+    .rows[0].id;
+  const event = (
+    await pool.query(
+      `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+       VALUES($1,$2,'final-comment','1789','final-sender','final comment') RETURNING id`,
+      [workspaceId, connectionId],
+    )
+  ).rows[0].id;
+  const reply = (
+    await pool.query(
+      `INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text,status,attempt_id,attempt_started_at)
+       VALUES($1,$2,$3,$4,'final-comment','1789','final-sender','final reply','sending',gen_random_uuid(),now()) RETURNING id`,
+      [workspaceId, connectionId, event, rule],
+    )
+  ).rows[0].id;
+  // The worker's finalization locks the outbox row, then inserts a follow conversation (a key-share lock on the connection).
+  const finalize = await pool.connect();
+  try {
+    await finalize.query("BEGIN");
+    await finalize.query(
+      "UPDATE private_reply_outbox SET status='sent',attempt_id=NULL,attempt_started_at=NULL,sent_at=now(),recipient_id='901' WHERE id=$1",
+      [reply],
+    );
+    const outcome = pool
+      .query("SELECT public.delete_connection_data($1,$2,$3,'account-deleted')", [workspaceId, connectionId, userId])
+      .then(
+        () => "deleted",
+        (error: { code?: string }) => error.code,
+      );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const inserted = await finalize
+      .query(
+        `INSERT INTO instagram_follow_conversations(reply_id,connection_id,recipient_id,confirmation_keyword,follower_reply_text,non_follower_reply_text,status)
+         VALUES($1,$2,'901','ok','yes','no','waiting')`,
+        [reply, connectionId],
+      )
+      .then(
+        () => "inserted",
+        (error: { code?: string }) => error.code,
+      );
+    assert.equal(inserted, "inserted");
+    await finalize.query("COMMIT");
+    assert.equal(await outcome, "AC003");
+  } finally {
+    finalize.release();
+  }
+  assert.equal(
+    (await pool.query("SELECT status FROM private_reply_outbox WHERE id=$1", [reply])).rows[0].status,
+    "sent",
   );
 });
