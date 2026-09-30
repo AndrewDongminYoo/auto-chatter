@@ -13,7 +13,10 @@
 2. 작업 공간의 모든 연결을 해제된 상태(비활성, 발송 꺼짐, 저장된 토큰 없음)로 만듭니다. 연결 해제 API나 관리자 SQL을 사용합니다.
 3. 관리자 연결에서 트랜잭션을 열고 `SELECT public.delete_workspace_data('<workspace>', '<운영자 사용자 ID>');`를 실행한 뒤, 반환된 건수와 `member_user_ids`를 확인하고 커밋합니다.
 4. `member_user_ids`의 Supabase Auth 사용자를 Supabase 대시보드의 Authentication 화면이나 관리자 API로 삭제합니다. 이 단계는 서버 코드가 아니라 운영자가 수행합니다.
-5. 처리 결과를 요청자에게 이메일로 안내합니다.
+5. 관리자 연결에서 `SELECT workspace_id FROM workspace_members WHERE user_id = ANY('<member_user_ids>')`가 아무 행도 반환하지 않는지 확인합니다.
+   요청자가 대시보드를 연 상태에서 3번과 4번 사이에 새로고침하면 `POST /api/workspace`가 새 작업 공간을 만들 수 있기 때문입니다. 행이 있으면 그 작업 공간에도 3번을 실행합니다.
+   4번 뒤에는 모든 API 요청이 Supabase `/user`로 세션을 다시 확인하므로(`src/app/api.ts`의 `auth.user`) 삭제된 사용자는 더 이상 작업 공간을 만들 수 없습니다.
+6. 처리 결과를 요청자에게 이메일로 안내합니다.
 
 ## 삭제하는 기록
 

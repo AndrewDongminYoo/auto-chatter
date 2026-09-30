@@ -161,7 +161,7 @@ A fresh dedicated Supabase project gets `db/schema.sql` and `deploy/supabase-acc
 The access script enables RLS, revokes API-role table access, and grants only SELECT/INSERT/UPDATE to the server role and the Compose `automations_app` role when present; both must be unprivileged, have no memberships, and own no objects.
 It also revokes PUBLIC schema CREATE, so do not apply it to a shared project without reviewing that impact.
 Assign a workspace to a confirmed operator with `deploy/assign-workspace-owner.sql`; never claim legacy data automatically by email.
-Whole-workspace deletion is `public.delete_workspace_data` (see the workspace deletion invariant above); the multi-user cutover note records its order.
+Whole-workspace deletion follows `docs/specs/2026-09-30-workspace-data-deletion.md`.
 
 **Compose**: `Dockerfile` runs the sources as the non-root `node` user with production dependencies only.
 `compose.yaml` starts PostgreSQL and ingress by default; profiles `send` and `public` enable the real worker and Caddy proxy respectively.
