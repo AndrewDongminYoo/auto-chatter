@@ -292,6 +292,50 @@ test("a send claimed while the deletion waits is refused instead of deleted", as
   assert.equal((await pool.query("SELECT count(*) FROM data_deletion_records")).rows[0].count, "0");
 });
 
+test("a reply confirmed while the deletion waits joins the person before deletion", async () => {
+  await pool.query(
+    "UPDATE private_reply_outbox SET status='sending',recipient_id=NULL,provider_message_id=NULL,sent_at=NULL,attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE sender_id='456'",
+  );
+  await consent("dm_recipient", "901", "marketing", "revoke");
+  const worker = await pool.connect();
+  try {
+    await worker.query("BEGIN");
+    await worker.query("SELECT id FROM private_reply_outbox WHERE sender_id='456' FOR UPDATE");
+    await worker.query(
+      "UPDATE private_reply_outbox SET status='sent',recipient_id='901',provider_message_id='mid-late',sent_at=now(),attempt_id=NULL,attempt_started_at=NULL WHERE sender_id='456'",
+    );
+    let settled = false;
+    const deletion = deletePerson("comment_sender", "456").finally(() => {
+      settled = true;
+    });
+    for (let attempt = 0; attempt < 100 && !settled; attempt += 1) {
+      const waiting = await pool.query(
+        "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()",
+      );
+      if (waiting.rows[0].waiting > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await worker.query("COMMIT");
+    const { result } = (await deletion).rows[0]!;
+    assert.equal(result.retained_counts.carried_comment_sender_revokes, 1);
+  } finally {
+    worker.release();
+  }
+  assert.equal(
+    (await pool.query("SELECT count(*) FROM instagram_inbox_messages WHERE recipient_id='901'")).rows[0].count,
+    "0",
+  );
+  assert.equal(await deliveryRecipientOptedOut(pool, { workspaceId, connectionId, senderId: "456" }), false);
+  assert.equal(
+    (
+      await pool.query(
+        "SELECT count(*) FROM channel_consent_state WHERE identity_kind='comment_sender' AND identity_value='456' AND decision='revoke'",
+      )
+    ).rows[0].count,
+    "1",
+  );
+});
+
 test("a DM-only person without a reply bridge loses only their DM records and grants", async () => {
   const { result } = (await deletePerson("dm_recipient", "902")).rows[0]!;
   assert.equal(result.deleted_counts.instagram_inbox_messages, 1);

@@ -597,6 +597,7 @@ DECLARE
   found_senders text[];
   found_recipients text[];
   size_before int;
+  size_locked int := -1;
 BEGIN
   IF p_identity_kind IS NULL OR p_identity_kind NOT IN ('comment_sender','dm_recipient')
     OR p_identity_value IS NULL OR length(btrim(p_identity_value))=0 THEN
@@ -615,42 +616,48 @@ BEGIN
     senders := '{}';
     recipients := ARRAY[p_identity_value];
   END IF;
-  -- Follow the provider-acknowledged reply bridge (the one consent checks use) and handoff pairs,
-  -- which start only on a verified bridge, until the person's identity set stops growing.
+  -- Resolve, lock, and resolve again: a send confirmed while this waited for a row lock can add
+  -- a new bridge, whose rows must be locked and checked as well.
   LOOP
-    size_before := cardinality(senders) + cardinality(recipients);
-    SELECT coalesce(array_agg(DISTINCT pair.sender_id), '{}'), coalesce(array_agg(DISTINCT pair.recipient_id), '{}')
-    INTO found_senders, found_recipients
-    FROM (
-      SELECT reply.sender_id, reply.recipient_id
-      FROM public.private_reply_outbox reply
-      JOIN public.instagram_comment_events event ON event.id=reply.event_id
-        AND event.workspace_id=reply.workspace_id AND event.connection_id=reply.connection_id
-        AND event.sender_id=reply.sender_id
-      WHERE reply.workspace_id=p_workspace AND reply.connection_id=p_connection
-        AND reply.status='sent' AND reply.recipient_id IS NOT NULL
-        AND reply.provider_message_id IS NOT NULL AND length(btrim(reply.provider_message_id))>0
-        AND (reply.sender_id=ANY(senders) OR reply.recipient_id=ANY(recipients))
-      UNION
-      SELECT handoff.sender_id, handoff.recipient_id
-      FROM public.instagram_inbox_handoffs handoff
-      WHERE handoff.workspace_id=p_workspace AND handoff.connection_id=p_connection
-        AND (handoff.sender_id=ANY(senders) OR handoff.recipient_id=ANY(recipients))
-    ) pair;
-    senders := ARRAY(SELECT DISTINCT unnest(senders || found_senders));
-    recipients := ARRAY(SELECT DISTINCT unnest(recipients || found_recipients));
-    EXIT WHEN cardinality(senders) + cardinality(recipients) = size_before;
-  END LOOP;
-  SELECT coalesce(array_agg(id), '{}') INTO replies FROM public.private_reply_outbox
-  WHERE workspace_id=p_workspace AND connection_id=p_connection AND sender_id=ANY(senders);
+    -- Follow the provider-acknowledged reply bridge (the one consent checks use) and handoff pairs,
+    -- which start only on a verified bridge, until the person's identity set stops growing.
+    LOOP
+      size_before := cardinality(senders) + cardinality(recipients);
+      SELECT coalesce(array_agg(DISTINCT pair.sender_id), '{}'), coalesce(array_agg(DISTINCT pair.recipient_id), '{}')
+      INTO found_senders, found_recipients
+      FROM (
+        SELECT reply.sender_id, reply.recipient_id
+        FROM public.private_reply_outbox reply
+        JOIN public.instagram_comment_events event ON event.id=reply.event_id
+          AND event.workspace_id=reply.workspace_id AND event.connection_id=reply.connection_id
+          AND event.sender_id=reply.sender_id
+        WHERE reply.workspace_id=p_workspace AND reply.connection_id=p_connection
+          AND reply.status='sent' AND reply.recipient_id IS NOT NULL
+          AND reply.provider_message_id IS NOT NULL AND length(btrim(reply.provider_message_id))>0
+          AND (reply.sender_id=ANY(senders) OR reply.recipient_id=ANY(recipients))
+        UNION
+        SELECT handoff.sender_id, handoff.recipient_id
+        FROM public.instagram_inbox_handoffs handoff
+        WHERE handoff.workspace_id=p_workspace AND handoff.connection_id=p_connection
+          AND (handoff.sender_id=ANY(senders) OR handoff.recipient_id=ANY(recipients))
+      ) pair;
+      senders := ARRAY(SELECT DISTINCT unnest(senders || found_senders));
+      recipients := ARRAY(SELECT DISTINCT unnest(recipients || found_recipients));
+      EXIT WHEN cardinality(senders) + cardinality(recipients) = size_before;
+    END LOOP;
+    EXIT WHEN cardinality(senders) + cardinality(recipients) = size_locked;
+    size_locked := cardinality(senders) + cardinality(recipients);
+    SELECT coalesce(array_agg(id), '{}') INTO replies FROM public.private_reply_outbox
+    WHERE workspace_id=p_workspace AND connection_id=p_connection AND sender_id=ANY(senders);
 
-  -- Lock the person's delivery rows before checking them. Workers claim with FOR UPDATE SKIP LOCKED,
-  -- so a claim either committed first (and is seen as sending here) or skips these rows.
-  PERFORM 1 FROM public.private_reply_outbox WHERE id=ANY(replies) FOR UPDATE;
-  PERFORM 1 FROM public.instagram_follow_conversations
-  WHERE connection_id=p_connection AND (reply_id=ANY(replies) OR recipient_id=ANY(recipients)) FOR UPDATE;
-  PERFORM 1 FROM public.instagram_manual_replies
-  WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients) FOR UPDATE;
+    -- Lock the person's delivery rows before checking them. Workers claim with FOR UPDATE SKIP LOCKED,
+    -- so a claim either committed first (and is seen as sending here) or skips these rows.
+    PERFORM 1 FROM public.private_reply_outbox WHERE id=ANY(replies) FOR UPDATE;
+    PERFORM 1 FROM public.instagram_follow_conversations
+    WHERE connection_id=p_connection AND (reply_id=ANY(replies) OR recipient_id=ANY(recipients)) FOR UPDATE;
+    PERFORM 1 FROM public.instagram_manual_replies
+    WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients) FOR UPDATE;
+  END LOOP;
   IF EXISTS(SELECT 1 FROM public.private_reply_outbox WHERE id=ANY(replies) AND status='sending')
     OR EXISTS(SELECT 1 FROM public.instagram_follow_conversations
       WHERE connection_id=p_connection AND status='sending' AND (reply_id=ANY(replies) OR recipient_id=ANY(recipients)))
