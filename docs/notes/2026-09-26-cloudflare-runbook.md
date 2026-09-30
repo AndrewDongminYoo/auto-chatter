@@ -164,6 +164,19 @@ Worker 버전 `a5b205b7-b5c8-4c38-9502-ef62085512d2`를 배포하고 100% 활성
 로그인하지 않은 `/api/me`와 삭제 API는 401, 서명 없는 웹훅은 403이었으며 `/app/app.js`의 운영 응답과 로컬 파일 SHA-256이 일치했습니다.
 배포 직후 cron 1회가 예외 없이 완료된 것을 Worker 실시간 로그로 확인했습니다.
 동의 guard, 플로 발행, 연결 데이터 삭제의 실계정 동작은 검증하지 않았습니다.
+같은 날 PR #86 병합 커밋 `3aa3f0f949c0a94fdd8eb95e9742de14a6851afd`까지를 운영에 적용했습니다.
+적용 전 운영 DB는 018까지 적용된 상태였고, 활성 연결 1개·발송 비활성·발송 중 행 0개였습니다.
+public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-09-30-pr86/public-before-019.dump`에 백업했으며 데이터 테이블 24개가 들어 있습니다.
+관리자 연결은 앞과 같은 Session pooler를 TLS `verify-full`로 사용했고, `deploy/migrate-multi-user.sql`을 실행해 migration 019를 적용했습니다.
+적용 후 삭제 증적의 `scope` 컬럼 기본값이 `connection`인 것을 조회했습니다.
+`delete_person_data`는 `SECURITY INVOKER`이고 `postgres`가 소유하며, `auto_chatter_server`, `anon`, `authenticated`, `service_role`, PUBLIC 어느 쪽에도 실행 권한이 없었습니다.
+`delete_connection_data`의 서버 역할 실행 권한은 유지됐고, 서버 역할의 제품 테이블 DELETE 권한은 0개였습니다.
+기존 행 수(연결 1, 댓글 9, outbox 3, 삭제 증적 0)는 유지됐습니다.
+Worker 버전 `37a5b991-f658-4930-8c8a-9f481edbc4f8`를 배포하고 100% 활성 상태를 조회했으며 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+공개 페이지 4개는 200이었고 `/privacy`와 `/data-deletion`에서 이용자 단위 삭제에도 수신 거부 기록을 남긴다는 문장을 확인했습니다.
+로그인하지 않은 `/api/me`와 삭제 증적 목록 API는 401, 서명 없는 웹훅은 403이었으며 `/app/app.js`의 운영 응답과 로컬 파일 SHA-256이 일치했습니다.
+배포 후 cron 2회가 예외 없이 완료됐습니다.
+이용자 단위 삭제 함수는 운영 데이터에 실행하지 않았습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
