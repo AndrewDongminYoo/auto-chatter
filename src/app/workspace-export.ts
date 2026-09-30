@@ -1,6 +1,5 @@
 import type { Pool } from "pg";
-import type { User } from "./auth.ts";
-import { workspaceFor } from "./settings.ts";
+import { ApiError, type User } from "./auth.ts";
 
 // Every public table is either exported here or listed in EXCLUDED_TABLES; workspace-export.db.test.ts enforces it.
 // "connection" tables carry no workspace_id and are scoped through the workspace's connections.
@@ -38,11 +37,17 @@ export const EXCLUDED_ITEMS = [
 ];
 
 export async function exportWorkspace(pool: Pool, user: User) {
-  const workspace = await workspaceFor(pool, user);
   const client = await pool.connect();
   try {
-    // One snapshot so rows that reference each other are exported consistently.
+    // One snapshot for the membership check and every exported row, so a member removed concurrently
+    // cannot export, and rows that reference each other are exported consistently.
     await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    const membership = await client.query<{ workspace_id: string }>(
+      "SELECT workspace_id FROM workspace_members WHERE user_id=$1",
+      [user.id],
+    );
+    if (!membership.rows[0]) throw new ApiError(403, "workspace_required");
+    const workspace = membership.rows[0].workspace_id;
     const tables: Record<string, unknown[]> = {};
     for (const [table, { scope, omit = [] }] of Object.entries(EXPORTED_TABLES)) {
       const filter =
