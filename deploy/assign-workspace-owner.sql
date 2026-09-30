@@ -18,8 +18,14 @@ BEGIN
   SELECT workspace_id INTO previous_workspace FROM workspace_members WHERE user_id=target_user AND removed_at IS NULL FOR UPDATE;
   IF previous_workspace IS NOT NULL AND previous_workspace<>target_workspace THEN
     PERFORM 1 FROM workspaces WHERE id=previous_workspace FOR UPDATE;
+    -- The same emptiness rule as currentWorkspaceMovable in src/app/workspace-members.ts.
     IF EXISTS(SELECT 1 FROM instagram_connections WHERE workspace_id=previous_workspace)
       OR EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id=previous_workspace AND user_id<>target_user AND removed_at IS NULL)
+      OR EXISTS(SELECT 1 FROM instagram_comment_rules WHERE workspace_id=previous_workspace)
+      OR EXISTS(SELECT 1 FROM flows WHERE workspace_id=previous_workspace)
+      OR EXISTS(SELECT 1 FROM instagram_contact_fields WHERE workspace_id=previous_workspace)
+      OR EXISTS(SELECT 1 FROM instagram_contact_segments WHERE workspace_id=previous_workspace)
+      OR EXISTS(SELECT 1 FROM workspace_invites WHERE workspace_id=previous_workspace)
       OR EXISTS(SELECT 1 FROM instagram_oauth_states WHERE workspace_id=previous_workspace AND consumed_at IS NULL AND expires_at>now()) THEN
       RAISE EXCEPTION 'Existing workspace is not empty or has an active OAuth flow';
     END IF;
