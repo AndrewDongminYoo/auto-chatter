@@ -511,6 +511,11 @@ BEGIN
   IF target.active OR target.send_enabled OR target.access_token_encrypted IS NOT NULL THEN
     RAISE EXCEPTION 'connection_active' USING ERRCODE='AC002';
   END IF;
+  -- Lock the delivery rows first: an uncommitted claim would otherwise still read as pending here,
+  -- and the deletes below would remove the row after the claim commits it as sending.
+  PERFORM 1 FROM public.private_reply_outbox WHERE connection_id=p_connection ORDER BY id FOR UPDATE;
+  PERFORM 1 FROM public.instagram_follow_conversations WHERE connection_id=p_connection ORDER BY reply_id FOR UPDATE;
+  PERFORM 1 FROM public.instagram_manual_replies WHERE connection_id=p_connection ORDER BY id FOR UPDATE;
   IF EXISTS(SELECT 1 FROM public.private_reply_outbox WHERE connection_id=p_connection AND status='sending')
     OR EXISTS(SELECT 1 FROM public.instagram_follow_conversations WHERE connection_id=p_connection AND status='sending')
     OR EXISTS(SELECT 1 FROM public.instagram_manual_replies WHERE connection_id=p_connection AND status='sending')
