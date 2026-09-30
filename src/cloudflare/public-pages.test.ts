@@ -30,6 +30,9 @@ for (const [pathname, title] of [
     if (pathname !== "/service") assert.ok(html.includes("수신 거부(동의 철회) 기록은"));
     assert.match(html, /설정 화면에서[^<]*직접 삭제/);
     if (pathname === "/data-deletion") assert.ok(html.includes("Instagram 계정 ID를 다시 입력"));
+    if (pathname !== "/service")
+      assert.ok(html.includes("작업 공간과 로그인 계정 전체의 삭제를 요청하면 수신 거부 기록과"));
+    if (pathname === "/privacy") assert.ok(html.includes("'데이터 내보내기'에서 작업 공간의 기록을 JSON 파일로"));
   });
 
   test(`${pathname} supports HEAD and rejects write methods`, async () => {
