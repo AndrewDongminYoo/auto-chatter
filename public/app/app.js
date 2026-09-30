@@ -19,6 +19,7 @@ let fieldsRequest = 0;
 let fieldBusy = false;
 let fieldNameDirty = false;
 let refreshPromise;
+let currentUserId;
 let editingRuleId;
 let dirty = false;
 let mediaGeneration = 0;
@@ -125,6 +126,7 @@ window.addEventListener("beforeunload", (event) => {
 function resetSession() {
   resetInbox();
   connections = [];
+  currentUserId = undefined;
   contactsGeneration++;
   contactsDirty.clear();
   contactsAfter = null;
@@ -190,6 +192,12 @@ const errors = {
   origin_rejected: "이 페이지에서 다시 시도해 주세요.",
   connection_not_found: "접근할 수 있는 Instagram 계정을 선택해 주세요.",
   connection_unavailable: "계정 연결 상태와 토큰 유효기간을 확인해 주세요.",
+  connection_active:
+    "이 계정은 아직 연결되어 있습니다. '연결 해제'로 수신·발송을 중지하고 토큰을 삭제한 뒤 다시 시도해 주세요.",
+  sending_in_progress: "이 계정에 발송 중인 메시지가 있어 지금은 삭제할 수 없습니다. 몇 분 뒤 다시 시도해 주세요.",
+  confirmation_mismatch:
+    "입력한 계정 ID가 이 연결의 Instagram 계정 ID와 다릅니다. 표시된 숫자 ID를 그대로 입력해 주세요.",
+  invalid_data_deletion: "삭제를 확인할 Instagram 계정 ID를 입력해 주세요.",
   keywords_required: "키워드를 하나 이상 입력해 주세요.",
   invalid_contact_automation: "연락처 자동화 설정을 확인해 주세요.",
   invalid_contact_tags: "태그는 한 줄에 하나씩 최대 20개, 각각 40자까지 입력해 주세요.",
@@ -305,10 +313,157 @@ function list(text) {
     .filter(Boolean);
 }
 
+const deletedLabels = {
+  instagram_comment_events: "댓글",
+  private_reply_outbox: "비공개 답장",
+  instagram_follow_conversations: "팔로우 후속 메시지",
+  instagram_message_receipts: "확인 메시지 수신",
+  instagram_inbox_messages: "보관한 수신 DM",
+  instagram_inbox_handoffs: "상담 전환",
+  instagram_inbox_handoff_events: "상담 전환 이력",
+  instagram_manual_replies: "수동 답장",
+  instagram_manual_reply_events: "수동 답장 감사 기록",
+  instagram_contact_automation: "자동화 중지 상태",
+  instagram_contact_tags: "연락처 태그",
+  instagram_contact_field_values: "연락처 필드 값",
+  channel_consent_state: "동의 허용 상태",
+  channel_consent_events: "동의 허용 기록",
+};
+const retainedLabels = {
+  channel_consent_state: "수신 거부 상태",
+  channel_consent_events: "수신 거부 기록",
+  carried_comment_sender_revokes: "댓글 작성자 ID로 옮긴 수신 거부",
+};
+
+function countTotal(counts) {
+  return Object.values(counts ?? {}).reduce((sum, count) => sum + (Number(count) || 0), 0);
+}
+
+function countSummary(counts, labels) {
+  return Object.entries(counts ?? {})
+    .filter(([, count]) => Number(count) > 0)
+    .map(([key, count]) => `${labels[key] ?? key} ${Number(count).toLocaleString("ko-KR")}건`)
+    .join(", ");
+}
+
+function deletionRecord(record) {
+  const item = node("li", "");
+  const scope = record.scope === "person" ? "이용자 단위 삭제(운영자 처리)" : "연결 단위 삭제";
+  const requester =
+    record.scope === "person" ? "" : record.requested_by === currentUserId ? " · 내 요청" : " · 다른 관리자 요청";
+  item.append(node("strong", `${new Date(record.completed_at).toLocaleString("ko-KR")} · ${scope}${requester}`));
+  const deleted = countSummary(record.deleted_counts, deletedLabels);
+  item.append(
+    node(
+      "p",
+      deleted
+        ? `삭제 ${countTotal(record.deleted_counts).toLocaleString("ko-KR")}건 · ${deleted}`
+        : "삭제할 기록이 없었습니다.",
+      "hint",
+    ),
+  );
+  const retained = countSummary(record.retained_counts, retainedLabels);
+  if (retained) item.append(node("p", `보관 · ${retained}`, "hint"));
+  return item;
+}
+
+function connectionData(account, generation) {
+  const section = node("div", "", "connection-data");
+  const history = document.createElement("details");
+  history.append(node("summary", "삭제 기록"));
+  const historyStatus = node("p", "", "hint");
+  historyStatus.setAttribute("role", "status");
+  const records = node("ul", "", "deletion-records");
+  history.append(historyStatus, records);
+  let historyRequest = 0;
+  const loadHistory = async () => {
+    const request = ++historyRequest;
+    historyStatus.textContent = "삭제 기록을 불러오는 중…";
+    try {
+      const result = await api(`/api/connections/${account.id}/data-deletions`);
+      if (generation !== segmentsGeneration || request !== historyRequest) return;
+      records.replaceChildren(...result.deletions.map(deletionRecord));
+      historyStatus.textContent = result.deletions.length
+        ? `최근 ${result.deletions.length}건 · 댓글·메시지 내용과 이용자 식별자는 기록하지 않습니다.`
+        : "이 연결의 삭제 기록이 없습니다.";
+    } catch (error) {
+      if (generation !== segmentsGeneration || request !== historyRequest) return;
+      historyStatus.textContent = error.message;
+    }
+  };
+  history.addEventListener("toggle", () => {
+    if (history.open) void loadHistory();
+  });
+  // Mirrors the delete_connection_data guard: inactive, send off, and no stored token (an expired token still counts).
+  if (!account.active && !account.send_enabled && account.token_registered === false) {
+    const removal = document.createElement("details");
+    removal.append(node("summary", "데이터 삭제"));
+    const deletionForm = document.createElement("form");
+    deletionForm.className = "deletion-form";
+    const help = node(
+      "p",
+      "이 연결의 댓글·답장 처리 기록, 보관한 수신 DM, 상담 전환·수동 답장 기록, 연락처 태그·필드 값·자동화 중지 상태와 동의 허용 기록을 삭제합니다. 대기 중이거나 실패한 발송도 함께 삭제됩니다. 수신 거부 기록과 삭제 기록은 보관하며, 연결과 댓글 규칙·필드 정의는 남습니다. 삭제한 기록은 되돌릴 수 없습니다.",
+      "hint",
+    );
+    const helpId = `deletion-help-${account.id}`;
+    help.id = helpId;
+    const label = node("label", `확인을 위해 Instagram 계정 ID(${account.account_id})를 입력하세요`);
+    const input = document.createElement("input");
+    input.name = "confirm_account_id";
+    input.autocomplete = "off";
+    input.inputMode = "numeric";
+    input.spellcheck = false;
+    input.required = true;
+    input.maxLength = 255;
+    input.setAttribute("aria-describedby", helpId);
+    label.append(input);
+    const failure = node("p", "", "form-error");
+    failure.setAttribute("role", "alert");
+    const submit = node("button", "기록 삭제", "secondary danger");
+    submit.type = "submit";
+    submit.dataset.loadingLabel = "삭제 중…";
+    input.addEventListener("input", () => {
+      failure.textContent = "";
+      input.removeAttribute("aria-invalid");
+    });
+    deletionForm.append(help, label, failure, submit);
+    deletionForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void action(submit, async () => {
+        failure.textContent = "";
+        input.removeAttribute("aria-invalid");
+        try {
+          const result = await api(`/api/connections/${account.id}/data-deletion`, "POST", {
+            confirm_account_id: input.value.trim(),
+          });
+          if (generation !== segmentsGeneration) return;
+          input.value = "";
+          removal.open = false;
+          notice(
+            `${account.username ?? account.account_id} 연결의 기록 ${countTotal(result.deleted_counts).toLocaleString("ko-KR")}건을 삭제했습니다. 항목별 건수는 삭제 기록에서 확인할 수 있습니다.`,
+          );
+          if (history.open) void loadHistory();
+          else history.open = true;
+        } catch (error) {
+          if (generation !== segmentsGeneration) return;
+          failure.textContent = error.message;
+          input.setAttribute("aria-invalid", "true");
+          input.focus();
+        }
+      });
+    });
+    removal.append(deletionForm);
+    section.append(removal);
+  }
+  section.append(history);
+  return section;
+}
+
 async function loadWorkspace() {
   const generation = segmentsGeneration;
   const me = await api("/api/me");
   if (generation !== segmentsGeneration) return;
+  currentUserId = me.user?.id;
   await api("/api/workspace", "POST");
   if (generation !== segmentsGeneration) return;
   const [accounts, settings] = await Promise.all([api("/api/connections"), api("/api/rules")]);
@@ -453,7 +608,7 @@ async function loadWorkspace() {
       action(disconnect, async () => {
         if (
           !confirm(
-            "이 계정의 수신·발송을 중지하고 저장한 토큰을 삭제할까요? 기존 기록은 데이터 삭제 안내에 따라 요청할 수 있습니다.",
+            "이 계정의 수신·발송을 중지하고 저장한 토큰을 삭제할까요? 해제한 뒤에는 이 계정의 '데이터 삭제'에서 기존 기록을 삭제할 수 있습니다.",
           )
         )
           return;
@@ -461,7 +616,7 @@ async function loadWorkspace() {
         await loadWorkspace();
       }),
     );
-    item.append(disconnect);
+    item.append(disconnect, connectionData(account, generation));
     byId("connections").append(item);
     const option = node("option", account.username ?? account.account_id);
     option.value = account.id;
