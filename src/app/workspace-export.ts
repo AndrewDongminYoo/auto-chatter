@@ -48,28 +48,32 @@ export async function exportWorkspace(pool: Pool, user: User) {
     );
     if (!membership.rows[0]) throw new ApiError(403, "workspace_required");
     const workspace = membership.rows[0].workspace_id;
-    const tables: Record<string, unknown[]> = {};
+    // Rows stay as PostgreSQL JSON text: parsing them in JavaScript would round bigint IDs above 2^53.
+    const tables: string[] = [];
     for (const [table, { scope, omit = [] }] of Object.entries(EXPORTED_TABLES)) {
       const filter =
         scope === "workspace"
           ? "t.workspace_id=$1"
           : "t.connection_id IN (SELECT id FROM instagram_connections WHERE workspace_id=$1)";
-      const result = await client.query<{ rows: unknown[] }>(
-        `SELECT coalesce(jsonb_agg(to_jsonb(t) - $2::text[] ORDER BY to_jsonb(t)::text), '[]'::jsonb) AS rows
+      const result = await client.query<{ rows: string }>(
+        `SELECT coalesce(jsonb_agg(to_jsonb(t) - $2::text[] ORDER BY to_jsonb(t)::text), '[]'::jsonb)::text AS rows
          FROM ${table} t WHERE ${filter}`,
         [workspace, omit],
       );
-      tables[table] = result.rows[0]!.rows;
+      tables.push(`${JSON.stringify(table)}:${result.rows[0]!.rows}`);
     }
     const exportedAt = (await client.query<{ now: Date }>("SELECT now()")).rows[0]!.now;
     await client.query("COMMIT");
-    return {
+    const header = JSON.stringify({
       format: "auto-chatter-workspace-export",
       version: 1,
       exported_at: exportedAt.toISOString(),
       workspace_id: workspace,
       excluded: EXCLUDED_ITEMS,
-      tables,
+    });
+    return {
+      exportedAt: exportedAt.toISOString(),
+      body: `${header.slice(0, -1)},"tables":{${tables.join(",")}}}`,
     };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);

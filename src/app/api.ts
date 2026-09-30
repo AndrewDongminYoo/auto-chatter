@@ -100,12 +100,14 @@ export async function appApi(
         return json({ workspace_id: await ensureWorkspace(pool, user) });
       if (url.pathname === "/api/workspace/export" && request.method === "GET") {
         const exported = await exportWorkspace(pool, user);
-        const response = json(exported);
-        response.headers.set(
-          "Content-Disposition",
-          `attachment; filename="auto-chatter-export-${exported.exported_at.slice(0, 10)}.json"`,
-        );
-        return response;
+        return new Response(exported.body, {
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": `attachment; filename="auto-chatter-export-${exported.exportedAt.slice(0, 10)}.json"`,
+          },
+        });
       }
       if (url.pathname === "/api/connections" && request.method === "GET")
         return json({ connections: await listConnections(pool, user) });

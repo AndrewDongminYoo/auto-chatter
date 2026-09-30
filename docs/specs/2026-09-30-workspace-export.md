@@ -9,11 +9,12 @@
 
 ## API
 
-`GET /api/workspace/export`는 호출자의 작업 공간을 `workspaceFor`로 찾고, 작업 공간이 없으면 `403 workspace_required`를 반환합니다.
+`GET /api/workspace/export`는 내보내기 트랜잭션 안에서 호출자의 `workspace_members` 행으로 작업 공간을 찾고, 멤버십이 없으면 `403 workspace_required`를 반환합니다.
 응답은 `Cache-Control: no-store`와 `Content-Disposition: attachment; filename="auto-chatter-export-<UTC 날짜>.json"`을 가집니다.
 본문은 `format`(`auto-chatter-workspace-export`), `version`(1), `exported_at`, `workspace_id`, `excluded`, `tables`로 구성됩니다.
 `tables`의 각 값은 해당 테이블의 행을 열 이름 그대로 담은 배열입니다.
-모든 테이블을 하나의 `REPEATABLE READ READ ONLY` 트랜잭션에서 읽어, 서로 참조하는 행이 같은 시점의 상태로 내보내집니다.
+멤버십 확인과 모든 테이블 조회를 하나의 `REPEATABLE READ READ ONLY` 트랜잭션에서 수행해, 동시에 제거된 멤버는 내보낼 수 없고 서로 참조하는 행은 같은 시점의 상태로 내보내집니다.
+행은 PostgreSQL이 만든 JSON 문자열 그대로 응답 본문에 넣고, 화면도 받은 문자열을 그대로 저장합니다. JavaScript에서 해석하면 2^53을 넘는 bigint ID가 반올림되기 때문입니다.
 
 ## 포함과 제외
 

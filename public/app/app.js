@@ -245,7 +245,7 @@ const errors = {
     "비밀번호는 변경됐지만 다른 세션 종료를 확인하지 못했습니다. 새 비밀번호로 로그인한 뒤 계정 상태를 확인해 주세요.",
 };
 
-async function api(path, method = "GET", body, retry = true) {
+async function api(path, method = "GET", body, retry = true, asText = false) {
   let response;
   try {
     response = await fetch(path, {
@@ -262,9 +262,10 @@ async function api(path, method = "GET", body, retry = true) {
       refreshPromise = undefined;
     });
     await refreshPromise;
-    return api(path, method, body, false);
+    return api(path, method, body, false, asText);
   }
   if (response.status === 401) resetSession();
+  if (asText && response.ok) return response.text();
   let result;
   try {
     result = await response.json();
@@ -1026,12 +1027,14 @@ byId("connect").addEventListener("click", (event) =>
 byId("export-data").addEventListener("click", (event) =>
   action(event.currentTarget, async () => {
     const generation = segmentsGeneration;
-    const data = await api("/api/workspace/export");
+    // Saved as the server's text: parsing it would round bigint IDs above 2^53.
+    const text = await api("/api/workspace/export", "GET", undefined, true, true);
     if (generation !== segmentsGeneration) return;
-    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+    const exportedOn = /"exported_at":"(\d{4}-\d{2}-\d{2})/.exec(text)?.[1] ?? new Date().toISOString().slice(0, 10);
+    const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = `auto-chatter-export-${data.exported_at.slice(0, 10)}.json`;
+    link.download = `auto-chatter-export-${exportedOn}.json`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
     notice("작업 공간 데이터를 JSON 파일로 저장했습니다. 댓글·메시지 내용이 들어 있으니 안전한 곳에 보관해 주세요.");

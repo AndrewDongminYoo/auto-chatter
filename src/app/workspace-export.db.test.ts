@@ -225,6 +225,16 @@ test("every public table is exported or explicitly excluded, and secret-like col
   }
 });
 
+test("bigint identifiers above 2^53 are exported exactly", async () => {
+  await pool.query(
+    `INSERT INTO instagram_comment_events(id,workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+     OVERRIDING SYSTEM VALUE VALUES(9007199254740993,$1,$2,'comment-big','1789','123','big id')`,
+    [workspaceId, connectionId],
+  );
+  const text = await (await request()).text();
+  assert.ok(text.includes('"id": 9007199254740993') || text.includes('"id":9007199254740993'), "bigint id was rounded");
+});
+
 test("a signed-in user without a workspace cannot export", async () => {
   const response = await request(strangerId);
   assert.equal(response.status, 403);
