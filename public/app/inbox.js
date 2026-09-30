@@ -458,6 +458,19 @@ function createInbox({ api, node, getConnections }) {
   reset();
   return {
     reset,
+    // Drops drafts and the open conversation of a connection whose data was deleted, then reloads the list.
+    forgetConnection(connectionId) {
+      for (const key of states.keys()) if (key.startsWith(`${connectionId}:`)) states.delete(key);
+      if (selected?.row.connection_id === connectionId) {
+        selected = null;
+        byId("inbox-messages").replaceChildren();
+        byId("inbox-conversation-title").textContent = "대화를 선택하세요";
+        byId("inbox-thread-refresh").hidden = true;
+        clearTimeout(expiryTimer);
+      }
+      controls();
+      void loadList();
+    },
     loadList,
     loadConversation,
     hasDrafts: () =>

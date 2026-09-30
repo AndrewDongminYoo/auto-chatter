@@ -367,6 +367,22 @@ function deletionRecord(record) {
   return item;
 }
 
+// Removes the deleted connection's contacts, inbox drafts and activity from the screen, then reloads those views.
+function forgetDeletedConnection(connectionId) {
+  for (const key of contactsDirty) if (key.startsWith(`${connectionId}:`)) contactsDirty.delete(key);
+  for (const card of byId("contacts-list").querySelectorAll(".contact-row"))
+    if (card.dataset.connectionId === connectionId) card.remove();
+  inbox.forgetConnection(connectionId);
+  if (!contactsDirty.size && !contactsSaving) void loadContacts();
+  const generation = segmentsGeneration;
+  loadActivity().catch(() => {
+    if (generation !== segmentsGeneration) return;
+    byId("activity").replaceChildren(
+      emptyState("처리 내역을 불러오지 못했습니다", "새로고침을 눌러 다시 시도해 주세요."),
+    );
+  });
+}
+
 function connectionData(account, generation) {
   const section = node("div", "", "connection-data");
   const history = document.createElement("details");
@@ -446,6 +462,7 @@ function connectionData(account, generation) {
           );
           if (history.open) void loadHistory();
           else history.open = true;
+          forgetDeletedConnection(account.id);
         } catch (error) {
           if (generation !== segmentsGeneration) return;
           failure.textContent = error.message;
@@ -1208,6 +1225,7 @@ function canReloadContacts() {
 }
 function contactCard(contact) {
   const item = node("article", "", "contact-row");
+  item.dataset.connectionId = contact.connection_id;
   const summary = node("div", "", "contact-summary");
   summary.append(
     node("h3", `참여자 ${contact.sender_id}`),
