@@ -28,6 +28,8 @@ for (const [pathname, title] of [
     assert.match(html, /href="mailto:ydm2790@gmail.com"/);
     assert.doesNotMatch(html, /never-reflect-this-value/);
     if (pathname !== "/service") assert.ok(html.includes("수신 거부(동의 철회) 기록은"));
+    assert.match(html, /설정 화면에서[^<]*직접 삭제/);
+    if (pathname === "/data-deletion") assert.ok(html.includes("Instagram 계정 ID를 다시 입력"));
   });
 
   test(`${pathname} supports HEAD and rejects write methods`, async () => {
