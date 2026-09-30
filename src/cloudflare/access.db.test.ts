@@ -87,6 +87,10 @@ test("Supabase roles cannot read product data; the server role has DML without D
         ),
         { code: "42501" },
       );
+      await assert.rejects(client.query("SELECT public.delete_workspace_data(gen_random_uuid(),gen_random_uuid())"), {
+        code: "42501",
+      });
+      await assert.rejects(client.query("SELECT * FROM workspace_deletion_records"), { code: "42501" });
       await client.query("RESET ROLE");
     }
     await client.query("SET ROLE auto_chatter_server");
@@ -173,6 +177,10 @@ test("Supabase roles cannot read product data; the server role has DML without D
       ),
       { code: "42501" },
     );
+    await assert.rejects(client.query("SELECT public.delete_workspace_data(gen_random_uuid(),gen_random_uuid())"), {
+      code: "42501",
+    });
+    await assert.rejects(client.query("SELECT * FROM workspace_deletion_records"), { code: "42501" });
     await client.query("RESET ROLE");
     await client.query("SET ROLE automations_app");
     assert.equal((await client.query("SELECT count(*) FROM workspace_members")).rows[0].count, "1");
@@ -239,6 +247,10 @@ test("Supabase roles cannot read product data; the server role has DML without D
       ),
       { code: "42501" },
     );
+    await assert.rejects(client.query("SELECT public.delete_workspace_data(gen_random_uuid(),gen_random_uuid())"), {
+      code: "42501",
+    });
+    await assert.rejects(client.query("SELECT * FROM workspace_deletion_records"), { code: "42501" });
     await assert.rejects(client.query("CREATE TABLE public.forbidden_compose(id int)"), { code: "42501" });
     for (const table of [
       "data_deletion_records",
