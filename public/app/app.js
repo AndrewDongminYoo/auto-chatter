@@ -533,8 +533,9 @@ async function acceptPendingInvite() {
     rememberInvite(null);
     notice(`초대를 수락했습니다. ${roleLabelsAs[joined.role] ?? "멤버로"} 작업 공간에 참여했습니다.`);
   } catch (error) {
-    // A refused invite will not succeed on retry; a network failure keeps the token for the next load.
-    if (error.status) rememberInvite(null);
+    // Only a definitive refusal drops the token; a network failure, an expired session, a rate limit or a
+    // server error keeps it so the next load or login retries the acceptance.
+    if ([400, 403, 404, 409, 410].includes(error.status)) rememberInvite(null);
     notice(error.message, true);
   }
   inviteNoticeShown = true;
