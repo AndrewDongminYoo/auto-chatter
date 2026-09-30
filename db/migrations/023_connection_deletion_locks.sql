@@ -205,7 +205,7 @@ BEGIN
   SELECT coalesce(array_agg(user_id ORDER BY user_id), '{}') INTO members
   FROM public.workspace_members WHERE workspace_id=p_workspace;
 
-  -- Children before parents, following the foreign keys (the multi-user cutover note keeps the same order).
+  -- Children before parents, following the foreign keys; this function body owns the order the multi-user cutover note refers to.
   DELETE FROM public.instagram_manual_reply_events WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_manual_reply_events', affected);
