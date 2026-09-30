@@ -175,6 +175,15 @@ export async function acceptInvite(pool: Pool, user: User, input: unknown) {
   const hash = tokenHash(input.token);
   return transaction(pool, async (client) => {
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [user.id]);
+    // Lock order matches createInvite (workspace, then invite row): find the workspace unlocked, lock it,
+    // then lock and re-read the invite, so a concurrent re-invite cannot deadlock with this acceptance.
+    const target = (
+      await client.query<{ workspace_id: string }>("SELECT workspace_id FROM workspace_invites WHERE token_hash=$1", [
+        hash,
+      ])
+    ).rows[0];
+    if (!target) throw new ApiError(404, "invite_not_found");
+    await client.query("SELECT id FROM workspaces WHERE id=$1 FOR SHARE", [target.workspace_id]);
     const invite = (
       await client.query<{
         id: string;
@@ -195,7 +204,6 @@ export async function acceptInvite(pool: Pool, user: User, input: unknown) {
     if (invite.revoked_at) throw new ApiError(410, "invite_revoked");
     if (invite.expired) throw new ApiError(410, "invite_expired");
     if (invite.email !== normalizeEmail(user.email)) throw new ApiError(403, "invite_email_mismatch");
-    await client.query("SELECT id FROM workspaces WHERE id=$1 FOR SHARE", [invite.workspace_id]);
     const current = (
       await client.query<{ workspace_id: string; role: string; removed: boolean }>(
         "SELECT workspace_id,role,removed_at IS NOT NULL AS removed FROM workspace_members WHERE user_id=$1 FOR UPDATE",

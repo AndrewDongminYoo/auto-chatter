@@ -217,6 +217,31 @@ test("a removed member is refused on the next request and a role change applies 
   }
 });
 
+test("an acceptance waits for a concurrent re-invite instead of deadlocking with it", async () => {
+  const { id, token } = await invite();
+  const reinviting = await pool.connect();
+  try {
+    // The same lock order as createInvite: the workspace row, then the open invite for that email.
+    await reinviting.query("BEGIN");
+    await reinviting.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [workspaceId]);
+    const accepting = accept(invitee, token);
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const waiting = await pool.query(
+        "SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FROM workspaces WHERE id=%FOR SHARE%'",
+      );
+      if (waiting.rowCount) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await reinviting.query("UPDATE workspace_invites SET revoked_at=now() WHERE id=$1", [id]);
+    await reinviting.query("COMMIT");
+    const response = await accepting;
+    assert.equal(response.status, 410);
+    assert.equal((await body<{ error: string }>(response)).error, "invite_revoked");
+  } finally {
+    reinviting.release();
+  }
+});
+
 test("owners cannot reach another workspace's members or invites", async () => {
   const { id } = await invite();
   assert.equal((await request(outsider, "DELETE", `/api/workspace/invites/${id}`)).status, 404);
