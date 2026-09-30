@@ -151,6 +151,19 @@ PR #72 병합 커밋 `f4511c0bd9375dc2237945db1280016444b3da12`은 Worker 버전
 PR #73 병합 커밋 `6c7f91421d817acc06ab50fb7ac1f52a7b5d00aa`은 2026-09-29에 Worker 버전 `9c424163-508b-460e-9b36-fb8f167deb71`로 배포하고 100% 활성 상태를 조회했습니다.
 이 배포에는 DB 마이그레이션이 없으며 `SEND_ENABLED=false`입니다.
 `/service`, `/privacy`, `/data-deletion`, `/app/`는 200, 로그인하지 않은 `/api/me`와 임의 연결 상태 조회는 401을 반환했고 `/app/app.js`의 운영 응답과 로컬 파일 SHA-256이 일치했습니다.
+2026-09-30에는 PR #84 병합 커밋 `100e5f175ae8db3315656dc182623ad4de43db18`까지를 운영에 적용했습니다.
+적용 전 운영 DB는 015까지 적용된 상태였고, 활성 연결 1개·발송 비활성·활성 규칙 0개·발송 중 행 0개였습니다.
+public 스키마 전체를 Homebrew `pg_dump` 17로 Git에서 제외된 `deploy/secrets/backups/2026-09-30-pr84/public-before-016-018.dump`에 백업했으며 데이터 테이블 19개가 들어 있습니다.
+관리자 연결은 로컬 Direct endpoint 대신 Session pooler `aws-0-ap-northeast-2.pooler.supabase.com`을 TLS `verify-full`로 사용했습니다.
+`deploy/migrate-multi-user.sql`을 실행해 migration 016–018을 적용했습니다.
+적용 후 새 테이블 5개의 RLS, 삭제 함수의 `SECURITY DEFINER`와 `postgres` 소유, `auto_chatter_server`에만 있는 함수 실행 권한을 조회했습니다.
+서버 역할의 제품 테이블 DELETE 권한은 0개였고, `flow_versions` UPDATE, 삭제 증적 INSERT·UPDATE, 동의 이벤트 UPDATE 권한도 없었습니다.
+기존 행 수(연결 1, 댓글 9, outbox 3)와 발송 비활성 상태는 유지됐습니다.
+Worker 버전 `a5b205b7-b5c8-4c38-9502-ef62085512d2`를 배포하고 100% 활성 상태를 조회했으며 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+공개 페이지 4개는 200이었고 `/privacy`와 `/data-deletion`에서 보관 예외 문장을 확인했습니다.
+로그인하지 않은 `/api/me`와 삭제 API는 401, 서명 없는 웹훅은 403이었으며 `/app/app.js`의 운영 응답과 로컬 파일 SHA-256이 일치했습니다.
+배포 직후 cron 1회가 예외 없이 완료된 것을 Worker 실시간 로그로 확인했습니다.
+동의 guard, 플로 발행, 연결 데이터 삭제의 실계정 동작은 검증하지 않았습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
