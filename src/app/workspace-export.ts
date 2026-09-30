@@ -28,8 +28,9 @@ export const EXPORTED_TABLES: Record<string, { scope: "workspace" | "connection"
   data_deletion_records: { scope: "workspace" },
 };
 
-// workspaces only holds the ID, which the export carries at the top level; OAuth states hold short-lived login secrets.
-export const EXCLUDED_TABLES = ["workspaces", "instagram_oauth_states"];
+// workspaces only holds the ID, which the export carries at the top level; OAuth states hold short-lived login secrets;
+// workspace deletion evidence belongs to workspaces that no longer exist.
+export const EXCLUDED_TABLES = ["workspaces", "instagram_oauth_states", "workspace_deletion_records"];
 // What the export leaves out, derived from the table settings so the file cannot understate it.
 export const EXCLUDED_ITEMS = [
   ...Object.entries(EXPORTED_TABLES).flatMap(([table, { omit = [] }]) => omit.map((column) => `${table}.${column}`)),
