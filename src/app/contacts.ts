@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { workspaceFor } from "./settings.ts";
-import { parseFieldCondition, validateFieldCondition } from "./contact-fields.ts";
+import { lockContact, parseFieldCondition, validateFieldCondition } from "./contact-fields.ts";
 
 type Contact = {
   connection_id: string;
@@ -150,6 +150,7 @@ export async function saveContactTags(pool: Pool, user: User, connectionId: stri
   try {
     await client.query("BEGIN");
     await lockContactConnection(client, workspaceId, connectionId);
+    await lockContact(client, connectionId, senderId);
     const result = await client.query(
       `INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags)
  SELECT $1,$2,$3,$4::text[] WHERE EXISTS(SELECT 1 FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3)

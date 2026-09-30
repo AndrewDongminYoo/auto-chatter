@@ -1,10 +1,24 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { FlowDocument } from "./flow-schema.ts";
-import { flowExecutionErrors, matchesFlowTrigger, planFlowRun } from "./flow-runtime.ts";
+import { flowExecutionErrors, matchesFlowTrigger, planFlowRun, type ContactFacts } from "./flow-runtime.ts";
 
 const fieldId = "99999999-9999-4999-8999-999999999999";
+const textField = "88888888-8888-4888-8888-888888888888";
+const flagField = "77777777-7777-4777-8777-777777777777";
+const dateField = "66666666-6666-4666-8666-666666666666";
 const noFacts = { tags: new Set<string>(), fields: new Map<string, unknown>() };
+const types = new Map([
+  [fieldId, "text"],
+  [textField, "text"],
+  [flagField, "boolean"],
+  [dateField, "date"],
+]);
+const input = { commentText: "link please", writableFields: new Set([fieldId, textField, flagField, dateField]) };
+
+function plan(document: FlowDocument, facts: ContactFacts = noFacts, overrides: Partial<typeof input> = {}) {
+  return planFlowRun(document, facts, { ...input, ...overrides });
+}
 
 function branching(): FlowDocument {
   return {
@@ -35,8 +49,18 @@ function branching(): FlowDocument {
   };
 }
 
+// start -> nodes in order -> reply, each on its "next" port.
+function chain(nodes: FlowDocument["nodes"], text = "Thanks"): FlowDocument {
+  const document = branching();
+  document.nodes = [document.nodes[0]!, ...nodes, { id: "reply", type: "instagram_message", config: { text } }];
+  document.edges = document.nodes
+    .slice(1)
+    .map((node, index) => ({ from: document.nodes[index]!.id, port: "next", to: node.id }));
+  return document;
+}
+
 test("branches on normalized tags and typed field values and records the path", () => {
-  assert.deepEqual(planFlowRun(branching(), { tags: new Set(["vip"]), fields: new Map() }), {
+  assert.deepEqual(plan(branching(), { tags: new Set(["vip"]), fields: new Map() }), {
     status: "message",
     text: "VIP link",
     steps: [
@@ -44,8 +68,9 @@ test("branches on normalized tags and typed field values and records the path", 
       { node_id: "vip", node_type: "has_tag", outcome: "true" },
       { node_id: "vip_reply", node_type: "instagram_message", outcome: "queued" },
     ],
+    changes: { tags: new Map(), fields: new Map() },
   });
-  const seoul = planFlowRun(branching(), { tags: new Set(), fields: new Map([[fieldId, "Seoul"]]) });
+  const seoul = plan(branching(), { tags: new Set(), fields: new Map([[fieldId, "Seoul"]]) });
   assert.equal(seoul.status, "message");
   assert.deepEqual(
     seoul.steps.map((step) => step.outcome),
@@ -54,14 +79,14 @@ test("branches on normalized tags and typed field values and records the path", 
 });
 
 test("an empty port ends the run without a message", () => {
-  const plan = planFlowRun(branching(), { tags: new Set(), fields: new Map([[fieldId, "Busan"]]) });
-  assert.deepEqual(plan, {
+  assert.deepEqual(plan(branching(), { tags: new Set(), fields: new Map([[fieldId, "Busan"]]) }), {
     status: "ended",
     steps: [
       { node_id: "start", node_type: "instagram_comment", outcome: "next" },
       { node_id: "vip", node_type: "has_tag", outcome: "false" },
       { node_id: "city", node_type: "field_equals", outcome: "false" },
     ],
+    changes: { tags: new Map(), fields: new Map() },
   });
 });
 
@@ -69,52 +94,150 @@ test("field operators treat a stored null as unset and compare values by type", 
   const document = branching();
   const city = document.nodes[2]!;
   city.config = { field_id: fieldId, field_operator: "is_set" };
-  assert.equal(planFlowRun(document, { tags: new Set(), fields: new Map([[fieldId, null]]) }).status, "ended");
-  assert.equal(planFlowRun(document, { tags: new Set(), fields: new Map([[fieldId, false]]) }).status, "message");
+  assert.equal(plan(document, { tags: new Set(), fields: new Map([[fieldId, null]]) }).status, "ended");
+  assert.equal(plan(document, { tags: new Set(), fields: new Map([[fieldId, false]]) }).status, "message");
   city.config = { field_id: fieldId, field_operator: "is_unset" };
-  assert.equal(planFlowRun(document, noFacts).status, "message");
+  assert.equal(plan(document).status, "message");
   city.config = { field_id: fieldId, field_operator: "eq", field_value: 1 };
-  assert.equal(planFlowRun(document, { tags: new Set(), fields: new Map([[fieldId, "1"]]) }).status, "ended");
-  assert.equal(planFlowRun(document, { tags: new Set(), fields: new Map([[fieldId, 1]]) }).status, "message");
+  assert.equal(plan(document, { tags: new Set(), fields: new Map([[fieldId, "1"]]) }).status, "ended");
+  assert.equal(plan(document, { tags: new Set(), fields: new Map([[fieldId, 1]]) }).status, "message");
 });
 
 test("an unsupported node fails the run where it was reached instead of being skipped", () => {
   const document = branching();
-  document.nodes.push({ id: "tag", type: "add_tag", config: { tag: "lead" } });
-  document.edges.push({ from: "city", port: "false", to: "tag" });
-  const plan = planFlowRun(document, noFacts);
-  assert.equal(plan.status, "failed");
-  assert.equal(plan.status === "failed" && plan.failure_code, "unsupported_node");
-  assert.deepEqual(plan.steps.at(-1), { node_id: "tag", node_type: "add_tag", outcome: "unsupported_node" });
+  document.nodes.push({ id: "follow", type: "follows_account", config: {} });
+  document.edges.push({ from: "city", port: "false", to: "follow" });
+  const result = plan(document);
+  assert.equal(result.status, "failed");
+  assert.equal(result.status === "failed" && result.failure_code, "unsupported_node");
+  assert.deepEqual(result.steps.at(-1), {
+    node_id: "follow",
+    node_type: "follows_account",
+    outcome: "unsupported_node",
+  });
 });
 
-test("a message that uses variables, a button or a next node is not sent by this runtime", () => {
+test("a message with a button or a next node is not sent by this runtime", () => {
   for (const change of [
-    (document: FlowDocument) => (document.nodes[3]!.config = { text: "Hi {{comment.text}}" }),
     (document: FlowDocument) => (document.nodes[3]!.config = { text: "Hi", button_title: "OK" }),
     (document: FlowDocument) => document.edges.push({ from: "vip_reply", port: "next", to: "city" }),
   ]) {
     const document = branching();
     change(document);
-    const plan = planFlowRun(document, { tags: new Set(["vip"]), fields: new Map() });
-    assert.equal(plan.status, "failed");
-    assert.equal(flowExecutionErrors(document).length, 1);
+    assert.equal(plan(document, { tags: new Set(["vip"]), fields: new Map() }).status, "failed");
+    assert.equal(flowExecutionErrors(document, types).length, 1);
   }
 });
 
-test("execution errors name every node or edge this runtime cannot run", () => {
-  assert.deepEqual(flowExecutionErrors(branching()), []);
+test("execution errors name every node, edge or variable this runtime cannot run", () => {
+  assert.deepEqual(flowExecutionErrors(branching(), types), []);
   const document = branching();
   document.nodes.push(
     { id: "follow", type: "follows_account", config: {} },
     { id: "tag", type: "add_tag", config: { tag: "lead" } },
+    { id: "flag", type: "instagram_message", config: { text: "Opted in: {{field:" + flagField.toUpperCase() + "}}" } },
   );
   document.edges.push({ from: "seoul_reply", port: "next", to: "follow" });
-  assert.deepEqual(flowExecutionErrors(document), [
+  assert.deepEqual(flowExecutionErrors(document, types), [
     { code: "unsupported_node", node_id: "follow", path: "nodes[5].type" },
-    { code: "unsupported_node", node_id: "tag", path: "nodes[6].type" },
+    { code: "unsupported_variable", node_id: "flag", path: "nodes[7].config.text" },
     { code: "unsupported_after_message", edge_index: 4, path: "edges[4]" },
   ]);
+});
+
+test("tag and field actions change the facts that later conditions read, in path order", () => {
+  const document = chain([
+    { id: "add", type: "add_tag", config: { tag: " Lead " } },
+    { id: "again", type: "add_tag", config: { tag: "lead" } },
+    { id: "drop", type: "remove_tag", config: { tag: "old" } },
+    { id: "gone", type: "remove_tag", config: { tag: "never" } },
+    { id: "set", type: "set_field", config: { field_id: fieldId.toUpperCase(), value: "Seoul" } },
+    { id: "same", type: "set_field", config: { field_id: textField, value: "kept" } },
+    { id: "is_lead", type: "has_tag", config: { tag: "LEAD" } },
+  ]);
+  document.edges.at(-1)!.port = "true";
+  const result = plan(document, { tags: new Set(["old"]), fields: new Map([[textField, "kept"]]) });
+  assert.equal(result.status, "message");
+  assert.deepEqual(
+    result.steps.map((step) => step.outcome),
+    ["next", "added", "already_present", "removed", "absent", "set", "unchanged", "true", "queued"],
+  );
+  assert.deepEqual(result.changes, {
+    tags: new Map([
+      ["lead", true],
+      ["old", false],
+    ]),
+    fields: new Map([[fieldId, "Seoul"]]),
+  });
+});
+
+test("a tag added and removed again on one path leaves no change", () => {
+  const document = chain([
+    { id: "add", type: "add_tag", config: { tag: "trial" } },
+    { id: "drop", type: "remove_tag", config: { tag: "trial" } },
+  ]);
+  assert.deepEqual(plan(document).changes, { tags: new Map(), fields: new Map() });
+});
+
+test("a contact with 20 tags records tag_limit and the run continues", () => {
+  const full = new Set(Array.from({ length: 20 }, (_, index) => `t${index}`));
+  const result = plan(chain([{ id: "add", type: "add_tag", config: { tag: "lead" } }]), {
+    tags: full,
+    fields: new Map(),
+  });
+  assert.equal(result.status, "message");
+  assert.equal(result.steps[1]!.outcome, "tag_limit");
+  assert.deepEqual(result.changes.tags, new Map());
+});
+
+test("setting an archived or otherwise unwritable field fails the run at that node", () => {
+  const document = chain([
+    { id: "add", type: "add_tag", config: { tag: "lead" } },
+    { id: "set", type: "set_field", config: { field_id: fieldId, value: "Seoul" } },
+  ]);
+  const result = plan(document, noFacts, { writableFields: new Set() });
+  assert.equal(result.status, "failed");
+  assert.equal(result.status === "failed" && result.failure_code, "field_unavailable");
+  assert.deepEqual(result.steps.at(-1), { node_id: "set", node_type: "set_field", outcome: "field_unavailable" });
+  // Actions before the failing node already ran.
+  assert.deepEqual(result.changes.tags, new Map([["lead", true]]));
+});
+
+test("message variables render once, so comment text is never read as a template", () => {
+  const document = chain(
+    [{ id: "set", type: "set_field", config: { field_id: fieldId, value: 7 } }],
+    "You said {{comment.text}} ({{field:" + fieldId + "}}, {{field:" + dateField + "}})",
+  );
+  const facts = { tags: new Set<string>(), fields: new Map<string, unknown>([[dateField, "2026-10-01"]]) };
+  const result = plan(document, facts, { commentText: "<b>{{field:" + dateField + "}}</b>" });
+  assert.equal(result.status === "message" && result.text, `You said <b>{{field:${dateField}}}</b> (7, 2026-10-01)`);
+});
+
+test("a missing, boolean, oversized or empty rendered message fails the run", () => {
+  const cases: [string, ContactFacts, string, string][] = [
+    ["Hi {{field:" + textField + "}}", noFacts, "link", "variable_missing"],
+    [
+      "Hi {{field:" + textField + "}}",
+      { tags: new Set(), fields: new Map([[textField, null]]) },
+      "x",
+      "variable_missing",
+    ],
+    [
+      "Hi {{field:" + flagField + "}}",
+      { tags: new Set(), fields: new Map([[flagField, true]]) },
+      "x",
+      "unsupported_variable",
+    ],
+    ["{{comment.text}}", noFacts, "a".repeat(1001), "message_too_long"],
+    ["{{comment.text}}", noFacts, "   ", "message_empty"],
+  ];
+  for (const [text, facts, commentText, code] of cases) {
+    const result = plan(chain([], text), facts, { commentText });
+    assert.equal(result.status === "failed" && result.failure_code, code, `${text} -> ${code}`);
+    assert.deepEqual(result.steps.at(-1), { node_id: "reply", node_type: "instagram_message", outcome: code });
+  }
+  const exact = plan(chain([], "{{comment.text}}"), noFacts, { commentText: "a".repeat(1000) });
+  assert.equal(exact.status, "message");
 });
 
 test("the trigger uses the legacy rule matcher, including exclusions and match-all", () => {

@@ -2,6 +2,15 @@ import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { workspaceFor } from "./settings.ts";
 
+// Serializes every writer of one contact's tags and field values: flow runs, which read them before
+// writing, and manual edits. Taken after the connection lock, and after any field row lock.
+export async function lockContact(client: PoolClient, connectionId: string, senderId: string) {
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1::text || ':' || $2, 0))", [
+    connectionId.toLowerCase(),
+    senderId,
+  ]);
+}
+
 export type FieldCondition = { field_id: string; field_operator: string; field_value?: unknown };
 
 export function parseFieldCondition(input: Record<string, unknown>): FieldCondition | null {
@@ -190,6 +199,7 @@ export async function saveContactFieldValue(
     ).rows[0];
     if (!field) throw new ApiError(404, "field_not_found");
     if (input.value !== null) validateValue(field.type, input.value);
+    await lockContact(client, connectionId, senderId);
     const saved = await client.query(
       `INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value)
       SELECT $1,$2,$3,$4,$5::jsonb WHERE EXISTS(SELECT 1 FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3)

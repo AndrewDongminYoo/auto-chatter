@@ -17,9 +17,16 @@ const RUN_HISTORY_LIMIT = 50;
 export const FLOW_REQUEST_BYTES = 65_536 + 4_096;
 const SUMMARY = `f.id,f.name,f.draft_revision,f.archived,f.enabled,f.updated_at,v.version_no AS published_version_no`;
 
+// Publish and enable lock the flow row FOR NO KEY UPDATE: they change no key column, and a stronger
+// lock would block the foreign-key checks of an ingestion that holds a connection lock, while this
+// transaction waits for that connection row.
 // An enabled flow runs on a Cloudflare-delivered (OAuth) connection with a version this runtime executes.
-function runnableErrors(document: FlowDocument, connection: { active: boolean; oauth: boolean } | null): FlowError[] {
-  const errors = flowExecutionErrors(document);
+function runnableErrors(
+  document: FlowDocument,
+  connection: { active: boolean; oauth: boolean } | null,
+  fieldTypes: ReadonlyMap<string, string>,
+): FlowError[] {
+  const errors = flowExecutionErrors(document, fieldTypes);
   if (!connection?.active) errors.push({ code: "connection_unavailable", path: "nodes" });
   else if (!connection.oauth) errors.push({ code: "login_mode_required", path: "nodes" });
   return errors;
@@ -134,7 +141,7 @@ export async function publishFlow(
     await client.query("BEGIN");
     const flow = (
       await client.query(
-        "SELECT draft,draft_revision,archived,enabled FROM flows WHERE id=$1 AND workspace_id=$2 FOR UPDATE",
+        "SELECT draft,draft_revision,archived,enabled FROM flows WHERE id=$1 AND workspace_id=$2 FOR NO KEY UPDATE",
         [id, workspace],
       )
     ).rows[0];
@@ -193,7 +200,7 @@ export async function publishFlow(
     });
     // A new version of an enabled flow starts runs immediately, so it must be runnable too.
     if (!errors.length && flow.enabled && "document" in parsed)
-      errors.push(...runnableErrors(parsed.document, connection));
+      errors.push(...runnableErrors(parsed.document, connection, fields));
     if (errors.length) {
       await client.query("ROLLBACK");
       return { errors };
@@ -275,9 +282,9 @@ export async function setFlowEnabled(
     await client.query("BEGIN");
     const flow = (
       await client.query(
-        `SELECT f.archived,v.definition,v.trigger_connection_id FROM flows f
+        `SELECT f.archived,v.definition,v.trigger_connection_id,v.field_ids FROM flows f
          LEFT JOIN flow_versions v ON v.id=f.published_version_id AND v.flow_id=f.id
-         WHERE f.id=$1 AND f.workspace_id=$2 FOR UPDATE OF f`,
+         WHERE f.id=$1 AND f.workspace_id=$2 FOR NO KEY UPDATE OF f`,
         [id, workspace],
       )
     ).rows[0];
@@ -294,8 +301,17 @@ export async function setFlowEnabled(
             [flow.trigger_connection_id, workspace],
           )
         ).rows[0] ?? null;
+      // Field types never change, so the types of the version's fields decide which variables render.
+      const fieldTypes = new Map<string, string>(
+        (
+          await client.query<{ id: string; type: string }>(
+            "SELECT id,type FROM instagram_contact_fields WHERE workspace_id=$1 AND id=ANY($2::uuid[])",
+            [workspace, flow.field_ids],
+          )
+        ).rows.map((row) => [row.id, row.type]),
+      );
       const parsed = parseFlowDocument(flow.definition);
-      const errors = "document" in parsed ? runnableErrors(parsed.document, connection) : parsed.errors;
+      const errors = "document" in parsed ? runnableErrors(parsed.document, connection, fieldTypes) : parsed.errors;
       if (errors.length) {
         await client.query("ROLLBACK");
         return { errors };
