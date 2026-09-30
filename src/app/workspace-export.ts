@@ -25,6 +25,8 @@ export const EXPORTED_TABLES: Record<string, { scope: "workspace" | "connection"
   channel_consent_state: { scope: "workspace" },
   flows: { scope: "workspace" },
   flow_versions: { scope: "workspace" },
+  flow_runs: { scope: "workspace" },
+  flow_step_runs: { scope: "workspace" },
   data_deletion_records: { scope: "workspace" },
 };
 

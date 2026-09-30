@@ -137,10 +137,24 @@ async function seedWorkspace(workspace: string, user: string, connection: string
       [workspace],
     )
   ).rows[0].id;
+  const version = (
+    await pool.query(
+      `INSERT INTO flow_versions(flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,published_by)
+       VALUES($1,$2,1,1,'{"nodes":[]}',$3,'1789',$4) RETURNING id`,
+      [flow, workspace, connection, user],
+    )
+  ).rows[0].id;
+  const run = (
+    await pool.query(
+      `INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,event_id,status)
+       VALUES($1,$2,$3,$4,$5,'ended') RETURNING id`,
+      [workspace, connection, flow, version, event],
+    )
+  ).rows[0].id;
   await pool.query(
-    `INSERT INTO flow_versions(flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,published_by)
-     VALUES($1,$2,1,1,'{"nodes":[]}',$3,'1789',$4)`,
-    [flow, workspace, connection, user],
+    `INSERT INTO flow_step_runs(run_id,workspace_id,connection_id,seq,node_id,node_type,outcome)
+     VALUES($1,$2,$3,0,'start','instagram_comment','next')`,
+    [run, workspace, connection],
   );
   await pool.query(
     `INSERT INTO data_deletion_records(workspace_id,connection_id,requested_by,deleted_counts,retained_counts)
