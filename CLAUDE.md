@@ -183,4 +183,4 @@ This file records no deployment status on purpose; read these owners before clai
 
 - Production deployments, migrations and live Meta checks: `docs/notes/2026-09-26-cloudflare-runbook.md`, `docs/notes/2026-09-26-multi-user-cutover.md`, and the latest production note (currently `docs/notes/2026-09-29-issue13-production-verification.md`).
 - Per-issue code, local, provider and production state: `docs/notes/2026-09-27-manychat-acceptance-matrix.md` and the verification notes it links.
-- Only specs with a `## 운영 상태`, `## 운영 확인` or `## 운영 적용` section record their own status (`grep -l '^## 운영 ' docs/specs/*.md`); a spec that says deployment was out of scope describes its PR, not the current production state.
+- `grep -l '^## 운영 ' docs/specs/*.md` lists the specs with a dedicated status section (`## 운영 상태`, `## 운영 확인` or `## 운영 적용`); `docs/specs/2026-09-25-messaging-automation-platform.md` also records live and production results in its current-state paragraph. A spec that says deployment was out of scope describes its PR, not the current production state.
