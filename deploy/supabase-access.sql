@@ -158,3 +158,18 @@ BEGIN
   END LOOP;
 END $$;
 REVOKE ALL ON FUNCTION public.delete_person_data(uuid,uuid,uuid,text,text) FROM PUBLIC;
+
+-- Workspace deletion and its evidence are administrator-only: no runtime or API role may execute or read them.
+ALTER TABLE public.workspace_deletion_records ENABLE ROW LEVEL SECURITY;
+DO $$
+DECLARE any_role text;
+BEGIN
+  FOREACH any_role IN ARRAY ARRAY['auto_chatter_server','automations_app','anon','authenticated','service_role'] LOOP
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname=any_role) THEN
+      EXECUTE format('REVOKE ALL ON FUNCTION public.delete_workspace_data(uuid,uuid) FROM %I',any_role);
+      EXECUTE format('REVOKE ALL ON TABLE public.workspace_deletion_records FROM %I',any_role);
+    END IF;
+  END LOOP;
+END $$;
+REVOKE ALL ON FUNCTION public.delete_workspace_data(uuid,uuid) FROM PUBLIC;
+REVOKE ALL ON TABLE public.workspace_deletion_records FROM PUBLIC;
