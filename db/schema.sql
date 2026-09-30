@@ -16,7 +16,42 @@ DO $$ BEGIN
 END $$;
 ALTER TABLE workspace_members DROP CONSTRAINT IF EXISTS workspace_members_workspace_id_key;
 CREATE INDEX IF NOT EXISTS workspace_members_workspace_idx ON workspace_members(workspace_id);
-CREATE UNIQUE INDEX IF NOT EXISTS workspace_members_one_owner_idx ON workspace_members(workspace_id) WHERE role='owner';
+-- Removed members keep their row (server roles have no DELETE) so the next request refuses them;
+-- accepting another invite or creating a new workspace reuses the row. The email is shown to owners.
+ALTER TABLE workspace_members ADD COLUMN IF NOT EXISTS email text CHECK(email IS NULL OR length(email) BETWEEN 3 AND 320);
+ALTER TABLE workspace_members ADD COLUMN IF NOT EXISTS removed_at timestamptz;
+ALTER TABLE workspace_members ADD COLUMN IF NOT EXISTS removed_by uuid;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='workspace_members'::regclass AND conname='workspace_members_removed') THEN
+    ALTER TABLE workspace_members ADD CONSTRAINT workspace_members_removed
+      CHECK((removed_at IS NULL) = (removed_by IS NULL) AND (removed_at IS NULL OR role<>'owner'));
+  END IF;
+END $$;
+-- One owner among the members who were not removed.
+DROP INDEX IF EXISTS workspace_members_one_owner_idx;
+CREATE UNIQUE INDEX IF NOT EXISTS workspace_members_one_active_owner_idx
+  ON workspace_members(workspace_id) WHERE role='owner' AND removed_at IS NULL;
+
+-- An invite is bound to one email and role, stores only the SHA-256 of its link token, and can be used once.
+CREATE TABLE IF NOT EXISTS workspace_invites (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  email text NOT NULL CHECK(email = lower(btrim(email)) AND length(email) BETWEEN 3 AND 320),
+  role text NOT NULL CHECK(role IN ('admin','agent')),
+  token_hash text NOT NULL UNIQUE CHECK(token_hash ~ '^[0-9a-f]{64}$'),
+  created_by uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  expires_at timestamptz NOT NULL,
+  accepted_at timestamptz,
+  accepted_by uuid,
+  revoked_at timestamptz,
+  CHECK(expires_at > created_at),
+  CHECK((accepted_at IS NULL) = (accepted_by IS NULL)),
+  CHECK(accepted_at IS NULL OR revoked_at IS NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS workspace_invites_open_email_idx
+  ON workspace_invites(workspace_id, email) WHERE accepted_at IS NULL AND revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS workspace_invites_workspace_idx ON workspace_invites(workspace_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS instagram_oauth_states (
   state_hash text PRIMARY KEY,
@@ -903,6 +938,7 @@ AS $$
 DECLARE
   connections uuid[];
   members uuid[];
+  owner uuid;
   deleted jsonb := '{}'::jsonb;
   affected bigint;
   saved public.workspace_deletion_records%ROWTYPE;
@@ -938,6 +974,9 @@ BEGIN
   END IF;
   SELECT coalesce(array_agg(user_id ORDER BY user_id), '{}') INTO members
   FROM public.workspace_members WHERE workspace_id=p_workspace;
+  -- Only the requesting owner's login is deleted afterwards; other members just lose the workspace.
+  SELECT user_id INTO owner FROM public.workspace_members
+  WHERE workspace_id=p_workspace AND role='owner' AND removed_at IS NULL;
 
   -- Children before parents, following the foreign keys; this function body owns the order the multi-user cutover note refers to.
   DELETE FROM public.instagram_manual_reply_events WHERE workspace_id=p_workspace;
@@ -1014,6 +1053,9 @@ BEGIN
   DELETE FROM public.instagram_oauth_states WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_oauth_states', affected);
+  DELETE FROM public.workspace_invites WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('workspace_invites', affected);
   DELETE FROM public.workspace_members WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('workspace_members', affected);
@@ -1022,12 +1064,13 @@ BEGIN
   INSERT INTO public.workspace_deletion_records(workspace_id,requested_by,deleted_counts)
   VALUES(p_workspace,p_actor,deleted)
   RETURNING * INTO saved;
-  -- Member IDs are returned so the administrator can delete the Auth users; they are not stored.
+  -- The owner ID is the one Auth user the administrator deletes; member IDs are informational. Neither is stored.
   RETURN jsonb_build_object(
     'id', saved.id,
     'completed_at', saved.completed_at,
     'deleted_counts', saved.deleted_counts,
-    'member_user_ids', to_jsonb(members)
+    'member_user_ids', to_jsonb(members),
+    'owner_user_id', owner
   );
 END $$;
 REVOKE ALL ON FUNCTION public.delete_workspace_data(uuid,uuid) FROM PUBLIC;

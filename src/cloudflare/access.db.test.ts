@@ -13,7 +13,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
   const client = await pool.connect();
   try {
     await client.query(
-      "DROP TABLE IF EXISTS data_deletion_records, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS workspace_invites, data_deletion_records, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await client.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await client.query(
@@ -56,6 +56,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
       await client.query(`SET ROLE ${role}`);
       for (const table of [
         "data_deletion_records",
+        "workspace_invites",
         "flows",
         "flow_versions",
         "flow_runs",
@@ -262,6 +263,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("CREATE TABLE public.forbidden_compose(id int)"), { code: "42501" });
     for (const table of [
       "data_deletion_records",
+      "workspace_invites",
       "flows",
       "flow_versions",
       "flow_runs",
@@ -284,9 +286,9 @@ test("Supabase roles cannot read product data; the server role has DML without D
       await client.query(`SELECT * FROM ${table}`);
     await client.query("RESET ROLE");
     const protectedTables = await client.query(
-      "SELECT relname FROM pg_class WHERE relnamespace='public'::regnamespace AND relrowsecurity AND relname IN ('data_deletion_records','flows','flow_versions','flow_runs','flow_step_runs','channel_consent_state','channel_consent_events','instagram_manual_replies','instagram_manual_reply_events','instagram_inbox_handoffs','instagram_inbox_handoff_events','instagram_inbox_messages','instagram_contact_automation','instagram_contact_fields','instagram_contact_field_values','workspaces','workspace_members','instagram_oauth_states','instagram_follow_conversations','instagram_message_receipts','instagram_connections','instagram_comment_rules','instagram_comment_events','private_reply_outbox')",
+      "SELECT relname FROM pg_class WHERE relnamespace='public'::regnamespace AND relrowsecurity AND relname IN ('workspace_invites','data_deletion_records','flows','flow_versions','flow_runs','flow_step_runs','channel_consent_state','channel_consent_events','instagram_manual_replies','instagram_manual_reply_events','instagram_inbox_handoffs','instagram_inbox_handoff_events','instagram_inbox_messages','instagram_contact_automation','instagram_contact_fields','instagram_contact_field_values','workspaces','workspace_members','instagram_oauth_states','instagram_follow_conversations','instagram_message_receipts','instagram_connections','instagram_comment_rules','instagram_comment_events','private_reply_outbox')",
     );
-    assert.equal(protectedTables.rowCount, 24);
+    assert.equal(protectedTables.rowCount, 25);
     // Exercise RLS independently of table grants: an accidental future grant must not expose rows.
     await client.query("GRANT SELECT ON workspaces TO anon");
     await client.query("SET ROLE anon");
