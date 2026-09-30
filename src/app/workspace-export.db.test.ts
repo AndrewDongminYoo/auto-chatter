@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { appApi } from "./api.ts";
-import { EXCLUDED_TABLES, EXPORTED_TABLES } from "./workspace-export.ts";
+import { EXCLUDED_ITEMS, EXCLUDED_TABLES, EXPORTED_TABLES } from "./workspace-export.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
@@ -182,6 +182,8 @@ test("exports every table of the caller's workspace and nothing from another wor
   assert.equal(body.format, "auto-chatter-workspace-export");
   assert.equal(body.version, 1);
   assert.equal(body.workspace_id, workspaceId);
+  assert.deepEqual(body.excluded, EXCLUDED_ITEMS);
+  assert.ok(body.excluded.includes("instagram_connections.access_token_encrypted"));
   assert.deepEqual(Object.keys(body.tables).sort(), Object.keys(EXPORTED_TABLES).sort());
   for (const [table, rows] of Object.entries(body.tables as Record<string, Record<string, unknown>[]>)) {
     assert.ok(rows.length > 0, `${table} was seeded but exported no rows`);

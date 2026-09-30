@@ -31,6 +31,11 @@ export const EXPORTED_TABLES: Record<string, { scope: "workspace" | "connection"
 
 // workspaces only holds the ID, which the export carries at the top level; OAuth states hold short-lived login secrets.
 export const EXCLUDED_TABLES = ["workspaces", "instagram_oauth_states"];
+// What the export leaves out, derived from the table settings so the file cannot understate it.
+export const EXCLUDED_ITEMS = [
+  ...Object.entries(EXPORTED_TABLES).flatMap(([table, { omit = [] }]) => omit.map((column) => `${table}.${column}`)),
+  ...EXCLUDED_TABLES,
+];
 
 export async function exportWorkspace(pool: Pool, user: User) {
   const workspace = await workspaceFor(pool, user);
@@ -58,7 +63,7 @@ export async function exportWorkspace(pool: Pool, user: User) {
       version: 1,
       exported_at: exportedAt.toISOString(),
       workspace_id: workspace,
-      excluded: ["instagram_connections.access_token_encrypted", ...EXCLUDED_TABLES],
+      excluded: EXCLUDED_ITEMS,
       tables,
     };
   } catch (error) {
