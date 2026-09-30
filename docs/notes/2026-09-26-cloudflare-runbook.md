@@ -183,6 +183,19 @@ Worker 버전 `37a5b991-f658-4930-8c8a-9f481edbc4f8`를 배포하고 100% 활성
 로그인하지 않은 `/api/me`와 삭제 기록 조회는 401, 서명 없는 웹훅은 403이었으며 `/app/`의 `app.js`, `inbox.js`, `styles.css`는 운영 응답과 로컬 파일의 SHA-256이 일치했습니다.
 배포 후 cron 2회가 예외 없이 완료됐습니다.
 실제 해제된 연결에서의 삭제와 기록 표시는 검증하지 않았습니다.
+같은 날 PR #91 병합 커밋 `f5d7362d5b389baf7718fb87814d58a2c04b6118`까지를 운영에 적용했습니다. 이 커밋에는 PR #90의 작업 공간 내보내기가 포함됩니다.
+적용 전 운영 DB는 019까지 적용된 상태였고, 연결 1개(수신 켜짐·발송 꺼짐)·활성 규칙 0개·발송 중 행 0개였습니다.
+public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-09-30-pr91/public-before-020.dump`에 백업했으며 데이터 테이블 24개가 들어 있습니다.
+관리자 연결은 앞과 같은 Session pooler를 TLS `verify-full`로 사용했고, 해당 커밋의 `deploy/migrate-multi-user.sql`을 실행해 migration 020을 적용했습니다.
+적용 후 `workspace_deletion_records`의 RLS, `delete_workspace_data`의 `SECURITY INVOKER`와 `postgres` 소유를 조회했습니다.
+`auto_chatter_server`, `anon`, `authenticated`, `service_role`은 새 함수를 실행하거나 새 증적을 읽을 수 없었고, 서버 역할의 연결 삭제 함수 실행 권한은 유지됐으며 제품 테이블 DELETE 권한은 0개였습니다.
+기존 행 수(작업 공간 2, 연결 1, 댓글 9, outbox 3, 삭제 증적 0)는 유지됐습니다.
+Worker 버전 `4528cdc8-d42e-496a-a14b-84de27735b24`를 해당 커밋에서 배포하고 100% 활성 상태를 조회했으며 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+공개 페이지 3개와 `/app/`은 200이었고 `/privacy`와 `/data-deletion`에서 작업 공간 전체 삭제 문장을, `/privacy`에서 데이터 내보내기 경로를 확인했습니다.
+로그인하지 않은 `/api/me`, 삭제 기록 조회, `/api/workspace/export`는 401, 서명 없는 웹훅은 403이었으며 `/app/`의 `app.js`, `inbox.js`, `styles.css`는 운영 응답과 배포 커밋 파일의 SHA-256이 일치했습니다.
+배포 후 cron 2회가 예외 없이 완료됐습니다.
+작업 공간 전체 삭제 함수와 내보내기는 운영 데이터에 실행하지 않았습니다.
+이후 `main`에 병합된 PR #92(migration 021, 플로 실행)는 운영에 적용하거나 배포하지 않았으며, 그 Worker 코드는 021이 먼저 적용되어야 합니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
