@@ -1023,6 +1023,20 @@ byId("connect").addEventListener("click", (event) =>
     location.assign(url.href);
   }),
 );
+byId("export-data").addEventListener("click", (event) =>
+  action(event.currentTarget, async () => {
+    const generation = segmentsGeneration;
+    const data = await api("/api/workspace/export");
+    if (generation !== segmentsGeneration) return;
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `auto-chatter-export-${data.exported_at.slice(0, 10)}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    notice("작업 공간 데이터를 JSON 파일로 저장했습니다. 댓글·메시지 내용이 들어 있으니 안전한 곳에 보관해 주세요.");
+  }),
+);
 byId("new-rule").addEventListener("click", () => {
   if (!canDiscardRule()) return;
   dirty = false;
