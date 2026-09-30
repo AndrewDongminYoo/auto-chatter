@@ -9,11 +9,21 @@ import {
   type FlowDocument,
   type FlowError,
 } from "./flow-schema.ts";
+import { flowExecutionErrors } from "./flow-runtime.ts";
 
 const MAX_ACTIVE_FLOWS = 50;
+const RUN_HISTORY_LIMIT = 50;
 // The 64 KB document limit plus room for the request wrapper (name, revision, keys).
 export const FLOW_REQUEST_BYTES = 65_536 + 4_096;
-const SUMMARY = `f.id,f.name,f.draft_revision,f.archived,f.updated_at,v.version_no AS published_version_no`;
+const SUMMARY = `f.id,f.name,f.draft_revision,f.archived,f.enabled,f.updated_at,v.version_no AS published_version_no`;
+
+// An enabled flow runs on a Cloudflare-delivered (OAuth) connection with a version this runtime executes.
+function runnableErrors(document: FlowDocument, connection: { active: boolean; oauth: boolean } | null): FlowError[] {
+  const errors = flowExecutionErrors(document);
+  if (!connection?.active) errors.push({ code: "connection_unavailable", path: "nodes" });
+  else if (!connection.oauth) errors.push({ code: "login_mode_required", path: "nodes" });
+  return errors;
+}
 
 function flowName(value: unknown): string {
   if (typeof value !== "string" || value.length > 300) throw new ApiError(400, "invalid_flow");
@@ -123,10 +133,10 @@ export async function publishFlow(
   try {
     await client.query("BEGIN");
     const flow = (
-      await client.query("SELECT draft,draft_revision,archived FROM flows WHERE id=$1 AND workspace_id=$2 FOR UPDATE", [
-        id,
-        workspace,
-      ])
+      await client.query(
+        "SELECT draft,draft_revision,archived,enabled FROM flows WHERE id=$1 AND workspace_id=$2 FOR UPDATE",
+        [id, workspace],
+      )
     ).rows[0];
     if (!flow) throw new ApiError(404, "flow_not_found");
     if (flow.archived) throw new ApiError(409, "flow_archived");
@@ -181,6 +191,9 @@ export async function publishFlow(
       legacyRuleEnabled: conflicts.legacy,
       otherFlowPublished: conflicts.other,
     });
+    // A new version of an enabled flow starts runs immediately, so it must be runnable too.
+    if (!errors.length && flow.enabled && "document" in parsed)
+      errors.push(...runnableErrors(parsed.document, connection));
     if (errors.length) {
       await client.query("ROLLBACK");
       return { errors };
@@ -211,7 +224,7 @@ export async function archiveFlow(pool: Pool, user: User, id: string) {
   if (!isUuid(id)) throw new ApiError(400, "invalid_flow");
   const workspace = await workspaceFor(pool, user);
   const archived = await pool.query(
-    `UPDATE flows SET archived=true,published_version_id=NULL,updated_at=clock_timestamp()
+    `UPDATE flows SET archived=true,enabled=false,published_version_id=NULL,updated_at=clock_timestamp()
      WHERE id=$1 AND workspace_id=$2 RETURNING id`,
     [id, workspace],
   );
@@ -247,4 +260,79 @@ export async function getFlowVersion(pool: Pool, user: User, id: string, version
   ).rows[0];
   if (!version) throw new ApiError(404, "flow_version_not_found");
   return version;
+}
+
+export async function setFlowEnabled(
+  pool: Pool,
+  user: User,
+  id: string,
+  enabled: boolean,
+): Promise<{ enabled: boolean } | { errors: FlowError[] }> {
+  if (!isUuid(id)) throw new ApiError(400, "invalid_flow");
+  const workspace = await workspaceFor(pool, user);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const flow = (
+      await client.query(
+        `SELECT f.archived,v.definition,v.trigger_connection_id FROM flows f
+         LEFT JOIN flow_versions v ON v.id=f.published_version_id AND v.flow_id=f.id
+         WHERE f.id=$1 AND f.workspace_id=$2 FOR UPDATE OF f`,
+        [id, workspace],
+      )
+    ).rows[0];
+    if (!flow) throw new ApiError(404, "flow_not_found");
+    if (enabled) {
+      if (flow.archived) throw new ApiError(409, "flow_archived");
+      if (!flow.definition) throw new ApiError(409, "flow_not_published");
+      // Lock order: flow row, then connection row, as publishing does.
+      const connection =
+        (
+          await client.query(
+            `SELECT active,access_token_encrypted IS NOT NULL AS oauth FROM instagram_connections
+             WHERE id=$1 AND workspace_id=$2 FOR NO KEY UPDATE`,
+            [flow.trigger_connection_id, workspace],
+          )
+        ).rows[0] ?? null;
+      const parsed = parseFlowDocument(flow.definition);
+      const errors = "document" in parsed ? runnableErrors(parsed.document, connection) : parsed.errors;
+      if (errors.length) {
+        await client.query("ROLLBACK");
+        return { errors };
+      }
+    }
+    await client.query("UPDATE flows SET enabled=$3,updated_at=clock_timestamp() WHERE id=$1 AND workspace_id=$2", [
+      id,
+      workspace,
+      enabled,
+    ]);
+    await client.query("COMMIT");
+    return { enabled };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Latest runs with the path each took and the delivery state of the reply it queued.
+// Sender IDs and comment text stay out of the history.
+export async function listFlowRuns(pool: Pool, user: User, id: string) {
+  if (!isUuid(id)) throw new ApiError(400, "invalid_flow");
+  const workspace = await workspaceFor(pool, user);
+  if (!(await pool.query("SELECT 1 FROM flows WHERE id=$1 AND workspace_id=$2", [id, workspace])).rowCount)
+    throw new ApiError(404, "flow_not_found");
+  return (
+    await pool.query(
+      `SELECT r.id,v.version_no,r.status,r.failure_code,r.created_at,
+         reply.status AS delivery_status,reply.failure_code AS delivery_failure_code,reply.sent_at,
+         coalesce((SELECT jsonb_agg(jsonb_build_object('node_id',s.node_id,'node_type',s.node_type,'outcome',s.outcome) ORDER BY s.seq)
+           FROM flow_step_runs s WHERE s.run_id=r.id),'[]'::jsonb) AS steps
+       FROM flow_runs r JOIN flow_versions v ON v.id=r.flow_version_id
+       LEFT JOIN private_reply_outbox reply ON reply.flow_run_id=r.id
+       WHERE r.flow_id=$1 AND r.workspace_id=$2 ORDER BY r.created_at DESC,r.id DESC LIMIT $3`,
+      [id, workspace, RUN_HISTORY_LIMIT],
+    )
+  ).rows;
 }

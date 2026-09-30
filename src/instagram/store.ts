@@ -1,6 +1,8 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type { InstagramComment } from "./webhook.ts";
 import { matchesCommentRule, type CommentRuleMatch } from "./comment-rule.ts";
+import { parseFlowDocument } from "../app/flow-schema.ts";
+import { matchesFlowTrigger, planFlowRun } from "../app/flow-runtime.ts";
 
 interface ConnectionRow {
   id: string;
@@ -53,7 +55,12 @@ export async function ingestComments(pool: Pool, comments: readonly InstagramCom
         [connection.workspace_id, connection.id, comment.postId],
       );
       const rule = rules.rows[0];
-      if (!rule || !matchesCommentRule(comment.text, rule)) continue;
+      // An enabled rule and a published flow never share one media, so only one of them can answer.
+      if (!rule) {
+        await startFlowRun(client, connection, event.id, comment);
+        continue;
+      }
+      if (!matchesCommentRule(comment.text, rule)) continue;
 
       await client.query(
         `INSERT INTO private_reply_outbox
@@ -87,4 +94,92 @@ export async function ingestComments(pool: Pool, comments: readonly InstagramCom
   } finally {
     client.release();
   }
+}
+
+// Starts the enabled flow published for this media, inside the comment's ingestion transaction.
+async function startFlowRun(
+  client: PoolClient,
+  connection: ConnectionRow,
+  eventId: string,
+  comment: InstagramComment,
+): Promise<void> {
+  const flows = await client.query<{ flow_id: string; version_id: string; definition: unknown }>(
+    `SELECT f.id AS flow_id,v.id AS version_id,v.definition FROM flows f
+     JOIN flow_versions v ON v.id=f.published_version_id AND v.flow_id=f.id
+     WHERE f.workspace_id=$1 AND f.enabled AND NOT f.archived AND v.trigger_connection_id=$2 AND v.trigger_media_id=$3`,
+    [connection.workspace_id, connection.id, comment.postId],
+  );
+  const flow = flows.rows[0];
+  if (!flow) return;
+  const parsed = parseFlowDocument(flow.definition);
+  const document = "document" in parsed ? parsed.document : null;
+  if (document && !matchesFlowTrigger(document, comment.text)) return;
+  const tags = await client.query<{ tags: string[] }>(
+    "SELECT tags FROM instagram_contact_tags WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3",
+    [connection.workspace_id, connection.id, comment.senderId],
+  );
+  const fields = await client.query<{ field_id: string; value: unknown }>(
+    `SELECT field_id::text,value FROM instagram_contact_field_values
+     WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3`,
+    [connection.workspace_id, connection.id, comment.senderId],
+  );
+  const plan = document
+    ? planFlowRun(document, {
+        tags: new Set(tags.rows[0]?.tags ?? []),
+        fields: new Map(fields.rows.map((row) => [row.field_id, row.value])),
+      })
+    : ({ status: "failed", steps: [], failure_code: "invalid_definition" } as const);
+  const runs = await client.query<{ id: string }>(
+    `INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,event_id,status,failure_code)
+     VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(flow_id,event_id) DO NOTHING RETURNING id`,
+    [
+      connection.workspace_id,
+      connection.id,
+      flow.flow_id,
+      flow.version_id,
+      eventId,
+      plan.status === "message" ? "delivering" : plan.status,
+      plan.status === "failed" ? plan.failure_code : null,
+    ],
+  );
+  const run = runs.rows[0];
+  if (!run) return;
+  const steps = [...plan.steps];
+  if (plan.status === "message") {
+    // The outbox keeps one private reply per sender and media, whichever rule or flow queued it.
+    const queued = await client.query(
+      `INSERT INTO private_reply_outbox
+        (workspace_id,connection_id,event_id,flow_run_id,comment_id,media_id,sender_id,private_reply_text)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING RETURNING id`,
+      [
+        connection.workspace_id,
+        connection.id,
+        eventId,
+        run.id,
+        comment.commentId,
+        comment.postId,
+        comment.senderId,
+        plan.text,
+      ],
+    );
+    if (!queued.rowCount) {
+      steps[steps.length - 1] = { ...steps[steps.length - 1]!, outcome: "duplicate_recipient" };
+      await client.query("UPDATE flow_runs SET status='skipped',failure_code='duplicate_recipient' WHERE id=$1", [
+        run.id,
+      ]);
+    }
+  }
+  await client.query(
+    `INSERT INTO flow_step_runs(run_id,workspace_id,connection_id,seq,node_id,node_type,outcome)
+     SELECT $1,$2,$3,step.seq-1,step.node_id,step.node_type,step.outcome
+     FROM unnest($4::text[],$5::text[],$6::text[]) WITH ORDINALITY AS step(node_id,node_type,outcome,seq)`,
+    [
+      run.id,
+      connection.workspace_id,
+      connection.id,
+      steps.map((step) => step.node_id),
+      steps.map((step) => step.node_type),
+      steps.map((step) => step.outcome),
+    ],
+  );
 }

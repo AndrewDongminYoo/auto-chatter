@@ -207,17 +207,25 @@ export default {
                     : new PreSendVerificationError("block", "connection_changed");
                 const body = typeof init.body === "string" ? JSON.parse(init.body) : null;
                 if (body?.recipient?.comment_id) {
+                  // The reply's rule or flow must still be on; a flow run keeps its pinned version.
                   const rule = await pool.query(
                     `SELECT reply.workspace_id::text,reply.sender_id,reply.recipient_id,
+                      coalesce(rule.enabled,flow.enabled) AS source_enabled,reply.flow_run_id IS NOT NULL AS from_flow,
                       NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
                       AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused)) AS automation_active
-                     FROM private_reply_outbox reply JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
-                    WHERE reply.connection_id=$1 AND reply.comment_id=$2 AND rule.enabled AND reply.status='sending'`,
+                     FROM private_reply_outbox reply LEFT JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
+                     LEFT JOIN flow_runs run ON run.id=reply.flow_run_id LEFT JOIN flows flow ON flow.id=run.flow_id
+                    WHERE reply.connection_id=$1 AND reply.comment_id=$2 AND reply.status='sending'`,
                     [connectionId, body.recipient.comment_id],
                   );
-                  if (rule.rows[0]?.automation_active === false)
-                    throw new PreSendVerificationError("retry", "contact_paused");
                   if (!rule.rowCount) throw new PreSendVerificationError("block", "inactive_rule");
+                  if (rule.rows[0].source_enabled !== true)
+                    throw new PreSendVerificationError(
+                      "block",
+                      rule.rows[0].from_flow ? "inactive_flow" : "inactive_rule",
+                    );
+                  if (rule.rows[0].automation_active === false)
+                    throw new PreSendVerificationError("retry", "contact_paused");
                   const reply = rule.rows[0];
                   try {
                     if (

@@ -148,9 +148,10 @@ test("waits for an uncommitted claim and refuses once it commits as sending", as
     claim.release();
   }
   const kept = await pool.query("SELECT status FROM private_reply_outbox WHERE workspace_id=$1", [workspaceId]);
+  // The fixture seeds one rule reply and one flow reply.
   assert.deepEqual(
     kept.rows.map((row) => row.status),
-    ["sending"],
+    ["sending", "sending"],
   );
 });
 

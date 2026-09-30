@@ -178,11 +178,32 @@ export async function updateConnection(pool: Pool, user: User, id: string, input
 export async function disconnectConnection(pool: Pool, user: User, id: string) {
   if (!isUuid(id)) throw new ApiError(400, "invalid_connection");
   const workspaceId = await workspaceFor(pool, user);
-  await pool.query(
-    `WITH disconnected AS (UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL,token_expires_at=NULL
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Flows first, all of them: enabling or publishing locks one flow row before its trigger connection
+    // row, so waiting here lets a concurrent enable commit and be turned off below, and any later one
+    // finds the connection inactive. A row skipped by the filter alone would not wait. NO KEY UPDATE
+    // still conflicts with their FOR UPDATE but not with the KEY SHARE that comment ingestion's foreign
+    // key checks hold on flows, so a multi-comment ingestion batch cannot deadlock with this.
+    await client.query("SELECT id FROM flows WHERE workspace_id=$1 ORDER BY id FOR NO KEY UPDATE", [workspaceId]);
+    await client.query(
+      `UPDATE flows f SET enabled=false,updated_at=clock_timestamp() FROM flow_versions v
+       WHERE v.id=f.published_version_id AND v.trigger_connection_id=$1 AND f.workspace_id=$2 AND f.enabled`,
+      [id, workspaceId],
+    );
+    await client.query(
+      `WITH disconnected AS (UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL,token_expires_at=NULL
  WHERE id=$1 AND workspace_id=$2 RETURNING id) UPDATE instagram_comment_rules SET enabled=false WHERE connection_id IN(SELECT id FROM disconnected) AND workspace_id=$2`,
-    [id, workspaceId],
-  );
+      [id, workspaceId],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
   return { disconnected: true };
 }
 export async function listActivity(pool: Pool, user: User) {

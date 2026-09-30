@@ -111,10 +111,36 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
       [workspace],
     )
   ).rows[0].id;
+  const version = (
+    await pool.query(
+      `INSERT INTO flow_versions(flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,published_by)
+       VALUES($1,$2,1,1,'{"nodes":[]}',$3,'1789',$4) RETURNING id`,
+      [flow, workspace, connection, user],
+    )
+  ).rows[0].id;
+  const flowEvent = (
+    await pool.query(
+      `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+       VALUES($1,$2,$3,'2001','124','flow comment') RETURNING id`,
+      [workspace, connection, `comment-flow-${account}`],
+    )
+  ).rows[0].id;
+  const run = (
+    await pool.query(
+      `INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,event_id,status)
+       VALUES($1,$2,$3,$4,$5,'delivering') RETURNING id`,
+      [workspace, connection, flow, version, flowEvent],
+    )
+  ).rows[0].id;
   await pool.query(
-    `INSERT INTO flow_versions(flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,published_by)
-     VALUES($1,$2,1,1,'{"nodes":[]}',$3,'1789',$4)`,
-    [flow, workspace, connection, user],
+    `INSERT INTO flow_step_runs(run_id,workspace_id,connection_id,seq,node_id,node_type,outcome)
+     VALUES($1,$2,$3,0,'start','instagram_comment','next'),($1,$2,$3,1,'reply','instagram_message','queued')`,
+    [run, workspace, connection],
+  );
+  await pool.query(
+    `INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,flow_run_id,comment_id,media_id,sender_id,private_reply_text,status)
+     VALUES($1,$2,$3,$4,$5,'2001','124','flow reply','failed')`,
+    [workspace, connection, flowEvent, run, `comment-flow-${account}`],
   );
   await pool.query(
     `INSERT INTO data_deletion_records(workspace_id,connection_id,requested_by,deleted_counts,retained_counts)

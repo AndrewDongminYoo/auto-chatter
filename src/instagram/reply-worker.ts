@@ -257,16 +257,22 @@ export async function processNextPrivateReply(
   );
   if (deferred.rowCount === 1) return true;
 
-  const ruleEnabled = await pool.query(
-    `SELECT rule.enabled FROM instagram_comment_rules rule
-    JOIN private_reply_outbox reply ON reply.rule_id=rule.id WHERE reply.id=$1`,
+  // A reply comes from a legacy rule or a flow run; either source must still be switched on.
+  // A flow run keeps its pinned version, so republishing does not stop it and disabling does.
+  const source = await pool.query<{ enabled: boolean | null; from_flow: boolean }>(
+    `SELECT coalesce(rule.enabled,flow.enabled) AS enabled,reply.flow_run_id IS NOT NULL AS from_flow
+     FROM private_reply_outbox reply
+     LEFT JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
+     LEFT JOIN flow_runs run ON run.id=reply.flow_run_id
+     LEFT JOIN flows flow ON flow.id=run.flow_id
+     WHERE reply.id=$1`,
     [row.id],
   );
-  if (ruleEnabled.rows[0]?.enabled !== true) {
+  if (source.rows[0]?.enabled !== true) {
     await updateClaim(
       pool,
-      "UPDATE private_reply_outbox SET status='blocked',failure_code='inactive_rule' WHERE id=$1 AND status='sending' AND attempt_id=$2",
-      [row.id, attemptId],
+      "UPDATE private_reply_outbox SET status='blocked',failure_code=$3 WHERE id=$1 AND status='sending' AND attempt_id=$2",
+      [row.id, attemptId, source.rows[0]?.from_flow ? "inactive_flow" : "inactive_rule"],
     );
     return true;
   }
