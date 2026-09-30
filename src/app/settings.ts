@@ -7,17 +7,26 @@ export async function ensureWorkspace(pool: Pool, user: User): Promise<string> {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [user.id]);
     const existing = await client.query<{ workspace_id: string }>(
-      "SELECT workspace_id FROM workspace_members WHERE user_id=$1",
+      "SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL",
       [user.id],
     );
     let id = existing.rows[0]?.workspace_id;
-    if (!id) {
+    if (id) {
+      // Keeps the email owners see in the member list current for members created before it was recorded.
+      await client.query(
+        "UPDATE workspace_members SET email=$2 WHERE user_id=$1 AND removed_at IS NULL AND email IS DISTINCT FROM $2",
+        [user.id, normalizeEmail(user.email)],
+      );
+    } else {
+      // A removed member starts over as the owner of a new workspace; their old row is reused.
       id = randomUUID();
       await client.query("INSERT INTO workspaces(id) VALUES($1)", [id]);
-      await client.query("INSERT INTO workspace_members(user_id,workspace_id,role) VALUES($1,$2,'owner')", [
-        user.id,
-        id,
-      ]);
+      await client.query(
+        `INSERT INTO workspace_members(user_id,workspace_id,role,email) VALUES($1,$2,'owner',$3)
+         ON CONFLICT(user_id) DO UPDATE SET workspace_id=EXCLUDED.workspace_id,role='owner',email=EXCLUDED.email,
+           removed_at=NULL,removed_by=NULL`,
+        [user.id, id, normalizeEmail(user.email)],
+      );
     }
     await client.query("COMMIT");
     return id;
@@ -38,14 +47,26 @@ export function roleAllows(role: WorkspaceRole, minimum: WorkspaceRole): boolean
 // Every workspace-scoped request states the least role it needs; membership and role are read per request,
 // so a removal or downgrade applies to the next request after it commits.
 export async function workspaceFor(pool: Pool, user: User, minimum: WorkspaceRole): Promise<string> {
+  return (await membershipFor(pool, user, minimum)).workspace_id;
+}
+
+export async function membershipFor(
+  pool: Pool,
+  user: User,
+  minimum: WorkspaceRole,
+): Promise<{ workspace_id: string; role: WorkspaceRole }> {
   const result = await pool.query<{ workspace_id: string; role: WorkspaceRole }>(
-    "SELECT workspace_id,role FROM workspace_members WHERE user_id=$1",
+    "SELECT workspace_id,role FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL",
     [user.id],
   );
   const member = result.rows[0];
   if (!member) throw new ApiError(403, "workspace_required");
   if (!roleAllows(member.role, minimum)) throw new ApiError(403, "role_forbidden");
-  return member.workspace_id;
+  return member;
+}
+
+export function normalizeEmail(value: string): string {
+  return value.trim().toLowerCase();
 }
 function text(value: unknown, max: number, required = true): string {
   if (typeof value !== "string" || value.length > max || (required && !value.trim()))

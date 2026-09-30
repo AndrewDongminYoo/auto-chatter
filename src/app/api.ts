@@ -9,10 +9,20 @@ import {
   ensureWorkspace,
   listConnections,
   listRules,
+  membershipFor,
   saveRule,
   parseRule,
   updateConnection,
 } from "./settings.ts";
+import {
+  acceptInvite,
+  changeMemberRole,
+  createInvite,
+  listInvites,
+  listMembers,
+  removeMember,
+  revokeInvite,
+} from "./workspace-members.ts";
 import { beginInstagramOAuth, finishInstagramOAuth, type InstagramOAuthEnv } from "./instagram-oauth.ts";
 import {
   archiveContactSegment,
@@ -98,8 +108,24 @@ export async function appApi(
         return await beginInstagramOAuth(pool, user, env);
       if (url.pathname === "/api/instagram/callback" && request.method === "GET")
         return await finishInstagramOAuth(pool, user, request, env, fetchImpl);
-      if (url.pathname === "/api/workspace" && request.method === "POST")
-        return json({ workspace_id: await ensureWorkspace(pool, user) });
+      if (url.pathname === "/api/workspace" && request.method === "POST") {
+        await ensureWorkspace(pool, user);
+        return json(await membershipFor(pool, user, "agent"));
+      }
+      if (url.pathname === "/api/invites/accept" && request.method === "POST")
+        return json(await acceptInvite(pool, user, await readJson(request)));
+      if (url.pathname === "/api/workspace/members" && request.method === "GET")
+        return json({ members: await listMembers(pool, user) });
+      const member = /^\/api\/workspace\/members\/([a-f0-9-]+)$/.exec(url.pathname);
+      if (member && request.method === "PATCH")
+        return json(await changeMemberRole(pool, user, member[1]!, await readJson(request)));
+      if (member && request.method === "DELETE") return json(await removeMember(pool, user, member[1]!));
+      if (url.pathname === "/api/workspace/invites" && request.method === "GET")
+        return json({ invites: await listInvites(pool, user) });
+      if (url.pathname === "/api/workspace/invites" && request.method === "POST")
+        return json(await createInvite(pool, user, await readJson(request), env.APP_ORIGIN ?? url.origin), 201);
+      const invite = /^\/api\/workspace\/invites\/([a-f0-9-]+)$/.exec(url.pathname);
+      if (invite && request.method === "DELETE") return json(await revokeInvite(pool, user, invite[1]!));
       if (url.pathname === "/api/workspace/export" && request.method === "GET") {
         const exported = await exportWorkspace(pool, user);
         return new Response(exported.body, {
