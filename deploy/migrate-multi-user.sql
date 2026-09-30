@@ -21,6 +21,7 @@ BEGIN;
 \ir ../db/migrations/019_person_data_deletion.sql
 \ir ../db/migrations/020_workspace_data_deletion.sql
 \ir ../db/migrations/021_flow_runs.sql
+\ir ../db/migrations/022_workspace_roles.sql
 \ir ../db/migrations/023_connection_deletion_locks.sql
 \ir supabase-access.sql
 COMMIT;

@@ -16,7 +16,7 @@ export async function inboxHandoff(
   query: URLSearchParams,
 ) {
   validate(connection, recipient, query);
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   const result = await pool.query(
     `SELECT handoff.active,handoff.version,
       EXISTS(SELECT 1 FROM instagram_inbox_messages WHERE workspace_id=$2 AND connection_id=$1 AND recipient_id=$3) AS conversation
@@ -61,7 +61,7 @@ export async function saveInboxHandoff(
     Number(input.expected_version) >= 2147483647
   )
     throw new ApiError(400, "invalid_handoff_request");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");

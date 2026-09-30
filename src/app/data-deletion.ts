@@ -20,7 +20,7 @@ export async function deleteConnectionData(pool: Pool, user: User, connectionId:
     input.confirm_account_id.length > 255
   )
     throw new ApiError(400, "invalid_data_deletion");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "admin");
   try {
     const result = await pool.query<{ result: unknown }>(
       "SELECT public.delete_connection_data($1,$2,$3,$4) AS result",
@@ -36,7 +36,7 @@ export async function deleteConnectionData(pool: Pool, user: User, connectionId:
 
 export async function listDataDeletions(pool: Pool, user: User, connectionId: string) {
   if (!isUuid(connectionId)) throw new ApiError(400, "invalid_data_deletion");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "admin");
   const owned = await pool.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [
     connectionId,
     workspace,

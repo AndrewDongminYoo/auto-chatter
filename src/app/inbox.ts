@@ -5,7 +5,7 @@ import { workspaceFor } from "./settings.ts";
 export async function setInbox(pool: Pool, user: User, id: string, input: unknown) {
   if (!isUuid(id) || !isRecord(input) || Object.keys(input).length !== 1 || typeof input.enabled !== "boolean")
     throw new ApiError(400, "invalid_inbox_setting");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "admin");
   const found = await pool.query("SELECT active FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [
     id,
     workspace,
@@ -21,7 +21,7 @@ export async function setInbox(pool: Pool, user: User, id: string, input: unknow
   return { enabled: result.rows[0].inbox_enabled };
 }
 export async function listInbox(pool: Pool, user: User, query: URLSearchParams) {
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   let after: { connection_id: string; recipient_id: string } | null = null;
   const connection = query.get("connection_id");
   if (connection && !isUuid(connection)) throw new ApiError(400, "invalid_inbox_query");
@@ -76,7 +76,7 @@ export async function inboxMessages(
     (query.has("before") && !/^[1-9]\d{0,18}$/.test(query.get("before")!))
   )
     throw new ApiError(400, "invalid_inbox_query");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   const owned = await pool.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [
     connection,
     workspace,
@@ -101,7 +101,7 @@ export async function inboxContext(
 ) {
   if (!isUuid(connection) || !/^\d{1,40}$/.test(recipient) || query.size)
     throw new ApiError(400, "invalid_inbox_query");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   return readInboxContext(pool, workspace, connection, recipient);
 }
 

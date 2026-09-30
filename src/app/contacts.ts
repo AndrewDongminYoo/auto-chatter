@@ -71,7 +71,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   }
   let condition = parseFieldCondition(fieldInput);
   const after = cursor(options.get("after"));
-  const workspaceId = await workspaceFor(pool, user);
+  const workspaceId = await workspaceFor(pool, user, "agent");
   if (segmentId !== null) {
     const segment = await pool.query<{
       connection_id: string | null;
@@ -145,7 +145,7 @@ export async function saveContactTags(pool: Pool, user: User, connectionId: stri
   )
     throw new ApiError(400, "invalid_contact_tags");
   const tags = [...new Set(input.tags.map(tag))].sort();
-  const workspaceId = await workspaceFor(pool, user);
+  const workspaceId = await workspaceFor(pool, user, "agent");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -168,7 +168,7 @@ export async function saveContactTags(pool: Pool, user: User, connectionId: stri
 }
 
 export async function listContactSegments(pool: Pool, user: User) {
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   return (
     await pool.query(
       "SELECT id,name,connection_id,tag,field_id,field_operator,field_value FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived ORDER BY name,id",
@@ -209,7 +209,7 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
   if (connectionId !== null && !isUuid(connectionId)) throw new ApiError(400, "invalid_segment");
   const filterTag = input.tag === undefined || input.tag === null || input.tag === "" ? null : tag(input.tag);
   const condition = parseFieldCondition(input);
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "admin");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -254,7 +254,7 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
 
 export async function archiveContactSegment(pool: Pool, user: User, id: string) {
   if (!isUuid(id)) throw new ApiError(400, "invalid_segment");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "admin");
   const result = await pool.query(
     "UPDATE instagram_contact_segments SET archived=true WHERE workspace_id=$1 AND id=$2 RETURNING id",
     [workspace, id],
@@ -278,7 +278,7 @@ export async function saveContactAutomation(
     typeof input.paused !== "boolean"
   )
     throw new ApiError(400, "invalid_contact_automation");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");

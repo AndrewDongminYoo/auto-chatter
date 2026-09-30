@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 import { ApiError, type User } from "./auth.ts";
+import { roleAllows, type WorkspaceRole } from "./settings.ts";
 
 // Every public table is either exported here or listed in EXCLUDED_TABLES; workspace-export.db.test.ts enforces it.
 // "connection" tables carry no workspace_id and are scoped through the workspace's connections.
@@ -45,11 +46,13 @@ export async function exportWorkspace(pool: Pool, user: User) {
     // One snapshot for the membership check and every exported row, so a member removed concurrently
     // cannot export, and rows that reference each other are exported consistently.
     await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
-    const membership = await client.query<{ workspace_id: string }>(
-      "SELECT workspace_id FROM workspace_members WHERE user_id=$1",
+    const membership = await client.query<{ workspace_id: string; role: WorkspaceRole }>(
+      "SELECT workspace_id,role FROM workspace_members WHERE user_id=$1",
       [user.id],
     );
     if (!membership.rows[0]) throw new ApiError(403, "workspace_required");
+    // The export holds every comment, DM and contact record, so agents cannot take it.
+    if (!roleAllows(membership.rows[0].role, "admin")) throw new ApiError(403, "role_forbidden");
     const workspace = membership.rows[0].workspace_id;
     // Rows stay as PostgreSQL JSON text: parsing them in JavaScript would round bigint IDs above 2^53.
     const tables: string[] = [];

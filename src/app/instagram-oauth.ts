@@ -49,7 +49,7 @@ function config(env: InstagramOAuthEnv) {
 
 export async function beginInstagramOAuth(pool: Pool, user: User, env: InstagramOAuthEnv): Promise<Response> {
   const settings = config(env);
-  const workspaceId = await workspaceFor(pool, user);
+  const workspaceId = await workspaceFor(pool, user, "admin");
   const state = randomBytes(32).toString("hex");
   await pool.query(
     "INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES($1,$2,$3,now()+interval '10 minutes')",
@@ -112,7 +112,7 @@ export async function finishInstagramOAuth(
     !timingSafeEqual(Buffer.from(state), Buffer.from(browserState))
   )
     throw new ApiError(400, "invalid_oauth_state");
-  const workspaceId = await workspaceFor(pool, user);
+  const workspaceId = await workspaceFor(pool, user, "admin");
   const consumed = await pool.query(
     "UPDATE instagram_oauth_states SET consumed_at=now() WHERE state_hash=$1 AND user_id=$2 AND workspace_id=$3 AND consumed_at IS NULL AND expires_at>now() RETURNING state_hash",
     [stateHash(state), user.id, workspaceId],
