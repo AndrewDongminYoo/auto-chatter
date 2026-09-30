@@ -298,3 +298,52 @@ test("the invite migration replays and the schema keeps one active owner and no 
     { code: "23505" },
   );
 });
+
+test("creations that resolved the old workspace before an acceptance moved the user are refused", async () => {
+  const ownWorkspace = "88888888-8888-4888-8888-888888888888";
+  await pool.query("INSERT INTO workspaces(id) VALUES($1)", [ownWorkspace]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role,email) VALUES($1,$2,'owner',$3)", [
+    ownWorkspace,
+    stranger.id,
+    stranger.email,
+  ]);
+  async function waitForLockWaiters(count: number) {
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const waiting = await pool.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type='Lock'");
+      if (waiting.rows[0].n >= count) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error(`fewer than ${count} lock waiters`);
+  }
+  const creations: [string, unknown][] = [
+    ["/api/flows", { name: "late flow" }],
+    ["/api/contact-fields", { name: "late field", type: "text" }],
+    ["/api/contact-segments", { name: "late segment" }],
+    ["/api/workspace/invites", { email: "late@example.test", role: "agent" }],
+  ];
+  const { token } = await invite(stranger.email, "admin");
+  const blocker = await pool.connect();
+  try {
+    // Hold the user's own workspace so the acceptance and then every creation queue behind it in that order.
+    await blocker.query("BEGIN");
+    await blocker.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [ownWorkspace]);
+    const accepting = accept(stranger, token);
+    await waitForLockWaiters(1);
+    const creating = creations.map(([path, input]) => request(stranger, "POST", path, input));
+    await waitForLockWaiters(1 + creations.length);
+    await blocker.query("COMMIT");
+    assert.equal((await accepting).status, 200);
+    for (const [index, response] of (await Promise.all(creating)).entries())
+      assert.equal(response.status, 403, creations[index]![0]);
+  } finally {
+    blocker.release();
+  }
+  const left = await pool.query(
+    `SELECT (SELECT count(*) FROM flows WHERE workspace_id=$1)
+      + (SELECT count(*) FROM instagram_contact_fields WHERE workspace_id=$1)
+      + (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1)
+      + (SELECT count(*) FROM workspace_invites WHERE workspace_id=$1) AS n`,
+    [ownWorkspace],
+  );
+  assert.equal(Number(left.rows[0].n), 0);
+});

@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
-import { normalizeEmail, workspaceFor } from "./settings.ts";
+import { lockWorkspaceForMember, normalizeEmail, workspaceFor } from "./settings.ts";
 
 const INVITE_DAYS = 7;
 const MAX_OPEN_INVITES = 20;
@@ -69,7 +69,7 @@ export async function createInvite(pool: Pool, user: User, input: unknown, origi
   const workspace = await workspaceFor(pool, user, "owner");
   const token = randomBytes(32).toString("base64url");
   const invite = await transaction(pool, async (client) => {
-    await client.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [workspace]);
+    await lockWorkspaceForMember(client, workspace, user, "owner");
     if (
       (
         await client.query(

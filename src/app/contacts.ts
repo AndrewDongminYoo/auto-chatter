@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
-import { workspaceFor } from "./settings.ts";
+import { lockWorkspaceForMember, workspaceFor } from "./settings.ts";
 import { lockContact, parseFieldCondition, validateFieldCondition } from "./contact-fields.ts";
 
 type Contact = {
@@ -215,7 +215,7 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
   try {
     await client.query("BEGIN");
     // Serialize creations so concurrent requests cannot exceed the active-segment limit.
-    await client.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [workspace]);
+    await lockWorkspaceForMember(client, workspace, user, "admin");
     await validateFieldCondition(client, workspace, condition, true);
     if (
       connectionId !== null &&

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 export async function ensureWorkspace(pool: Pool, user: User): Promise<string> {
   const client = await pool.connect();
@@ -63,6 +63,26 @@ export async function membershipFor(
   if (!member) throw new ApiError(403, "workspace_required");
   if (!roleAllows(member.role, minimum)) throw new ApiError(403, "role_forbidden");
   return member;
+}
+
+// Locks the workspace row and re-checks the caller's membership in the same transaction. Accepting an invite can
+// move the caller out of an empty workspace between workspaceFor and this lock (acceptInvite holds the old
+// workspace row FOR UPDATE), and a creation must then not land in the workspace the caller left.
+export async function lockWorkspaceForMember(
+  client: PoolClient,
+  workspace: string,
+  user: User,
+  minimum: WorkspaceRole,
+): Promise<void> {
+  await client.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [workspace]);
+  const member = (
+    await client.query<{ role: WorkspaceRole }>(
+      "SELECT role FROM workspace_members WHERE user_id=$1 AND workspace_id=$2 AND removed_at IS NULL",
+      [user.id, workspace],
+    )
+  ).rows[0];
+  if (!member) throw new ApiError(403, "workspace_required");
+  if (!roleAllows(member.role, minimum)) throw new ApiError(403, "role_forbidden");
 }
 
 export function normalizeEmail(value: string): string {
