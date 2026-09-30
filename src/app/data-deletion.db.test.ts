@@ -247,8 +247,10 @@ test("connection deletion removes personal data, keeps revokes and records evide
     "id",
     "requested_by",
     "retained_counts",
+    "scope",
     "workspace_id",
   ]);
+  assert.equal(record.rows[0].scope, "connection");
 
   const list = (await (await request("GET", `/api/connections/${connectionId}/data-deletions`)).json()) as {
     deletions: { id: string }[];

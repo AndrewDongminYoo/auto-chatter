@@ -81,6 +81,12 @@ test("Supabase roles cannot read product data; the server role has DML without D
         client.query("SELECT public.delete_connection_data(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'x')"),
         { code: "42501" },
       );
+      await assert.rejects(
+        client.query(
+          "SELECT public.delete_person_data(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'comment_sender','1')",
+        ),
+        { code: "42501" },
+      );
       await client.query("RESET ROLE");
     }
     await client.query("SET ROLE auto_chatter_server");
@@ -161,6 +167,12 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("UPDATE data_deletion_records SET id=id"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM data_deletion_records"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_comment_events"), { code: "42501" });
+    await assert.rejects(
+      client.query(
+        "SELECT public.delete_person_data('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','33333333-3333-4333-8333-333333333333','comment_sender','1')",
+      ),
+      { code: "42501" },
+    );
     await client.query("RESET ROLE");
     await client.query("SET ROLE automations_app");
     assert.equal((await client.query("SELECT count(*) FROM workspace_members")).rows[0].count, "1");
@@ -221,6 +233,12 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("DELETE FROM flows"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM channel_consent_events"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM channel_consent_state"), { code: "42501" });
+    await assert.rejects(
+      client.query(
+        "SELECT public.delete_person_data('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','33333333-3333-4333-8333-333333333333','comment_sender','1')",
+      ),
+      { code: "42501" },
+    );
     await assert.rejects(client.query("CREATE TABLE public.forbidden_compose(id int)"), { code: "42501" });
     for (const table of [
       "data_deletion_records",
