@@ -20,6 +20,7 @@ let fieldBusy = false;
 let fieldNameDirty = false;
 let refreshPromise;
 let currentUserId;
+let activityRequest = 0;
 let editingRuleId;
 let dirty = false;
 let mediaGeneration = 0;
@@ -1143,8 +1144,16 @@ void start();
 
 async function loadActivity() {
   const generation = segmentsGeneration;
-  const result = await api("/api/activity");
-  if (generation !== segmentsGeneration) return;
+  // A read that started before a data deletion must not replace the list reloaded after it.
+  const request = ++activityRequest;
+  let result;
+  try {
+    result = await api("/api/activity");
+  } catch (error) {
+    if (request !== activityRequest) return;
+    throw error;
+  }
+  if (generation !== segmentsGeneration || request !== activityRequest) return;
   const labels = {
     pending: "대기",
     waiting: "응답 대기",
