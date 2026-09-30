@@ -66,4 +66,5 @@ Supabase API 역할과 PUBLIC은 함수를 실행할 수 없습니다.
 
 migration 018은 관리자 migration 러너와 접근 권한 스크립트에 포함됩니다.
 2026-09-30 운영 DB에 migration 018을 적용하고 이 계약을 포함한 Worker를 배포했습니다. 적용 결과와 권한 조회는 [운영 적용 기록](../notes/2026-09-26-cloudflare-runbook.md)에 있습니다.
+같은 날 삭제 전 발송 행을 잠그는 migration 023도 운영 DB에 적용했습니다.
 실계정에서의 동작은 아직 검증하지 않았습니다.
