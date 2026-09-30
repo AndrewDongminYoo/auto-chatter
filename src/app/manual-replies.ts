@@ -16,7 +16,7 @@ export async function readManualReplyStatus(
   enabled: boolean,
 ) {
   validate(connection, recipient, query);
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   const owned = await pool.query(
     "SELECT 1 FROM instagram_connections c WHERE c.id=$1 AND c.workspace_id=$2 AND EXISTS(SELECT 1 FROM instagram_inbox_messages m WHERE m.workspace_id=c.workspace_id AND m.connection_id=c.id AND m.recipient_id=$3)",
     [connection, workspace, recipient],
@@ -85,7 +85,7 @@ export async function queueManualReply(
   if (!retryOf && (typeof body.text !== "string" || !body.text.trim() || body.text.length > 1000))
     throw new ApiError(400, "invalid_manual_reply_request");
   const retryReason = retryOf ? reason(body.reason) : null;
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -166,7 +166,7 @@ export async function resolveManualReply(
   const body = requestKey(input, ["request_key", "decision", "reason"]);
   if (body.decision !== "no_retry") throw new ApiError(400, "invalid_manual_reply_request");
   const note = reason(body.reason),
-    workspace = await workspaceFor(pool, user),
+    workspace = await workspaceFor(pool, user, "agent"),
     client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -232,7 +232,7 @@ export async function listManualReplies(
       throw new ApiError(400, "invalid_manual_reply_query");
     }
   }
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   if (
     !(await pool.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [connection, workspace]))
       .rowCount

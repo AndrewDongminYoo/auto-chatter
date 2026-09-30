@@ -35,7 +35,11 @@ const post = {
 function mediaPool(owned = true) {
   return {
     query: async (sql: string) => ({
-      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId }] : owned ? [connection] : [],
+      rows: sql.includes("workspace_members")
+        ? [{ workspace_id: workspaceId, role: "owner" }]
+        : owned
+          ? [connection]
+          : [],
     }),
     end: async () => {},
   } as unknown as Pool;
@@ -113,7 +117,7 @@ test("Instagram review allowlist and explicit public switch permit OAuth", async
     Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
   const pool = {
     query: async (sql: string) => ({
-      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId }] : [],
+      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : [],
     }),
     end: async () => {},
   } as unknown as Pool;
@@ -148,6 +152,36 @@ test("Instagram review allowlist and explicit public switch permit OAuth", async
   assert.equal(disabled.status, 403);
 });
 
+test("an agent cannot start an Instagram connection", async () => {
+  const fetchImpl = (async () =>
+    Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
+  const pool = {
+    query: async (sql: string) => ({
+      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "agent" }] : [],
+    }),
+    end: async () => {},
+  } as unknown as Pool;
+  const response = await appApi(
+    new Request("https://app.test/api/instagram/connect", {
+      method: "POST",
+      headers: { origin: "https://app.test", cookie: "__Host-ac-access=test-session" },
+    }),
+    {
+      ...config,
+      APP_ORIGIN: "https://app.test",
+      INSTAGRAM_OAUTH_APP_ID: "123",
+      INSTAGRAM_OAUTH_APP_SECRET: "synthetic-secret",
+      TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
+      META_GRAPH_VERSION: "v26.0",
+      INSTAGRAM_PUBLIC_CONNECT_ENABLED: "true",
+    },
+    () => pool,
+    fetchImpl,
+  );
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), { error: "role_forbidden" });
+});
+
 test("a denied Instagram callback returns to the app with a bounded reason", async () => {
   const fetchImpl = (async (input: string | URL | Request) =>
     Response.json(
@@ -157,7 +191,9 @@ test("a denied Instagram callback returns to the app with a bounded reason", asy
     )) as typeof fetch;
   const pool = {
     query: async (sql: string) => ({
-      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId }] : [{ state_hash: "consumed" }],
+      rows: sql.includes("workspace_members")
+        ? [{ workspace_id: workspaceId, role: "owner" }]
+        : [{ state_hash: "consumed" }],
       rowCount: 1,
     }),
     end: async () => {},
@@ -425,7 +461,7 @@ test("connection health distinguishes token expiry, account access and webhook s
     const pool = {
       query: async (sql: string) => ({
         rows: sql.includes("workspace_members")
-          ? [{ workspace_id: workspaceId }]
+          ? [{ workspace_id: workspaceId, role: "owner" }]
           : [{ ...connection, access_token_encrypted: token, token_expires_at: expiry }],
       }),
       end: async () => {},
@@ -474,7 +510,7 @@ test("invalid credential expiry cannot authorize media reads", async () => {
   const pool = {
     query: async (sql: string) => ({
       rows: sql.includes("workspace_members")
-        ? [{ workspace_id: workspaceId }]
+        ? [{ workspace_id: workspaceId, role: "owner" }]
         : [{ ...connection, token_expires_at: "invalid" }],
     }),
     end: async () => {},
@@ -570,7 +606,7 @@ test("fixed-target rule edits remain available without a working provider creden
   const existingId = "44444444-4444-4444-8444-444444444444";
   const pool = {
     query: async (sql: string) => ({
-      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId }] : [{ id: existingId }],
+      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : [{ id: existingId }],
     }),
     end: async () => {},
   } as unknown as Pool;
@@ -687,7 +723,9 @@ test("consent mutation rejects unauthenticated and cross-origin requests before 
 
 test("contacts API is authenticated and returns only the workspace list", async () => {
   const pool = {
-    query: async (sql: string) => ({ rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId }] : [] }),
+    query: async (sql: string) => ({
+      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : [],
+    }),
     end: async () => {},
   } as unknown as Pool;
   const response = await appApi(
@@ -702,7 +740,9 @@ test("contacts API is authenticated and returns only the workspace list", async 
 
 test("saved segment list is authenticated and workspace scoped", async () => {
   const pool = {
-    query: async (sql: string) => ({ rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId }] : [] }),
+    query: async (sql: string) => ({
+      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : [],
+    }),
     end: async () => {},
   } as unknown as Pool;
   const response = await appApi(
@@ -717,7 +757,9 @@ test("saved segment list is authenticated and workspace scoped", async () => {
 
 test("custom field list is authenticated and workspace scoped", async () => {
   const pool = {
-    query: async (sql: string) => ({ rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId }] : [] }),
+    query: async (sql: string) => ({
+      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : [],
+    }),
     end: async () => {},
   } as unknown as Pool;
   const response = await appApi(
@@ -802,7 +844,7 @@ test("contact routes accept encoded string sender IDs without changing identity"
   const sender = "sender/one% test";
   const query = async (sql: string, values: unknown[] = []) => ({
     rows: sql.includes("workspace_members")
-      ? [{ workspace_id: workspaceId }]
+      ? [{ workspace_id: workspaceId, role: "owner" }]
       : values[2] === sender
         ? [{ tags: ["lead"] }]
         : [],

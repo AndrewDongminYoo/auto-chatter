@@ -65,7 +65,7 @@ export async function validateFieldCondition(
 }
 
 export async function listContactFields(pool: Pool, user: User) {
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   return (
     await pool.query(
       "SELECT id,name,type FROM instagram_contact_fields WHERE workspace_id=$1 AND NOT archived ORDER BY name,id",
@@ -86,7 +86,7 @@ export async function createContactField(pool: Pool, user: User, input: unknown)
     throw new ApiError(400, "invalid_contact_field");
   const name = input.name.trim().normalize("NFC");
   if (!name || name.length > 60 || /[\p{Cc}\p{Cf}]/u.test(name)) throw new ApiError(400, "invalid_contact_field");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "admin");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -110,7 +110,7 @@ export async function createContactField(pool: Pool, user: User, input: unknown)
 
 export async function archiveContactField(pool: Pool, user: User, id: string) {
   if (!isUuid(id)) throw new ApiError(400, "invalid_contact_field");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "admin");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -173,7 +173,7 @@ export async function saveContactFieldValue(
     !Object.hasOwn(input, "value")
   )
     throw new ApiError(400, "invalid_field_value");
-  const workspace = await workspaceFor(pool, user);
+  const workspace = await workspaceFor(pool, user, "agent");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");

@@ -14,7 +14,10 @@ export async function ensureWorkspace(pool: Pool, user: User): Promise<string> {
     if (!id) {
       id = randomUUID();
       await client.query("INSERT INTO workspaces(id) VALUES($1)", [id]);
-      await client.query("INSERT INTO workspace_members(user_id,workspace_id) VALUES($1,$2)", [user.id, id]);
+      await client.query("INSERT INTO workspace_members(user_id,workspace_id,role) VALUES($1,$2,'owner')", [
+        user.id,
+        id,
+      ]);
     }
     await client.query("COMMIT");
     return id;
@@ -25,13 +28,24 @@ export async function ensureWorkspace(pool: Pool, user: User): Promise<string> {
     client.release();
   }
 }
-export async function workspaceFor(pool: Pool, user: User): Promise<string> {
-  const result = await pool.query<{ workspace_id: string }>(
-    "SELECT workspace_id FROM workspace_members WHERE user_id=$1",
+export type WorkspaceRole = "owner" | "admin" | "agent";
+const ROLE_RANK: Record<WorkspaceRole, number> = { agent: 1, admin: 2, owner: 3 };
+
+export function roleAllows(role: WorkspaceRole, minimum: WorkspaceRole): boolean {
+  return ROLE_RANK[role] >= ROLE_RANK[minimum];
+}
+
+// Every workspace-scoped request states the least role it needs; membership and role are read per request,
+// so a removal or downgrade applies to the next request after it commits.
+export async function workspaceFor(pool: Pool, user: User, minimum: WorkspaceRole): Promise<string> {
+  const result = await pool.query<{ workspace_id: string; role: WorkspaceRole }>(
+    "SELECT workspace_id,role FROM workspace_members WHERE user_id=$1",
     [user.id],
   );
-  if (!result.rows[0]) throw new ApiError(403, "workspace_required");
-  return result.rows[0].workspace_id;
+  const member = result.rows[0];
+  if (!member) throw new ApiError(403, "workspace_required");
+  if (!roleAllows(member.role, minimum)) throw new ApiError(403, "role_forbidden");
+  return member.workspace_id;
 }
 function text(value: unknown, max: number, required = true): string {
   if (typeof value !== "string" || value.length > max || (required && !value.trim()))
@@ -82,7 +96,7 @@ export function parseRule(input: unknown) {
   };
 }
 export async function listConnections(pool: Pool, user: User) {
-  const workspaceId = await workspaceFor(pool, user);
+  const workspaceId = await workspaceFor(pool, user, "agent");
   return (
     await pool.query(
       `SELECT id,account_id,username,active,send_enabled,inbox_enabled,token_expires_at,access_token_encrypted IS NOT NULL AS token_registered,
@@ -95,7 +109,7 @@ export async function listConnections(pool: Pool, user: User) {
   ).rows;
 }
 export async function listRules(pool: Pool, user: User) {
-  const workspaceId = await workspaceFor(pool, user);
+  const workspaceId = await workspaceFor(pool, user, "agent");
   return (
     await pool.query(
       `SELECT id,connection_id,media_id,keyword,keywords,excluded_keywords,match_mode,private_reply_text,enabled,follow_gate_enabled,follower_reply_text,non_follower_reply_text,confirmation_keyword,confirmation_button_title FROM instagram_comment_rules WHERE workspace_id=$1 ORDER BY id`,
@@ -105,7 +119,7 @@ export async function listRules(pool: Pool, user: User) {
 }
 export async function saveRule(pool: Pool, user: User, input: unknown) {
   const rule = parseRule(input);
-  const workspaceId = await workspaceFor(pool, user);
+  const workspaceId = await workspaceFor(pool, user, "admin");
   const write = async (db: Pick<Pool, "query">) => {
     const result = await db.query(
       rule.id
@@ -164,7 +178,7 @@ export async function saveRule(pool: Pool, user: User, input: unknown) {
 export async function updateConnection(pool: Pool, user: User, id: string, input: unknown) {
   if (!isUuid(id) || !isRecord(input) || typeof input.active !== "boolean" || typeof input.send_enabled !== "boolean")
     throw new ApiError(400, "invalid_connection");
-  const workspaceId = await workspaceFor(pool, user);
+  const workspaceId = await workspaceFor(pool, user, "admin");
   const result = await pool.query(
     `UPDATE instagram_connections SET active=$3,send_enabled=$4,
  inbox_enabled_at=CASE WHEN $3 AND NOT active AND inbox_enabled THEN clock_timestamp() ELSE inbox_enabled_at END
@@ -177,7 +191,7 @@ export async function updateConnection(pool: Pool, user: User, id: string, input
 }
 export async function disconnectConnection(pool: Pool, user: User, id: string) {
   if (!isUuid(id)) throw new ApiError(400, "invalid_connection");
-  const workspaceId = await workspaceFor(pool, user);
+  const workspaceId = await workspaceFor(pool, user, "admin");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -207,7 +221,7 @@ export async function disconnectConnection(pool: Pool, user: User, id: string) {
   return { disconnected: true };
 }
 export async function listActivity(pool: Pool, user: User) {
-  const workspaceId = await workspaceFor(pool, user);
+  const workspaceId = await workspaceFor(pool, user, "agent");
   return (
     await pool.query(
       `SELECT reply.id,reply.connection_id,reply.media_id,reply.status AS first_reply_status,reply.failure_code AS first_reply_error,
