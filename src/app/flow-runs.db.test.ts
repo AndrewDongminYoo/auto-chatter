@@ -301,6 +301,33 @@ test("the worker sends a flow reply while the flow is on, keeps it across a repu
   assert.equal((await runs(id)).length, 3);
 });
 
+test("a run that read the flow before a disable committed keeps its actions, and its reply is blocked", async () => {
+  const id = await enabledActionFlow("Thanks");
+  const disabling = await pool.connect();
+  try {
+    // The statements setFlowEnabled runs to turn the flow off, left uncommitted.
+    await disabling.query("BEGIN");
+    await disabling.query("SELECT 1 FROM flows WHERE id=$1 FOR NO KEY UPDATE", [id]);
+    await disabling.query("UPDATE flows SET enabled=false,updated_at=clock_timestamp() WHERE id=$1", [id]);
+    const outcome = await Promise.race([
+      comment("comment-1", "sender-1").then(() => "ingested"),
+      new Promise((resolve) => setTimeout(() => resolve("blocked"), 2000)),
+    ]);
+    assert.equal(outcome, "ingested");
+    await disabling.query("COMMIT");
+  } finally {
+    await disabling.query("ROLLBACK");
+    disabling.release();
+  }
+  // Serializable as the comment arriving just before the disable: the actions stay, the reply is not sent.
+  assert.deepEqual(await contact("sender-1"), { tags: ["lead"], city: "Seoul" });
+  assert.equal(await processNextPrivateReply(pool, sent, () => now, connectionId), true);
+  assert.deepEqual(
+    (await runs(id)).map((run) => [run.status, run.delivery_status, run.delivery_failure_code]),
+    [["delivering", "blocked", "inactive_flow"]],
+  );
+});
+
 test("disconnecting the trigger connection turns its flows off", async () => {
   const id = await enabledFlow();
   assert.equal((await request("DELETE", `/api/connections/${connectionId}`, undefined, otherUserId)).status, 200);
