@@ -23,5 +23,6 @@ BEGIN;
 \ir ../db/migrations/021_flow_runs.sql
 \ir ../db/migrations/022_workspace_roles.sql
 \ir ../db/migrations/023_connection_deletion_locks.sql
+\ir ../db/migrations/024_workspace_invites.sql
 \ir supabase-access.sql
 COMMIT;

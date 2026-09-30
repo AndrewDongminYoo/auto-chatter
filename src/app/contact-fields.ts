@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
-import { workspaceFor } from "./settings.ts";
+import { lockWorkspaceForMember, workspaceFor } from "./settings.ts";
 
 // Serializes every writer of one contact's tags and field values: flow runs, which read them before
 // writing, and manual edits. Taken after the connection lock, and after any field row lock.
@@ -99,7 +99,7 @@ export async function createContactField(pool: Pool, user: User, input: unknown)
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [workspace]);
+    await lockWorkspaceForMember(client, workspace, user, "admin");
     const result = await client.query(
       `INSERT INTO instagram_contact_fields(workspace_id,name,type)
       SELECT $1,$2,$3 WHERE (SELECT count(*) FROM instagram_contact_fields WHERE workspace_id=$1 AND NOT archived)<50 RETURNING id,name,type`,

@@ -6,6 +6,7 @@ import { roleAllows, type WorkspaceRole } from "./settings.ts";
 // "connection" tables carry no workspace_id and are scoped through the workspace's connections.
 export const EXPORTED_TABLES: Record<string, { scope: "workspace" | "connection"; omit?: string[] }> = {
   workspace_members: { scope: "workspace" },
+  workspace_invites: { scope: "workspace", omit: ["token_hash"] },
   instagram_connections: { scope: "workspace", omit: ["access_token_encrypted"] },
   instagram_comment_rules: { scope: "workspace" },
   instagram_comment_events: { scope: "workspace" },
@@ -47,7 +48,7 @@ export async function exportWorkspace(pool: Pool, user: User) {
     // cannot export, and rows that reference each other are exported consistently.
     await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
     const membership = await client.query<{ workspace_id: string; role: WorkspaceRole }>(
-      "SELECT workspace_id,role FROM workspace_members WHERE user_id=$1",
+      "SELECT workspace_id,role FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL",
       [user.id],
     );
     if (!membership.rows[0]) throw new ApiError(403, "workspace_required");

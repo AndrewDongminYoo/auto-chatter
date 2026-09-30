@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
-import { workspaceFor } from "./settings.ts";
+import { lockWorkspaceForMember, workspaceFor } from "./settings.ts";
 import {
   EMPTY_FLOW,
   flowReferences,
@@ -76,7 +76,7 @@ export async function createFlow(pool: Pool, user: User, input: unknown) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [workspace]);
+    await lockWorkspaceForMember(client, workspace, user, "admin");
     const created = await client.query(
       `INSERT INTO flows(workspace_id,name,draft) SELECT $1,$2,$3::jsonb
        WHERE (SELECT count(*) FROM flows WHERE workspace_id=$1 AND NOT archived)<$4

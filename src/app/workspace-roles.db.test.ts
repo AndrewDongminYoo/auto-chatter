@@ -180,8 +180,20 @@ test("members of one workspace cannot read or change another workspace", async (
 
 test("the role migration replays, keeps one owner per workspace and lets members share a workspace", async () => {
   const migration = await readFile(new URL("../../db/migrations/022_workspace_roles.sql", import.meta.url), "utf8");
+  // Runner order: 024 replaces 022's owner index with one that ignores removed members.
+  const invites = await readFile(new URL("../../db/migrations/024_workspace_invites.sql", import.meta.url), "utf8");
   await pool.query(migration);
+  await pool.query(invites);
   await pool.query(migration);
+  await pool.query(invites);
+  assert.equal(
+    (
+      await pool.query(
+        "SELECT count(*)::int AS count FROM pg_indexes WHERE indexname='workspace_members_one_owner_idx'",
+      )
+    ).rows[0].count,
+    0,
+  );
   assert.equal(
     (await pool.query("SELECT count(*)::int AS count FROM workspace_members WHERE workspace_id=$1", [workspaceId]))
       .rows[0].count,

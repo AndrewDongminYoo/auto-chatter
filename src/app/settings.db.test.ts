@@ -908,6 +908,39 @@ test("administrator ownership assignment requires confirmation and preserves exi
   }
 });
 
+test("administrator ownership assignment refuses to leave a workspace holding invites or settings", async () => {
+  const client = await pool.connect();
+  try {
+    const script = await readFile(new URL("../../deploy/assign-workspace-owner.sql", import.meta.url), "utf8");
+    const functionSql = script
+      .slice(script.indexOf("CREATE FUNCTION"), script.indexOf("SELECT pg_temp.assign_workspace_owner"))
+      .replace("auth.users", "pg_temp.verified_users")
+      // The previous test may have left the temporary function on this pooled connection.
+      .replace("CREATE FUNCTION", "CREATE OR REPLACE FUNCTION");
+    await client.query("CREATE TEMP TABLE verified_users(id uuid,email_confirmed_at timestamptz)");
+    await client.query(functionSql);
+    const mover = "66666666-6666-4666-8666-666666666661";
+    const own = "66666666-6666-4666-8666-666666666662";
+    const target = "66666666-6666-4666-8666-666666666663";
+    await client.query("INSERT INTO verified_users VALUES($1,now())", [mover]);
+    await client.query("INSERT INTO workspaces VALUES($1),($2)", [own, target]);
+    await client.query("INSERT INTO workspace_members(user_id,workspace_id,role) VALUES($1,$2,'owner')", [mover, own]);
+    // A revoked invite still holds an invitee's email, so the workspace is not empty.
+    await client.query(
+      `INSERT INTO workspace_invites(workspace_id,email,role,token_hash,created_by,expires_at,revoked_at)
+       VALUES($1,'old@example.test','agent',$2,$3,now()+interval '1 day',now())`,
+      [own, "a".repeat(64), mover],
+    );
+    await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
+    await client.query("TRUNCATE workspace_invites");
+    await client.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'kept','{}')", [own]);
+    await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
+  } finally {
+    await client.query("DROP TABLE IF EXISTS pg_temp.verified_users");
+    client.release();
+  }
+});
+
 test("activity belongs to the verified workspace and excludes recipient content", async () => {
   const { ingestComments } = await import("../instagram/store.ts");
   const { listActivity } = await import("./settings.ts");
