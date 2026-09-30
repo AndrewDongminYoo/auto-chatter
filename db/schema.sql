@@ -501,7 +501,9 @@ DECLARE
   carried bigint := 0;
 BEGIN
   SELECT * INTO target FROM public.instagram_connections
-  WHERE id=p_connection AND workspace_id=p_workspace FOR NO KEY UPDATE;
+  -- FOR UPDATE (not NO KEY UPDATE) also conflicts with the key-share locks that inserts referencing this
+  -- connection take, so no delivery row can appear after the scan below.
+  WHERE id=p_connection AND workspace_id=p_workspace FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'connection_not_found' USING ERRCODE='AC001';
   END IF;

@@ -1,5 +1,6 @@
 -- delete_connection_data checked for sending rows without locking them, so an uncommitted claim read as pending
 -- and the deletes then removed the row after the claim committed it as sending. The body is unchanged otherwise;
+-- The connection row is also locked FOR UPDATE so inserts that reference it wait instead of adding rows after the scan.
 -- the same fix is in delete_workspace_data (migration 020) and delete_person_data (migration 019).
 CREATE OR REPLACE FUNCTION public.delete_connection_data(
   p_workspace uuid,
@@ -23,7 +24,9 @@ DECLARE
   carried bigint := 0;
 BEGIN
   SELECT * INTO target FROM public.instagram_connections
-  WHERE id=p_connection AND workspace_id=p_workspace FOR NO KEY UPDATE;
+  -- FOR UPDATE (not NO KEY UPDATE) also conflicts with the key-share locks that inserts referencing this
+  -- connection take, so no delivery row can appear after the scan below.
+  WHERE id=p_connection AND workspace_id=p_workspace FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'connection_not_found' USING ERRCODE='AC001';
   END IF;

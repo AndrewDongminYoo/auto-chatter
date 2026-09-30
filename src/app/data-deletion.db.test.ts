@@ -432,3 +432,40 @@ test("deletion waits for an uncommitted claim and refuses once it commits as sen
     ["sending"],
   );
 });
+
+test("deletion waits for a concurrently inserted delivery row and refuses once it commits as sending", async () => {
+  const rule = (await pool.query("SELECT id FROM instagram_comment_rules WHERE connection_id=$1", [connectionId]))
+    .rows[0].id;
+  const event = (
+    await pool.query(
+      `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+       VALUES($1,$2,'late-comment','1789','late-sender','late comment') RETURNING id`,
+      [workspaceId, connectionId],
+    )
+  ).rows[0].id;
+  const ingress = await pool.connect();
+  try {
+    await ingress.query("BEGIN");
+    await ingress.query(
+      `INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text,status,attempt_id,attempt_started_at)
+       VALUES($1,$2,$3,$4,'late-comment','1789','late-sender','late reply','sending',gen_random_uuid(),now())`,
+      [workspaceId, connectionId, event, rule],
+    );
+    const outcome = pool
+      .query("SELECT public.delete_connection_data($1,$2,$3,'account-deleted')", [workspaceId, connectionId, userId])
+      .then(
+        () => "deleted",
+        (error: { code?: string }) => error.code,
+      );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await ingress.query("COMMIT");
+    assert.equal(await outcome, "AC003");
+  } finally {
+    ingress.release();
+  }
+  const late = await pool.query("SELECT status FROM private_reply_outbox WHERE comment_id='late-comment'");
+  assert.deepEqual(
+    late.rows.map((row) => row.status),
+    ["sending"],
+  );
+});
