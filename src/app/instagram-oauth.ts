@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { Pool } from "pg";
 import { ApiError, cookie, isRecord, json, type User } from "./auth.ts";
-import { workspaceFor } from "./settings.ts";
+import { lockWorkspaceForMember, workspaceFor } from "./settings.ts";
 import { sealSecret } from "./secrets.ts";
 
 export interface InstagramOAuthEnv {
@@ -51,10 +51,23 @@ export async function beginInstagramOAuth(pool: Pool, user: User, env: Instagram
   const settings = config(env);
   const workspaceId = await workspaceFor(pool, user, "admin");
   const state = randomBytes(32).toString("hex");
-  await pool.query(
-    "INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES($1,$2,$3,now()+interval '10 minutes')",
-    [stateHash(state), user.id, workspaceId],
-  );
+  // An unconsumed state keeps an empty workspace from being left through an invite, so store it only while the
+  // workspace is locked and the caller is still an admin there (see lockWorkspaceForMember).
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await lockWorkspaceForMember(client, workspaceId, user, "admin");
+    await client.query(
+      "INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES($1,$2,$3,now()+interval '10 minutes')",
+      [stateHash(state), user.id, workspaceId],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
   const url = new URL("https://www.instagram.com/oauth/authorize");
   for (const [key, value] of Object.entries({
     client_id: settings.appId,

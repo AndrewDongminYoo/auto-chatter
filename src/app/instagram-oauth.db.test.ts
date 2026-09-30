@@ -467,3 +467,38 @@ test("an invite accepted while the callback runs leaves no connection in the aba
   await assert.rejects(finishInstagramOAuth(pool, user, request, env, provider), /workspace_required/);
   assert.equal((await pool.query("SELECT count(*) FROM instagram_connections")).rows[0].count, "0");
 });
+
+test("starting a connection while an invite moves the user does not leave a state in the abandoned workspace", async () => {
+  const invite = await createInvite(pool, other, { email: user.email, role: "admin" }, "https://app.test");
+  const token = new URL(invite.link).hash.slice("#invite=".length);
+  const blocker = await pool.connect();
+  try {
+    // Queue the acceptance first, then the connection start, behind a lock on the user's own workspace.
+    await blocker.query("BEGIN");
+    await blocker.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [workspaceId]);
+    const accepting = acceptInvite(pool, user, { token });
+    const waiters = async (count: number) => {
+      for (let attempt = 0; attempt < 80; attempt++) {
+        const waiting = await pool.query(
+          "SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type='Lock'",
+        );
+        if (waiting.rows[0].n >= count) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      throw new Error(`fewer than ${count} lock waiters`);
+    };
+    await waiters(1);
+    const starting = beginInstagramOAuth(pool, user, env).then(
+      (response) => response.status,
+      (error: { status?: number }) => error.status,
+    );
+    await waiters(2);
+    await blocker.query("COMMIT");
+    await accepting;
+    assert.equal(await starting, 403);
+  } finally {
+    blocker.release();
+  }
+  const states = await pool.query("SELECT count(*) FROM instagram_oauth_states WHERE workspace_id=$1", [workspaceId]);
+  assert.equal(states.rows[0].count, "0");
+});

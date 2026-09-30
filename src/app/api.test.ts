@@ -115,10 +115,13 @@ test("Instagram review gate blocks public OAuth before database access and repor
 test("Instagram review allowlist and explicit public switch permit OAuth", async () => {
   const fetchImpl = (async () =>
     Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
+  const query = async (sql: string) => ({
+    rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : [],
+  });
+  // Starting OAuth stores its state in a transaction on a client from the pool.
   const pool = {
-    query: async (sql: string) => ({
-      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : [],
-    }),
+    query,
+    connect: async () => ({ query, release: () => {} }),
     end: async () => {},
   } as unknown as Pool;
   const request = () =>
