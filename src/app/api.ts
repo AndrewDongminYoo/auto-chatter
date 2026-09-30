@@ -28,6 +28,7 @@ import { setInbox, listInbox, inboxMessages, inboxContext } from "./inbox.ts";
 import { archiveContactField, createContactField, listContactFields, saveContactFieldValue } from "./contact-fields.ts";
 import { recordConsentEvent } from "./channel-consent.ts";
 import { deleteConnectionData, listDataDeletions } from "./data-deletion.ts";
+import { exportWorkspace } from "./workspace-export.ts";
 import {
   FLOW_REQUEST_BYTES,
   archiveFlow,
@@ -97,6 +98,17 @@ export async function appApi(
         return await finishInstagramOAuth(pool, user, request, env, fetchImpl);
       if (url.pathname === "/api/workspace" && request.method === "POST")
         return json({ workspace_id: await ensureWorkspace(pool, user) });
+      if (url.pathname === "/api/workspace/export" && request.method === "GET") {
+        const exported = await exportWorkspace(pool, user);
+        return new Response(exported.body, {
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": `attachment; filename="auto-chatter-export-${exported.exportedAt.slice(0, 10)}.json"`,
+          },
+        });
+      }
       if (url.pathname === "/api/connections" && request.method === "GET")
         return json({ connections: await listConnections(pool, user) });
       const consentEvent = /^\/api\/connections\/([^/]+)\/channel-consent-events$/.exec(url.pathname);

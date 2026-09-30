@@ -623,6 +623,14 @@ test("workerd contact API uses restricted server privileges and verified workspa
       { headers },
     );
     assert.equal((await fieldFiltered.json()).contacts[0].fields[field.id], 0);
+    // The restricted server role can read every exported table, and the export omits token ciphertext.
+    const exported = await runtime.dispatchFetch("https://app.test/api/workspace/export", { headers });
+    assert.equal(exported.status, 200);
+    assert.match(exported.headers.get("content-disposition") ?? "", /^attachment; filename="auto-chatter-export-/);
+    const exportBody = await exported.json();
+    assert.equal(exportBody.tables.instagram_contact_field_values[0].value, 0);
+    assert.ok(exportBody.tables.instagram_connections.length > 0);
+    assert.ok(exportBody.tables.instagram_connections.every((row) => !("access_token_encrypted" in row)));
     const foreignField = await runtime.dispatchFetch(valuePath, {
       method: "PUT",
       headers: { ...headers, cookie: "__Host-ac-access=foreign" },
