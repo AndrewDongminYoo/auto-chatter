@@ -338,6 +338,23 @@ test("a disconnect waits for a concurrent enable and still turns the flow off", 
   assert.equal((await pool.query("SELECT enabled FROM flows WHERE id=$1", [id])).rows[0].enabled, false);
 });
 
+test("a disconnect does not wait for the foreign key locks an open ingestion holds on flows", async () => {
+  const id = await publishedFlow();
+  const ingesting = await pool.connect();
+  try {
+    await ingesting.query("BEGIN");
+    await ingesting.query("SELECT 1 FROM flows WHERE id=$1 FOR KEY SHARE", [id]);
+    const outcome = await Promise.race([
+      request("DELETE", `/api/connections/${connectionId}`).then((response) => response.status),
+      new Promise((resolve) => setTimeout(() => resolve("blocked"), 2000)),
+    ]);
+    assert.equal(outcome, 200);
+  } finally {
+    await ingesting.query("ROLLBACK");
+    ingesting.release();
+  }
+});
+
 test("run history is visible only to the flow's workspace", async () => {
   const id = await enabledFlow();
   assert.equal((await request("GET", `/api/flows/${id}/runs`, undefined, otherUserId)).status, 404);
