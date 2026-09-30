@@ -347,3 +347,42 @@ test("creations that resolved the old workspace before an acceptance moved the u
   );
   assert.equal(Number(left.rows[0].n), 0);
 });
+
+test("two owners accepting each other's invites get workspace_not_empty instead of a deadlock", async () => {
+  const strangerWorkspace = "99999999-9999-4999-8999-999999999999";
+  await pool.query("INSERT INTO workspaces(id) VALUES($1)", [strangerWorkspace]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role,email) VALUES($1,$2,'owner',$3)", [
+    strangerWorkspace,
+    stranger.id,
+    stranger.email,
+  ]);
+  async function inviteFrom(actor: Actor, email: string) {
+    const response = await request(actor, "POST", "/api/workspace/invites", { email, role: "admin" });
+    assert.equal(response.status, 201);
+    return (await body<{ link: string }>(response)).link.split("#invite=")[1]!;
+  }
+  const toStranger = await inviteFrom(outsider, stranger.email);
+  const toOutsider = await inviteFrom(stranger, outsider.email);
+  const blocker = await pool.connect();
+  try {
+    // Release both acceptances at once so each takes its destination lock before its source lock.
+    await blocker.query("BEGIN");
+    await blocker.query("SELECT id FROM workspaces WHERE id=ANY($1) FOR UPDATE", [
+      [strangerWorkspace, otherWorkspaceId],
+    ]);
+    const accepting = [accept(stranger, toStranger), accept(outsider, toOutsider)];
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const waiting = await pool.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type='Lock'");
+      if (waiting.rows[0].n >= 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await blocker.query("COMMIT");
+    const responses = await Promise.all(accepting);
+    for (const response of responses) {
+      assert.equal(response.status, 409);
+      assert.equal((await body<{ error: string }>(response)).error, "workspace_not_empty");
+    }
+  } finally {
+    blocker.release();
+  }
+});

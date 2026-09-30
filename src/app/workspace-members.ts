@@ -183,7 +183,19 @@ export async function acceptInvite(pool: Pool, user: User, input: unknown) {
       ])
     ).rows[0];
     if (!target) throw new ApiError(404, "invite_not_found");
-    await client.query("SELECT id FROM workspaces WHERE id=$1 FOR SHARE", [target.workspace_id]);
+    // An owner leaving their own workspace also needs that row FOR UPDATE below. Take both workspace locks
+    // in ID order, so two owners accepting each other's invites queue instead of deadlocking.
+    const source = (
+      await client.query<{ workspace_id: string }>(
+        "SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL AND role='owner'",
+        [user.id],
+      )
+    ).rows[0]?.workspace_id;
+    const workspaceLocks: [string, "SHARE" | "UPDATE"][] = [[target.workspace_id, "SHARE"]];
+    if (source && source !== target.workspace_id) workspaceLocks.push([source, "UPDATE"]);
+    workspaceLocks.sort(([a], [b]) => (a < b ? -1 : 1));
+    for (const [id, mode] of workspaceLocks)
+      await client.query(`SELECT id FROM workspaces WHERE id=$1 FOR ${mode}`, [id]);
     const invite = (
       await client.query<{
         id: string;
