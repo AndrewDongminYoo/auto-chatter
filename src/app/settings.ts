@@ -181,7 +181,10 @@ export async function disconnectConnection(pool: Pool, user: User, id: string) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    // Flows first: enabling a flow locks the flow row before its trigger connection row.
+    // Flows first, all of them: enabling or publishing locks one flow row before its trigger connection
+    // row, so waiting here lets a concurrent enable commit and be turned off below, and any later one
+    // finds the connection inactive. A row skipped by the filter alone would not wait.
+    await client.query("SELECT id FROM flows WHERE workspace_id=$1 ORDER BY id FOR UPDATE", [workspaceId]);
     await client.query(
       `UPDATE flows f SET enabled=false,updated_at=clock_timestamp() FROM flow_versions v
        WHERE v.id=f.published_version_id AND v.trigger_connection_id=$1 AND f.workspace_id=$2 AND f.enabled`,

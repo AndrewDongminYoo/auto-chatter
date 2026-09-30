@@ -313,6 +313,31 @@ test("disconnecting the trigger connection turns its flows off", async () => {
   assert.equal((await runs(id)).length, 0);
 });
 
+test("a disconnect waits for a concurrent enable and still turns the flow off", async () => {
+  const id = await publishedFlow();
+  const enabling = await pool.connect();
+  try {
+    // The same lock order as setFlowEnabled: the flow row first, then the connection row.
+    await enabling.query("BEGIN");
+    await enabling.query("SELECT 1 FROM flows WHERE id=$1 FOR UPDATE", [id]);
+    await enabling.query("SELECT 1 FROM instagram_connections WHERE id=$1 FOR NO KEY UPDATE", [connectionId]);
+    const disconnecting = request("DELETE", `/api/connections/${connectionId}`);
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const waiting = await pool.query(
+        "SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FROM flows WHERE workspace_id%'",
+      );
+      if (waiting.rowCount) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await enabling.query("UPDATE flows SET enabled=true WHERE id=$1", [id]);
+    await enabling.query("COMMIT");
+    assert.equal((await disconnecting).status, 200);
+  } finally {
+    enabling.release();
+  }
+  assert.equal((await pool.query("SELECT enabled FROM flows WHERE id=$1", [id])).rows[0].enabled, false);
+});
+
 test("run history is visible only to the flow's workspace", async () => {
   const id = await enabledFlow();
   assert.equal((await request("GET", `/api/flows/${id}/runs`, undefined, otherUserId)).status, 404);
