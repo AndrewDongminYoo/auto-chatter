@@ -7,6 +7,7 @@ import { refreshDueInstagramTokens } from "./instagram-token-refresh.ts";
 import { disconnectConnection, ensureWorkspace } from "./settings.ts";
 import { openSecret, sealSecret } from "./secrets.ts";
 import { ingestMessages } from "../instagram/follow-flow.ts";
+import { acceptInvite, createInvite } from "./workspace-members.ts";
 
 const url = new URL(process.env.TEST_DATABASE_URL ?? "http://invalid");
 if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
@@ -438,4 +439,31 @@ test("wrong encryption key cannot change the token or call Meta", async () => {
       .access_token_encrypted,
     ciphertext,
   );
+});
+
+test("an invite accepted while the callback runs leaves no connection in the abandoned workspace", async () => {
+  const { request } = await authorization();
+  const invite = await createInvite(pool, other, { email: user.email, role: "admin" }, "https://app.test");
+  const token = new URL(invite.link).hash.slice("#invite=".length);
+  let calls = 0;
+  const provider: typeof fetch = async () => {
+    calls++;
+    // The user joins the other workspace after the state was consumed and before the connection is stored.
+    if (calls === 1) {
+      await acceptInvite(pool, user, { token });
+      return Response.json({
+        access_token: "short-token",
+        permissions: [
+          "instagram_business_basic",
+          "instagram_business_manage_comments",
+          "instagram_business_manage_messages",
+        ],
+      });
+    }
+    if (calls === 2) return Response.json({ access_token: "long-token", expires_in: 5_184_000 });
+    if (calls === 3) return Response.json({ user_id: "98765", username: "account" });
+    return Response.json({ success: true });
+  };
+  await assert.rejects(finishInstagramOAuth(pool, user, request, env, provider), /workspace_required/);
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_connections")).rows[0].count, "0");
 });

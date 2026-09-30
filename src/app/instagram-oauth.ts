@@ -172,16 +172,36 @@ export async function finishInstagramOAuth(
   )
     throw new ApiError(502, "instagram_account_unverified");
   const encrypted = sealSecret(long.access_token, settings.key, `${workspaceId}:${account.user_id}`);
-  const saved = await pool.query(
-    `INSERT INTO instagram_connections(id,workspace_id,account_id,username,active,send_enabled,access_token_encrypted,token_expires_at)
-     VALUES($1,$2,$3,$4,false,false,$5,now()+make_interval(secs=>$6))
-     ON CONFLICT(account_id) DO UPDATE SET username=EXCLUDED.username,active=false,send_enabled=false,
-       access_token_encrypted=EXCLUDED.access_token_encrypted,token_expires_at=EXCLUDED.token_expires_at,
-       token_obtained_at=now(),
-       token_refresh_attempted_at=NULL
-     WHERE instagram_connections.workspace_id=$2 RETURNING id`,
-    [randomUUID(), workspaceId, account.user_id, account.username, encrypted, Math.floor(long.expires_in)],
-  );
+  // The provider calls above take seconds, and accepting an invite can move the user out of this workspace
+  // meanwhile. acceptInvite holds the old workspace row FOR UPDATE while it checks that the workspace is empty,
+  // so re-check the membership under FOR SHARE on the same row and store the connection in that transaction.
+  const client = await pool.connect();
+  let saved;
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT id FROM workspaces WHERE id=$1 FOR SHARE", [workspaceId]);
+    const member = await client.query(
+      "SELECT 1 FROM workspace_members WHERE user_id=$1 AND workspace_id=$2 AND removed_at IS NULL AND role IN ('owner','admin')",
+      [user.id, workspaceId],
+    );
+    if (member.rowCount !== 1) throw new ApiError(403, "workspace_required");
+    saved = await client.query(
+      `INSERT INTO instagram_connections(id,workspace_id,account_id,username,active,send_enabled,access_token_encrypted,token_expires_at)
+       VALUES($1,$2,$3,$4,false,false,$5,now()+make_interval(secs=>$6))
+       ON CONFLICT(account_id) DO UPDATE SET username=EXCLUDED.username,active=false,send_enabled=false,
+         access_token_encrypted=EXCLUDED.access_token_encrypted,token_expires_at=EXCLUDED.token_expires_at,
+         token_obtained_at=now(),
+         token_refresh_attempted_at=NULL
+       WHERE instagram_connections.workspace_id=$2 RETURNING id`,
+      [randomUUID(), workspaceId, account.user_id, account.username, encrypted, Math.floor(long.expires_in)],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
   if (saved.rowCount !== 1) throw new ApiError(409, "instagram_account_already_connected");
   const subscribed = await providerJson(
     fetchImpl,
