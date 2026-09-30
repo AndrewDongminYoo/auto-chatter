@@ -2,7 +2,10 @@ import type { Pool, PoolClient } from "pg";
 import type { InstagramComment } from "./webhook.ts";
 import { matchesCommentRule, type CommentRuleMatch } from "./comment-rule.ts";
 import { parseFlowDocument } from "../app/flow-schema.ts";
-import { matchesFlowTrigger, planFlowRun } from "../app/flow-runtime.ts";
+import { matchesFlowTrigger, planFlowRun, type FlowChanges } from "../app/flow-runtime.ts";
+import { lockContact } from "../app/contact-fields.ts";
+
+const ACTION_TYPES = new Set(["add_tag", "remove_tag", "set_field"]);
 
 interface ConnectionRow {
   id: string;
@@ -114,21 +117,54 @@ async function startFlowRun(
   const parsed = parseFlowDocument(flow.definition);
   const document = "document" in parsed ? parsed.document : null;
   if (document && !matchesFlowTrigger(document, comment.text)) return;
+  let writableFields = new Set<string>();
+  const hasActions = document?.nodes.some((node) => ACTION_TYPES.has(node.type)) ?? false;
+  if (document && hasActions) {
+    // A run that changes contact data takes the contact-write connection lock (see
+    // lockContactConnection), so it serializes with data deletion and sees a disconnect.
+    const locked = await client.query(
+      "SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2 AND active FOR SHARE",
+      [connection.id, connection.workspace_id],
+    );
+    if (!locked.rowCount) return;
+    const targets = document.nodes.flatMap((node) =>
+      node.type === "set_field" && typeof node.config.field_id === "string" ? [node.config.field_id] : [],
+    );
+    // The share lock keeps a field from being archived before this transaction writes its value.
+    const writable = await client.query<{ id: string }>(
+      "SELECT id::text FROM instagram_contact_fields WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND NOT archived FOR SHARE",
+      [connection.workspace_id, targets],
+    );
+    writableFields = new Set(writable.rows.map((row) => row.id));
+    // Held until commit, so another run or a manual edit cannot change this contact's tags or
+    // field values between this run's read and its write: every recorded outcome is what was stored.
+    await lockContact(client, connection.id, comment.senderId);
+  }
   const tags = await client.query<{ tags: string[] }>(
     "SELECT tags FROM instagram_contact_tags WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3",
     [connection.workspace_id, connection.id, comment.senderId],
   );
+  const stored = tags.rows[0]?.tags ?? [];
   const fields = await client.query<{ field_id: string; value: unknown }>(
     `SELECT field_id::text,value FROM instagram_contact_field_values
      WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3`,
     [connection.workspace_id, connection.id, comment.senderId],
   );
   const plan = document
-    ? planFlowRun(document, {
-        tags: new Set(tags.rows[0]?.tags ?? []),
-        fields: new Map(fields.rows.map((row) => [row.field_id, row.value])),
-      })
-    : ({ status: "failed", steps: [], failure_code: "invalid_definition" } as const);
+    ? planFlowRun(
+        document,
+        {
+          tags: new Set(stored),
+          fields: new Map(fields.rows.map((row) => [row.field_id, row.value])),
+        },
+        { commentText: comment.text, writableFields },
+      )
+    : ({
+        status: "failed",
+        steps: [],
+        failure_code: "invalid_definition",
+        changes: { tags: new Map(), fields: new Map() },
+      } as const);
   const runs = await client.query<{ id: string }>(
     `INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,event_id,status,failure_code)
      VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(flow_id,event_id) DO NOTHING RETURNING id`,
@@ -144,6 +180,7 @@ async function startFlowRun(
   );
   const run = runs.rows[0];
   if (!run) return;
+  await applyContactChanges(client, connection, comment.senderId, stored, plan.changes);
   const steps = [...plan.steps];
   if (plan.status === "message") {
     // The outbox keeps one private reply per sender and media, whichever rule or flow queued it.
@@ -182,4 +219,34 @@ async function startFlowRun(
       steps.map((step) => step.outcome),
     ],
   );
+}
+
+// Writes a run's net tag and field changes under the contact lock taken in startFlowRun.
+async function applyContactChanges(
+  client: PoolClient,
+  connection: ConnectionRow,
+  senderId: string,
+  stored: readonly string[],
+  changes: FlowChanges,
+): Promise<void> {
+  const key = [connection.workspace_id, connection.id, senderId];
+  if (changes.tags.size)
+    await client.query(
+      `INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,$3,$4::text[])
+       ON CONFLICT(workspace_id,connection_id,sender_id) DO UPDATE SET tags=EXCLUDED.tags`,
+      [
+        ...key,
+        [
+          ...stored.filter((tag) => changes.tags.get(tag) !== false),
+          ...[...changes.tags].filter(([, member]) => member).map(([tag]) => tag),
+        ],
+      ],
+    );
+  if (changes.fields.size)
+    await client.query(
+      `INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value)
+       SELECT $1,$2,$3,item.field_id,item.value::jsonb FROM unnest($4::uuid[],$5::text[]) AS item(field_id,value)
+       ON CONFLICT(workspace_id,connection_id,sender_id,field_id) DO UPDATE SET value=EXCLUDED.value`,
+      [...key, [...changes.fields.keys()], [...changes.fields.values()].map((value) => JSON.stringify(value))],
+    );
 }
