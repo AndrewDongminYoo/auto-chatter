@@ -116,9 +116,10 @@ test("an invite joins the matching confirmed email once and then gives that role
   assert.equal((await request(invitee, "GET", "/api/flows")).status, 200);
   assert.equal((await request(invitee, "POST", "/api/flows", { name: "no" })).status, 403);
 
+  // A retry after a lost response returns the original success.
   const again = await accept(invitee, token);
-  assert.equal(again.status, 409);
-  assert.equal((await body<{ error: string }>(again)).error, "invite_used");
+  assert.equal(again.status, 200);
+  assert.deepEqual(await body(again), { workspace_id: workspaceId, role: "agent" });
   const members = await body<{ members: { email: string; role: string }[] }>(
     await request(owner, "GET", "/api/workspace/members"),
   );
@@ -385,4 +386,39 @@ test("two owners accepting each other's invites get workspace_not_empty instead 
   } finally {
     blocker.release();
   }
+});
+
+test("a removed member cannot rejoin with the invite link they already used", async () => {
+  const { token } = await invite();
+  assert.equal((await accept(invitee, token)).status, 200);
+  assert.equal((await request(owner, "DELETE", `/api/workspace/members/${invitee.id}`)).status, 200);
+  const reused = await accept(invitee, token);
+  assert.equal(reused.status, 409);
+  assert.equal((await body<{ error: string }>(reused)).error, "invite_used");
+});
+
+test("an owner whose workspace holds only revoked or expired invites cannot leave it", async () => {
+  const strangerWorkspace = "99999999-9999-4999-8999-999999999998";
+  await pool.query("INSERT INTO workspaces(id) VALUES($1)", [strangerWorkspace]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role,email) VALUES($1,$2,'owner',$3)", [
+    strangerWorkspace,
+    stranger.id,
+    stranger.email,
+  ]);
+  const created = await request(stranger, "POST", "/api/workspace/invites", {
+    email: "old@example.test",
+    role: "agent",
+  });
+  assert.equal(created.status, 201);
+  const { id } = await body<{ id: string }>(created);
+  assert.equal((await request(stranger, "DELETE", `/api/workspace/invites/${id}`)).status, 200);
+  const { token } = await invite(stranger.email, "admin");
+  const refused = await accept(stranger, token);
+  assert.equal(refused.status, 409);
+  assert.equal((await body<{ error: string }>(refused)).error, "workspace_not_empty");
+  assert.equal(
+    (await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [stranger.id])).rows[0]
+      .workspace_id,
+    strangerWorkspace,
+  );
 });

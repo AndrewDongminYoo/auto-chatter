@@ -160,7 +160,7 @@ async function currentWorkspaceMovable(client: PoolClient, workspace: string, us
        OR EXISTS(SELECT 1 FROM flows WHERE workspace_id=$1)
        OR EXISTS(SELECT 1 FROM instagram_contact_fields WHERE workspace_id=$1)
        OR EXISTS(SELECT 1 FROM instagram_contact_segments WHERE workspace_id=$1)
-       OR EXISTS(SELECT 1 FROM workspace_invites WHERE workspace_id=$1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at>now())
+       OR EXISTS(SELECT 1 FROM workspace_invites WHERE workspace_id=$1)
        OR EXISTS(SELECT 1 FROM instagram_oauth_states WHERE workspace_id=$1 AND consumed_at IS NULL AND expires_at>now())
        AS busy`,
     [workspace, userId],
@@ -204,15 +204,29 @@ export async function acceptInvite(pool: Pool, user: User, input: unknown) {
         role: string;
         expired: boolean;
         accepted_at: Date | null;
+        accepted_by: string | null;
         revoked_at: Date | null;
       }>(
-        `SELECT id,workspace_id,email,role,expires_at<=now() AS expired,accepted_at,revoked_at
+        `SELECT id,workspace_id,email,role,expires_at<=now() AS expired,accepted_at,accepted_by,revoked_at
          FROM workspace_invites WHERE token_hash=$1 FOR UPDATE`,
         [hash],
       )
     ).rows[0];
     if (!invite) throw new ApiError(404, "invite_not_found");
-    if (invite.accepted_at) throw new ApiError(409, "invite_used");
+    if (invite.accepted_at) {
+      // A retry after a lost response answers the original success; anyone else, or the same user after a
+      // removal or a move, gets invite_used.
+      if (invite.accepted_by === user.id) {
+        const member = (
+          await client.query<{ role: string }>(
+            "SELECT role FROM workspace_members WHERE user_id=$1 AND workspace_id=$2 AND removed_at IS NULL",
+            [user.id, invite.workspace_id],
+          )
+        ).rows[0];
+        if (member) return { workspace_id: invite.workspace_id, role: member.role };
+      }
+      throw new ApiError(409, "invite_used");
+    }
     if (invite.revoked_at) throw new ApiError(410, "invite_revoked");
     if (invite.expired) throw new ApiError(410, "invite_expired");
     if (invite.email !== normalizeEmail(user.email)) throw new ApiError(403, "invite_email_mismatch");

@@ -47,8 +47,8 @@ migration 022는 기존 멤버를 모두 `owner`로 두고, 작업 공간당 멤
 
 `POST /api/invites/accept`는 로그인해 이메일 인증을 마친 사용자의 이메일이 초대 이메일과 같을 때만 성공합니다.
 이메일은 앞뒤 공백을 지우고 소문자로 비교하며, 다르면 `403 invite_email_mismatch`를 반환하고 초대를 쓰지 않습니다.
-사용한 초대는 `409 invite_used`, 취소한 초대는 `410 invite_revoked`, 만료한 초대는 `410 invite_expired`, 없는 토큰은 `404 invite_not_found`입니다.
-앱은 처음 로그인할 때 작업 공간을 만들므로, 자신만 있고 연결·규칙·플로·필드·필터·열린 초대·진행 중인 OAuth가 없는 작업 공간에서는 옮겨 갈 수 있습니다.
+사용한 초대는 `409 invite_used`(수락한 계정이 여전히 그 작업 공간의 멤버이면 응답을 잃은 재시도로 보고 같은 성공을 돌려줍니다), 취소한 초대는 `410 invite_revoked`, 만료한 초대는 `410 invite_expired`, 없는 토큰은 `404 invite_not_found`입니다.
+앱은 처음 로그인할 때 작업 공간을 만들므로, 자신만 있고 연결·규칙·플로·필드·필터·초대 기록(취소·만료·사용된 초대 포함)·진행 중인 OAuth가 없는 작업 공간에서는 옮겨 갈 수 있습니다.
 그 밖의 작업 공간에 속해 있으면 `409 workspace_not_empty`로 거부합니다.
 수락은 이전 작업 공간 행을 `FOR UPDATE`로 잠근 채 비어 있는지 확인합니다. Instagram 연결 콜백은 공급자 호출 뒤 같은 행을 `FOR SHARE`로 잠그고 멤버십을 다시 확인한 트랜잭션에서 연결을 저장하므로, 콜백 도중 초대를 수락하면 콜백이 `403 workspace_required`로 끝나고 떠난 작업 공간에 연결이 남지 않습니다.
 빈 작업 공간을 채울 수 있는 플로·연락처 필드·필터·초대 생성과 Instagram 연결 시작(OAuth state 저장)도 같은 행을 `FOR UPDATE`로 잠근 뒤 같은 트랜잭션에서 멤버십과 역할을 다시 확인하므로(`lockWorkspaceForMember`), 수락이 먼저 커밋되면 `403 workspace_required`로 거부됩니다.
