@@ -77,6 +77,9 @@ test("exports every table of the caller's workspace and nothing from another wor
   assert.doesNotMatch(text, /account-foreign/);
   assert.ok(text.includes("comment text account-own"));
   assert.equal(body.tables.instagram_connections[0].access_token_encrypted, undefined);
+  assert.ok(body.excluded.includes("instagram_unmatched_replies.message_text"));
+  assert.doesNotMatch(text, /kept dm text/);
+  assert.equal(body.tables.instagram_unmatched_replies[0].message_id, "kept-account-own");
   assert.ok(body.tables.instagram_connections[0].token_expires_at);
 });
 

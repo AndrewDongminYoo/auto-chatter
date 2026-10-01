@@ -17,6 +17,16 @@ const ACTION_TYPES = new Set(["add_tag", "remove_tag", "set_field"]);
 const REPLY_DEADLINE = `reply.sent_at+make_interval(mins=>jsonb_path_query_first(v.definition,
   'lax $.nodes[*] ? (@.id == $id && @.type == "wait_for_reply").config.timeout_minutes',
   jsonb_build_object('id',run.resume_node_id))::int)`;
+// A typed DM kept while the run's reply was being sent (#108) that the reconcile has not linked yet and
+// that may still answer the wait: from the reply's recipient, dated from its last attempt start to
+// before the wait ends, still holding its text and under 15 minutes old. A wait does not time out
+// while one exists, so a reconcile that was skipped, failed or ran out of rows links it first; the
+// 15-minute boundary limits the delay. Same aliases as REPLY_DEADLINE.
+const UNLINKED_KEPT_ANSWER = `EXISTS(SELECT 1 FROM instagram_unmatched_replies kept
+  WHERE kept.connection_id=run.connection_id AND kept.sender_id=reply.recipient_id AND kept.matched_at IS NULL
+    AND kept.message_text IS NOT NULL AND kept.received_at>now()-interval '15 minutes'
+    AND kept.confirmation_reply_id IS NULL AND kept.message_at>=reply.attempt_started_at
+    AND kept.message_at<${REPLY_DEADLINE})`;
 
 // The first instant strictly after `at` at which the wall clock in `zone` reads `time` (#32): today's
 // occurrence in that zone if it is still ahead, otherwise tomorrow's. `at` is read once (the input row
@@ -337,7 +347,8 @@ async function recordPlan(
 // Advances waiting runs whose delay has passed and runs whose reply wait timed out (#32), one
 // transaction per run so one failing run does not hold back the others. A reply wait times out only
 // once its private reply is sent; a reply that is blocked, failed, unknown or still queued keeps the
-// run waiting. The connection is locked FOR SHARE before the run row, the same order as the data
+// run waiting, and so does a kept DM that may still answer it (UNLINKED_KEPT_ANSWER). The connection is
+// locked FOR SHARE before the run row, the same order as the data
 // deletion functions (connection, then its rows), so the two never deadlock; the run is then claimed
 // with SKIP LOCKED and must still be due, so overlapping resumers, a redeploy or a lost notification
 // advance it once. Returns how many runs were advanced.
@@ -354,6 +365,7 @@ export async function resumeDueFlowRuns(pool: Pool, limit = 50): Promise<number>
          SELECT run.id,run.connection_id,${REPLY_DEADLINE} AS due FROM flow_runs run
          JOIN private_reply_outbox reply ON reply.flow_run_id=run.id JOIN flow_versions v ON v.id=run.flow_version_id
          WHERE run.status='awaiting_reply' AND reply.status='sent' AND ${REPLY_DEADLINE}<=now()
+           AND NOT ${UNLINKED_KEPT_ANSWER}
        ) due_runs WHERE NOT id=ANY($1::uuid[]) ORDER BY due,id LIMIT 1`,
       [passed],
     );
@@ -411,7 +423,8 @@ async function resumeFlowRun(client: PoolClient, runId: string, connectionId: st
   const claimed = await client.query<ClaimedRun>(
     `${CLAIMED_RUN}
      WHERE run.id=$1 AND run.connection_id=$2 AND ((run.status='waiting' AND run.resume_at<=now())
-       OR (run.status='awaiting_reply' AND reply.status='sent' AND ${REPLY_DEADLINE}<=now()))
+       OR (run.status='awaiting_reply' AND reply.status='sent' AND ${REPLY_DEADLINE}<=now()
+         AND NOT ${UNLINKED_KEPT_ANSWER}))
      FOR UPDATE OF run SKIP LOCKED`,
     [runId, connectionId],
   );
@@ -425,6 +438,9 @@ async function resumeFlowRun(client: PoolClient, runId: string, connectionId: st
 // Advances the run awaiting a reply to the private reply this DM answers (#32), inside the message
 // ingestion transaction. The run's reply must be sent to this sender, sent no later than the message
 // and still within its wait; the most recent reply wins when several runs wait for the same person.
+// `early` is the reconcile of a DM kept while its reply was being sent (#108): the reply's last send
+// attempt, not its sent_at, must have started no later than the message. The wait still ends at sent_at
+// plus its timeout.
 // The connection is locked FOR SHARE before the run row, as in resumeDueFlowRuns, and the run is
 // claimed FOR UPDATE without SKIP LOCKED: a concurrent timeout or another message either finishes
 // first, and the claim then sees the run is no longer awaiting a reply, or waits for this transaction.
@@ -436,7 +452,9 @@ async function resumeFlowRun(client: PoolClient, runId: string, connectionId: st
 export async function resumeRepliedFlowRun(
   client: PoolClient,
   message: { accountId: string; senderId: string; messageId: string; text: string; timestamp: Date },
+  early = false,
 ): Promise<boolean> {
+  const since = early ? "reply.attempt_started_at" : "reply.sent_at";
   const unanswered = `NOT EXISTS(SELECT 1 FROM flow_runs answered WHERE answered.connection_id=run.connection_id
     AND answered.reply_message_id=$4)`;
   const lost: string[] = [];
@@ -446,7 +464,7 @@ export async function resumeRepliedFlowRun(
        JOIN private_reply_outbox reply ON reply.flow_run_id=run.id JOIN flow_versions v ON v.id=run.flow_version_id
        JOIN instagram_connections c ON c.id=run.connection_id
        WHERE run.status='awaiting_reply' AND c.account_id=$1 AND reply.status='sent' AND reply.recipient_id=$2
-         AND reply.sent_at<=$3 AND $3<${REPLY_DEADLINE} AND ${unanswered} AND run.id<>ALL($5::uuid[])
+         AND ${since}<=$3 AND $3<${REPLY_DEADLINE} AND ${unanswered} AND run.id<>ALL($5::uuid[])
        ORDER BY reply.sent_at DESC,reply.id DESC LIMIT 1`,
       [message.accountId, message.senderId, message.timestamp, message.messageId, lost],
     );
@@ -458,7 +476,7 @@ export async function resumeRepliedFlowRun(
     const claimed = await client.query<ClaimedRun>(
       `${CLAIMED_RUN}
        WHERE run.id=$1 AND run.connection_id=$2 AND run.status='awaiting_reply' AND reply.status='sent'
-         AND reply.recipient_id=$3 AND reply.sent_at<=$5 AND $5<${REPLY_DEADLINE} AND ${unanswered}
+         AND reply.recipient_id=$3 AND ${since}<=$5 AND $5<${REPLY_DEADLINE} AND ${unanswered}
        FOR UPDATE OF run`,
       [candidate.id, candidate.connection_id, message.senderId, message.messageId, message.timestamp],
     );

@@ -3,7 +3,12 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { ingestComments } from "./store.ts";
-import { ingestMessages, processNextFollowReply } from "./follow-flow.ts";
+import {
+  clearExpiredUnmatchedReplies,
+  ingestMessages,
+  processNextFollowReply,
+  reconcileUnmatchedReplies,
+} from "./follow-flow.ts";
 import { createNodeFollowTransport, assertNodePrivateReplyAllowed } from "./node-delivery.ts";
 import { ProviderRateLimitedError, runPrivateReplyWorker, processNextPrivateReply } from "./reply-worker.ts";
 import { recordChannelConsentEvent } from "./channel-consent.ts";
@@ -943,4 +948,263 @@ test("consent read failure at follow admission defers claimed work", async () =>
       .then((result) => result.rows[0]),
     { status: "pending", failure_code: "consent_unavailable", attempt_id: null },
   );
+});
+
+// Queues a follow-gated reply to comment 333 and sends it with a transport that receives DMs from its
+// recipient 7890 while the reply is being sent (#108), dated just after the claim and so before sent_at.
+async function sendFollowReplyWhileReceiving(deliver: (at: Date, replyId: string) => Promise<void>, button = "") {
+  await pool.query(
+    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',confirmation_button_title=$2,follower_reply_text='링크',non_follower_reply_text='팔로우 안내' WHERE id=$1",
+    [rule, button],
+  );
+  await ingestComments(pool, [{ accountId: "123", commentId: "333", postId: "111", senderId: "789", text: "link" }]);
+  let deliveredAt: Date | undefined;
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: async () => ({ commentCreatedAt: new Date(), authorizationVerified: true, mediaOwned: true }),
+      send: async (request) => {
+        const started = (
+          await pool.query("SELECT attempt_started_at FROM private_reply_outbox WHERE id=$1", [request.id])
+        ).rows[0].attempt_started_at as Date;
+        deliveredAt = new Date(started.getTime() + 1);
+        await deliver(deliveredAt, request.id);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return { messageId: "first-dm", recipientId: "7890" };
+      },
+    },
+    () => new Date(),
+    connection,
+  );
+  const early = (await pool.query("SELECT id::text,status,sent_at FROM private_reply_outbox WHERE comment_id='333'"))
+    .rows[0];
+  assert.equal(early.status, "sent");
+  assert.ok(deliveredAt! < early.sent_at, "the DM must be dated before the reply was recorded as sent");
+  return { at: deliveredAt!, replyId: early.id as string };
+}
+const earlyDm = (id: string, text: string, timestamp: Date, confirmationReplyId?: string) => ({
+  accountId: "123",
+  senderId: "7890",
+  messageId: id,
+  text,
+  timestamp,
+  ...(confirmationReplyId ? { confirmationReplyId } : {}),
+});
+const conversation = async (id: string) =>
+  (
+    await pool.query(
+      "SELECT status,confirmed_at,last_message_at FROM instagram_follow_conversations WHERE reply_id=$1",
+      [id],
+    )
+  ).rows[0];
+const unmatched = async () =>
+  (
+    await pool.query(
+      "SELECT message_id,message_text,matched_at IS NOT NULL AS matched,text_cleared_at IS NOT NULL AS cleared FROM instagram_unmatched_replies ORDER BY message_id",
+    )
+  ).rows;
+
+test("a typed confirmation that arrives while the first DM is being sent starts the follow check (#108)", async () => {
+  const { at, replyId: early } = await sendFollowReplyWhileReceiving((time) =>
+    ingestMessages(pool, [earlyDm("early-confirm", " 확인 ", time)]),
+  );
+  assert.deepEqual(await conversation(early), { status: "pending", confirmed_at: at, last_message_at: at });
+  assert.deepEqual(await unmatched(), [
+    { message_id: "early-confirm", message_text: " 확인 ", matched: true, cleared: false },
+  ]);
+  assert.equal(
+    (await pool.query("SELECT count(*)::int AS count FROM instagram_message_receipts WHERE message_id='early-confirm'"))
+      .rows[0].count,
+    1,
+  );
+});
+
+test("a confirmation button tapped while the first DM is being sent starts the follow check (#108)", async () => {
+  const { at, replyId: early } = await sendFollowReplyWhileReceiving(
+    (time, id) => ingestMessages(pool, [earlyDm("early-tap", "자료 받기", time, id)]),
+    "자료 받기",
+  );
+  assert.deepEqual(await conversation(early), { status: "pending", confirmed_at: at, last_message_at: at });
+});
+
+test("the reconcile of an earlier reply to the same person leaves a button bound to the reply being sent", async () => {
+  // Reply A (comment 444) reaches 7890 before the follow-gated reply B starts.
+  await ingestComments(pool, [{ accountId: "123", commentId: "444", postId: "111", senderId: "790", text: "link" }]);
+  await processNextPrivateReply(
+    pool,
+    {
+      verify: async () => ({ commentCreatedAt: new Date(), authorizationVerified: true, mediaOwned: true }),
+      send: async () => ({ messageId: "dm-a", recipientId: "7890" }),
+    },
+    () => new Date(),
+    connection,
+  );
+  const a = (await pool.query("SELECT id::text FROM private_reply_outbox WHERE comment_id='444' AND status='sent'"))
+    .rows[0].id as string;
+  let reconciledForA: number | undefined;
+  const { at, replyId: b } = await sendFollowReplyWhileReceiving(async (time, id) => {
+    await ingestMessages(pool, [earlyDm("early-tap", "자료 받기", time, id)]);
+    // A's post-send reconcile runs while B is still being sent.
+    reconciledForA = await reconcileUnmatchedReplies(pool, { replyId: a });
+  }, "자료 받기");
+  assert.equal(reconciledForA, 0);
+  assert.deepEqual(await conversation(b), { status: "pending", confirmed_at: at, last_message_at: at });
+});
+
+// Puts another reply on the connection (comment 444) in `sending` from before reply 333's attempt, so
+// it may be the reply a DM kept during 333's send answers.
+async function anotherReplySending(): Promise<void> {
+  await ingestComments(pool, [{ accountId: "123", commentId: "444", postId: "111", senderId: "790", text: "link" }]);
+  await pool.query(
+    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute' WHERE comment_id='444'",
+  );
+}
+
+test("a reply's own pass takes a button bound to it while another reply is being sent", async () => {
+  await anotherReplySending();
+  const { at, replyId: early } = await sendFollowReplyWhileReceiving(
+    (time, id) => ingestMessages(pool, [earlyDm("early-tap", "자료 받기", time, id)]),
+    "자료 받기",
+  );
+  assert.deepEqual(await conversation(early), { status: "pending", confirmed_at: at, last_message_at: at });
+});
+
+test("a typed confirmation kept while another reply is being sent waits for the scheduled reconcile", async () => {
+  await anotherReplySending();
+  const { at, replyId: early } = await sendFollowReplyWhileReceiving((time) =>
+    ingestMessages(pool, [earlyDm("early-confirm", "확인", time)]),
+  );
+  // The other reply may be the one it answers, so 333's own pass leaves it.
+  assert.equal((await conversation(early)).status, "waiting");
+  assert.equal(await reconcileUnmatchedReplies(pool), 0);
+  await pool.query("UPDATE private_reply_outbox SET status='unknown' WHERE comment_id='444'");
+  assert.equal(await reconcileUnmatchedReplies(pool), 1);
+  assert.deepEqual(await conversation(early), { status: "pending", confirmed_at: at, last_message_at: at });
+});
+
+test("an early confirmation delivered again during or after the send confirms once", async () => {
+  const { at, replyId: early } = await sendFollowReplyWhileReceiving(async (time) => {
+    await ingestMessages(pool, [earlyDm("early-confirm", "확인", time)]);
+    await ingestMessages(pool, [earlyDm("early-confirm", "확인", time), earlyDm("early-other", "hello", time)]);
+  });
+  await ingestMessages(pool, [earlyDm("early-confirm", "확인", at)]);
+  assert.equal((await conversation(early)).status, "pending");
+  assert.equal(await reconcileUnmatchedReplies(pool), 0);
+  assert.deepEqual(
+    (await unmatched()).map((row) => [row.message_id, row.matched]),
+    [
+      ["early-confirm", true],
+      ["early-other", true],
+    ],
+  );
+  assert.equal(
+    (await pool.query("SELECT count(*)::int AS count FROM instagram_message_receipts WHERE message_id='early-confirm'"))
+      .rows[0].count,
+    1,
+  );
+});
+
+test("a DM is kept only while a reply of the same connection has been sending for under 10 minutes", async () => {
+  // Nothing is being sent, so an unmatched DM is not kept.
+  await ingestMessages(pool, [earlyDm("idle", "hello", new Date())]);
+  assert.deepEqual(await unmatched(), []);
+  await ingestComments(pool, [{ accountId: "123", commentId: "333", postId: "111", senderId: "789", text: "link" }]);
+  await pool.query(
+    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '11 minutes' WHERE comment_id='333'",
+  );
+  await ingestMessages(pool, [earlyDm("stale", "hello", new Date())]);
+  assert.deepEqual(await unmatched(), []);
+  await pool.query(
+    "UPDATE private_reply_outbox SET attempt_started_at=now()-interval '1 minute' WHERE comment_id='333'",
+  );
+  await ingestMessages(pool, [
+    earlyDm("before-attempt", "hello", new Date(Date.now() - 120_000)),
+    earlyDm("nul", "a\u0000b", new Date()),
+    { ...earlyDm("foreign", "hello", new Date()), accountId: "999" },
+    // A confirmation of the reply that is already sent is matched, so it is not kept.
+    { ...earlyDm("matched", "확인", new Date()), senderId: "456" },
+    earlyDm("kept", "hello", new Date()),
+  ]);
+  assert.deepEqual(await unmatched(), [{ message_id: "kept", message_text: "hello", matched: false, cleared: false }]);
+  assert.equal((await state()).status, "pending");
+});
+
+test("the text of a kept DM is removed after 15 minutes and it is no longer linked", async () => {
+  await ingestComments(pool, [{ accountId: "123", commentId: "333", postId: "111", senderId: "789", text: "link" }]);
+  await pool.query(
+    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute' WHERE comment_id='333'",
+  );
+  await ingestMessages(pool, [earlyDm("old", "확인", new Date()), earlyDm("new", "확인", new Date())]);
+  await pool.query(
+    "UPDATE instagram_unmatched_replies SET received_at=now()-interval '15 minutes' WHERE message_id='old'",
+  );
+  assert.equal(await clearExpiredUnmatchedReplies(pool), 1);
+  assert.equal(await clearExpiredUnmatchedReplies(pool), 0);
+  assert.deepEqual(await unmatched(), [
+    { message_id: "new", message_text: "확인", matched: false, cleared: false },
+    { message_id: "old", message_text: null, matched: false, cleared: true },
+  ]);
+  await pool.query(
+    "UPDATE private_reply_outbox SET status='sent',recipient_id='7890',provider_message_id='mid',sent_at=now() WHERE comment_id='333'",
+  );
+  assert.equal(await reconcileUnmatchedReplies(pool), 1);
+  assert.deepEqual(
+    (await unmatched()).map((row) => [row.message_id, row.matched]),
+    [
+      ["new", true],
+      ["old", false],
+    ],
+  );
+});
+
+test("a DM is not kept after a connection deletion that commits while it is being ingested", async () => {
+  await ingestComments(pool, [{ accountId: "123", commentId: "333", postId: "111", senderId: "789", text: "link" }]);
+  await pool.query(
+    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute' WHERE comment_id='333'",
+  );
+  // The reply is recorded as sent, the account disconnected and its data deleted in one transaction that
+  // takes the connection lock before the DM is ingested and commits after the DM read the sending reply.
+  const deletion = await pool.connect();
+  let ingest: Promise<void> | undefined;
+  try {
+    await deletion.query("BEGIN");
+    await deletion.query(
+      "UPDATE private_reply_outbox SET status='sent',recipient_id='7890',provider_message_id='mid',sent_at=now() WHERE comment_id='333'",
+    );
+    await deletion.query(
+      "UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1",
+      [connection],
+    );
+    await deletion.query("SELECT public.delete_connection_data($1,$2,gen_random_uuid(),'123')", [
+      workspace,
+      connection,
+    ]);
+    ingest = ingestMessages(pool, [earlyDm("late", "hello", new Date())]);
+    for (let attempt = 0; ; attempt++) {
+      const waiting = await pool.query(
+        "SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'",
+      );
+      if (waiting.rowCount) break;
+      if (attempt === 100) assert.fail("the DM ingestion never waited for the deletion");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await deletion.query("COMMIT");
+  } finally {
+    await deletion.query("ROLLBACK").catch(() => undefined);
+    deletion.release();
+  }
+  await ingest;
+  assert.deepEqual(await unmatched(), []);
+});
+
+test("migration 028 replays and every deletion function removes kept DMs", async () => {
+  const migration = await readFile(new URL("../../db/migrations/028_unmatched_replies.sql", import.meta.url), "utf8");
+  await pool.query(migration);
+  await pool.query(migration);
+  for (const name of ["delete_connection_data", "delete_person_data", "delete_workspace_data"])
+    assert.match(
+      (await pool.query("SELECT prosrc FROM pg_proc WHERE proname=$1", [name])).rows[0].prosrc,
+      /DELETE FROM public\.instagram_unmatched_replies/,
+      name,
+    );
 });

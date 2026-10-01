@@ -28,6 +28,7 @@ const connectionTables = [
   "instagram_follow_conversations",
   "instagram_message_receipts",
   "instagram_inbox_messages",
+  "instagram_unmatched_replies",
   "instagram_contact_automation",
   "instagram_contact_tags",
   "instagram_contact_field_values",
@@ -80,6 +81,11 @@ async function seedConnection(connection: string, workspace: string, account: st
   await pool.query(
     `INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at)
      VALUES($1,$2,'900','dm-1','personal dm text','text',now())`,
+    [workspace, connection],
+  );
+  await pool.query(
+    `INSERT INTO instagram_unmatched_replies(workspace_id,connection_id,sender_id,message_id,message_text,message_at)
+     VALUES($1,$2,'900','kept-1','kept dm text',now())`,
     [workspace, connection],
   );
   await pool.query(

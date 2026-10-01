@@ -4,7 +4,7 @@ import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { appApi } from "./api.ts";
 import { ingestComments, resumeDueFlowRuns } from "../instagram/store.ts";
-import { ingestMessages } from "../instagram/follow-flow.ts";
+import { ingestMessages, reconcileUnmatchedReplies } from "../instagram/follow-flow.ts";
 import { processNextPrivateReply, type PrivateReplyTransport } from "../instagram/reply-worker.ts";
 import { lockContact } from "./contact-fields.ts";
 
@@ -120,9 +120,39 @@ async function sendAll(): Promise<void> {
   while (await processNextPrivateReply(pool, transport, () => new Date(), connectionId));
 }
 
+// Sends the next reply with a transport that receives a DM while the reply is being sent (#108): the
+// DM is dated just after the claim, so it is earlier than the sent_at recorded after send() returns.
+async function sendWhileReceiving(deliver: (at: Date) => Promise<void>): Promise<Date> {
+  let deliveredAt: Date | undefined;
+  await processNextPrivateReply(
+    pool,
+    {
+      ...transport,
+      send: async (reply) => {
+        const started = (
+          await pool.query<{ at: Date }>("SELECT attempt_started_at AS at FROM private_reply_outbox WHERE id=$1", [
+            reply.id,
+          ])
+        ).rows[0]!.at;
+        deliveredAt = new Date(started.getTime() + 1);
+        await deliver(deliveredAt);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return transport.send(reply);
+      },
+    },
+    () => new Date(),
+    connectionId,
+  );
+  const sent = (await pool.query<{ sent_at: Date }>("SELECT max(sent_at) AS sent_at FROM private_reply_outbox"))
+    .rows[0]!;
+  assert.ok(deliveredAt! < sent.sent_at, "the DM must be dated before the reply was recorded as sent");
+  return deliveredAt!;
+}
+
 // A DM dated a second from now by default: Meta stamps messages in milliseconds and the reply's sent_at
 // has microseconds, so a DM ingested within the same millisecond as the send would read as earlier.
-function dm(senderId: string, text: string, options: { at?: Date; id?: string; postback?: boolean } = {}) {
+// `postback` is the bound reply ID, or true for an unrelated one.
+function dm(senderId: string, text: string, options: { at?: Date; id?: string; postback?: boolean | string } = {}) {
   return ingestMessages(pool, [
     {
       accountId: "owned-account",
@@ -130,7 +160,7 @@ function dm(senderId: string, text: string, options: { at?: Date; id?: string; p
       messageId: options.id ?? `in-${Math.random()}`,
       text,
       timestamp: options.at ?? new Date(Date.now() + 1000),
-      ...(options.postback ? { confirmationReplyId: "1" } : {}),
+      ...(options.postback ? { confirmationReplyId: options.postback === true ? "1" : options.postback } : {}),
     },
   ]);
 }
@@ -219,6 +249,178 @@ test("a DM reply continues the run on replied and saves the text for the comment
   // The run is over, so the cron has nothing to time out.
   await sentMinutesAgo(120);
   assert.equal(await resumeDueFlowRuns(pool), 0);
+});
+
+test("a reply that arrives while the private reply is being sent still continues the run (#108)", async () => {
+  const id = await enabledFlow();
+  await comment("comment-1", "sender-1");
+  await sendWhileReceiving((at) => dm("9001", "XL", { at, id: "early-1" }));
+  const [run] = await runs(id);
+  assert.equal(run!.status, "ended");
+  assert.deepEqual(outcomes(run), ["start:next", "ask:queued", "wait:replied", "wait:set", "answered:added"]);
+  assert.equal(await sizeOf("sender-1"), "XL");
+  const stored = (
+    await pool.query("SELECT message_id,matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies")
+  ).rows;
+  assert.deepEqual(stored, [{ message_id: "early-1", matched: true }]);
+});
+
+test("an early reply delivered again, during or after the send, advances the run once", async () => {
+  const id = await enabledFlow();
+  await comment("comment-1", "sender-1");
+  const at = await sendWhileReceiving(async (time) => {
+    await dm("9001", "XL", { at: time, id: "early-1" });
+    await dm("9001", "XL", { at: time, id: "early-1" });
+  });
+  await dm("9001", "XL", { at, id: "early-1" });
+  assert.equal(await reconcileUnmatchedReplies(pool), 0);
+  const [run] = await runs(id);
+  assert.equal(run!.status, "ended");
+  assert.equal(run!.steps.filter((step) => step.outcome === "replied").length, 1);
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_unmatched_replies")).rows[0].count, 1);
+});
+
+test("an early message dated before the send started, or a postback, does not answer the wait", async () => {
+  const id = await enabledFlow();
+  await comment("comment-1", "sender-1");
+  await sendWhileReceiving(async (at) => {
+    await dm("9001", "XL", { at: new Date(at.getTime() - 1000), id: "before" });
+    const sending = (await pool.query("SELECT id::text FROM private_reply_outbox WHERE status='sending'")).rows[0];
+    await dm("9001", "Yes", { at, id: "tap", postback: sending.id as string });
+  });
+  assert.equal((await runs(id))[0]!.status, "awaiting_reply");
+  // A message dated before the attempt cannot answer it and is not kept; the postback was offered once.
+  assert.deepEqual(
+    (await pool.query("SELECT message_id,matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies")).rows,
+    [{ message_id: "tap", matched: true }],
+  );
+  assert.equal(await reconcileUnmatchedReplies(pool), 0);
+});
+
+test("the scheduled reconcile links an early reply that the send path left behind", async () => {
+  const id = await enabledFlow();
+  await comment("comment-1", "sender-1");
+  await pool.query(
+    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute'",
+  );
+  await dm("9001", "XL", { at: new Date(Date.now() - 30_000), id: "early-1" });
+  assert.equal((await runs(id))[0]!.status, "awaiting_reply");
+  // The reply is recorded as sent elsewhere, without the reconcile that normally follows.
+  await pool.query(
+    "UPDATE private_reply_outbox SET status='sent',recipient_id='9001',provider_message_id='mid',sent_at=now()",
+  );
+  assert.equal(await reconcileUnmatchedReplies(pool), 1);
+  assert.equal(await reconcileUnmatchedReplies(pool), 0);
+  assert.equal((await runs(id))[0]!.status, "ended");
+  assert.equal(await sizeOf("sender-1"), "XL");
+});
+
+test("neither reconcile gives a kept reply to an earlier reply while another one is being sent", async () => {
+  const id = await enabledFlow();
+  // Reply A to 9001 went out earlier and its wait was answered.
+  await comment("comment-1", "sender-1");
+  await sendAll();
+  await dm("9001", "S", { id: "in-a" });
+  const a = (
+    await pool.query(
+      "UPDATE private_reply_outbox SET attempt_started_at=now()-interval '5 minutes',sent_at=now()-interval '5 minutes' RETURNING id::text",
+    )
+  ).rows[0].id as string;
+  // Reply B goes to the same person and is being sent when the answer to it arrives.
+  await comment("comment-2", "sender-2");
+  await pool.query(
+    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute' WHERE comment_id='comment-2'",
+  );
+  await dm("9001", "XL", { at: new Date(Date.now() - 30_000), id: "early-b" });
+  assert.equal(await reconcileUnmatchedReplies(pool), 0);
+  assert.equal(await reconcileUnmatchedReplies(pool, { connectionId }), 0);
+  // A's post-send pass (A was being sent too when the DM arrived) must not use it up either.
+  assert.equal(await reconcileUnmatchedReplies(pool, { replyId: a }), 0);
+  assert.deepEqual(
+    (await pool.query("SELECT message_id,matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies")).rows,
+    [{ message_id: "early-b", matched: false }],
+  );
+  const b = (
+    await pool.query(
+      "UPDATE private_reply_outbox SET status='sent',recipient_id='9001',provider_message_id='mid-b',sent_at=now() WHERE comment_id='comment-2' RETURNING id::text",
+    )
+  ).rows[0].id as string;
+  assert.equal(await reconcileUnmatchedReplies(pool, { replyId: b }), 1);
+  const statuses = (await runs(id)).map((run) => run.status);
+  assert.deepEqual(statuses, ["ended", "ended"]);
+  assert.equal(await sizeOf("sender-2"), "XL");
+});
+
+// A 1-minute wait whose reply was recorded as sent 2 minutes ago, so the wait is over, with a DM that
+// answered it in time kept from while the reply was being sent and not linked yet.
+async function keptAnswerAfterWaitEnded(): Promise<string> {
+  const id = await enabledFlow(waitingDocument({ timeout: 1 }));
+  await comment("comment-1", "sender-1");
+  await pool.query(
+    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '3 minutes'",
+  );
+  await dm("9001", "XL", { at: new Date(Date.now() - 150_000), id: "early-1" });
+  await pool.query(
+    "UPDATE private_reply_outbox SET status='sent',recipient_id='9001',provider_message_id='mid',sent_at=now()-interval '2 minutes'",
+  );
+  return id;
+}
+
+test("a wait does not time out while a reply kept in time is not linked yet", async () => {
+  const id = await keptAnswerAfterWaitEnded();
+  assert.equal(await resumeDueFlowRuns(pool), 0);
+  assert.equal((await runs(id))[0]!.status, "awaiting_reply");
+  assert.equal(await reconcileUnmatchedReplies(pool), 1);
+  assert.deepEqual(outcomes((await runs(id))[0]), [
+    "start:next",
+    "ask:queued",
+    "wait:replied",
+    "wait:set",
+    "answered:added",
+  ]);
+  assert.equal(await sizeOf("sender-1"), "XL");
+  assert.equal(await resumeDueFlowRuns(pool), 0);
+});
+
+test("a kept reply no longer holds the wait 15 minutes after it was received", async () => {
+  const id = await keptAnswerAfterWaitEnded();
+  await pool.query("UPDATE instagram_unmatched_replies SET received_at=now()-interval '15 minutes'");
+  assert.equal(await resumeDueFlowRuns(pool), 1);
+  assert.deepEqual(outcomes((await runs(id))[0]), ["start:next", "ask:queued", "wait:timeout", "silent:added"]);
+  assert.equal(await reconcileUnmatchedReplies(pool), 0);
+});
+
+test("a kept reply that turns 15 minutes old while the reconcile waits for its connection is not linked", async () => {
+  const id = await enabledFlow();
+  await comment("comment-1", "sender-1");
+  await pool.query(
+    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute'",
+  );
+  await dm("9001", "XL", { at: new Date(Date.now() - 30_000), id: "early-1" });
+  await pool.query(
+    "UPDATE private_reply_outbox SET status='sent',recipient_id='9001',provider_message_id='mid',sent_at=now()",
+  );
+  const holder = await pool.connect();
+  try {
+    await holder.query("BEGIN");
+    await holder.query("SELECT 1 FROM instagram_connections WHERE id=$1 FOR UPDATE", [connectionId]);
+    const reconciling = reconcileUnmatchedReplies(pool);
+    await waitForLock("SELECT account_id FROM instagram_connections%");
+    await pool.query("UPDATE instagram_unmatched_replies SET received_at=now()-interval '15 minutes'");
+    await holder.query("COMMIT");
+    assert.equal(await reconciling, 0);
+  } catch (error) {
+    await holder.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    holder.release();
+  }
+  assert.equal((await runs(id))[0]!.status, "awaiting_reply");
+  assert.equal(await sizeOf("sender-1"), undefined);
+  assert.deepEqual(
+    (await pool.query("SELECT matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies")).rows,
+    [{ matched: false }],
+  );
 });
 
 test("a redelivered or later message advances the run once, and a postback never does", async () => {

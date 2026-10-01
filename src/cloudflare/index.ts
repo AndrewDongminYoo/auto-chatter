@@ -4,7 +4,13 @@ import {
   recoverStaleManualReplies,
 } from "../instagram/manual-reply-worker.ts";
 import { parseMessageEvents } from "../instagram/message-events.ts";
-import { ingestMessages, processNextFollowReply, recoverStaleFollowReplies } from "../instagram/follow-flow.ts";
+import {
+  clearExpiredUnmatchedReplies,
+  ingestMessages,
+  processNextFollowReply,
+  reconcileUnmatchedReplies,
+  recoverStaleFollowReplies,
+} from "../instagram/follow-flow.ts";
 import { readMetaGraphError } from "../instagram/meta-graph-error.ts";
 import { refreshDueInstagramTokens } from "../app/instagram-token-refresh.ts";
 import { deliveryRecipientOptedOut } from "../instagram/channel-consent.ts";
@@ -353,19 +359,36 @@ export default {
     try {
       const pool = openPool(env);
       try {
+        // The text of a DM kept while its reply was being sent (#108) is removed after 15 minutes. This
+        // runs first and needs no other configuration, so no later failure can skip it.
+        let stepFailed = false;
+        try {
+          await clearExpiredUnmatchedReplies(pool);
+        } catch {
+          console.error("Kept reply text removal failed; the next schedule retries it");
+          stepFailed = true;
+        }
         if (!env.TOKEN_ENCRYPTION_KEY) throw new Error("Token encryption not configured");
         await refreshDueInstagramTokens(pool, env.TOKEN_ENCRYPTION_KEY, fetch, new Date(), env.META_GRAPH_VERSION);
-        // Resuming a delayed flow run only queues its reply, so it runs while sending is off too; a
-        // failed run is reported after the delivery steps below so it cannot hold them back.
-        let resumeFailed = false;
+        // Linking a kept DM to its now-sent reply and resuming a delayed flow run only change state or
+        // queue a reply, so they run while sending is off too; a failure is reported after the delivery
+        // steps below so it cannot hold them back. The link runs first: a DM that answered a reply wait in
+        // time must reach the run before the resume times that wait out, and the resume holds a wait for
+        // up to 15 minutes while a kept DM that may answer it is still unlinked.
+        try {
+          await reconcileUnmatchedReplies(pool);
+        } catch {
+          console.error("Early reply reconcile failed; the next schedule retries it");
+          stepFailed = true;
+        }
         try {
           await resumeDueFlowRuns(pool);
         } catch {
           console.error("Flow run resume failed; the next schedule retries it");
-          resumeFailed = true;
+          stepFailed = true;
         }
         if (env.SEND_ENABLED !== "true") {
-          if (resumeFailed) throw new Error("Flow run resume failed");
+          if (stepFailed) throw new Error("Scheduled step failed");
           return;
         }
         await pool.query(
@@ -374,7 +397,7 @@ export default {
         await recoverStaleManualReplies(pool);
         await recoverStaleFollowReplies(pool, new Date(Date.now() - 10 * 60_000));
         await wakeDueReplies(pool, env);
-        if (resumeFailed) throw new Error("Flow run resume failed");
+        if (stepFailed) throw new Error("Scheduled step failed");
       } finally {
         await pool.end();
       }

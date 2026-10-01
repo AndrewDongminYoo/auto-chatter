@@ -142,7 +142,7 @@ function failConsentRead(failAt: number): () => number {
 
 before(async () => {
   await pool.query(
-    "DROP TABLE IF EXISTS workspace_invites, data_deletion_records, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+    "DROP TABLE IF EXISTS workspace_invites, data_deletion_records, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
   );
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
 });
@@ -454,6 +454,35 @@ test("a webhook DM continues the run waiting for its reply and the cron times ou
   assert.equal(sends, 0);
 });
 
+test("the cron links a kept reply before it times out the wait that reply answered in time", async () => {
+  await awaitingReplyRuns();
+  // 457 answered while the reply was being sent, two hours ago, and only the cron can link it now.
+  await pool.query(
+    "UPDATE private_reply_outbox SET attempt_started_at=sent_at-interval '1 second' WHERE comment_id='comment-quiet'",
+  );
+  await pool.query(
+    `INSERT INTO instagram_unmatched_replies(workspace_id,connection_id,sender_id,message_id,message_text,message_at)
+     SELECT workspace_id,connection_id,'457','early-quiet','L',sent_at-interval '500 milliseconds'
+     FROM private_reply_outbox WHERE comment_id='comment-quiet'`,
+  );
+  env.SEND_ENABLED = "false";
+  await worker.scheduled({}, env);
+  assert.deepEqual(
+    (
+      await pool.query(
+        `SELECT run.status,array_agg(step.node_id||':'||step.outcome ORDER BY step.seq) AS steps
+         FROM flow_runs run JOIN private_reply_outbox reply ON reply.flow_run_id=run.id
+         JOIN flow_step_runs step ON step.run_id=run.id WHERE reply.comment_id='comment-quiet' GROUP BY run.status`,
+      )
+    ).rows,
+    [{ status: "ended", steps: ["wait:replied", "answered:added"] }],
+  );
+  assert.equal(
+    (await pool.query("SELECT matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies")).rows[0].matched,
+    true,
+  );
+});
+
 test("a failed flow resume still lets the cron wake pending replies, then reports the failure", async () => {
   const queue = env.REPLY_QUEUE;
   env.REPLY_QUEUE = {
@@ -471,6 +500,48 @@ test("a failed flow resume still lets the cron wake pending replies, then report
   });
   await assert.rejects(worker.scheduled({}, env), /scheduled recovery failed/);
   assert.deepEqual(published, [{ connectionId }]);
+});
+
+test("the cron links a kept DM to its sent reply and removes kept text after 15 minutes, with sending off", async () => {
+  assert.equal((await worker.fetch(request(), env)).status, 200);
+  await pool.query(
+    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute'",
+  );
+  const at = new Date(Date.now() - 30_000);
+  await ingestMessages(pool, [
+    { accountId: "123", senderId: "7890", messageId: "early-confirm", text: "확인", timestamp: at },
+    { accountId: "123", senderId: "7891", messageId: "old", text: "hello", timestamp: at },
+  ]);
+  await pool.query(
+    "UPDATE instagram_unmatched_replies SET received_at=now()-interval '15 minutes' WHERE message_id='old'",
+  );
+  // The reply is recorded as sent elsewhere, without the reconcile that normally follows it.
+  const reply = (
+    await pool.query(
+      "UPDATE private_reply_outbox SET status='sent',recipient_id='7890',provider_message_id='m',sent_at=now() RETURNING id",
+    )
+  ).rows[0].id;
+  await pool.query(
+    "INSERT INTO instagram_follow_conversations(reply_id,connection_id,recipient_id,confirmation_keyword,follower_reply_text,non_follower_reply_text) VALUES($1,$2,'7890','확인','링크','팔로우 안내')",
+    [reply, connectionId],
+  );
+  env.SEND_ENABLED = "false";
+  await worker.scheduled({}, env);
+  assert.deepEqual((await pool.query("SELECT status,confirmed_at FROM instagram_follow_conversations")).rows, [
+    { status: "pending", confirmed_at: at },
+  ]);
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT message_id,message_text,matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies ORDER BY message_id",
+      )
+    ).rows,
+    [
+      { message_id: "early-confirm", message_text: "확인", matched: true },
+      { message_id: "old", message_text: null, matched: false },
+    ],
+  );
+  assert.equal(sends, 0);
 });
 
 test("disabled sending preserves pending replies and does not schedule work", async () => {
