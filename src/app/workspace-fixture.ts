@@ -162,6 +162,28 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      VALUES($1,$2,$3,$4,$5,'2001','124','flow reply','failed')`,
     [workspace, connection, flowEvent, run, `comment-flow-${account}`],
   );
+  const endpoint = (
+    await pool.query("INSERT INTO webhook_endpoints(workspace_id,name,url) VALUES($1,'crm',$2) RETURNING id", [
+      workspace,
+      `https://hooks.example.test/${account}`,
+    ])
+  ).rows[0].id;
+  await pool.query(
+    `INSERT INTO webhook_signing_keys(id,workspace_id,endpoint_id,slot,secret_encrypted)
+     VALUES(gen_random_uuid(),$1,$2,1,$3)`,
+    [workspace, endpoint, `SECRET-CIPHERTEXT-webhook-${account}`],
+  );
+  const delivery = (
+    await pool.query(
+      `INSERT INTO webhook_deliveries(event_id,workspace_id,endpoint_id,connection_id,flow_id,flow_run_id,node_id,sender_id,payload,status,attempt_count,failure_code)
+       VALUES(gen_random_uuid(),$1,$2,$3,$4,$5,'notify','124','{"fields":{}}','dead',6,'http_error') RETURNING event_id`,
+      [workspace, endpoint, connection, flow, run],
+    )
+  ).rows[0].event_id;
+  await pool.query(
+    "INSERT INTO webhook_redelivery_events(workspace_id,connection_id,delivery_event_id,actor_id) VALUES($1,$2,$3,$4)",
+    [workspace, connection, delivery, user],
+  );
   await pool.query(
     `INSERT INTO data_deletion_records(workspace_id,connection_id,requested_by,deleted_counts,retained_counts)
      VALUES($1,$2,$3,'{"instagram_comment_events":0}','{}')`,

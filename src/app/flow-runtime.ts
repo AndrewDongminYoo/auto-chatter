@@ -1,16 +1,27 @@
 import { matchesCommentRule } from "../instagram/comment-rule.ts";
 import { isValidFieldValue } from "./contact-fields.ts";
-import { normalizeTag, type FlowDocument, type FlowError, type FlowNode } from "./flow-schema.ts";
+import { normalizeTag, replySaveFields, type FlowDocument, type FlowError, type FlowNode } from "./flow-schema.ts";
 
 // What the runtime knows about the commenter when the comment arrives.
 export type ContactFacts = { tags: ReadonlySet<string>; fields: ReadonlyMap<string, unknown> };
 // The comment that started the run, the fields a set_field node or a reply wait may still write (not
-// archived), and the reply text when a reply resumes the run.
-export type RunInput = { commentText: string; writableFields: ReadonlySet<string>; replyText?: string };
+// archived), the reply text when a reply resumes the run, and the fields that another published version
+// of the workspace saves a reply into (a webhook node sends none of them).
+export type RunInput = {
+  commentText: string;
+  writableFields: ReadonlySet<string>;
+  replyText?: string;
+  replyFields?: ReadonlySet<string>;
+};
 export type FlowStep = { node_id: string; node_type: string; outcome: string };
 // Net changes against the facts: a tag maps to its new membership, a field to its new value.
 export type FlowChanges = { tags: Map<string, boolean>; fields: Map<string, unknown> };
-export type FlowPlan = { steps: FlowStep[]; changes: FlowChanges } & (
+// What one webhook node sends: the contact facts when the walk reached it, after the actions before it.
+// tags is present only when the node includes them; fields holds the chosen fields, null when unset. A
+// field that a reply wait saves a reply into is left out, so reply text never leaves through a webhook.
+export type FlowWebhook = { node_id: string; endpoint_id: string; tags?: string[]; fields: Record<string, unknown> };
+// webhooks is present only when the walk reached a webhook node.
+export type FlowPlan = { steps: FlowStep[]; changes: FlowChanges; webhooks?: FlowWebhook[] } & (
   | { status: "ended" }
   | { status: "message"; text: string; wait_node_id?: string }
   | { status: "failed"; failure_code: string }
@@ -31,6 +42,7 @@ const EXECUTABLE_TYPES = new Set([
   "delay",
   "wait_until",
   "wait_for_reply",
+  "webhook",
 ]);
 // Where a stopped run continues: a delay or a time wait on next, a reply wait on replied or timeout.
 export type ResumeEntry = { node_id: string; port: string };
@@ -123,7 +135,8 @@ function render(
 // Walks one published document from its trigger, or from the delay or reply wait a run stopped at.
 // The result depends only on the document, the facts and the input, so a run records exactly the
 // path that produced its message. Actions change the facts that later nodes read; a failure keeps
-// the changes of the actions before it. A delay or a time wait ends this walk as waiting, and a
+// the changes of the actions before it, and the webhooks reached before it are still queued. A webhook
+// node only records what to send and the walk continues. A delay or a time wait ends this walk as waiting, and a
 // message followed by a reply wait names the wait. Resuming after either records only the nodes after
 // it; resuming at
 // a reply wait first records the port taken and, when the wait saves the reply, the save outcome, so
@@ -144,6 +157,15 @@ export function planFlowRun(
     ),
     fields: new Map([...fields].filter(([id, value]) => facts.fields.get(id) !== value)),
   });
+  const webhooks: FlowWebhook[] = [];
+  // Publishing refuses a webhook node that names such a field; a version that names one anyway (another
+  // flow made it a reply field later) sends the rest.
+  const replyFields = new Set([...(input.replyFields ?? []), ...replySaveFields(document)]);
+  // What every result of this walk carries besides its status and steps.
+  const effects = (): { changes: FlowChanges; webhooks?: FlowWebhook[] } => ({
+    changes: changes(),
+    ...(webhooks.length ? { webhooks } : {}),
+  });
   const byId = new Map(document.nodes.map((node) => [node.id, node]));
   const start = resume === undefined ? trigger(document) : byId.get(resume.node_id);
   if (
@@ -151,7 +173,7 @@ export function planFlowRun(
     (resume !== undefined &&
       !(Object.hasOwn(RESUME_PORTS, start.type) && RESUME_PORTS[start.type]!.includes(resume.port)))
   )
-    return { status: "failed", steps: [], failure_code: "invalid_definition", changes: changes() };
+    return { status: "failed", steps: [], failure_code: "invalid_definition", ...effects() };
   const steps: FlowStep[] = [];
   const afterWait = start.type === "wait_for_reply";
   if (resume === undefined) steps.push({ node_id: start.id, node_type: start.type, outcome: "next" });
@@ -174,15 +196,15 @@ export function planFlowRun(
   }
   const fail = (node: FlowNode, code: string): FlowPlan => {
     steps.push({ node_id: node.id, node_type: node.type, outcome: code });
-    return { status: "failed", steps, failure_code: code, changes: changes() };
+    return { status: "failed", steps, failure_code: code, ...effects() };
   };
   let current = start;
   let port = resume?.port ?? "next";
   while (steps.length <= document.nodes.length) {
     const edge = document.edges.find((candidate) => candidate.from === current.id && candidate.port === port);
-    if (!edge) return { status: "ended", steps, changes: changes() };
+    if (!edge) return { status: "ended", steps, ...effects() };
     const node = byId.get(edge.to);
-    if (!node) return { status: "failed", steps, failure_code: "invalid_definition", changes: changes() };
+    if (!node) return { status: "failed", steps, failure_code: "invalid_definition", ...effects() };
     current = node;
     let outcome: string;
     port = "next";
@@ -208,6 +230,27 @@ export function planFlowRun(
         fields.set(id, node.config.value);
         outcome = "set";
       }
+    } else if (node.type === "webhook") {
+      // The store queues the delivery in the run's transaction; the walk goes on without waiting.
+      const fieldIds = node.config.field_ids;
+      if (
+        typeof node.config.endpoint_id !== "string" ||
+        !Array.isArray(fieldIds) ||
+        fieldIds.some((id) => typeof id !== "string")
+      )
+        return fail(node, "invalid_definition");
+      webhooks.push({
+        node_id: node.id,
+        endpoint_id: node.config.endpoint_id.toLowerCase(),
+        ...(node.config.include_tags === true ? { tags: [...tags] } : {}),
+        fields: Object.fromEntries(
+          (fieldIds as string[])
+            .map((id) => id.toLowerCase())
+            .filter((id) => !replyFields.has(id))
+            .map((id) => [id, fields.get(id) ?? null]),
+        ),
+      });
+      outcome = "queued";
     } else if (node.type === "delay") {
       steps.push({ node_id: node.id, node_type: node.type, outcome: "waiting" });
       return {
@@ -215,7 +258,7 @@ export function planFlowRun(
         steps,
         resume_node_id: node.id,
         delay_minutes: node.config.minutes as number,
-        changes: changes(),
+        ...effects(),
       };
     } else if (node.type === "wait_until") {
       // The resume time depends on the workspace time zone, so the store computes it.
@@ -225,7 +268,7 @@ export function planFlowRun(
         steps,
         resume_node_id: node.id,
         until_time: String(node.config.time),
-        changes: changes(),
+        ...effects(),
       };
     } else if (node.type === "instagram_message" && node.config.button_title === undefined && !afterWait) {
       const outgoing = document.edges.filter((candidate) => candidate.from === node.id);
@@ -239,10 +282,10 @@ export function planFlowRun(
         steps,
         text: rendered.text,
         ...(wait === undefined ? {} : { wait_node_id: wait }),
-        changes: changes(),
+        ...effects(),
       };
     } else return fail(node, "unsupported_node");
     steps.push({ node_id: node.id, node_type: node.type, outcome });
   }
-  return { status: "failed", steps, failure_code: "step_limit", changes: changes() };
+  return { status: "failed", steps, failure_code: "step_limit", ...effects() };
 }

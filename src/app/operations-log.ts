@@ -11,6 +11,7 @@ export const OPERATION_STEPS = [
   "flow_resume",
   "stale_recovery",
   "wake",
+  "webhook_delivery",
   "alerts",
 ] as const;
 export type OperationStep = (typeof OPERATION_STEPS)[number];

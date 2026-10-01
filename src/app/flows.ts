@@ -10,6 +10,7 @@ import {
   type FlowError,
 } from "./flow-schema.ts";
 import { flowExecutionErrors } from "./flow-runtime.ts";
+import { replySavedFields } from "./contact-fields.ts";
 
 const MAX_ACTIVE_FLOWS = 50;
 const RUN_HISTORY_LIMIT = 50;
@@ -181,6 +182,32 @@ export async function publishFlow(
         )
       ).rows.map((row) => [row.id, row.type]),
     );
+    // A webhook node may name only an active endpoint of this workspace. Disabling the endpoint later is
+    // allowed: its deliveries then end as dead (endpoint_inactive) instead of being sent.
+    const endpoints = new Set<string>(
+      (
+        await client.query<{ id: string }>(
+          "SELECT id::text FROM webhook_endpoints WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND active",
+          [workspace, references?.endpoint_ids ?? []],
+        )
+      ).rows.map((row) => row.id),
+    );
+    // Reply text never leaves through a webhook: among the fields the draft names, those a published version
+    // saves a reply into and those another flow's current version sends. Neither read takes a lock, so two
+    // concurrent publishes can pass both; a run then leaves such a field out of its payload (planFlowRun).
+    const replyFields = await replySavedFields(client, workspace, references?.field_ids ?? []);
+    const webhookFields = new Set<string>(
+      (
+        await client.query<{ id: string }>(
+          `SELECT DISTINCT lower(target #>> '{}') AS id FROM flows f JOIN flow_versions v ON v.id=f.published_version_id
+           CROSS JOIN LATERAL jsonb_path_query(v.definition,
+             'lax $.nodes[*] ? (@.type == "webhook").config.field_ids[*]') target
+           WHERE f.workspace_id=$1 AND f.id<>$2 AND NOT f.archived AND v.field_ids && $3::uuid[]
+             AND jsonb_typeof(target)='string'`,
+          [workspace, id, references?.field_ids ?? []],
+        )
+      ).rows.map((row) => row.id),
+    );
     const conflicts =
       connection && mediaId
         ? (
@@ -195,6 +222,9 @@ export async function publishFlow(
     const errors = validateFlowForPublish(flow.draft, {
       connection,
       fields,
+      endpoints,
+      replyFields,
+      webhookFields,
       legacyRuleEnabled: conflicts.legacy,
       otherFlowPublished: conflicts.other,
     });

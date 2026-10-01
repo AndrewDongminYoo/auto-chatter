@@ -360,6 +360,8 @@ const deletedLabels = {
   private_reply_outbox: "비공개 답장",
   flow_runs: "플로 실행",
   flow_step_runs: "플로 실행 단계",
+  webhook_deliveries: "외부 전송",
+  webhook_redelivery_events: "외부 전송 재시도 기록",
   instagram_follow_conversations: "팔로우 후속 메시지",
   instagram_message_receipts: "확인 메시지 수신",
   instagram_inbox_messages: "보관한 수신 DM",

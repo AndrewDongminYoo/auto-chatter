@@ -1,4 +1,5 @@
 import { sealSecret } from "../app/secrets.ts";
+import { signingKeyContext } from "../app/webhook-delivery.ts";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -128,6 +129,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
   const config = JSON.parse(await readFile(new URL("../../wrangler.json", import.meta.url), "utf8"));
   let sends = 0;
   const graphPaths = [];
+  const webhookRequests = [];
   const runtime = new Miniflare({
     modules: true,
     scriptPath: ".wrangler/build/index.js",
@@ -148,6 +150,22 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
     },
     outboundService: async (request) => {
       const graphUrl = new URL(request.url);
+      // The flow webhook (#47): the DNS-over-HTTPS lookups, then the signed request to the endpoint.
+      if (graphUrl.hostname === "cloudflare-dns.com")
+        return Response.json(
+          graphUrl.searchParams.get("type") === "A"
+            ? { Status: 0, Answer: [{ name: "hooks.example.test", type: 1, data: "93.184.216.34" }] }
+            : { Status: 0 },
+        );
+      if (graphUrl.hostname === "hooks.example.test") {
+        webhookRequests.push({
+          method: request.method,
+          url: request.url,
+          headers: Object.fromEntries(request.headers),
+          body: await request.text(),
+        });
+        return new Response("ok");
+      }
       graphPaths.push(graphUrl.pathname);
       assert.equal(graphUrl.hostname, "graph.instagram.com");
       if (request.method === "POST") {
@@ -174,7 +192,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
   });
   try {
     await pool.query(
-      "DROP TABLE IF EXISTS scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
@@ -340,10 +358,37 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
             excluded_keywords: [],
           },
         },
+        {
+          id: "notify",
+          type: "webhook",
+          config: { endpoint_id: "99999999-9999-4999-8999-999999999999", field_ids: [], include_tags: true },
+        },
         { id: "reply", type: "instagram_message", config: { text: "Flow workerd reply" } },
       ],
-      edges: [{ from: "start", port: "next", to: "reply" }],
+      edges: [
+        { from: "start", port: "next", to: "notify" },
+        { from: "notify", port: "next", to: "reply" },
+      ],
     };
+    const endpointId = "99999999-9999-4999-8999-999999999999";
+    const signingKeyId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab";
+    const signingSecret = "whsec_workerd-test";
+    await pool.query(
+      "INSERT INTO webhook_endpoints(id,workspace_id,name,url) VALUES($1,'11111111-1111-4111-8111-111111111111','crm','https://hooks.example.test/in')",
+      [endpointId],
+    );
+    await pool.query(
+      "INSERT INTO webhook_signing_keys(id,workspace_id,endpoint_id,slot,secret_encrypted) VALUES($1,'11111111-1111-4111-8111-111111111111',$2,1,$3)",
+      [
+        signingKeyId,
+        endpointId,
+        sealSecret(
+          signingSecret,
+          Buffer.alloc(32, 1).toString("base64"),
+          signingKeyContext("11111111-1111-4111-8111-111111111111", endpointId, signingKeyId),
+        ),
+      ],
+    );
     await pool.query(
       "INSERT INTO flows(id,workspace_id,name,draft) VALUES($1,'11111111-1111-4111-8111-111111111111','Flow',$2)",
       [flowId, definition],
@@ -395,12 +440,41 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
            FROM private_reply_outbox reply JOIN flow_runs run ON run.id=reply.flow_run_id`,
         )
       ).rows,
-      [{ status: "sent", private_reply_text: "Flow workerd reply", run_status: "delivering", steps: 2 }],
+      [{ status: "sent", private_reply_text: "Flow workerd reply", run_status: "delivering", steps: 3 }],
       JSON.stringify(graphPaths),
     );
     assert.equal(sends, 3);
+    // Ingestion queued the webhook delivery under the restricted server role; only the cron sends it.
+    assert.deepEqual((await pool.query("SELECT status,node_id FROM webhook_deliveries")).rows, [
+      { status: "pending", node_id: "notify" },
+    ]);
+    assert.deepEqual(webhookRequests, []);
     await consumer.scheduled({ scheduledTime: Date.now(), cron: "* * * * *" });
     assert.equal(sends, 3);
+    assert.equal(webhookRequests.length, 1);
+    const [webhookRequest] = webhookRequests;
+    const delivered = (
+      await pool.query("SELECT event_id::text,status,payload,last_status_code FROM webhook_deliveries")
+    ).rows[0];
+    assert.deepEqual([delivered.status, delivered.payload, delivered.last_status_code], ["sent", null, 200]);
+    assert.equal(webhookRequest.method, "POST");
+    assert.equal(webhookRequest.url, "https://hooks.example.test/in");
+    assert.equal(webhookRequest.headers["content-type"], "application/json");
+    assert.equal(webhookRequest.headers["user-agent"], "auto-chatter-webhook/1");
+    assert.equal(webhookRequest.headers["x-autochatter-event-id"], delivered.event_id);
+    const [signedAt, signedKey, signedValue] = webhookRequest.headers["x-autochatter-signature"].split(",");
+    assert.equal(signedKey, `k=${signingKeyId}`);
+    assert.equal(
+      signedValue,
+      `v1=${createHmac("sha256", signingSecret)
+        .update(`${signedAt.slice(2)}.${webhookRequest.body}`)
+        .digest("hex")}`,
+    );
+    const sentPayload = JSON.parse(webhookRequest.body);
+    assert.equal(sentPayload.event_id, delivered.event_id);
+    assert.deepEqual([sentPayload.type, sentPayload.node_id, sentPayload.tags], ["flow.webhook", "notify", []]);
+    for (const forbidden of ["sender-flow", "comment-flow", "anything", "media"])
+      assert.ok(!webhookRequest.body.includes(forbidden), forbidden);
     // The restricted server role records every step, and the one-day fixture token raises its alert.
     assert.deepEqual(
       (
@@ -417,6 +491,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
         "stale_recovery",
         "token_refresh",
         "wake",
+        "webhook_delivery",
       ],
     );
     assert.deepEqual((await pool.query("SELECT name FROM scheduled_steps WHERE alert_active")).rows, [
