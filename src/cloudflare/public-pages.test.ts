@@ -38,6 +38,7 @@ for (const [pathname, title] of [
     if (pathname === "/privacy")
       assert.ok(html.includes("초대 기록은 취소·만료·사용된 것을 포함해 작업 공간을 삭제할 때까지 보관합니다"));
     if (pathname === "/privacy") assert.ok(html.includes("시행일: 2026년 10월 1일"));
+    if (pathname === "/privacy") assert.ok(html.includes("그 브라우저 탭이 수락할 때까지 링크를 임시로 보관하며"));
   });
 
   test(`${pathname} supports HEAD and rejects write methods`, async () => {
