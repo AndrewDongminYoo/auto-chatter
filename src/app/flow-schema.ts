@@ -27,18 +27,22 @@ const PORTS: Record<string, string[]> = {
   remove_tag: ["next"],
   set_field: ["next"],
   delay: ["next"],
+  wait_for_reply: ["replied", "timeout"],
 };
 // Own-property lookup, so names such as "constructor" are unknown types rather than prototype members.
 function portsOf(type: string): string[] | undefined {
   return Object.hasOwn(PORTS, type) ? PORTS[type] : undefined;
 }
-// A cycle is allowed only through a node that waits for input; none exists yet. A delay alone would
-// repeat the same path on a timer, so it does not count.
+// A cycle is allowed only through a node that waits for input. A delay alone would repeat the same
+// path on a timer, so it does not count, and a reply wait cannot close a cycle because it is reached
+// only from a message and no message may follow it; the set stays empty.
 const WAIT_TYPES = new Set<string>();
 // A private reply must be sent within seven days of the comment (reply-policy.ts), and a delay
 // starts when the webhook arrives, so the delays before a message leave an hour of that window for
 // webhook, cron and retry latency (service policy, not a Meta limit).
 const MAX_DELAY_MINUTES = 7 * 24 * 60 - 60;
+// The longest a run waits for a reply to its private reply (operator decision, 7 days).
+const MAX_REPLY_WAIT_MINUTES = 7 * 24 * 60;
 
 function error(code: string, path: string, extra: { node_id?: string; edge_index?: number } = {}): FlowError {
   return { code, ...extra, path };
@@ -144,6 +148,14 @@ function validConfig(node: FlowNode): boolean {
         (config.minutes as number) >= 1 &&
         (config.minutes as number) <= MAX_DELAY_MINUTES
       );
+    case "wait_for_reply":
+      return (
+        exactKeys(config, ["timeout_minutes"], ["save_field_id"]) &&
+        Number.isInteger(config.timeout_minutes) &&
+        (config.timeout_minutes as number) >= 1 &&
+        (config.timeout_minutes as number) <= MAX_REPLY_WAIT_MINUTES &&
+        (config.save_field_id === undefined || isUuid(config.save_field_id))
+      );
     default:
       return false;
   }
@@ -170,6 +182,16 @@ function fieldErrors(node: FlowNode, fields: Map<string, string>, path: string):
   const value = node.type === "set_field" ? node.config.value : node.config.field_value;
   if (value !== undefined && !isValidFieldValue(type, value))
     return [error("invalid_field_value", path, { node_id: node.id })];
+  return [];
+}
+
+// A reply is saved as text, so the field it goes into must be an active text field.
+function saveFieldErrors(node: FlowNode, fields: Map<string, string>, path: string): FlowError[] {
+  const id = node.config.save_field_id;
+  if (typeof id !== "string") return [];
+  const type = fields.get(id.toLowerCase());
+  if (!type) return [error("unknown_field", path, { node_id: node.id })];
+  if (type !== "text") return [error("invalid_field_type", path, { node_id: node.id })];
   return [];
 }
 
@@ -230,6 +252,7 @@ export function validateFlowForPublish(input: unknown, context: PublishContext):
     }
     if (node.type === "set_field" || node.type === "field_equals")
       errors.push(...fieldErrors(node, context.fields, path));
+    if (node.type === "wait_for_reply") errors.push(...saveFieldErrors(node, context.fields, path));
     if (node.type === "instagram_message")
       errors.push(...variableErrors(String(node.config.text), context.fields, `${path}.text`, node.id));
   });
@@ -256,6 +279,9 @@ export function validateFlowForPublish(input: unknown, context: PublishContext):
     used.add(key);
     if (to.type === "instagram_comment")
       errors.push(error("trigger_has_incoming", `edges[${index}].to`, { edge_index: index }));
+    // A reply wait listens for an answer to the private reply sent just before it.
+    if (to.type === "wait_for_reply" && from.type !== "instagram_message")
+      errors.push(error("wait_requires_message", `edges[${index}].from`, { edge_index: index }));
     valid.push(edge);
   });
   if (triggers.length !== 1) return errors;
@@ -272,6 +298,22 @@ export function validateFlowForPublish(input: unknown, context: PublishContext):
   }
   nodes.forEach((node, index) => {
     if (!reached.has(node.id)) errors.push(error("unreachable_node", `nodes[${index}]`, { node_id: node.id }));
+  });
+  // Nothing is sent after a reply wait in this version: the conversation it opened carries no
+  // further private reply, so no message may be reachable from it.
+  const afterWait = new Set<string>();
+  const pending = nodes.filter((node) => node.type === "wait_for_reply").map((node) => node.id);
+  while (pending.length) {
+    const id = pending.shift() as string;
+    for (const edge of valid)
+      if (edge.from === id && !afterWait.has(edge.to)) {
+        afterWait.add(edge.to);
+        pending.push(edge.to);
+      }
+  }
+  nodes.forEach((node, index) => {
+    if (node.type === "instagram_message" && afterWait.has(node.id))
+      errors.push(error("message_after_wait", `nodes[${index}]`, { node_id: node.id }));
   });
   if (hasCycle(nodes, valid)) errors.push(error("immediate_cycle", "edges"));
   else {
@@ -308,6 +350,8 @@ export function flowReferences(document: FlowDocument): {
   for (const node of document.nodes) {
     if ((node.type === "set_field" || node.type === "field_equals") && isUuid(node.config.field_id))
       fields.add(node.config.field_id.toLowerCase());
+    if (node.type === "wait_for_reply" && isUuid(node.config.save_field_id))
+      fields.add(node.config.save_field_id.toLowerCase());
     if (node.type === "instagram_message" && typeof node.config.text === "string")
       for (const match of node.config.text.matchAll(/\{\{field:([^{}]+)\}\}/g))
         if (isUuid(match[1])) fields.add(match[1].toLowerCase());

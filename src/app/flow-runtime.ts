@@ -1,22 +1,24 @@
 import { matchesCommentRule } from "../instagram/comment-rule.ts";
+import { isValidFieldValue } from "./contact-fields.ts";
 import { normalizeTag, type FlowDocument, type FlowError, type FlowNode } from "./flow-schema.ts";
 
 // What the runtime knows about the commenter when the comment arrives.
 export type ContactFacts = { tags: ReadonlySet<string>; fields: ReadonlyMap<string, unknown> };
-// The comment that started the run and the fields a set_field node may still write (not archived).
-export type RunInput = { commentText: string; writableFields: ReadonlySet<string> };
+// The comment that started the run, the fields a set_field node or a reply wait may still write (not
+// archived), and the reply text when a reply resumes the run.
+export type RunInput = { commentText: string; writableFields: ReadonlySet<string>; replyText?: string };
 export type FlowStep = { node_id: string; node_type: string; outcome: string };
 // Net changes against the facts: a tag maps to its new membership, a field to its new value.
 export type FlowChanges = { tags: Map<string, boolean>; fields: Map<string, unknown> };
 export type FlowPlan = { steps: FlowStep[]; changes: FlowChanges } & (
   | { status: "ended" }
-  | { status: "message"; text: string }
+  | { status: "message"; text: string; wait_node_id?: string }
   | { status: "failed"; failure_code: string }
   | { status: "waiting"; resume_node_id: string; delay_minutes: number }
 );
 
-// Reply waits (#32), follow checks and message buttons are refused when a flow is enabled rather
-// than skipped at run time.
+// Follow checks and message buttons are refused when a flow is enabled rather than skipped at run
+// time.
 const EXECUTABLE_TYPES = new Set([
   "instagram_comment",
   "has_tag",
@@ -26,7 +28,11 @@ const EXECUTABLE_TYPES = new Set([
   "remove_tag",
   "set_field",
   "delay",
+  "wait_for_reply",
 ]);
+// Where a stopped run continues: a delay on next, a reply wait on replied or timeout.
+export type ResumeEntry = { node_id: string; port: string };
+const RESUME_PORTS: Record<string, string[]> = { delay: ["next"], wait_for_reply: ["replied", "timeout"] };
 const MAX_TAGS = 20;
 const MAX_MESSAGE = 1000;
 const VARIABLE = /\{\{([^{}]*)\}\}/g;
@@ -55,9 +61,10 @@ export function flowExecutionErrors(document: FlowDocument, fieldTypes: Readonly
     )
       errors.push({ code: "unsupported_variable", node_id: node.id, path: `nodes[${index}].config.text` });
   });
-  const messages = new Set(document.nodes.filter((node) => node.type === "instagram_message").map((node) => node.id));
+  const byId = new Map(document.nodes.map((node) => [node.id, node]));
+  // The only node after a message is a reply wait; anything else would send or act after the reply.
   document.edges.forEach((edge, index) => {
-    if (messages.has(edge.from))
+    if (byId.get(edge.from)?.type === "instagram_message" && !leadsToWait(document, edge))
       errors.push({ code: "unsupported_after_message", edge_index: index, path: `edges[${index}]` });
   });
   return errors;
@@ -72,6 +79,10 @@ export function matchesFlowTrigger(document: FlowDocument, text: string): boolea
     match_mode: config.match_mode as "contains" | "exact" | "all",
     excluded_keywords: config.excluded_keywords as string[],
   });
+}
+
+function leadsToWait(document: FlowDocument, edge: FlowDocument["edges"][number]): boolean {
+  return edge.port === "next" && document.nodes.some((node) => node.id === edge.to && node.type === "wait_for_reply");
 }
 
 function fieldMatches(node: FlowNode, fields: ReadonlyMap<string, unknown>): boolean {
@@ -103,16 +114,18 @@ function render(
   return { text: rendered };
 }
 
-// Walks one published document from its trigger, or from the delay a waiting run stopped at. The
-// result depends only on the document, the facts and the input, so a run records exactly the path
-// that produced its message. Actions change the facts that later nodes read; a failure keeps the
-// changes of the actions before it. A delay ends this walk as waiting; resuming records only the
-// nodes after it, so the run's steps read as one path.
+// Walks one published document from its trigger, or from the delay or reply wait a run stopped at.
+// The result depends only on the document, the facts and the input, so a run records exactly the
+// path that produced its message. Actions change the facts that later nodes read; a failure keeps
+// the changes of the actions before it. A delay ends this walk as waiting, and a message followed by
+// a reply wait names the wait. Resuming after a delay records only the nodes after it; resuming at
+// a reply wait first records the port taken and, when the wait saves the reply, the save outcome, so
+// the run's steps read as one path.
 export function planFlowRun(
   document: FlowDocument,
   facts: ContactFacts,
   input: RunInput,
-  resumeFrom?: string,
+  resume?: ResumeEntry,
 ): FlowPlan {
   const tags = new Set(facts.tags);
   const fields = new Map(facts.fields);
@@ -125,17 +138,39 @@ export function planFlowRun(
     fields: new Map([...fields].filter(([id, value]) => facts.fields.get(id) !== value)),
   });
   const byId = new Map(document.nodes.map((node) => [node.id, node]));
-  const start = resumeFrom === undefined ? trigger(document) : byId.get(resumeFrom);
-  if (!start || (resumeFrom !== undefined && start.type !== "delay"))
+  const start = resume === undefined ? trigger(document) : byId.get(resume.node_id);
+  if (
+    !start ||
+    (resume !== undefined &&
+      !(Object.hasOwn(RESUME_PORTS, start.type) && RESUME_PORTS[start.type]!.includes(resume.port)))
+  )
     return { status: "failed", steps: [], failure_code: "invalid_definition", changes: changes() };
-  const steps: FlowStep[] =
-    resumeFrom === undefined ? [{ node_id: start.id, node_type: start.type, outcome: "next" }] : [];
+  const steps: FlowStep[] = [];
+  const afterWait = start.type === "wait_for_reply";
+  if (resume === undefined) steps.push({ node_id: start.id, node_type: start.type, outcome: "next" });
+  else if (afterWait) {
+    steps.push({ node_id: start.id, node_type: start.type, outcome: resume.port });
+    const target = start.config.save_field_id;
+    if (resume.port === "replied" && typeof target === "string") {
+      // A reply that cannot be stored is recorded on the wait and the run still takes replied.
+      const id = target.toLowerCase();
+      let outcome: string;
+      if (!input.writableFields.has(id)) outcome = "field_unavailable";
+      else if (!isValidFieldValue("text", input.replyText)) outcome = "reply_invalid";
+      else if (fields.get(id) === input.replyText) outcome = "unchanged";
+      else {
+        fields.set(id, input.replyText);
+        outcome = "set";
+      }
+      steps.push({ node_id: start.id, node_type: start.type, outcome });
+    }
+  }
   const fail = (node: FlowNode, code: string): FlowPlan => {
     steps.push({ node_id: node.id, node_type: node.type, outcome: code });
     return { status: "failed", steps, failure_code: code, changes: changes() };
   };
   let current = start;
-  let port = "next";
+  let port = resume?.port ?? "next";
   while (steps.length <= document.nodes.length) {
     const edge = document.edges.find((candidate) => candidate.from === current.id && candidate.port === port);
     if (!edge) return { status: "ended", steps, changes: changes() };
@@ -175,15 +210,20 @@ export function planFlowRun(
         delay_minutes: node.config.minutes as number,
         changes: changes(),
       };
-    } else if (
-      node.type === "instagram_message" &&
-      node.config.button_title === undefined &&
-      !document.edges.some((candidate) => candidate.from === node.id)
-    ) {
+    } else if (node.type === "instagram_message" && node.config.button_title === undefined && !afterWait) {
+      const outgoing = document.edges.filter((candidate) => candidate.from === node.id);
+      if (outgoing.some((candidate) => !leadsToWait(document, candidate))) return fail(node, "unsupported_node");
       const rendered = render(String(node.config.text), fields, input);
       if ("error" in rendered) return fail(node, rendered.error);
       steps.push({ node_id: node.id, node_type: node.type, outcome: "queued" });
-      return { status: "message", steps, text: rendered.text, changes: changes() };
+      const wait = outgoing[0]?.to;
+      return {
+        status: "message",
+        steps,
+        text: rendered.text,
+        ...(wait === undefined ? {} : { wait_node_id: wait }),
+        changes: changes(),
+      };
     } else return fail(node, "unsupported_node");
     steps.push({ node_id: node.id, node_type: node.type, outcome });
   }

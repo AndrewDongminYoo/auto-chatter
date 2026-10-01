@@ -53,6 +53,9 @@ const branching = flow(
     { id: "has", type: "has_tag", config: { tag: "vip" } },
     { id: "drop", type: "remove_tag", config: { tag: "cold" } },
     { id: "later", type: "delay", config: { minutes: 60 } },
+    { id: "answer", type: "wait_for_reply", config: { timeout_minutes: 1440, save_field_id: field } },
+    { id: "answered", type: "add_tag", config: { tag: "answered" } },
+    { id: "silent", type: "remove_tag", config: { tag: "answered" } },
   ],
   [
     { from: "start", port: "next", to: "follow" },
@@ -64,6 +67,9 @@ const branching = flow(
     { from: "check", port: "false", to: "has" },
     { from: "has", port: "true", to: "drop" },
     { from: "drop", port: "next", to: "later" },
+    { from: "no", port: "next", to: "answer" },
+    { from: "answer", port: "replied", to: "answered" },
+    { from: "answer", port: "timeout", to: "silent" },
   ],
 );
 
@@ -379,4 +385,118 @@ test("references expose the trigger and every field id used by configs and varia
     media_id: "1789",
     field_ids: [field, numberField].sort(),
   });
+});
+
+// start -> message -> wait, with the wait's ports leading to the given nodes.
+function replyWait(config: Record<string, unknown>, after: unknown[] = [], afterEdges: unknown[] = []) {
+  return flow(
+    [
+      { id: "m", type: "instagram_message", config: { text: "Reply with your size" } },
+      { id: "w", type: "wait_for_reply", config },
+      ...after,
+    ],
+    [{ from: "start", port: "next", to: "m" }, { from: "m", port: "next", to: "w" }, ...afterEdges],
+  );
+}
+
+test("a reply wait lasts a whole number of minutes up to 7 days and may save into a text field", () => {
+  assert.deepEqual(codes(replyWait({ timeout_minutes: 1 })), []);
+  assert.deepEqual(codes(replyWait({ timeout_minutes: 10080, save_field_id: field.toUpperCase() })), []);
+  for (const config of [
+    { timeout_minutes: 0 },
+    { timeout_minutes: 10081 },
+    { timeout_minutes: 1.5 },
+    { timeout_minutes: "60" },
+    {},
+    { timeout_minutes: 60, save_field_id: "not-a-uuid" },
+    { timeout_minutes: 60, save_field_id: null },
+    { timeout_minutes: 60, unit: "hours" },
+  ])
+    assert.deepEqual(codes(replyWait(config)), ["invalid_config"], JSON.stringify(config));
+  assert.deepEqual(validateFlowForPublish(replyWait({ timeout_minutes: 60, save_field_id: numberField }), context()), [
+    { code: "invalid_field_type", node_id: "w", path: "nodes[2].config" },
+  ]);
+  assert.deepEqual(codes(replyWait({ timeout_minutes: 60, save_field_id: "44444444-4444-4444-8444-444444444444" })), [
+    "unknown_field",
+  ]);
+  const ports = replyWait(
+    { timeout_minutes: 60 },
+    [{ id: "t", type: "add_tag", config: { tag: "x" } }],
+    [{ from: "w", port: "next", to: "t" }],
+  );
+  assert.deepEqual(codes(ports), ["invalid_port", "unreachable_node"]);
+});
+
+test("a reply wait is reached only from a message's next port", () => {
+  const direct = flow(
+    [{ id: "w", type: "wait_for_reply", config: { timeout_minutes: 60 } }],
+    [{ from: "start", port: "next", to: "w" }],
+  );
+  assert.deepEqual(validateFlowForPublish(direct, context()), [
+    { code: "wait_requires_message", edge_index: 0, path: "edges[0].from" },
+  ]);
+  const twoWays = flow(
+    [
+      { id: "has", type: "has_tag", config: { tag: "vip" } },
+      { id: "m", type: "instagram_message", config: { text: "Hi" } },
+      { id: "w", type: "wait_for_reply", config: { timeout_minutes: 60 } },
+    ],
+    [
+      { from: "start", port: "next", to: "has" },
+      { from: "has", port: "true", to: "m" },
+      { from: "has", port: "false", to: "w" },
+      { from: "m", port: "next", to: "w" },
+    ],
+  );
+  assert.deepEqual(codes(twoWays), ["wait_requires_message"]);
+  const chained = replyWait(
+    { timeout_minutes: 60 },
+    [{ id: "w2", type: "wait_for_reply", config: { timeout_minutes: 60 } }],
+    [{ from: "w", port: "replied", to: "w2" }],
+  );
+  assert.deepEqual(codes(chained), ["wait_requires_message"]);
+});
+
+test("no message may follow a reply wait, through actions, conditions or delays", () => {
+  assert.deepEqual(
+    codes(
+      replyWait(
+        { timeout_minutes: 60, save_field_id: field },
+        [
+          { id: "check", type: "field_equals", config: { field_id: field, field_operator: "is_set" } },
+          { id: "tag", type: "add_tag", config: { tag: "answered" } },
+          { id: "later", type: "delay", config: { minutes: 30 } },
+        ],
+        [
+          { from: "w", port: "replied", to: "check" },
+          { from: "check", port: "true", to: "tag" },
+          { from: "w", port: "timeout", to: "later" },
+        ],
+      ),
+    ),
+    [],
+  );
+  const followUp = replyWait(
+    { timeout_minutes: 60 },
+    [
+      { id: "later", type: "delay", config: { minutes: 30 } },
+      { id: "again", type: "instagram_message", config: { text: "Still there?" } },
+    ],
+    [
+      { from: "w", port: "timeout", to: "later" },
+      { from: "later", port: "next", to: "again" },
+    ],
+  );
+  assert.deepEqual(validateFlowForPublish(followUp, context()), [
+    { code: "message_after_wait", node_id: "again", path: "nodes[4]" },
+  ]);
+  // A loop back to the first message is both a cycle and a message after the wait.
+  const loop = replyWait({ timeout_minutes: 60 }, [], [{ from: "w", port: "timeout", to: "m" }]);
+  assert.deepEqual(codes(loop).sort(), ["immediate_cycle", "message_after_wait"]);
+});
+
+test("references include the field a reply wait saves into", () => {
+  const parsed = parseFlowDocument(replyWait({ timeout_minutes: 60, save_field_id: field.toUpperCase() }));
+  assert.ok("document" in parsed);
+  assert.deepEqual(flowReferences(parsed.document).field_ids, [field]);
 });
