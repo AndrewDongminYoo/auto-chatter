@@ -142,6 +142,10 @@ function resetSession() {
   byId("invites").replaceChildren();
   byId("invite-result").hidden = true;
   byId("invite-link").value = "";
+  byId("operations-section").hidden = true;
+  byId("operations-summary").textContent = "";
+  byId("operations-alerts").replaceChildren();
+  byId("operations").replaceChildren();
   contactsGeneration++;
   contactsDirty.clear();
   purgedContactConnections.clear();
@@ -650,6 +654,87 @@ function timeZoneControls() {
   byId("time-zone-readonly").hidden = editable || currentRole === undefined;
 }
 
+// Admins and owners see delivery metrics and alerts; the route refuses agents, so the section stays hidden for them.
+const operationAlertLabels = {
+  oldest_pending: (limits) => `발송 대기 ${limits.oldest_pending_minutes}분 초과`,
+  sending_dwell: (limits) => `발송 처리 ${limits.sending_dwell_minutes}분 초과`,
+  unknown_outcome: () => "결과 미확인 발송 있음",
+  token_expiring: (limits) => `토큰 만료 ${limits.token_expiry_days}일 이내`,
+  cron_stale: (limits) => `정기 작업이 ${limits.cron_stale_minutes}분 넘게 성공하지 않음`,
+};
+function operationAlert(name, limits) {
+  return badge(operationAlertLabels[name]?.(limits) ?? name, "warning");
+}
+function operationDuration(seconds) {
+  if (seconds === null || seconds === undefined) return "없음";
+  if (seconds < 60) return `${seconds}초`;
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60 ? `${minutes}분` : `${Math.floor(minutes / 60)}시간 ${minutes % 60}분`;
+}
+async function loadOperations() {
+  const generation = segmentsGeneration;
+  try {
+    const health = await api("/api/workspace/health");
+    if (generation !== segmentsGeneration) return;
+    const limits = health.thresholds;
+    const cron = health.last_cron_success_at
+      ? new Date(health.last_cron_success_at).toLocaleString("ko-KR")
+      : "기록 없음";
+    const summary = [
+      `${new Date(health.checked_at).toLocaleTimeString("ko-KR")} 확인 · 마지막 정기 작업 성공: ${cron}`,
+      ...(health.global_send_enabled ? [] : ["전체 발송이 중지되어 있어 발송 대기 경보는 표시하지 않습니다."]),
+    ].join(" · ");
+    byId("operations-summary").textContent = summary;
+    byId("operations-alerts").replaceChildren(...health.alerts.map((name) => operationAlert(name, limits)));
+    byId("operations").replaceChildren(
+      ...(health.connections.length
+        ? health.connections.map((connection) => {
+            const item = node("div", "", "item");
+            const badges = node("div", "", "badges");
+            badges.append(
+              ...(connection.alerts.length
+                ? connection.alerts.map((name) => operationAlert(name, limits))
+                : [badge("경보 없음")]),
+            );
+            item.append(
+              node("strong", connection.username ?? "이름 없는 계정"),
+              badges,
+              node(
+                "p",
+                `가장 오래 기다린 발송: ${operationDuration(connection.oldest_due_pending_seconds)} · 가장 오래 처리 중인 발송: ${operationDuration(connection.longest_sending_seconds)}`,
+                "hint",
+              ),
+              node(
+                "p",
+                `최근 24시간: 결과 미확인 ${connection.unknown_24h}건 · 실패 ${connection.failed_24h}건 · 차단 ${connection.blocked_24h}건`,
+                "hint",
+              ),
+              node(
+                "p",
+                [
+                  connection.token_expires_in_days === null
+                    ? "연결 토큰 없음"
+                    : connection.token_expires_in_days < 0
+                      ? "토큰 만료됨"
+                      : `토큰 만료까지 ${connection.token_expires_in_days}일`,
+                  ...(connection.send_paused_until
+                    ? [
+                        `발송 제한으로 ${new Date(connection.send_paused_until).toLocaleTimeString("ko-KR")}까지 일시 중지`,
+                      ]
+                    : []),
+                ].join(" · "),
+                "hint",
+              ),
+            );
+            return item;
+          })
+        : [node("p", "연결한 계정이 없습니다.", "hint")]),
+    );
+  } catch (error) {
+    if (generation === segmentsGeneration) notice(error.message, true);
+  }
+}
+
 async function loadWorkspace() {
   const generation = segmentsGeneration;
   const me = await api("/api/me");
@@ -661,6 +746,9 @@ async function loadWorkspace() {
   currentRole = membership.role;
   byId("time-zone-form").elements.time_zone.value = membership.time_zone ?? "";
   timeZoneControls();
+  const operationsVisible = currentRole === "owner" || currentRole === "admin";
+  byId("operations-section").hidden = !operationsVisible;
+  if (operationsVisible) void loadOperations();
   byId("members-section").hidden = currentRole !== "owner";
   if (currentRole === "owner") void loadMembers();
   if (generation !== segmentsGeneration) return;
@@ -1229,6 +1317,7 @@ byId("time-zone-form").addEventListener("submit", (event) => {
     notice(`시간대를 저장했습니다(${saved.time_zone}). 지금부터 정한 시각까지 기다리기 시작하는 실행에 적용됩니다.`);
   });
 });
+byId("operations-refresh").addEventListener("click", (event) => action(event.currentTarget, loadOperations));
 byId("copy-invite").addEventListener("click", async () => {
   const link = byId("invite-link");
   try {

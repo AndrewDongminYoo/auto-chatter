@@ -38,8 +38,9 @@ export const EXPORTED_TABLES: Record<string, { scope: "self" | "workspace" | "co
   data_deletion_records: { scope: "workspace" },
 };
 
-// OAuth states hold short-lived login secrets; workspace deletion evidence belongs to workspaces that no longer exist.
-export const EXCLUDED_TABLES = ["instagram_oauth_states", "workspace_deletion_records"];
+// OAuth states hold short-lived login secrets; workspace deletion evidence belongs to workspaces that no longer exist;
+// scheduled_steps is service-wide operations state with no workspace data.
+export const EXCLUDED_TABLES = ["instagram_oauth_states", "workspace_deletion_records", "scheduled_steps"];
 // What the export leaves out, derived from the table settings so the file cannot understate it.
 export const EXCLUDED_ITEMS = [
   ...Object.entries(EXPORTED_TABLES).flatMap(([table, { omit = [] }]) => omit.map((column) => `${table}.${column}`)),

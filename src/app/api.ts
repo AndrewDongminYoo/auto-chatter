@@ -41,6 +41,8 @@ import { archiveContactField, createContactField, listContactFields, saveContact
 import { recordConsentEvent } from "./channel-consent.ts";
 import { deleteConnectionData, listDataDeletions } from "./data-deletion.ts";
 import { exportWorkspace } from "./workspace-export.ts";
+import { failureCode, logOperation } from "./operations-log.ts";
+import { operationsHealth } from "./operations-health.ts";
 import {
   FLOW_REQUEST_BYTES,
   archiveFlow,
@@ -63,12 +65,24 @@ function instagramConnectAvailable(user: User, env: InstagramOAuthEnv): boolean 
     .some((email) => email.trim() !== "" && email.trim().toLowerCase() === user.email.toLowerCase());
 }
 
+// The reply is stored; the cron repairs the missing queue notification.
+function logManualNotificationFailure(correlationId: string, connectionId: string): void {
+  logOperation({
+    event: "queue_publish_failed",
+    code: "manual_reply_notification_failed",
+    correlation_id: correlationId,
+    connection_id: connectionId,
+  });
+}
+
 export async function appApi(
   request: Request,
   env: AuthEnv & AuthRateLimitEnv & InstagramOAuthEnv & { SEND_ENABLED?: string },
-  openPool: () => Pool,
+  openPool: (correlationId: string) => Pool,
   fetchImpl: typeof fetch = fetch,
   notifyReply?: (connectionId: string) => Promise<void>,
+  // The Worker passes the ID it already chose; otherwise cf-ray, or a fresh UUID when that header is missing.
+  correlationId: string = request.headers.get("cf-ray") ?? crypto.randomUUID(),
 ): Promise<Response> {
   try {
     const url = new URL(request.url);
@@ -104,7 +118,7 @@ export async function appApi(
       !instagramConnectAvailable(user, env)
     )
       throw new ApiError(403, "instagram_public_access_restricted");
-    const pool = openPool();
+    const pool = openPool(correlationId);
     try {
       if (url.pathname === "/api/instagram/connect" && request.method === "POST")
         return await beginInstagramOAuth(pool, user, env);
@@ -141,6 +155,8 @@ export async function appApi(
           },
         });
       }
+      if (url.pathname === "/api/workspace/health" && request.method === "GET")
+        return json(await operationsHealth(pool, user, env.SEND_ENABLED === "true"));
       if (url.pathname === "/api/connections" && request.method === "GET")
         return json({ connections: await listConnections(pool, user) });
       const consentEvent = /^\/api\/connections\/([^/]+)\/channel-consent-events$/.exec(url.pathname);
@@ -205,7 +221,7 @@ export async function appApi(
           try {
             await notifyReply?.(manual[1]!);
           } catch {
-            console.error("Manual reply notification failed; scheduled recovery required");
+            logManualNotificationFailure(correlationId, manual[1]!);
           }
           return json(resolution);
         }
@@ -222,7 +238,7 @@ export async function appApi(
         try {
           await notifyReply?.(manual[1]!);
         } catch {
-          console.error("Manual reply notification failed; scheduled recovery required");
+          logManualNotificationFailure(correlationId, manual[1]!);
         }
         return json(reply, 202);
       }
@@ -378,7 +394,12 @@ export async function appApi(
       return response;
     }
     if (error instanceof ApiError) return json({ error: error.message }, error.status);
-    // SQL/provider errors can contain submitted content or credentials.
+    // SQL/provider errors can contain submitted content or credentials, so only a fixed code is logged.
+    logOperation({
+      event: "request_failed",
+      code: failureCode(error),
+      correlation_id: correlationId,
+    });
     return json({ error: "service_unavailable" }, 503);
   }
 }

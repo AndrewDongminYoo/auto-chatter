@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { beginInstagramOAuth, finishInstagramOAuth } from "./instagram-oauth.ts";
-import { refreshDueInstagramTokens } from "./instagram-token-refresh.ts";
+import { refreshDueInstagramTokens, refreshDueInstagramTokensWithFailures } from "./instagram-token-refresh.ts";
 import { disconnectConnection, ensureWorkspace } from "./settings.ts";
 import { openSecret, sealSecret } from "./secrets.ts";
 import { ingestMessages } from "../instagram/follow-flow.ts";
@@ -334,8 +334,15 @@ test("refresh failure keeps the old token and a newer OAuth token wins a refresh
     calls++;
     return Response.json({ error: { code: 4 } }, { status: 400 });
   };
-  assert.equal(await refreshDueInstagramTokens(pool, env.TOKEN_ENCRYPTION_KEY, failed, now), 0);
-  assert.equal(await refreshDueInstagramTokens(pool, env.TOKEN_ENCRYPTION_KEY, failed, now), 0);
+  // The failed attempt is counted once; the next run within a day does not claim the connection again.
+  assert.deepEqual(await refreshDueInstagramTokensWithFailures(pool, env.TOKEN_ENCRYPTION_KEY, failed, now), {
+    refreshed: 0,
+    failed: 1,
+  });
+  assert.deepEqual(await refreshDueInstagramTokensWithFailures(pool, env.TOKEN_ENCRYPTION_KEY, failed, now), {
+    refreshed: 0,
+    failed: 0,
+  });
   assert.equal(calls, 1);
   assert.equal(
     (await pool.query("SELECT access_token_encrypted FROM instagram_connections WHERE id=$1", [connection])).rows[0]
@@ -354,7 +361,11 @@ test("refresh failure keeps the old token and a newer OAuth token wins a refresh
     }
     return Response.json({ user_id: "98765" });
   };
-  assert.equal(await refreshDueInstagramTokens(pool, env.TOKEN_ENCRYPTION_KEY, racing, later), 0);
+  // Losing to a newer OAuth token is not a refresh failure.
+  assert.deepEqual(await refreshDueInstagramTokensWithFailures(pool, env.TOKEN_ENCRYPTION_KEY, racing, later), {
+    refreshed: 0,
+    failed: 0,
+  });
   assert.equal(
     (await pool.query("SELECT access_token_encrypted FROM instagram_connections WHERE id=$1", [connection])).rows[0]
       .access_token_encrypted,
@@ -433,7 +444,10 @@ test("wrong encryption key cannot change the token or call Meta", async () => {
   const provider: typeof fetch = async () => {
     throw new Error("provider must not be called");
   };
-  assert.equal(await refreshDueInstagramTokens(pool, Buffer.alloc(32, 3).toString("base64"), provider), 0);
+  assert.deepEqual(
+    await refreshDueInstagramTokensWithFailures(pool, Buffer.alloc(32, 3).toString("base64"), provider),
+    { refreshed: 0, failed: 1 },
+  );
   assert.equal(
     (await pool.query("SELECT access_token_encrypted FROM instagram_connections WHERE id=$1", [connection])).rows[0]
       .access_token_encrypted,

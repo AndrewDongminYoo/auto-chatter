@@ -10,7 +10,12 @@ import {
   reconcileUnmatchedReplies,
 } from "./follow-flow.ts";
 import { createNodeFollowTransport, assertNodePrivateReplyAllowed } from "./node-delivery.ts";
-import { ProviderRateLimitedError, runPrivateReplyWorker, processNextPrivateReply } from "./reply-worker.ts";
+import {
+  ProviderRateLimitedError,
+  ProviderRejectedError,
+  runPrivateReplyWorker,
+  processNextPrivateReply,
+} from "./reply-worker.ts";
 import { recordChannelConsentEvent } from "./channel-consent.ts";
 const url = new URL(process.env.TEST_DATABASE_URL ?? "http://invalid");
 if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
@@ -167,6 +172,8 @@ test("a rule disabled during profile lookup prevents the POST", async () => {
   });
   assert.equal(sends, 0);
   assert.equal((await state()).status, "blocked");
+  // Outcomes keep their last claim time, which dates them in the 24-hour operations counts (#59).
+  assert.ok((await state()).attempt_started_at instanceof Date);
 });
 test("definite throttle retries with a connection pause; ambiguous POST never retries", async () => {
   await ingestMessages(pool, [incoming()]);
@@ -187,6 +194,7 @@ test("definite throttle retries with a connection pause; ambiguous POST never re
     },
   });
   assert.equal((await state()).status, "unknown");
+  assert.ok((await state()).attempt_started_at instanceof Date);
   assert.equal(
     await processNextFollowReply(pool, connection, {
       followStatus: async () => true,
@@ -198,6 +206,40 @@ test("definite throttle retries with a connection pause; ambiguous POST never re
   );
 });
 
+test("rejected and exhausted throttled sends keep their last claim time; a retry clears it", async () => {
+  await ingestMessages(pool, [incoming()]);
+  await processNextFollowReply(pool, connection, {
+    followStatus: async () => true,
+    send: async () => {
+      throw new ProviderRejectedError(10);
+    },
+  });
+  assert.equal((await state()).status, "failed");
+  assert.ok((await state()).attempt_started_at instanceof Date);
+  await pool.query(
+    "UPDATE instagram_follow_conversations SET status='pending',failure_code=NULL,next_attempt_at=now(),rate_limit_retries=3,attempt_started_at=NULL",
+  );
+  await processNextFollowReply(pool, connection, {
+    followStatus: async () => true,
+    send: async () => {
+      throw new ProviderRateLimitedError(4);
+    },
+  });
+  assert.equal((await state()).status, "failed");
+  assert.ok((await state()).attempt_started_at instanceof Date);
+  // A row that goes back to pending is no longer claimed.
+  await pool.query(
+    "UPDATE instagram_connections SET send_paused_until=NULL; UPDATE instagram_follow_conversations SET status='pending',next_attempt_at=now(),rate_limit_retries=0",
+  );
+  await processNextFollowReply(pool, connection, {
+    followStatus: async () => true,
+    send: async () => {
+      throw new ProviderRateLimitedError(4);
+    },
+  });
+  assert.equal((await state()).status, "pending");
+  assert.equal((await state()).attempt_started_at, null);
+});
 test("Node polling drains confirmed follow replies using its environment account", async () => {
   await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL");
   await ingestMessages(pool, [incoming()]);

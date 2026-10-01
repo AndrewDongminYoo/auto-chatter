@@ -10,6 +10,7 @@ import {
 import type { FollowTransport } from "./follow-transport.ts";
 import { deliveryRecipientOptedOut } from "./channel-consent.ts";
 import { evaluatePrivateReply } from "./reply-policy.ts";
+import { failureCode, logOperation } from "../app/operations-log.ts";
 
 export interface PrivateReplyRequest {
   attemptId?: string;
@@ -110,6 +111,7 @@ export async function processNextPrivateReply(
   transport: PrivateReplyTransport,
   now: () => Date = () => new Date(),
   connectionId: string,
+  correlationId?: string,
 ): Promise<boolean> {
   if (!connectionId) throw new Error("Instagram connection ID is required");
   const attemptId = randomUUID();
@@ -362,8 +364,14 @@ export async function processNextPrivateReply(
   if (recipientId) {
     try {
       await reconcileUnmatchedReplies(pool, { replyId: row.id });
-    } catch {
-      console.error("Early reply reconcile failed; scheduled recovery retries it");
+    } catch (error) {
+      // Scheduled recovery retries it.
+      logOperation({
+        event: "early_reply_reconcile_failed",
+        code: failureCode(error),
+        correlation_id: correlationId,
+        connection_id: row.connection_id,
+      });
     }
   }
   return true;
@@ -398,14 +406,22 @@ export async function runPrivateReplyWorker(
     throw new Error("recoveryIntervalMs must be a positive integer");
   const now = options.now ?? (() => new Date());
   const recover = async (at: Date) => {
+    const correlationId = randomUUID();
     await recoverStalePrivateReplies(pool, at, connectionId);
     if (options.follow) await recoverStaleFollowReplies(pool, at, connectionId);
     // This loop is the Node deployment's only schedule, so it also links and expires the DMs kept while
     // this connection's replies were being sent (#108).
     try {
       await reconcileUnmatchedReplies(pool, { connectionId });
-    } catch {
-      console.error("Early reply reconcile failed; the next recovery retries it");
+    } catch (error) {
+      // The next recovery retries it.
+      logOperation({
+        event: "early_reply_reconcile_failed",
+        code: failureCode(error),
+        correlation_id: correlationId,
+        connection_id: connectionId,
+        step: "early_reply_reconcile",
+      });
     }
     await clearExpiredUnmatchedReplies(pool, connectionId);
   };
