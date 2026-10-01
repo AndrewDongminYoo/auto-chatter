@@ -329,6 +329,131 @@ test("cron resumes a due flow run while sending is off and sends its reply once 
   assert.deepEqual(await rows(), [{ status: "sent", failure_code: null, rate_limit_retries: 0 }]);
 });
 
+// Flow runs whose private reply was sent to DM recipient 456 (comment-ask) and 457 (comment-quiet)
+// and which now wait for that person's reply; the quiet one's reply went out two hours ago.
+async function awaitingReplyRuns(): Promise<void> {
+  const workspace = "11111111-1111-4111-8111-111111111111";
+  const flow = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const version = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const definition = {
+    schema_version: 1,
+    nodes: [
+      {
+        id: "start",
+        type: "instagram_comment",
+        config: {
+          connection_id: connectionId,
+          media_id: "1789",
+          keywords: ["size"],
+          match_mode: "contains",
+          excluded_keywords: [],
+        },
+      },
+      { id: "ask", type: "instagram_message", config: { text: "Which size?" } },
+      { id: "wait", type: "wait_for_reply", config: { timeout_minutes: 60 } },
+      { id: "answered", type: "add_tag", config: { tag: "answered" } },
+      { id: "silent", type: "add_tag", config: { tag: "silent" } },
+    ],
+    edges: [
+      { from: "start", port: "next", to: "ask" },
+      { from: "ask", port: "next", to: "wait" },
+      { from: "wait", port: "replied", to: "answered" },
+      { from: "wait", port: "timeout", to: "silent" },
+    ],
+  };
+  await pool.query("INSERT INTO flows(id,workspace_id,name,draft) VALUES($1,$2,'Ask','{}')", [flow, workspace]);
+  await pool.query(
+    `INSERT INTO flow_versions(id,flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,published_by)
+     VALUES($1,$2,$3,1,0,$4,$5,'1789','99999999-9999-4999-8999-999999999999')`,
+    [version, flow, workspace, JSON.stringify(definition), connectionId],
+  );
+  await pool.query("UPDATE flows SET published_version_id=$2,enabled=true WHERE id=$1", [flow, version]);
+  for (const [comment, recipient, sentAgo] of [
+    ["comment-ask", "456", "1 minute"],
+    ["comment-quiet", "457", "2 hours"],
+  ]) {
+    const event = await pool.query<{ id: string }>(
+      `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+       VALUES($1,$2,$3,'1789',$4,'size') RETURNING id`,
+      [workspace, connectionId, comment, `sender-${recipient}`],
+    );
+    const run = await pool.query<{ id: string }>(
+      `INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,event_id,status,resume_node_id)
+       VALUES($1,$2,$3,$4,$5,'awaiting_reply','wait') RETURNING id`,
+      [workspace, connectionId, flow, version, event.rows[0]!.id],
+    );
+    await pool.query(
+      `INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,flow_run_id,comment_id,media_id,sender_id,private_reply_text,status,recipient_id,sent_at,provider_message_id)
+       VALUES($1,$2,$3,$4,$5,'1789',$6,'Which size?','sent',$7,now()-$8::interval,$9)`,
+      [
+        workspace,
+        connectionId,
+        event.rows[0]!.id,
+        run.rows[0]!.id,
+        comment,
+        `sender-${recipient}`,
+        recipient,
+        sentAgo,
+        `m-${comment}`,
+      ],
+    );
+  }
+}
+
+test("a webhook DM continues the run waiting for its reply and the cron times out the quiet one", async () => {
+  await awaitingReplyRuns();
+  const body = JSON.stringify({
+    object: "instagram",
+    entry: [
+      {
+        id: "123",
+        messaging: [
+          {
+            sender: { id: "456" },
+            recipient: { id: "123" },
+            timestamp: Date.now(),
+            message: { mid: "dm-1", text: "XL" },
+          },
+          {
+            sender: { id: "457" },
+            recipient: { id: "123" },
+            timestamp: Date.now(),
+            message: { mid: "dm-2", text: "L" },
+          },
+        ],
+      },
+    ],
+  });
+  const dm = () =>
+    new Request("https://example.test/webhooks/instagram", {
+      method: "POST",
+      body,
+      headers: { "x-hub-signature-256": "sha256=" + createHmac("sha256", "test-secret").update(body).digest("hex") },
+    });
+  assert.equal((await worker.fetch(dm(), env)).status, 200);
+  assert.equal((await worker.fetch(dm(), env)).status, 200);
+  const state = async () =>
+    (
+      await pool.query(
+        `SELECT reply.comment_id,run.status,array_agg(step.node_id||':'||step.outcome ORDER BY step.seq) FILTER (WHERE step.seq IS NOT NULL) AS steps
+         FROM flow_runs run JOIN private_reply_outbox reply ON reply.flow_run_id=run.id
+         LEFT JOIN flow_step_runs step ON step.run_id=run.id GROUP BY reply.comment_id,run.status ORDER BY reply.comment_id`,
+      )
+    ).rows;
+  // 457's message came after its wait ended, so only 456's run continues.
+  assert.deepEqual(await state(), [
+    { comment_id: "comment-ask", status: "ended", steps: ["wait:replied", "answered:added"] },
+    { comment_id: "comment-quiet", status: "awaiting_reply", steps: null },
+  ]);
+  env.SEND_ENABLED = "false";
+  await worker.scheduled({}, env);
+  assert.deepEqual(await state(), [
+    { comment_id: "comment-ask", status: "ended", steps: ["wait:replied", "answered:added"] },
+    { comment_id: "comment-quiet", status: "ended", steps: ["wait:timeout", "silent:added"] },
+  ]);
+  assert.equal(sends, 0);
+});
+
 test("a failed flow resume still lets the cron wake pending replies, then reports the failure", async () => {
   const queue = env.REPLY_QUEUE;
   env.REPLY_QUEUE = {

@@ -276,16 +276,19 @@ test("a resumed run continues after its delay with the facts read at resume time
   ]);
   // The reply hangs off vip's "true" port, so only a contact tagged after the comment gets it.
   document.edges = document.edges.map((edge) => (edge.from === "vip" ? { ...edge, port: "true" } : edge));
-  assert.equal(planFlowRun(document, noFacts, input, "wait").status, "ended");
-  assert.deepEqual(planFlowRun(document, { tags: new Set(["vip"]), fields: new Map() }, input, "wait"), {
-    status: "message",
-    text: "Thanks",
-    steps: [
-      { node_id: "vip", node_type: "has_tag", outcome: "true" },
-      { node_id: "reply", node_type: "instagram_message", outcome: "queued" },
-    ],
-    changes: { tags: new Map(), fields: new Map() },
-  });
+  assert.equal(planFlowRun(document, noFacts, input, { node_id: "wait", port: "next" }).status, "ended");
+  assert.deepEqual(
+    planFlowRun(document, { tags: new Set(["vip"]), fields: new Map() }, input, { node_id: "wait", port: "next" }),
+    {
+      status: "message",
+      text: "Thanks",
+      steps: [
+        { node_id: "vip", node_type: "has_tag", outcome: "true" },
+        { node_id: "reply", node_type: "instagram_message", outcome: "queued" },
+      ],
+      changes: { tags: new Map(), fields: new Map() },
+    },
+  );
 });
 
 test("a resumed run stops again at the next delay", () => {
@@ -293,7 +296,7 @@ test("a resumed run stops again at the next delay", () => {
     { id: "first", type: "delay", config: { minutes: 5 } },
     { id: "second", type: "delay", config: { minutes: 10020 } },
   ]);
-  const resumed = planFlowRun(document, noFacts, input, "first");
+  const resumed = planFlowRun(document, noFacts, input, { node_id: "first", port: "next" });
   assert.equal(resumed.status, "waiting");
   assert.equal(resumed.status === "waiting" && resumed.resume_node_id, "second");
   assert.equal(resumed.status === "waiting" && resumed.delay_minutes, 10020);
@@ -303,9 +306,152 @@ test("a resumed run stops again at the next delay", () => {
 test("resuming from a missing node or a node that is not a delay fails the run", () => {
   const document = chain([{ id: "wait", type: "delay", config: { minutes: 1 } }]);
   for (const from of ["gone", "reply", "start"]) {
-    const result = planFlowRun(document, noFacts, input, from);
+    const result = planFlowRun(document, noFacts, input, { node_id: from, port: "next" });
     assert.equal(result.status, "failed", from);
     assert.equal(result.status === "failed" && result.failure_code, "invalid_definition");
+    assert.deepEqual(result.steps, []);
+  }
+});
+
+// start -> reply -> wait (replied -> answered tag, timeout -> silent tag), with optional extra nodes.
+function waiting(config: Record<string, unknown> = { timeout_minutes: 60 }): FlowDocument {
+  const document = chain([], "What size do you need?");
+  document.nodes.push(
+    { id: "wait", type: "wait_for_reply", config },
+    { id: "answered", type: "add_tag", config: { tag: "answered" } },
+    { id: "silent", type: "add_tag", config: { tag: "silent" } },
+  );
+  document.edges.push(
+    { from: "reply", port: "next", to: "wait" },
+    { from: "wait", port: "replied", to: "answered" },
+    { from: "wait", port: "timeout", to: "silent" },
+  );
+  return document;
+}
+
+test("a message followed by a reply wait queues the message and names the wait", () => {
+  const document = waiting();
+  assert.deepEqual(flowExecutionErrors(document, types), []);
+  assert.deepEqual(plan(document), {
+    status: "message",
+    text: "What size do you need?",
+    wait_node_id: "wait",
+    steps: [
+      { node_id: "start", node_type: "instagram_comment", outcome: "next" },
+      { node_id: "reply", node_type: "instagram_message", outcome: "queued" },
+    ],
+    changes: { tags: new Map(), fields: new Map() },
+  });
+});
+
+test("the enable check allows a message only to lead into a reply wait", () => {
+  const document = waiting();
+  document.nodes.push({ id: "tag", type: "add_tag", config: { tag: "x" } });
+  document.edges[document.edges.findIndex((edge) => edge.from === "reply")] = {
+    from: "reply",
+    port: "next",
+    to: "tag",
+  };
+  assert.deepEqual(flowExecutionErrors(document, types), [
+    { code: "unsupported_after_message", edge_index: 1, path: "edges[1]" },
+  ]);
+  assert.equal(plan(document).status, "failed");
+});
+
+test("a reply resumes on the replied port and saves the reply text into the field", () => {
+  const document = waiting({ timeout_minutes: 60, save_field_id: textField.toUpperCase() });
+  document.nodes.push({
+    id: "check",
+    type: "field_equals",
+    config: { field_id: textField, field_operator: "eq", field_value: "XL" },
+  });
+  document.edges = document.edges.map((edge) => (edge.port === "replied" ? { ...edge, to: "check" } : edge));
+  document.edges.push({ from: "check", port: "true", to: "answered" });
+  const resumed = planFlowRun(document, noFacts, { ...input, replyText: "XL" }, { node_id: "wait", port: "replied" });
+  assert.deepEqual(resumed, {
+    status: "ended",
+    steps: [
+      { node_id: "wait", node_type: "wait_for_reply", outcome: "replied" },
+      { node_id: "wait", node_type: "wait_for_reply", outcome: "set" },
+      { node_id: "check", node_type: "field_equals", outcome: "true" },
+      { node_id: "answered", node_type: "add_tag", outcome: "added" },
+    ],
+    changes: { tags: new Map([["answered", true]]), fields: new Map([[textField, "XL"]]) },
+  });
+  const same = planFlowRun(
+    document,
+    { tags: new Set(), fields: new Map([[textField, "XL"]]) },
+    { ...input, replyText: "XL" },
+    { node_id: "wait", port: "replied" },
+  );
+  assert.deepEqual(same.steps[1], { node_id: "wait", node_type: "wait_for_reply", outcome: "unchanged" });
+});
+
+test("a reply that cannot be saved is recorded and the run continues on replied", () => {
+  const document = waiting({ timeout_minutes: 60, save_field_id: textField });
+  const cases: [Partial<typeof input> & { replyText: string }, string][] = [
+    [{ replyText: "x".repeat(1001) }, "reply_invalid"],
+    [{ replyText: "bad\u0000byte" }, "reply_invalid"],
+    [{ replyText: "XL", writableFields: new Set() }, "field_unavailable"],
+  ];
+  for (const [overrides, outcome] of cases) {
+    const resumed = planFlowRun(document, noFacts, { ...input, ...overrides }, { node_id: "wait", port: "replied" });
+    assert.equal(resumed.status, "ended", outcome);
+    assert.deepEqual(resumed.steps, [
+      { node_id: "wait", node_type: "wait_for_reply", outcome: "replied" },
+      { node_id: "wait", node_type: "wait_for_reply", outcome },
+      { node_id: "answered", node_type: "add_tag", outcome: "added" },
+    ]);
+    assert.deepEqual(resumed.changes.fields, new Map());
+  }
+  const multiline = planFlowRun(
+    document,
+    noFacts,
+    { ...input, replyText: "line one\nline two" },
+    { node_id: "wait", port: "replied" },
+  );
+  assert.equal(multiline.steps[1]!.outcome, "set");
+});
+
+test("a timeout resumes on the timeout port without saving anything", () => {
+  const document = waiting({ timeout_minutes: 60, save_field_id: textField });
+  assert.deepEqual(planFlowRun(document, noFacts, input, { node_id: "wait", port: "timeout" }), {
+    status: "ended",
+    steps: [
+      { node_id: "wait", node_type: "wait_for_reply", outcome: "timeout" },
+      { node_id: "silent", node_type: "add_tag", outcome: "added" },
+    ],
+    changes: { tags: new Map([["silent", true]]), fields: new Map() },
+  });
+});
+
+test("after a reply wait a delay waits again, and a message is never queued", () => {
+  const document = waiting();
+  document.nodes.push(
+    { id: "later", type: "delay", config: { minutes: 30 } },
+    { id: "again", type: "instagram_message", config: { text: "Still there?" } },
+  );
+  document.edges = document.edges.map((edge) => (edge.port === "timeout" ? { ...edge, to: "later" } : edge));
+  const timedOut = planFlowRun(document, noFacts, input, { node_id: "wait", port: "timeout" });
+  assert.equal(timedOut.status, "waiting");
+  assert.equal(timedOut.status === "waiting" && timedOut.resume_node_id, "later");
+  // Publish rejects a message after a wait; the runtime still refuses one reached on the same walk.
+  document.edges = document.edges.map((edge) => (edge.port === "replied" ? { ...edge, to: "again" } : edge));
+  const replied = planFlowRun(document, noFacts, input, { node_id: "wait", port: "replied" });
+  assert.equal(replied.status === "failed" && replied.failure_code, "unsupported_node");
+});
+
+test("a resume entry must name a delay's next port or a reply wait's replied or timeout port", () => {
+  const document = waiting();
+  document.nodes.push({ id: "pause", type: "delay", config: { minutes: 5 } });
+  for (const entry of [
+    { node_id: "wait", port: "next" },
+    { node_id: "pause", port: "replied" },
+    { node_id: "pause", port: "timeout" },
+    { node_id: "reply", port: "next" },
+  ]) {
+    const result = planFlowRun(document, noFacts, input, entry);
+    assert.equal(result.status === "failed" && result.failure_code, "invalid_definition", JSON.stringify(entry));
     assert.deepEqual(result.steps, []);
   }
 });

@@ -5,6 +5,7 @@ import type { FollowTransport } from "./follow-transport.ts";
 import { storeInboxMessage } from "./inbox.ts";
 import { deliveryRecipientOptedOut } from "./channel-consent.ts";
 import { PreSendVerificationError, ProviderRateLimitedError, ProviderRejectedError } from "./reply-worker.ts";
+import { resumeRepliedFlowRun } from "./store.ts";
 
 const normalized = (text: string) => text.normalize("NFC").trim().toLowerCase();
 export async function ingestMessages(
@@ -23,6 +24,8 @@ export async function ingestMessages(
         message.timestamp.getTime() <= now.getTime() - 24 * 3600000
       )
         continue;
+      // A typed DM (not a button postback) answers the flow run waiting for this person's reply.
+      if (!message.confirmationReplyId) await resumeRepliedFlowRun(client, message);
       // Most recent eligible first DM wins when more than one automation is awaiting the same person.
       const result = await client.query(
         `SELECT flow.reply_id,flow.confirmation_keyword,flow.last_message_at,flow.connection_id,
