@@ -13,16 +13,17 @@
 플로 문서는 `{schema_version: 1, nodes: [{id, type, config}], edges: [{from, port, to}]}` 형식입니다.
 노드 ID·타입·포트는 영문자, 숫자, `_`, `-`로 된 40자 이하 문자열입니다.
 
-| 분류   | 타입                     | 설정                                                                                                           | 출력 포트        |
-| ------ | ------------------------ | -------------------------------------------------------------------------------------------------------------- | ---------------- |
-| 트리거 | `instagram_comment`      | `connection_id`, `media_id`, `keywords`, `match_mode`, `excluded_keywords` (기존 댓글 규칙과 같은 상한과 모드) | `next`           |
-| 메시지 | `instagram_message`      | `text` (1,000자 이하), 선택 `button_title` (20자 이하, 버튼이 있으면 본문 640자 이하)                          | `next`           |
-| 조건   | `follows_account`        | 빈 설정                                                                                                        | `true` / `false` |
-| 조건   | `has_tag`                | `tag` (연락처 태그와 같은 정규화)                                                                              | `true` / `false` |
-| 조건   | `field_equals`           | `field_id`, `field_operator` (`eq`, `is_set`, `is_unset`), `eq`일 때 `field_value`                             | `true` / `false` |
-| 동작   | `add_tag` / `remove_tag` | `tag`                                                                                                          | `next`           |
-| 동작   | `set_field`              | `field_id`, 필드 타입에 맞는 `value`                                                                           | `next`           |
-| 대기   | `delay`                  | `minutes` (1~10,020 정수, [지연과 재개](2026-09-30-flow-runs.md#지연과-재개))                                  | `next`           |
+| 분류   | 타입                     | 설정                                                                                                                | 출력 포트             |
+| ------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| 트리거 | `instagram_comment`      | `connection_id`, `media_id`, `keywords`, `match_mode`, `excluded_keywords` (기존 댓글 규칙과 같은 상한과 모드)      | `next`                |
+| 메시지 | `instagram_message`      | `text` (1,000자 이하), 선택 `button_title` (20자 이하, 버튼이 있으면 본문 640자 이하)                               | `next`                |
+| 조건   | `follows_account`        | 빈 설정                                                                                                             | `true` / `false`      |
+| 조건   | `has_tag`                | `tag` (연락처 태그와 같은 정규화)                                                                                   | `true` / `false`      |
+| 조건   | `field_equals`           | `field_id`, `field_operator` (`eq`, `is_set`, `is_unset`), `eq`일 때 `field_value`                                  | `true` / `false`      |
+| 동작   | `add_tag` / `remove_tag` | `tag`                                                                                                               | `next`                |
+| 동작   | `set_field`              | `field_id`, 필드 타입에 맞는 `value`                                                                                | `next`                |
+| 대기   | `delay`                  | `minutes` (1~10,020 정수, [지연과 재개](2026-09-30-flow-runs.md#지연과-재개))                                       | `next`                |
+| 대기   | `wait_for_reply`         | `timeout_minutes` (1~10,080 정수), 선택 `save_field_id` (text 필드, [응답 대기](2026-09-30-flow-runs.md#응답-대기)) | `replied` / `timeout` |
 
 트리거는 정확히 하나이며 들어오는 연결을 가질 수 없습니다.
 출력 포트 하나에는 연결을 하나만 둘 수 있고, 비어 있는 포트는 해당 경로의 종료를 뜻합니다.
@@ -40,9 +41,11 @@
 
 - 알 수 없는 노드 타입, 타입별 설정, 누락된 연결 대상, 타입에 없는 포트, 같은 포트의 중복 연결
 - 트리거 개수, 트리거로 들어오는 연결, 트리거에서 도달할 수 없는 노드
-- 입력을 기다리는 노드를 거치지 않는 순환. 지연(`delay`)은 시간만 기다리므로 여기에 해당하지 않으며, 입력을 기다리는 노드가 아직 없으므로 모든 순환을 거부합니다.
+- 입력을 기다리는 노드를 거치지 않는 순환. 지연(`delay`)은 시간만 기다리므로 여기에 해당하지 않습니다. 응답 대기(`wait_for_reply`)는 아래 두 규칙 때문에 순환을 닫을 수 없으므로, 모든 순환을 거부합니다.
+- 응답 대기로 들어오는 연결은 메시지 노드의 `next` 포트에서만 올 수 있습니다(`wait_requires_message`).
+- 응답 대기에서 도달할 수 있는 메시지 노드가 없어야 합니다(`message_after_wait`). 대기 뒤에는 동작, 조건, 지연만 둘 수 있습니다.
 - 메시지로 가는 경로의 지연 합계가 지연 상한을 넘는지 여부(`delay_exceeds_reply_window`)
-- 변수 문법과, 작업 공간의 보관되지 않은 필드만 참조하는지 여부, 필드 타입에 맞는 값
+- 변수 문법과, 작업 공간의 보관되지 않은 필드만 참조하는지 여부, 필드 타입에 맞는 값. 응답 대기의 `save_field_id`는 text 필드여야 합니다(`invalid_field_type`).
 - 트리거 연결이 같은 작업 공간 소유이고 활성인지 여부
 - `follows_account`를 쓰면 트리거 연결에 OAuth 자격 증명이 있는지 여부. 환경 변수로 관리하는 연결은 DB만으로 로그인 방식을 알 수 없으므로 거부합니다.
 - 같은 연결·게시물에 켜진 기존 댓글 규칙(`legacy_rule_conflict`)이나 보관되지 않은 다른 발행 플로(`flow_trigger_conflict`)가 있는지 여부
@@ -73,6 +76,7 @@
 기존 댓글 규칙을 켜는 저장도 같은 연결 행을 잠그고, 보관되지 않은 발행 플로가 같은 게시물을 쓰면 `409 flow_trigger_conflict`로 거부합니다.
 규칙을 끄는 저장과 규칙 워커의 동작은 바뀌지 않습니다.
 발행은 참조 필드 행을 공유 잠금으로 읽고, 필드 보관은 현재 발행 버전이 그 필드를 참조하면 `409 field_in_use`로 거부합니다.
+응답 대기의 `save_field_id`도 참조 필드에 포함됩니다.
 
 ## API
 
