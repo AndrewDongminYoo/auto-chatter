@@ -5,6 +5,7 @@ import { Pool } from "pg";
 import { appApi } from "./api.ts";
 import { ingestComments, resumeDueFlowRuns } from "../instagram/store.ts";
 import { processNextPrivateReply, type PrivateReplyTransport } from "../instagram/reply-worker.ts";
+import { lockContact } from "./contact-fields.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
@@ -222,6 +223,32 @@ test("a second delay sets a new due time and the run resumes twice", async () =>
     run!.steps.map((step) => step.outcome),
     ["next", "added", "waiting", "true", "added", "waiting", "queued"],
   );
+});
+
+test("the next delay counts from when the run reaches it, not from when the resume began", async () => {
+  await enabledFlow(delayedDocument({ second: true }));
+  await comment("comment-1", "sender-1");
+  await tag("sender-1", ["lead", "vip"]);
+  await makeDue();
+  const holder = await pool.connect();
+  let finishedAt: Date;
+  try {
+    // A manual edit holding the contact lock makes the resume wait before it reaches the second delay.
+    await holder.query("BEGIN");
+    await lockContact(holder, connectionId, "sender-1");
+    const resumed = resumeDueFlowRuns(pool).then((count) => {
+      finishedAt = new Date();
+      return count;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await holder.query("COMMIT");
+    assert.equal(await resumed, 1);
+  } finally {
+    holder.release();
+  }
+  const row = (await pool.query<{ resume_at: Date }>("SELECT resume_at FROM flow_runs")).rows[0]!;
+  // The second delay is 5 minutes; the lock wait must not shorten it.
+  assert.ok(row.resume_at.getTime() - finishedAt!.getTime() >= 5 * 60_000 - 500, String(row.resume_at));
 });
 
 test("a flow turned off during the delay cancels the run and stays cancelled when turned on again", async () => {

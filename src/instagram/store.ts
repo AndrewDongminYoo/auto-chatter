@@ -140,7 +140,7 @@ async function startFlowRun(
       };
   const runs = await client.query<{ id: string }>(
     `INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,event_id,status,failure_code,resume_at,resume_node_id)
-     VALUES($1,$2,$3,$4,$5,$6,$7,now()+make_interval(mins=>$8),$9) ON CONFLICT(flow_id,event_id) DO NOTHING RETURNING id`,
+     VALUES($1,$2,$3,$4,$5,$6,$7,clock_timestamp()+make_interval(mins=>$8),$9) ON CONFLICT(flow_id,event_id) DO NOTHING RETURNING id`,
     [
       connection.workspace_id,
       connection.id,
@@ -320,9 +320,11 @@ async function resumeFlowRun(client: PoolClient, runId: string, connectionId: st
   );
   const run = claimed.rows[0];
   if (!run) return false;
+  // A delay counts from when the run reaches it: clock_timestamp(), not the transaction's now(), so
+  // time spent waiting for locks is not taken out of the next wait.
   const finish = (status: string, failureCode: string | null, delayMinutes: number | null, resumeNode: string | null) =>
     client.query(
-      `UPDATE flow_runs SET status=$2,failure_code=$3,resume_at=now()+make_interval(mins=>$4),resume_node_id=$5
+      `UPDATE flow_runs SET status=$2,failure_code=$3,resume_at=clock_timestamp()+make_interval(mins=>$4),resume_node_id=$5
        WHERE id=$1 AND status='waiting'`,
       [runId, status, failureCode, delayMinutes, resumeNode],
     );
