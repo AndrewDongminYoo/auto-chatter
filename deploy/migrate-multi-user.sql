@@ -30,5 +30,6 @@ BEGIN;
 \ir ../db/migrations/028_unmatched_replies.sql
 \ir ../db/migrations/029_conversation_assignment.sql
 \ir ../db/migrations/030_scheduled_steps.sql
+\ir ../db/migrations/031_flow_webhooks.sql
 \ir supabase-access.sql
 COMMIT;

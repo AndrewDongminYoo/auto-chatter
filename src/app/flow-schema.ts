@@ -8,6 +8,13 @@ export type FlowError = { code: string; node_id?: string; edge_index?: number; p
 export type PublishContext = {
   connection: { id: string; active: boolean; oauth: boolean } | null;
   fields: Map<string, string>;
+  // The workspace's active webhook endpoints among those the draft names.
+  endpoints: ReadonlySet<string>;
+  // Reply text never leaves through a webhook. Among the fields the draft names: those any published
+  // version of the workspace saves a reply into, and those a webhook node of another flow's current
+  // version sends.
+  replyFields: ReadonlySet<string>;
+  webhookFields: ReadonlySet<string>;
   legacyRuleEnabled: boolean;
   otherFlowPublished: boolean;
 };
@@ -29,6 +36,7 @@ const PORTS: Record<string, string[]> = {
   delay: ["next"],
   wait_until: ["next"],
   wait_for_reply: ["replied", "timeout"],
+  webhook: ["next"],
 };
 // Own-property lookup, so names such as "constructor" are unknown types rather than prototype members.
 function portsOf(type: string): string[] | undefined {
@@ -52,6 +60,8 @@ const MAX_REPLY_WAIT_MINUTES = 7 * 24 * 60;
 // as comment_expired by reply-policy.ts before the send, never sent late.
 const TIME_WAIT_MINUTES = 26 * 60;
 const WALL_CLOCK_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+// The most custom fields one webhook node sends (service policy).
+const MAX_WEBHOOK_FIELDS = 20;
 
 function error(code: string, path: string, extra: { node_id?: string; edge_index?: number } = {}): FlowError {
   return { code, ...extra, path };
@@ -167,6 +177,16 @@ function validConfig(node: FlowNode): boolean {
         (config.timeout_minutes as number) <= MAX_REPLY_WAIT_MINUTES &&
         (config.save_field_id === undefined || isUuid(config.save_field_id))
       );
+    case "webhook":
+      return (
+        exactKeys(config, ["endpoint_id", "field_ids", "include_tags"]) &&
+        isUuid(config.endpoint_id) &&
+        typeof config.include_tags === "boolean" &&
+        Array.isArray(config.field_ids) &&
+        config.field_ids.length <= MAX_WEBHOOK_FIELDS &&
+        config.field_ids.every(isUuid) &&
+        new Set(config.field_ids.map((id: string) => id.toLowerCase())).size === config.field_ids.length
+      );
     default:
       return false;
   }
@@ -196,14 +216,47 @@ function fieldErrors(node: FlowNode, fields: Map<string, string>, path: string):
   return [];
 }
 
-// A reply is saved as text, so the field it goes into must be an active text field.
-function saveFieldErrors(node: FlowNode, fields: Map<string, string>, path: string): FlowError[] {
+// The fields the reply waits of a document save the reply DM into, in lower case.
+export function replySaveFields(document: Pick<FlowDocument, "nodes">): Set<string> {
+  return new Set(
+    document.nodes.flatMap((node) =>
+      node.type === "wait_for_reply" && typeof node.config.save_field_id === "string"
+        ? [node.config.save_field_id.toLowerCase()]
+        : [],
+    ),
+  );
+}
+
+// A reply is saved as text, so the field it goes into must be an active text field, and not one that
+// another flow's webhook node sends.
+function saveFieldErrors(node: FlowNode, context: PublishContext, path: string): FlowError[] {
   const id = node.config.save_field_id;
   if (typeof id !== "string") return [];
-  const type = fields.get(id.toLowerCase());
+  const type = context.fields.get(id.toLowerCase());
   if (!type) return [error("unknown_field", path, { node_id: node.id })];
   if (type !== "text") return [error("invalid_field_type", path, { node_id: node.id })];
+  if (context.webhookFields.has(id.toLowerCase()))
+    return [error("reply_field_not_sendable", path, { node_id: node.id })];
   return [];
+}
+
+// A webhook node sends to one of the workspace's active endpoints, and only fields that are not archived.
+// It sends no field that this draft or a published version saves a reply into (replyFields).
+function webhookErrors(
+  node: FlowNode,
+  context: PublishContext,
+  replyFields: ReadonlySet<string>,
+  path: string,
+): FlowError[] {
+  const errors: FlowError[] = [];
+  const ids = (node.config.field_ids as string[]).map((id) => id.toLowerCase());
+  if (!context.endpoints.has(String(node.config.endpoint_id).toLowerCase()))
+    errors.push(error("endpoint_unavailable", `${path}.endpoint_id`, { node_id: node.id }));
+  if (ids.some((id) => !context.fields.has(id)))
+    errors.push(error("unknown_field", `${path}.field_ids`, { node_id: node.id }));
+  if (ids.some((id) => replyFields.has(id)))
+    errors.push(error("reply_field_not_sendable", `${path}.field_ids`, { node_id: node.id }));
+  return errors;
 }
 
 // The longest total delay on any path into each node, including the node's own delay or time wait.
@@ -254,6 +307,7 @@ export function validateFlowForPublish(input: unknown, context: PublishContext):
   const errors: FlowError[] = [];
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const configValid = new Map<string, boolean>();
+  const replyFields = new Set([...context.replyFields, ...replySaveFields(parsed.document)]);
   nodes.forEach((node, index) => {
     const path = `nodes[${index}].config`;
     if (!portsOf(node.type)) {
@@ -268,7 +322,8 @@ export function validateFlowForPublish(input: unknown, context: PublishContext):
     }
     if (node.type === "set_field" || node.type === "field_equals")
       errors.push(...fieldErrors(node, context.fields, path));
-    if (node.type === "wait_for_reply") errors.push(...saveFieldErrors(node, context.fields, path));
+    if (node.type === "wait_for_reply") errors.push(...saveFieldErrors(node, context, path));
+    if (node.type === "webhook") errors.push(...webhookErrors(node, context, replyFields, path));
     if (node.type === "instagram_message")
       errors.push(...variableErrors(String(node.config.text), context.fields, `${path}.text`, node.id));
   });
@@ -360,10 +415,17 @@ export function flowReferences(document: FlowDocument): {
   connection_id: string | null;
   media_id: string | null;
   field_ids: string[];
+  endpoint_ids: string[];
 } {
   const trigger = document.nodes.find((node) => node.type === "instagram_comment");
   const fields = new Set<string>();
+  const endpoints = new Set<string>();
   for (const node of document.nodes) {
+    if (node.type === "webhook") {
+      if (isUuid(node.config.endpoint_id)) endpoints.add(node.config.endpoint_id.toLowerCase());
+      if (Array.isArray(node.config.field_ids))
+        for (const id of node.config.field_ids) if (isUuid(id)) fields.add(id.toLowerCase());
+    }
     if ((node.type === "set_field" || node.type === "field_equals") && isUuid(node.config.field_id))
       fields.add(node.config.field_id.toLowerCase());
     if (node.type === "wait_for_reply" && isUuid(node.config.save_field_id))
@@ -376,5 +438,6 @@ export function flowReferences(document: FlowDocument): {
     connection_id: isUuid(trigger?.config.connection_id) ? trigger.config.connection_id.toLowerCase() : null,
     media_id: typeof trigger?.config.media_id === "string" ? trigger.config.media_id : null,
     field_ids: [...fields].sort(),
+    endpoint_ids: [...endpoints].sort(),
   };
 }

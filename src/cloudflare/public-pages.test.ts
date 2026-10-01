@@ -59,6 +59,12 @@ for (const [pathname, title] of [
       assert.ok(html.includes("응답 DM의 본문을 받은 지 15분이 지난 뒤 정기 정리 작업에서 지우는 것 외에는"));
     if (pathname === "/privacy") assert.ok(!html.includes("최대 15분"));
     if (pathname === "/privacy") assert.ok(html.includes("그 브라우저 탭이 수락할 때까지 링크를 임시로 보관하며"));
+    if (pathname === "/privacy")
+      assert.ok(
+        html.includes(
+          "<p>계정 관리자가 플로에 외부 전송을 설정하면, 지정한 태그·사용자 정의 필드 값과 처리 식별자를 관리자가 지정한 외부 주소로 전송합니다. 댓글·DM 본문과 Instagram 식별자는 전송하지 않습니다.</p>",
+        ),
+      );
   });
 
   test(`${pathname} supports HEAD and rejects write methods`, async () => {

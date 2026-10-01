@@ -5,6 +5,7 @@ import { flowReferences, parseFlowDocument, validateFlowForPublish, type Publish
 const connection = "11111111-1111-4111-8111-111111111111";
 const field = "22222222-2222-4222-8222-222222222222";
 const numberField = "33333333-3333-4333-8333-333333333333";
+const endpoint = "44444444-4444-4444-8444-444444444444";
 
 function context(overrides: Partial<PublishContext> = {}): PublishContext {
   return {
@@ -13,6 +14,9 @@ function context(overrides: Partial<PublishContext> = {}): PublishContext {
       [field, "text"],
       [numberField, "number"],
     ]),
+    endpoints: new Set([endpoint]),
+    replyFields: new Set(),
+    webhookFields: new Set(),
     legacyRuleEnabled: false,
     otherFlowPublished: false,
     ...overrides,
@@ -458,6 +462,7 @@ test("references expose the trigger and every field id used by configs and varia
     connection_id: connection,
     media_id: "1789",
     field_ids: [field, numberField].sort(),
+    endpoint_ids: [],
   });
 });
 
@@ -567,6 +572,144 @@ test("no message may follow a reply wait, through actions, conditions or delays"
   // A loop back to the first message is both a cycle and a message after the wait.
   const loop = replyWait({ timeout_minutes: 60 }, [], [{ from: "w", port: "timeout", to: "m" }]);
   assert.deepEqual(codes(loop).sort(), ["immediate_cycle", "message_after_wait"]);
+});
+
+function webhook(config: unknown) {
+  return flow([{ id: "hook", type: "webhook", config }], [{ from: "start", port: "next", to: "hook" }]);
+}
+
+test("a webhook node names an endpoint, the fields to send and whether tags are sent", () => {
+  assert.deepEqual(codes(webhook({ endpoint_id: endpoint, field_ids: [], include_tags: false })), []);
+  assert.deepEqual(
+    codes(webhook({ endpoint_id: endpoint.toUpperCase(), field_ids: [field, numberField], include_tags: true })),
+    [],
+  );
+  for (const config of [
+    {},
+    { endpoint_id: endpoint, field_ids: [field] },
+    { endpoint_id: endpoint, include_tags: true },
+    { endpoint_id: "not-a-uuid", field_ids: [], include_tags: false },
+    { endpoint_id: endpoint, field_ids: field, include_tags: false },
+    { endpoint_id: endpoint, field_ids: ["city"], include_tags: false },
+    { endpoint_id: endpoint, field_ids: [field, field.toUpperCase()], include_tags: false },
+    { endpoint_id: endpoint, field_ids: [], include_tags: "yes" },
+    { endpoint_id: endpoint, field_ids: [], include_tags: false, url: "https://example.test/hook" },
+    {
+      endpoint_id: endpoint,
+      field_ids: Array.from({ length: 21 }, (_, index) => `${field.slice(0, -2)}${String(index).padStart(2, "0")}`),
+      include_tags: false,
+    },
+  ])
+    assert.deepEqual(codes(webhook(config)), ["invalid_config"], JSON.stringify(config));
+  // A draft is saved with any config; only publishing checks it.
+  assert.ok("document" in parseFlowDocument(webhook({ endpoint_id: "later" })));
+});
+
+test("publishing a webhook node needs an active endpoint of the workspace and fields that are not archived", () => {
+  const config = { endpoint_id: endpoint, field_ids: [field], include_tags: true };
+  assert.deepEqual(validateFlowForPublish(webhook(config), context({ endpoints: new Set() })), [
+    { code: "endpoint_unavailable", node_id: "hook", path: "nodes[1].config.endpoint_id" },
+  ]);
+  assert.deepEqual(validateFlowForPublish(webhook(config), context({ fields: new Map() })), [
+    { code: "unknown_field", node_id: "hook", path: "nodes[1].config.field_ids" },
+  ]);
+  assert.deepEqual(codes(webhook({ ...config, field_ids: [field, "55555555-5555-4555-8555-555555555555"] })), [
+    "unknown_field",
+  ]);
+});
+
+test("a webhook node cannot send a field that a reply wait saves a reply into", () => {
+  const hook = (ids: string[]) => ({
+    id: "hook",
+    type: "webhook",
+    config: { endpoint_id: endpoint, field_ids: ids, include_tags: false },
+  });
+  const edges = [{ from: "w", port: "replied", to: "hook" }];
+  const refused = [{ code: "reply_field_not_sendable", node_id: "hook", path: "nodes[3].config.field_ids" }];
+  // The same draft saves the reply into the field the node sends, in either letter case.
+  const saving = { timeout_minutes: 60, save_field_id: field.toUpperCase() };
+  assert.deepEqual(validateFlowForPublish(replyWait(saving, [hook([numberField, field])], edges), context()), refused);
+  // The node is refused wherever it sits, also on a path that never passes the wait.
+  const aside = flow(
+    [
+      { id: "m", type: "instagram_message", config: { text: "Reply with your size" } },
+      { id: "w", type: "wait_for_reply", config: saving },
+      hook([field]),
+      { id: "has", type: "has_tag", config: { tag: "vip" } },
+    ],
+    [
+      { from: "start", port: "next", to: "has" },
+      { from: "has", port: "true", to: "m" },
+      { from: "m", port: "next", to: "w" },
+      { from: "has", port: "false", to: "hook" },
+    ],
+  );
+  assert.deepEqual(codes(aside), ["reply_field_not_sendable"]);
+  // A field the wait does not save into is sent.
+  assert.deepEqual(codes(replyWait(saving, [hook([numberField])], edges)), []);
+  // A published version of the workspace saves a reply into the field.
+  const plain = replyWait({ timeout_minutes: 60 }, [hook([field])], edges);
+  assert.deepEqual(codes(plain), []);
+  assert.deepEqual(validateFlowForPublish(plain, context({ replyFields: new Set([field]) })), refused);
+  // Another flow's webhook node sends the field this draft would save a reply into.
+  assert.deepEqual(validateFlowForPublish(replyWait(saving), context({ webhookFields: new Set([field]) })), [
+    { code: "reply_field_not_sendable", node_id: "w", path: "nodes[2].config" },
+  ]);
+  assert.deepEqual(codes(replyWait({ timeout_minutes: 60 }), context({ webhookFields: new Set([field]) })), []);
+});
+
+test("a webhook node has one port, adds no time to the reply window and may follow any wait", () => {
+  const hook = { id: "hook", type: "webhook", config: { endpoint_id: endpoint, field_ids: [], include_tags: true } };
+  const delayed = flow(
+    [
+      { id: "later", type: "delay", config: { minutes: 10020 } },
+      hook,
+      { id: "m", type: "instagram_message", config: { text: "Hi" } },
+    ],
+    [
+      { from: "start", port: "next", to: "later" },
+      { from: "later", port: "next", to: "hook" },
+      { from: "hook", port: "next", to: "m" },
+    ],
+  );
+  assert.deepEqual(codes(delayed), []);
+  assert.deepEqual(codes(replyWait({ timeout_minutes: 60 }, [hook], [{ from: "w", port: "replied", to: "hook" }])), []);
+  assert.deepEqual(
+    codes(
+      replyWait(
+        { timeout_minutes: 60 },
+        [hook, { id: "again", type: "instagram_message", config: { text: "Again" } }],
+        [
+          { from: "w", port: "timeout", to: "hook" },
+          { from: "hook", port: "next", to: "again" },
+        ],
+      ),
+    ),
+    ["message_after_wait"],
+  );
+  assert.deepEqual(codes(flow([hook], [{ from: "start", port: "true", to: "hook" }])).sort(), [
+    "invalid_port",
+    "unreachable_node",
+  ]);
+  const looped = flow(
+    [hook, { id: "has", type: "has_tag", config: { tag: "vip" } }],
+    [
+      { from: "start", port: "next", to: "hook" },
+      { from: "hook", port: "next", to: "has" },
+      { from: "has", port: "true", to: "hook" },
+    ],
+  );
+  assert.deepEqual(codes(looped), ["immediate_cycle"]);
+});
+
+test("references include the endpoint and the fields a webhook node sends", () => {
+  const parsed = parseFlowDocument(
+    webhook({ endpoint_id: endpoint.toUpperCase(), field_ids: [numberField.toUpperCase(), field], include_tags: true }),
+  );
+  assert.ok("document" in parsed);
+  const references = flowReferences(parsed.document);
+  assert.deepEqual(references.field_ids, [field, numberField]);
+  assert.deepEqual(references.endpoint_ids, [endpoint]);
 });
 
 test("references include the field a reply wait saves into", () => {

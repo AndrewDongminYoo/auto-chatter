@@ -81,6 +81,19 @@ test("exports every table of the caller's workspace and nothing from another wor
   assert.doesNotMatch(text, /kept dm text/);
   assert.equal(body.tables.instagram_unmatched_replies[0].message_id, "kept-account-own");
   assert.ok(body.tables.instagram_connections[0].token_expires_at);
+  // A webhook signing key is exported by ID and dates only; its sealed secret is left out.
+  assert.ok(body.excluded.includes("webhook_signing_keys.secret_encrypted"));
+  assert.deepEqual(Object.keys(body.tables.webhook_signing_keys[0]).sort(), [
+    "created_at",
+    "endpoint_id",
+    "id",
+    "retired_at",
+    "slot",
+    "workspace_id",
+  ]);
+  assert.equal(body.tables.webhook_endpoints[0].url, "https://hooks.example.test/account-own");
+  assert.equal(body.tables.webhook_deliveries[0].status, "dead");
+  assert.equal(body.tables.webhook_redelivery_events[0].actor_id, userId);
 });
 
 test("the export carries the caller's workspace row with its time zone and no other workspace", async () => {

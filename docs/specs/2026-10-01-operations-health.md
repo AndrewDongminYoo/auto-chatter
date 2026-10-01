@@ -32,14 +32,17 @@ Node 워커의 `worker-main.ts`·`main.ts`가 터미널에 쓰는 사용법·설
 | `cron_record_failed`            | 실패 코드                                                      | `cron` 행 기록 실패                     |
 | `alert_started`·`alert_cleared` | `alert_<경보 이름>`                                            | 경보 상태가 바뀐 Cron 실행              |
 | `alert_new_occurrence`          | `alert_unknown_outcome`                                        | 경보가 켜진 동안 새 `unknown` 발생      |
+| `webhook_delivery_failed`       | [전달](2026-10-01-flow-webhook-delivery.md#전달)의 실패 코드   | 외부 전송 실패, 다시 시도할 때          |
+| `webhook_delivery_dead`         | 같은 실패 코드                                                 | 외부 전송이 `dead`로 끝날 때            |
+| `webhook_delivery_claim_lost`   | `claim_lost`                                                   | 외부 전송 시도가 claim을 잃었을 때      |
 
 ## 정기 작업 기록
 
 `scheduled_steps`(migration 030)는 이름 하나에 한 행입니다.
-Cron 단계 `kept_reply_cleanup`, `token_refresh`, `early_reply_reconcile`, `flow_resume`, `stale_recovery`, `wake`, `alerts`는 마지막 성공·실패 시각과 고정 실패 코드를 남깁니다.
+Cron 단계 `kept_reply_cleanup`, `token_refresh`, `early_reply_reconcile`, `flow_resume`, `stale_recovery`, `wake`, `webhook_delivery`, `alerts`는 마지막 성공·실패 시각과 고정 실패 코드를 남깁니다.
 `cron` 행은 실행한 모든 단계(`alerts` 포함)가 성공한 실행의 시각이며, 한 단계라도 실패하면 실패 코드 `step_failed`를 남깁니다. 그래서 `cron` 행은 `alerts` 단계 뒤에 씁니다. 앞 단계가 모두 성공한 실행은 `alerts` 단계에서 `cron_stale`을 꺼진 것으로 계산하므로, 복구한 실행이 그 실행 안에서 경보를 해제합니다.
 `alert_<이름>` 행은 경보가 켜져 있는지와 마지막으로 바뀐 시각을 남깁니다. `alert_unknown_outcome` 행의 `alert_seen_count`는 마지막 평가가 본 `unknown` 결과의 전체 수입니다.
-전역 발송이 꺼져 있으면 `stale_recovery`와 `wake`는 실행하지 않고 이전 기록을 그대로 둡니다.
+전역 발송이 꺼져 있으면 `stale_recovery`, `wake`, `webhook_delivery`는 실행하지 않고 이전 기록을 그대로 둡니다.
 `token_refresh`는 갱신 대상 연결을 모두 시도한 뒤, 토큰 복호화 실패, Meta 호출 실패·시간 초과, 잘못된 갱신 응답, 계정이 다른 프로필이 하나라도 있으면 `token_refresh_failed`로 실패합니다. 더 새 토큰이나 수신 중지에 밀린 갱신은 실패가 아닙니다. 한 연결은 하루에 한 번만 갱신을 시도하므로 계속 실패해도 실패는 시도한 실행에만 남고 다음 실행은 성공으로 기록됩니다. 지속 실패의 신호는 연결마다 하루 한 번 남는 `cron_step_failed`(`step = token_refresh`) 줄이고, 만료 7일 전부터는 `token_expiring` 경보입니다.
 한 단계가 실패해도 다음 단계는 계속 실행하고, 실행 끝에 고정 메시지 `Cloudflare scheduled recovery failed`의 오류를 던져 Cloudflare가 실패로 기록하게 합니다. DB 연결 풀을 열거나 닫다 실패해도 원래 오류 메시지는 던지지 않고 `cron_run_failed` 줄과 같은 고정 메시지만 남깁니다. 이전에는 토큰 갱신 실패나 `TOKEN_ENCRYPTION_KEY` 누락이 이후 단계를 모두 멈췄습니다.
 기록 쓰기 자체가 실패하면 단계가 성공했어도 `cron_step_record_failed`(`cron` 행이면 `cron_record_failed`) 줄을 남기고 그 실행을 실패로 봅니다. 저장된 결과가 낡았으므로 `cron` 행에도 `step_failed`를 남기며, DB가 중단되면 단계마다 단계 실패 줄과 기록 실패 줄이 함께 남습니다.

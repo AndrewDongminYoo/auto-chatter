@@ -11,6 +11,26 @@ export async function lockContact(client: PoolClient, connectionId: string, send
   ]);
 }
 
+// The fields, among fieldIds, that a reply wait of any published flow version of the workspace saves a
+// reply DM into (#47). Every version counts, current or not: versions are immutable and a value one of
+// them stored may still be in the field, so a webhook node never sends such a field.
+export async function replySavedFields(
+  client: PoolClient,
+  workspaceId: string,
+  fieldIds: readonly unknown[],
+): Promise<Set<string>> {
+  const ids = fieldIds.filter(isUuid);
+  if (!ids.length) return new Set();
+  const saved = await client.query<{ id: string }>(
+    `SELECT DISTINCT lower(target #>> '{}') AS id FROM flow_versions v
+     CROSS JOIN LATERAL jsonb_path_query(v.definition,
+       'lax $.nodes[*] ? (@.type == "wait_for_reply").config.save_field_id') target
+     WHERE v.workspace_id=$1 AND v.field_ids && $2::uuid[] AND jsonb_typeof(target)='string'`,
+    [workspaceId, ids],
+  );
+  return new Set(saved.rows.map((row) => row.id));
+}
+
 export type FieldCondition = { field_id: string; field_operator: string; field_value?: unknown };
 
 export function parseFieldCondition(input: Record<string, unknown>): FieldCondition | null {

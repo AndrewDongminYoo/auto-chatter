@@ -56,6 +56,15 @@ import {
   saveFlowDraft,
   setFlowEnabled,
 } from "./flows.ts";
+import {
+  createWebhookEndpoint,
+  listWebhookDeliveries,
+  listWebhookEndpoints,
+  redeliverWebhook,
+  retireWebhookKey,
+  rotateWebhookKey,
+  setWebhookEndpointActive,
+} from "./webhooks.ts";
 
 function instagramConnectAvailable(user: User, env: InstagramOAuthEnv): boolean {
   if (env.INSTAGRAM_PUBLIC_CONNECT_ENABLED === "true") return true;
@@ -334,6 +343,23 @@ export async function appApi(
       }
       if (flow?.[2] === "runs" && !flow[3] && request.method === "GET")
         return json({ runs: await listFlowRuns(pool, user, flow[1]!) });
+      if (url.pathname === "/api/webhooks/endpoints" && request.method === "GET")
+        return json({ endpoints: await listWebhookEndpoints(pool, user) });
+      if (url.pathname === "/api/webhooks/endpoints" && request.method === "POST")
+        return json(await createWebhookEndpoint(pool, user, await readJson(request), env), 201);
+      const webhookEndpoint = /^\/api\/webhooks\/endpoints\/([a-f0-9-]+)\/(rotate|retire|enable|disable)$/.exec(
+        url.pathname,
+      );
+      if (webhookEndpoint && request.method === "POST") {
+        if (webhookEndpoint[2] === "rotate")
+          return json(await rotateWebhookKey(pool, user, webhookEndpoint[1]!, env), 201);
+        if (webhookEndpoint[2] === "retire") return json(await retireWebhookKey(pool, user, webhookEndpoint[1]!));
+        return json(await setWebhookEndpointActive(pool, user, webhookEndpoint[1]!, webhookEndpoint[2] === "enable"));
+      }
+      if (url.pathname === "/api/webhooks/deliveries" && request.method === "GET")
+        return json({ deliveries: await listWebhookDeliveries(pool, user) });
+      const redelivery = /^\/api\/webhooks\/deliveries\/([a-f0-9-]+)\/redeliver$/.exec(url.pathname);
+      if (redelivery && request.method === "POST") return json(await redeliverWebhook(pool, user, redelivery[1]!));
       if (url.pathname === "/api/activity" && request.method === "GET")
         return json({ activity: await listActivity(pool, user) });
       if (url.pathname === "/api/rules" && request.method === "GET")

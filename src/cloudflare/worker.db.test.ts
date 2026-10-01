@@ -8,6 +8,7 @@ import { after, afterEach, before, beforeEach, mock, test } from "node:test";
 import { Pool } from "pg";
 import worker, { type Env } from "./index.ts";
 import { operationsHealth } from "../app/operations-health.ts";
+import { signingKeyContext } from "../app/webhook-delivery.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
@@ -161,7 +162,7 @@ function failConsentRead(failAt: number): () => number {
 
 before(async () => {
   await pool.query(
-    "DROP TABLE IF EXISTS scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+    "DROP TABLE IF EXISTS webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
   );
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
 });
@@ -339,6 +340,7 @@ test("cron recovers a committed reply after queue publish failure", async () => 
       "stale_recovery",
       "token_refresh",
       "wake",
+      "webhook_delivery",
     ],
   );
 });
@@ -1775,3 +1777,248 @@ for (const [label, change] of [
       "1",
     );
   });
+
+// A flow run that reached a webhook node: one delivery is queued for an active endpoint with one signing key.
+async function queuedWebhook(): Promise<{ eventId: string; keyId: string; secret: string }> {
+  const workspace = "11111111-1111-4111-8111-111111111111";
+  const flow = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const version = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const endpoint = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const keyId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const eventId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const secret = "whsec_cron-test";
+  await pool.query("INSERT INTO flows(id,workspace_id,name,draft) VALUES($1,$2,'Notify','{}')", [flow, workspace]);
+  await pool.query(
+    `INSERT INTO flow_versions(id,flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,published_by)
+     VALUES($1,$2,$3,1,0,'{}',$4,'1789','99999999-9999-4999-8999-999999999999')`,
+    [version, flow, workspace, connectionId],
+  );
+  const event = await pool.query<{ id: string }>(
+    `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+     VALUES($1,$2,'comment-hook','1789','sender-hook','link') RETURNING id`,
+    [workspace, connectionId],
+  );
+  const run = await pool.query<{ id: string }>(
+    `INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,event_id,status)
+     VALUES($1,$2,$3,$4,$5,'ended') RETURNING id`,
+    [workspace, connectionId, flow, version, event.rows[0]!.id],
+  );
+  await pool.query(
+    "INSERT INTO webhook_endpoints(id,workspace_id,name,url) VALUES($1,$2,'crm','https://hooks.example.test/in')",
+    [endpoint, workspace],
+  );
+  await pool.query(
+    "INSERT INTO webhook_signing_keys(id,workspace_id,endpoint_id,slot,secret_encrypted) VALUES($1,$2,$3,1,$4)",
+    [
+      keyId,
+      workspace,
+      endpoint,
+      sealSecret(secret, env.TOKEN_ENCRYPTION_KEY!, signingKeyContext(workspace, endpoint, keyId)),
+    ],
+  );
+  await pool.query(
+    `INSERT INTO webhook_deliveries(event_id,workspace_id,endpoint_id,connection_id,flow_id,flow_run_id,node_id,sender_id,payload)
+     VALUES($1,$2,$3,$4,$5,$6,'notify','sender-hook',$7)`,
+    [
+      eventId,
+      workspace,
+      endpoint,
+      connectionId,
+      flow,
+      run.rows[0]!.id,
+      JSON.stringify({ event_id: eventId, fields: {} }),
+    ],
+  );
+  return { eventId, keyId, secret };
+}
+
+// Answers the DNS-over-HTTPS lookups with a public address and hands webhook requests to the test.
+function mockWebhookFetch(answer: (init: RequestInit) => Response | Promise<Response>) {
+  const graphFetch = globalThis.fetch;
+  const hosts: string[] = [];
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const target = new URL(String(input));
+    if (target.hostname === "graph.instagram.com") return graphFetch(input, init);
+    hosts.push(target.hostname);
+    if (target.hostname === "cloudflare-dns.com")
+      return Response.json(
+        target.searchParams.get("type") === "A"
+          ? { Status: 0, Answer: [{ name: "hooks.example.test", type: 1, data: "93.184.216.34" }] }
+          : { Status: 0 },
+      );
+    assert.equal(target.href, "https://hooks.example.test/in");
+    return answer(init ?? {});
+  });
+  return hosts;
+}
+
+test("the cron delivers a queued flow webhook after the message steps, and only while sending is on", async () => {
+  await longLivedToken();
+  const webhook = await queuedWebhook();
+  // A reply whose queue notification was lost, so the wake step has work in the same run.
+  assert.equal((await worker.fetch(request(), env)).status, 200);
+  published = [];
+  let received: RequestInit | undefined;
+  let publishedBeforeWebhook: unknown[] = [];
+  const hosts = mockWebhookFetch((init) => {
+    received = init;
+    publishedBeforeWebhook = [...published];
+    return new Response("ok");
+  });
+
+  env.SEND_ENABLED = "false";
+  await worker.scheduled({}, env);
+  assert.deepEqual(hosts, []);
+  assert.equal((await pool.query("SELECT status FROM webhook_deliveries")).rows[0].status, "pending");
+  assert.equal(
+    (await pool.query("SELECT count(*) FROM scheduled_steps WHERE name='webhook_delivery'")).rows[0].count,
+    "0",
+  );
+
+  env.SEND_ENABLED = "true";
+  await worker.scheduled({}, env);
+  assert.deepEqual(hosts, ["cloudflare-dns.com", "cloudflare-dns.com", "hooks.example.test"]);
+  // The wake had already published the reply notification when the webhook request left.
+  assert.deepEqual(publishedBeforeWebhook, [{ connectionId }]);
+  assert.equal(received!.method, "POST");
+  assert.equal(received!.redirect, "manual");
+  const headers = new Headers(received!.headers);
+  assert.equal(headers.get("x-autochatter-event-id"), webhook.eventId);
+  const [timestamp, key, signature] = headers.get("x-autochatter-signature")!.split(",");
+  assert.equal(key, `k=${webhook.keyId}`);
+  assert.equal(
+    signature,
+    `v1=${createHmac("sha256", webhook.secret)
+      .update(`${timestamp!.slice(2)}.${String(received!.body)}`)
+      .digest("hex")}`,
+  );
+  assert.deepEqual((await pool.query("SELECT status,payload,last_status_code FROM webhook_deliveries")).rows, [
+    { status: "sent", payload: null, last_status_code: 200 },
+  ]);
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name='webhook_delivery'",
+      )
+    ).rows,
+    [{ failure_code: null, succeeded: true }],
+  );
+  assert.equal(sends, 0);
+  assert.deepEqual(logLines, []);
+});
+
+test("token refresh and webhook delivery share one subrequest budget per cron invocation", async () => {
+  await longLivedToken();
+  // Ten connections whose tokens are due, so token refresh makes two Graph calls for each of them.
+  for (let index = 0; index < 10; index++) {
+    const account = `refresh-${index}`;
+    await pool.query(
+      `INSERT INTO instagram_connections(id,workspace_id,account_id,active,access_token_encrypted,token_expires_at,token_obtained_at)
+       VALUES($1,'11111111-1111-4111-8111-111111111111',$2,true,$3,now()+interval '20 days',now()-interval '2 days')`,
+      [
+        crypto.randomUUID(),
+        account,
+        sealSecret(`token-${account}`, env.TOKEN_ENCRYPTION_KEY!, `11111111-1111-4111-8111-111111111111:${account}`),
+      ],
+    );
+  }
+  await queuedWebhook();
+  await pool.query(
+    `INSERT INTO webhook_deliveries(event_id,workspace_id,endpoint_id,connection_id,flow_id,flow_run_id,node_id,sender_id,payload)
+     SELECT gen_random_uuid(),workspace_id,endpoint_id,connection_id,flow_id,flow_run_id,'notify-'||n,sender_id,payload
+     FROM webhook_deliveries, generate_series(1,9) n`,
+  );
+  restoreMocks();
+  let calls = 0;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    calls++;
+    const target = new URL(String(input));
+    if (target.pathname === "/refresh_access_token")
+      return Response.json({ access_token: target.searchParams.get("access_token"), expires_in: 5_184_000 });
+    if (target.hostname === "graph.instagram.com")
+      return Response.json({
+        user_id: new Headers(init?.headers).get("authorization")!.replace("Bearer token-", ""),
+      });
+    if (target.hostname === "cloudflare-dns.com")
+      return Response.json(
+        target.searchParams.get("type") === "A"
+          ? { Status: 0, Answer: [{ name: "hooks.example.test", type: 1, data: "93.184.216.34" }] }
+          : { Status: 0 },
+      );
+    return new Response("ok");
+  });
+  await worker.scheduled({}, env);
+  // 20 refresh calls leave 25 of the 45: eight attempts of three subrequests, and no claim for the ninth.
+  assert.equal(calls, 20 + 8 * 3);
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT status,attempt_count,count(*)::int AS count FROM webhook_deliveries GROUP BY status,attempt_count ORDER BY status",
+      )
+    ).rows,
+    [
+      { status: "pending", attempt_count: 0, count: 2 },
+      { status: "sent", attempt_count: 1, count: 8 },
+    ],
+  );
+  assert.equal(
+    (
+      await pool.query(
+        "SELECT count(*)::int AS count FROM instagram_connections WHERE account_id LIKE 'refresh-%' AND token_obtained_at>now()-interval '1 minute'",
+      )
+    ).rows[0].count,
+    10,
+  );
+});
+
+test("a failing webhook endpoint or delivery step neither stops nor fails the message steps", async () => {
+  await longLivedToken();
+  await queuedWebhook();
+  await pool.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now())");
+  assert.equal((await worker.fetch(request(), env)).status, 200);
+  published = [];
+  mockWebhookFetch(() => {
+    throw new Error("connection refused by https://hooks.example.test/in");
+  });
+  // An endpoint failure is a delivery outcome, not a step failure: the run succeeds and the reply is woken.
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, [{ connectionId }]);
+  assert.deepEqual((await pool.query("SELECT status,failure_code,attempt_count FROM webhook_deliveries")).rows, [
+    { status: "retry", failure_code: "request_failed", attempt_count: 1 },
+  ]);
+  assert.deepEqual(
+    logLines.map(({ correlation_id, ...line }) => line),
+    [{ event: "webhook_delivery_failed", code: "request_failed", connection_id: connectionId }],
+  );
+  assert.deepEqual(await rows(), [{ status: "pending", failure_code: null, rate_limit_retries: 0 }]);
+
+  // A database failure inside the delivery step fails that step only; wake ran before it and is recorded.
+  logLines.length = 0;
+  published = [];
+  await pool.query("UPDATE webhook_deliveries SET next_attempt_at=now()-interval '1 second'");
+  const originalQuery = Pool.prototype.query;
+  mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    if (typeof sql === "string" && sql.includes("UPDATE webhook_deliveries"))
+      throw Object.assign(new Error("deliveries for https://hooks.example.test/in"), { code: "42P01" });
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  await assert.rejects(worker.scheduled({}, env), /^Error: Cloudflare scheduled recovery failed$/);
+  assert.deepEqual(published, [{ connectionId }]);
+  assert.deepEqual(
+    logLines.map(({ correlation_id, ...line }) => line),
+    [{ event: "cron_step_failed", code: "database_error", step: "webhook_delivery" }],
+  );
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT name,failure_code,last_success_at>last_failure_at AS recovered FROM scheduled_steps WHERE name IN ('wake','webhook_delivery') ORDER BY name",
+      )
+    ).rows,
+    [
+      { name: "wake", failure_code: null, recovered: null },
+      { name: "webhook_delivery", failure_code: "database_error", recovered: false },
+    ],
+  );
+  assert.equal(await consume(), "ack");
+  assert.equal((await rows())[0].status, "sent");
+});

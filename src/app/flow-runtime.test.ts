@@ -456,6 +456,130 @@ test("a resume entry must name a delay's next port or a reply wait's replied or 
   }
 });
 
+const endpointId = "44444444-4444-4444-8444-444444444444";
+
+test("a webhook node records what to send from the facts at that point and the walk continues", () => {
+  const document = chain([
+    { id: "before", type: "webhook", config: { endpoint_id: endpointId, field_ids: [fieldId], include_tags: false } },
+    { id: "tag", type: "add_tag", config: { tag: "lead" } },
+    { id: "set", type: "set_field", config: { field_id: fieldId, value: "Busan" } },
+    {
+      id: "after",
+      type: "webhook",
+      config: {
+        endpoint_id: endpointId.toUpperCase(),
+        field_ids: [fieldId.toUpperCase(), textField],
+        include_tags: true,
+      },
+    },
+  ]);
+  assert.deepEqual(flowExecutionErrors(document, types), []);
+  const facts = { tags: new Set(["vip"]), fields: new Map<string, unknown>([[fieldId, "Seoul"]]) };
+  assert.deepEqual(plan(document, facts), {
+    status: "message",
+    text: "Thanks",
+    steps: [
+      { node_id: "start", node_type: "instagram_comment", outcome: "next" },
+      { node_id: "before", node_type: "webhook", outcome: "queued" },
+      { node_id: "tag", node_type: "add_tag", outcome: "added" },
+      { node_id: "set", node_type: "set_field", outcome: "set" },
+      { node_id: "after", node_type: "webhook", outcome: "queued" },
+      { node_id: "reply", node_type: "instagram_message", outcome: "queued" },
+    ],
+    changes: { tags: new Map([["lead", true]]), fields: new Map([[fieldId, "Busan"]]) },
+    webhooks: [
+      { node_id: "before", endpoint_id: endpointId, fields: { [fieldId]: "Seoul" } },
+      {
+        node_id: "after",
+        endpoint_id: endpointId,
+        tags: ["vip", "lead"],
+        fields: { [fieldId]: "Busan", [textField]: null },
+      },
+    ],
+  });
+  // A walk without a webhook node carries no webhooks key.
+  assert.equal("webhooks" in plan(branching()), false);
+});
+
+test("a webhook node runs after a delay, a time wait and a reply wait, and before a failing node", () => {
+  const hook = { id: "hook", type: "webhook", config: { endpoint_id: endpointId, field_ids: [], include_tags: true } };
+  for (const wait of [
+    { id: "pause", type: "delay", config: { minutes: 5 } },
+    { id: "pause", type: "wait_until", config: { time: "09:30" } },
+  ]) {
+    const document = chain([wait, hook]);
+    assert.equal(plan(document).webhooks, undefined, wait.type);
+    const resumed = planFlowRun(document, noFacts, input, { node_id: "pause", port: "next" });
+    assert.deepEqual(
+      resumed.steps.map((step) => `${step.node_id}:${step.outcome}`),
+      ["hook:queued", "reply:queued"],
+      wait.type,
+    );
+    assert.deepEqual(resumed.webhooks, [{ node_id: "hook", endpoint_id: endpointId, tags: [], fields: {} }]);
+  }
+  const replied = waiting();
+  replied.nodes.push(hook);
+  replied.edges.push({ from: "answered", port: "next", to: "hook" });
+  assert.deepEqual(flowExecutionErrors(replied, types), []);
+  assert.equal(plan(replied).webhooks, undefined);
+  const answered = planFlowRun(replied, noFacts, input, { node_id: "wait", port: "replied" });
+  assert.equal(answered.status, "ended");
+  assert.deepEqual(answered.webhooks, [{ node_id: "hook", endpoint_id: endpointId, tags: ["answered"], fields: {} }]);
+  assert.equal(planFlowRun(replied, noFacts, input, { node_id: "wait", port: "timeout" }).webhooks, undefined);
+  // The webhook reached before a failing node is still queued, like the actions before a failure.
+  const failing = chain([hook, { id: "set", type: "set_field", config: { field_id: fieldId, value: "x" } }]);
+  const failed = plan(failing, noFacts, { writableFields: new Set<string>() });
+  assert.equal(failed.status === "failed" && failed.failure_code, "field_unavailable");
+  assert.equal(failed.webhooks?.length, 1);
+  // A message may still be followed only by a reply wait.
+  const afterMessage = chain([]);
+  afterMessage.nodes.push(hook);
+  afterMessage.edges.push({ from: "reply", port: "next", to: "hook" });
+  assert.deepEqual(
+    flowExecutionErrors(afterMessage, types).map((error) => error.code),
+    ["unsupported_after_message"],
+  );
+  const malformed = chain([{ id: "hook", type: "webhook", config: { endpoint_id: endpointId, field_ids: "all" } }]);
+  const invalid = plan(malformed);
+  assert.equal(invalid.status === "failed" && invalid.failure_code, "invalid_definition");
+});
+
+test("a webhook node leaves out every field that a reply wait saves a reply into", () => {
+  const hook = (id: string) => ({
+    id,
+    type: "webhook",
+    config: { endpoint_id: endpointId, field_ids: [textField.toUpperCase(), fieldId], include_tags: false },
+  });
+  // start -> reply -> wait(saves into textField) -(replied)-> answered -> hook
+  const document = waiting({ timeout_minutes: 60, save_field_id: textField });
+  document.nodes.push(hook("hook"));
+  document.edges.push({ from: "answered", port: "next", to: "hook" });
+  const facts = { tags: new Set<string>(), fields: new Map<string, unknown>([[fieldId, "Seoul"]]) };
+  const replied = planFlowRun(
+    document,
+    facts,
+    { ...input, replyText: "REPLY-TEXT" },
+    { node_id: "wait", port: "replied" },
+  );
+  // The reply was saved, and the payload holds only the other field.
+  assert.deepEqual(replied.changes.fields, new Map([[textField, "REPLY-TEXT"]]));
+  assert.deepEqual(replied.webhooks, [{ node_id: "hook", endpoint_id: endpointId, fields: { [fieldId]: "Seoul" } }]);
+  assert.ok(!JSON.stringify(replied.webhooks).includes("REPLY-TEXT"));
+  // A reply an earlier run stored is left out too, on a path that never passes the wait.
+  const before = chain([hook("early")], "What size do you need?");
+  before.nodes.push({ id: "wait", type: "wait_for_reply", config: { timeout_minutes: 60, save_field_id: textField } });
+  before.edges.push({ from: "reply", port: "next", to: "wait" });
+  const stored = { tags: new Set<string>(), fields: new Map<string, unknown>([[textField, "OLD-REPLY"]]) };
+  assert.deepEqual(plan(before, stored).webhooks, [
+    { node_id: "early", endpoint_id: endpointId, fields: { [fieldId]: null } },
+  ]);
+  // So is a field that another published version saves a reply into.
+  const other = chain([hook("hook")]);
+  assert.deepEqual(plan(other, stored).webhooks?.[0]?.fields, { [textField]: "OLD-REPLY", [fieldId]: null });
+  const elsewhere = planFlowRun(other, stored, { ...input, replyFields: new Set([textField]) });
+  assert.deepEqual(elsewhere.webhooks?.[0]?.fields, { [fieldId]: null });
+});
+
 test("a time wait stops the run as waiting until a wall-clock time and resumes on next", () => {
   const document = chain([
     { id: "tag", type: "add_tag", config: { tag: "lead" } },

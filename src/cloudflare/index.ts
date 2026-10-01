@@ -387,6 +387,13 @@ export default {
 async function runScheduledSteps(env: Env, correlationId: string): Promise<boolean> {
   const pool = openPool(env, correlationId);
   let failed = false;
+  // Every fetch of this invocation goes through one counter, so webhook delivery claims only what the
+  // subrequests left after token refresh can carry. A call is counted before it starts, also when it fails.
+  let subrequests = 0;
+  const countedFetch: typeof fetch = (input, init) => {
+    subrequests++;
+    return fetch(input, init);
+  };
   const step = async (name: OperationStep, run: () => Promise<unknown>): Promise<void> => {
     let failure: string | null = null;
     try {
@@ -418,7 +425,7 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
       const { failed: refreshFailures } = await refreshDueInstagramTokensWithFailures(
         pool,
         env.TOKEN_ENCRYPTION_KEY,
-        fetch,
+        countedFetch,
         new Date(),
         env.META_GRAPH_VERSION,
       );
@@ -430,7 +437,7 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
     // for up to 15 minutes while a kept DM that may answer it is still unlinked.
     await step("early_reply_reconcile", () => reconcileUnmatchedReplies(pool));
     await step("flow_resume", () => resumeDueFlowRuns(pool));
-    // With sending off, stale recovery and wake do not run and keep their last recorded times.
+    // With sending off, stale recovery, wake and webhook delivery do not run and keep their last recorded times.
     if (env.SEND_ENABLED === "true") {
       await step("stale_recovery", async () => {
         await pool.query(
@@ -440,6 +447,16 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
         await recoverStaleFollowReplies(pool, new Date(Date.now() - 10 * 60_000));
       });
       await step("wake", () => wakeDueReplies(pool, env));
+      // Outbound flow webhooks (#47) are delivered after every message step, so a slow or failing endpoint
+      // cannot stop or delay a reply. They share the global send switch: with sending off nothing leaves.
+      await step("webhook_delivery", async () => {
+        if (!env.TOKEN_ENCRYPTION_KEY) throw new ConfigurationError("Token encryption not configured");
+        await deliverDueWebhooks(pool, env.TOKEN_ENCRYPTION_KEY, {
+          fetchImpl: countedFetch,
+          correlationId,
+          subrequestsLeft: () => CRON_SUBREQUEST_BUDGET - subrequests,
+        });
+      });
     }
     // The alerts step runs before the 'cron' row is written, so that row counts its failure too; a run whose
     // earlier steps all succeeded clears cron_stale in the same run.
@@ -477,3 +494,4 @@ import {
   type OperationStep,
 } from "../app/operations-log.ts";
 import { evaluateAlerts, recordStep } from "../app/operations-health.ts";
+import { CRON_SUBREQUEST_BUDGET, deliverDueWebhooks } from "../app/webhook-delivery.ts";

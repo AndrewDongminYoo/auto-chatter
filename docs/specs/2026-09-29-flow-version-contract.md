@@ -25,6 +25,7 @@
 | 대기   | `delay`                  | `minutes` (1~10,020 정수, [지연과 재개](2026-09-30-flow-runs.md#지연과-재개))                                       | `next`                |
 | 대기   | `wait_until`             | `time` (24시간제 `HH:MM`, 작업 공간 시간대, [시각 대기](2026-09-30-flow-runs.md#시각-대기))                         | `next`                |
 | 대기   | `wait_for_reply`         | `timeout_minutes` (1~10,080 정수), 선택 `save_field_id` (text 필드, [응답 대기](2026-09-30-flow-runs.md#응답-대기)) | `replied` / `timeout` |
+| 전송   | `webhook`                | `endpoint_id`, `field_ids`, `include_tags` ([외부 전송](2026-10-01-flow-webhook-delivery.md#플로-노드))             | `next`                |
 
 트리거는 정확히 하나이며 들어오는 연결을 가질 수 없습니다.
 출력 포트 하나에는 연결을 하나만 둘 수 있고, 비어 있는 포트는 해당 경로의 종료를 뜻합니다.
@@ -47,6 +48,7 @@
 - 응답 대기에서 도달할 수 있는 메시지 노드가 없어야 합니다(`message_after_wait`). 대기 뒤에는 동작, 조건, 지연, 시각 대기만 둘 수 있습니다.
 - 메시지로 가는 경로의 지연 합계가 지연 상한을 넘는지 여부(`delay_exceeds_reply_window`). 시각 대기는 1,560분으로 셉니다.
 - 변수 문법과, 작업 공간의 보관되지 않은 필드만 참조하는지 여부, 필드 타입에 맞는 값. 응답 대기의 `save_field_id`는 text 필드여야 합니다(`invalid_field_type`).
+- `webhook` 노드의 주소·필드 검사, 그리고 `webhook` 노드와 응답 대기 양쪽에 적용되는 응답 저장 필드 규칙(`reply_field_not_sendable`). 내용은 [외부 전송](2026-10-01-flow-webhook-delivery.md#플로-노드)이 정합니다.
 - 트리거 연결이 같은 작업 공간 소유이고 활성인지 여부
 - `follows_account`를 쓰면 트리거 연결에 OAuth 자격 증명이 있는지 여부. 환경 변수로 관리하는 연결은 DB만으로 로그인 방식을 알 수 없으므로 거부합니다.
 - 같은 연결·게시물에 켜진 기존 댓글 규칙(`legacy_rule_conflict`)이나 보관되지 않은 다른 발행 플로(`flow_trigger_conflict`)가 있는지 여부

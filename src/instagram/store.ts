@@ -9,7 +9,7 @@ import {
   type FlowPlan,
   type ResumeEntry,
 } from "../app/flow-runtime.ts";
-import { lockContact } from "../app/contact-fields.ts";
+import { lockContact, replySavedFields } from "../app/contact-fields.ts";
 
 const ACTION_TYPES = new Set(["add_tag", "remove_tag", "set_field"]);
 // When a reply wait ends: the time its private reply was sent plus the timeout of the wait node in
@@ -156,8 +156,8 @@ async function startFlowRun(
   eventId: string,
   comment: InstagramComment,
 ): Promise<void> {
-  const flows = await client.query<{ flow_id: string; version_id: string; definition: unknown }>(
-    `SELECT f.id AS flow_id,v.id AS version_id,v.definition FROM flows f
+  const flows = await client.query<{ flow_id: string; version_id: string; version_no: number; definition: unknown }>(
+    `SELECT f.id AS flow_id,v.id AS version_id,v.version_no,v.definition FROM flows f
      JOIN flow_versions v ON v.id=f.published_version_id AND v.flow_id=f.id
      WHERE f.workspace_id=$1 AND f.enabled AND NOT f.archived AND v.trigger_connection_id=$2 AND v.trigger_media_id=$3`,
     [connection.workspace_id, connection.id, comment.postId],
@@ -181,7 +181,11 @@ async function startFlowRun(
     : new Set<string>();
   const facts = await readContact(client, connection, comment.senderId);
   const plan: FlowPlan = document
-    ? planFlowRun(document, facts, { commentText: comment.text, writableFields })
+    ? planFlowRun(document, facts, {
+        commentText: comment.text,
+        writableFields,
+        replyFields: await webhookReplyFields(client, connection, document),
+      })
     : {
         status: "failed",
         steps: [],
@@ -207,7 +211,15 @@ async function startFlowRun(
   );
   const run = runs.rows[0];
   if (!run) return;
-  await recordPlan(client, connection, run.id, { eventId, ...comment }, facts.stored, plan, 0);
+  await recordPlan(
+    client,
+    connection,
+    { id: run.id, flowId: flow.flow_id, versionNo: flow.version_no },
+    { eventId, ...comment },
+    facts.stored,
+    plan,
+    0,
+  );
 }
 
 // Whether a run of this version may change contact data: an action, or a reply wait that saves the
@@ -288,21 +300,87 @@ async function readContact(client: PoolClient, connection: ConnectionRow, sender
   return { stored, tags: new Set(stored), fields: new Map(fields.rows.map((row) => [row.field_id, row.value])) };
 }
 
-type RunComment = { eventId: string; commentId: string; postId: string; senderId: string };
+// The fields this version's webhook nodes name that a published version of the workspace saves a reply
+// into (#47); the walk leaves them out of every payload. Read after the contact facts: a version is
+// published before any reply it saves, so a stored reply is never read without its version being seen here.
+async function webhookReplyFields(
+  client: PoolClient,
+  connection: ConnectionRow,
+  document: FlowDocument,
+): Promise<Set<string>> {
+  const named = document.nodes.flatMap((node) =>
+    node.type === "webhook" && Array.isArray(node.config.field_ids) ? node.config.field_ids : [],
+  );
+  return replySavedFields(client, connection.workspace_id, named);
+}
 
-// Stores what one walk of a run produced: contact changes, the queued reply and the steps, numbered
-// from firstSeq so a resumed run continues its path.
+type RunComment = { eventId: string; commentId: string; postId: string; senderId: string };
+type RunIdentity = { id: string; flowId: string; versionNo: number };
+
+// Queues one outbound delivery per webhook node the walk reached (#47), in the run's transaction. The
+// payload is the whole request body: the tags and field values the node chose and processing identifiers.
+// It never holds comment or DM text (the walk leaves out every field a reply wait saves a reply into), a
+// username or an Instagram identifier; the comment sender is stored
+// beside it only so person deletion finds the row. One delivery exists per run and node, and an endpoint
+// outside the workspace queues nothing; either case is recorded on the node's step as not_queued.
+async function queueWebhooks(
+  client: PoolClient,
+  connection: ConnectionRow,
+  run: RunIdentity,
+  senderId: string,
+  plan: FlowPlan,
+  steps: FlowPlan["steps"],
+): Promise<void> {
+  for (const webhook of plan.webhooks ?? []) {
+    const eventId = crypto.randomUUID();
+    const queued = await client.query(
+      `INSERT INTO webhook_deliveries(event_id,workspace_id,endpoint_id,connection_id,flow_id,flow_run_id,node_id,sender_id,payload)
+       SELECT $1,$2,endpoint.id,$4,$5,$6,$7,$8,$9::jsonb FROM webhook_endpoints endpoint
+       WHERE endpoint.id=$3 AND endpoint.workspace_id=$2
+       ON CONFLICT(flow_run_id,node_id) DO NOTHING RETURNING event_id`,
+      [
+        eventId,
+        connection.workspace_id,
+        webhook.endpoint_id,
+        connection.id,
+        run.flowId,
+        run.id,
+        webhook.node_id,
+        senderId,
+        JSON.stringify({
+          event_id: eventId,
+          type: "flow.webhook",
+          created_at: new Date().toISOString(),
+          flow_id: run.flowId,
+          flow_version: run.versionNo,
+          run_id: run.id,
+          node_id: webhook.node_id,
+          ...(webhook.tags === undefined ? {} : { tags: webhook.tags }),
+          fields: webhook.fields,
+        }),
+      ],
+    );
+    if (queued.rowCount) continue;
+    const index = steps.findIndex((step) => step.node_id === webhook.node_id && step.node_type === "webhook");
+    if (index >= 0) steps[index] = { ...steps[index]!, outcome: "not_queued" };
+  }
+}
+
+// Stores what one walk of a run produced: contact changes, the queued webhook deliveries and reply, and
+// the steps, numbered from firstSeq so a resumed run continues its path.
 async function recordPlan(
   client: PoolClient,
   connection: ConnectionRow,
-  runId: string,
+  run: RunIdentity,
   comment: RunComment,
   stored: readonly string[],
   plan: FlowPlan,
   firstSeq: number,
 ): Promise<void> {
+  const runId = run.id;
   await applyContactChanges(client, connection, comment.senderId, stored, plan.changes);
   const steps = [...plan.steps];
+  await queueWebhooks(client, connection, run, comment.senderId, plan, steps);
   if (plan.status === "message") {
     // The outbox keeps one private reply per sender and media, whichever rule or flow queued it.
     const queued = await client.query(
@@ -400,10 +478,12 @@ type ClaimedRun = {
   media_id: string;
   sender_id: string;
   comment_text: string;
+  flow_id: string;
+  version_no: number;
 };
 
 const CLAIMED_RUN = `SELECT run.status,run.resume_node_id,f.enabled AND NOT f.archived AS flow_on,v.definition,
-    run.event_id::text,e.comment_id,e.media_id,e.sender_id,e.comment_text
+    run.event_id::text,e.comment_id,e.media_id,e.sender_id,e.comment_text,run.flow_id::text,v.version_no
   FROM flow_runs run JOIN flows f ON f.id=run.flow_id JOIN flow_versions v ON v.id=run.flow_version_id
   JOIN instagram_comment_events e ON e.id=run.event_id
   LEFT JOIN private_reply_outbox reply ON reply.flow_run_id=run.id`;
@@ -545,7 +625,12 @@ async function continueFlowRun(
     ? planFlowRun(
         document,
         facts,
-        { commentText: run.comment_text, writableFields, ...(reply === undefined ? {} : { replyText: reply.text }) },
+        {
+          commentText: run.comment_text,
+          writableFields,
+          replyFields: await webhookReplyFields(client, owner, document),
+          ...(reply === undefined ? {} : { replyText: reply.text }),
+        },
         entry,
       )
     : {
@@ -562,7 +647,7 @@ async function continueFlowRun(
   await recordPlan(
     client,
     owner,
-    runId,
+    { id: runId, flowId: run.flow_id, versionNo: run.version_no },
     { eventId: run.event_id, commentId: run.comment_id, postId: run.media_id, senderId: run.sender_id },
     facts.stored,
     plan,
