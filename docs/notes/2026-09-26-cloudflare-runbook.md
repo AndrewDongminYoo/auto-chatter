@@ -404,6 +404,55 @@ DB 상태와 고정 오류 로그를 확인하고 `unknown`을 일괄 pending으
 롤백 때도 같은 DB를 유지하며 Cloudflare와 Node 발송 워커를 동시에 켜지 않습니다.
 백업·복구 옵션과 요금은 선택한 Supabase 프로젝트 플랜에서 별도 확인합니다.
 
+## 6. 운영 로그와 경보
+
+지표·경보·로그 형식의 계약은 [운영 지표·경보 명세](../specs/2026-10-01-operations-health.md)가 소유합니다.
+이 절은 Cloudflare에서 그것을 보는 방법만 다룹니다.
+
+### Workers Logs 설정
+
+`wrangler.json`의 `observability`로 Workers Logs를 켜고 표본 비율은 1(모든 호출)로 둡니다.
+호출 로그(`logs.invocation_logs`)는 껐습니다. 문서는 호출 로그에 요청·응답 정보가 들어간다고만 설명하고 쿼리 문자열을 가리는지 밝히지 않는데, `/api/instagram/callback`의 쿼리에는 OAuth 인증 코드가 들어 있기 때문입니다.
+그래서 Workers Logs에는 `logOperation`이 남긴 허용 필드 줄만 남습니다. 호출 로그를 끈 상태에서 처리되지 않은 예외가 어떻게 기록되는지는 문서에서 확인하지 못했습니다.
+설정은 `corepack pnpm build:cloudflare`(dry run)로 검증했으며 배포는 하지 않았습니다.
+
+2026-10-01에 확인한 [Workers Logs 문서](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)의 수치입니다.
+
+| 항목            | Workers Free                             | Workers Paid                            |
+| --------------- | ---------------------------------------- | --------------------------------------- |
+| 보존 기간       | 3일                                      | 7일                                     |
+| 포함 이벤트     | 하루 200,000건                           | 월 2,000만 건, 초과 시 100만 건당 $0.60 |
+| 로그 한 건 크기 | 256 KB 초과분 잘림                       | 같음                                    |
+| 계정 일일 한도  | 50억 건, 넘으면 그날 남은 시간은 1% 표본 | 같음                                    |
+
+각 로그 줄은 `logOperation`이 쓰는 JSON 문자열 한 줄입니다. 문서는 JSON 형식 로그를 권장하고 `console.log`에 넘긴 객체의 필드를 추출하는 예만 보여 주며, JSON 문자열 메시지의 필드도 추출하는지는 밝히지 않습니다. 아래 키 필터가 동작하는지는 배포 뒤 Query Builder에서 확인해야 합니다.
+로그는 Cloudflare 계정에서 Workers를 볼 수 있는 사람이 조회하며, 이 서비스는 따로 접근 범위를 두지 않습니다. 로그 줄에는 본문·토큰·이메일이 없으므로 보존 기간 안의 조회 권한만 계정 멤버 관리로 통제합니다.
+
+### 검색
+
+[Query Builder 문서](https://developers.cloudflare.com/workers/observability/query-builder/)(2026-10-01 확인)대로 대시보드의 Workers & Pages에서 Observability를 열고 키·연산자·값으로 거릅니다.
+
+- 경보: `code`가 `alert_`로 시작하는 줄. `event`가 `alert_started`이면 시작, `alert_cleared`이면 해제, `alert_new_occurrence`이면 켜진 `alert_unknown_outcome` 동안 새로 생긴 `unknown`입니다.
+- Cron 단계 실패: `event = cron_step_failed`, 단계는 `step`, 원인 분류는 `code`입니다. DB 연결 풀 열기·닫기 실패는 `event = cron_run_failed`, 단계 결과나 `cron` 행 기록 실패는 `event = cron_step_record_failed`·`cron_record_failed`입니다.
+- Queue 발행 실패: `event = queue_publish_failed`. 이후 Cron의 `wake` 단계가 복구합니다.
+- 한 요청이나 한 Cron 실행의 줄 모음: 같은 `correlation_id`. 웹훅·API는 응답의 `cf-ray` 값과 같습니다.
+- 한 연결의 줄: `connection_id`.
+
+### 알림 연결
+
+2026-10-01에 확인한 [Cloudflare Notifications 목록](https://developers.cloudflare.com/notifications/notification-available/)에는 Workers 로그 검색 결과나 로그 필드로 보내는 알림 종류가 없었습니다.
+[Workers Issues](https://developers.cloudflare.com/workers/observability/issues/)(공개 베타, 2026-10-01 확인)는 오류 로그와 처리되지 않은 예외를 이슈로 묶고 자동화로 웹훅·채팅 등에 보낼 수 있다고 설명하지만, `observability.issues.enabled`에는 Wrangler 4.134.0 이상이 필요하고 이 저장소는 4.116.0이므로 켜지 않았습니다.
+경보는 지금은 대시보드의 운영 상태 영역과 위의 로그 검색으로 확인합니다. 외부 알림을 붙이려면 Wrangler를 올려 Issues를 켜고 `alert_started`·`alert_new_occurrence`·`cron_step_failed`·`cron_step_record_failed`·`cron_record_failed`·`cron_run_failed` 줄을 대상으로 자동화를 만드는 작업을 별도로 승인받아 진행합니다. 이 PR은 클라우드 리소스를 만들지 않았습니다.
+
+### 장애 대응
+
+- Queue 발행 실패(`queue_publish_failed`): 답장은 DB에 남아 있습니다. 다음 Cron의 `wake`가 다시 알리므로, 1분 안에 같은 연결의 `queue_message_failed`나 `cron_step_failed`(`step = wake`)가 이어지지 않는지 봅니다.
+- DB 장애(`database_unavailable`·`connection_unavailable`, 오류 코드가 없는 연결 시간 초과는 `unexpected_error`): 매 Cron 실행의 `cron_step_failed`와 `cron_step_record_failed`가 단계마다 남고 Cron이 실패합니다. 이 동안에는 경보 상태를 DB에 쓸 수 없으므로 화면도 열리지 않을 수 있습니다. Hyperdrive와 Supabase 상태를 먼저 확인합니다.
+- 발송 제한: 화면의 연결 행에 일시 중지 끝 시각이 보이며, 그 연결의 답장은 그때까지 큐 지연에서 빠집니다. 끝난 뒤에도 `oldest_pending`이 켜지면 Queue 소비를 확인합니다.
+- 토큰 갱신 실패(`cron_step_failed`, `step = token_refresh`, `code = token_refresh_failed`): 동작은 [운영 상태 명세](../specs/2026-10-01-operations-health.md)의 정기 작업 기록 절을 따릅니다. 같은 연결 시도가 며칠 연속 실패하면 그 작업 공간에 계정 재연결을 안내합니다.
+- Cron 복구: 다음 성공한 Cron이 `alert_cleared`(`code = alert_cron_stale` 등)를 남기고 화면의 마지막 정기 작업 성공 시각이 갱신됩니다.
+- `unknown_outcome`: 결과 미확인 답장은 자동 재시도하지 않습니다. 위의 5절대로 일괄 pending으로 되돌리지 않습니다.
+
 ## 검증 경계
 
 ### 최초 배포 당시 확인
