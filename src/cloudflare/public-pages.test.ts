@@ -43,6 +43,8 @@ for (const [pathname, title] of [
         html.includes("응답 DM의 본문을 그 사용자 정의 필드에 저장하며, 이 저장은 수신 인박스 설정과 관계없이"),
       );
     if (pathname === "/privacy") assert.ok(html.includes("플로가 저장하도록 지정한 응답을 제외하고 보관하지 않으며"));
+    if (pathname === "/privacy")
+      assert.ok(html.includes("인박스를 끄면, 플로가 저장하도록 지정한 응답을 제외하고 이후 DM 본문 보관을 중지하며"));
     if (pathname === "/privacy") assert.ok(html.includes("그 브라우저 탭이 수락할 때까지 링크를 임시로 보관하며"));
   });
 
