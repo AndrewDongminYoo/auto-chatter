@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { membershipFor, roleAllows, workspaceFor, type WorkspaceRole } from "./settings.ts";
+import { lockConversation } from "../instagram/inbox.ts";
 
 // Conversation status and assignment (#22). A conversation without a state row is open and unassigned at
 // version 0. Neither value changes the handoff or the automation pause; the two are independent.
@@ -138,7 +139,8 @@ async function apply(
   recipient: string,
   change: ReturnType<typeof parse>,
 ): Promise<SaveConversationResult> {
-  // Lock order: the workspace row, membership rows, the connection, then the conversation row.
+  // Lock order: the workspace row, membership rows, the connection, the conversation (lockConversation), then
+  // the conversation row.
   // delete_workspace_data locks the workspace row first and deletes the members last, so taking the workspace
   // row first here makes the two queue instead of deadlocking. removeMember locks the removed member's row
   // before unassigning, so an assignment to that member either commits first (and is unassigned by the
@@ -165,6 +167,8 @@ async function apply(
     [workspace, connection, recipient],
   );
   if (!exists.rowCount) throw new ApiError(404, "conversation_not_found");
+  // A DM stored concurrently waits on this lock until the change commits and then reopens a closed conversation.
+  await lockConversation(client, connection, recipient, "exclusive");
   // A version 0 row means the same as no row; inserting it gives concurrent first changes a row to queue on.
   await client.query(
     `INSERT INTO instagram_inbox_conversations(workspace_id,connection_id,recipient_id) VALUES($1,$2,$3)

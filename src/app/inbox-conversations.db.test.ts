@@ -69,7 +69,7 @@ beforeEach(async () => {
 
 after(async () => pool.end());
 
-function request(actor: Actor, method: string, path: string, body?: unknown) {
+function request(actor: Actor, method: string, path: string, body?: unknown, connect = pool.connect.bind(pool)) {
   return appApi(
     new Request(`https://app.test${path}`, {
       method,
@@ -77,7 +77,7 @@ function request(actor: Actor, method: string, path: string, body?: unknown) {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }),
     apiEnv,
-    () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
+    () => ({ query: pool.query.bind(pool), connect, end: async () => {} }) as unknown as Pool,
     (async () => Response.json({ id: actor.id, email: actor.email, email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
@@ -132,6 +132,61 @@ async function waitForLockWaiters(count: number) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.fail(`expected ${count} requests waiting for a lock`);
+}
+
+// Runs a state change through the real API and holds its transaction just before COMMIT, after the
+// conversation row was written, until `release` is called.
+function saveHeldBeforeCommit(actor: Actor, change: Record<string, unknown>, recipient = "456") {
+  let reached!: () => void;
+  let release!: () => void;
+  const atCommit = new Promise<void>((resolve) => (reached = resolve));
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const connect = async () => {
+    const client = await pool.connect();
+    return new Proxy(client, {
+      get(target, key) {
+        if (key === "query")
+          return async (text: string, values?: unknown[]) => {
+            if (text === "COMMIT") {
+              reached();
+              await released;
+            }
+            return target.query(text, values);
+          };
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  };
+  const response = request(actor, "PUT", statePath(recipient), change, connect);
+  return { response, atCommit, release };
+}
+
+// Stores a DM while a close is held before COMMIT, then lets the close commit. Returns once both finished.
+async function dmDuringClose(change: Record<string, unknown>, messageId: string) {
+  const close = saveHeldBeforeCommit(agent, change);
+  try {
+    await Promise.race([
+      close.atCommit,
+      close.response.then((response) => assert.fail(`the close finished before COMMIT with ${response.status}`)),
+    ]);
+    let settled = false;
+    const ingestion = dm("456", messageId).finally(() => (settled = true));
+    // The DM either finishes without waiting or waits for the close; release the close in both cases so a
+    // failure comes from the state assertions, not from a lock-wait timeout.
+    for (let attempt = 0; attempt < 200 && !settled; attempt += 1) {
+      const waiting = await pool.query(
+        "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()",
+      );
+      if (waiting.rows[0].waiting >= 1) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    close.release();
+    assert.equal((await close.response).status, 200);
+    await ingestion;
+  } finally {
+    close.release();
+  }
 }
 
 test("a conversation without a state row is open and unassigned at version 0 in the list and the detail", async () => {
@@ -458,6 +513,76 @@ async function queueManualReply(actor: Actor, recipient: string) {
     [workspaceId, connectionId, recipient, actor.id],
   );
 }
+
+test("a DM stored while a close of an existing state row is uncommitted reopens it after the close", async () => {
+  await saved(agent, { expected_version: 0, assignee_user_id: agent.id });
+  await dmDuringClose({ expected_version: 1, status: "closed" }, "during-close");
+  const state = await detail();
+  assert.equal(state.status, "open");
+  assert.equal(state.version, 3);
+  assert.deepEqual(
+    (await events()).map((event) => [event.version, event.reason, event.to_status]),
+    [
+      [1, "manual", "open"],
+      [2, "manual", "closed"],
+      [3, "auto_reopen", "open"],
+    ],
+  );
+});
+
+test("a DM stored while the first close of a conversation is uncommitted reopens it after the close", async () => {
+  await dmDuringClose({ expected_version: 0, status: "closed" }, "during-first-close");
+  const state = await detail();
+  assert.equal(state.status, "open");
+  assert.equal(state.version, 2);
+  assert.deepEqual(
+    (await events()).map((event) => [event.version, event.reason, event.to_status]),
+    [
+      [1, "manual", "closed"],
+      [2, "auto_reopen", "open"],
+    ],
+  );
+});
+
+test("two DM batches with their senders in opposite orders do not wait on each other", async () => {
+  const message = (recipient: string, messageId: string) => ({
+    accountId: "123",
+    senderId: recipient,
+    messageId,
+    text: "hello",
+    timestamp: new Date(Date.now() - 1000),
+  });
+  const first = await pool.connect();
+  const second = await pool.connect();
+  try {
+    await first.query("BEGIN");
+    await second.query("BEGIN");
+    await storeInboxMessage(first, message("456", "batch-a-1"), new Date());
+    await storeInboxMessage(second, message("789", "batch-b-1"), new Date());
+    const settle = (promise: Promise<void>) =>
+      promise.then(
+        () => null,
+        (error: { code?: string }) => error.code ?? String(error),
+      );
+    const outcomes = await Promise.all([
+      settle(storeInboxMessage(first, message("789", "batch-a-2"), new Date())),
+      settle(storeInboxMessage(second, message("456", "batch-b-2"), new Date())),
+    ]);
+    assert.deepEqual(outcomes, [null, null]);
+    await first.query("COMMIT");
+    await second.query("COMMIT");
+  } finally {
+    await first.query("ROLLBACK").catch(() => undefined);
+    await second.query("ROLLBACK").catch(() => undefined);
+    first.release();
+    second.release();
+  }
+  assert.equal(
+    (await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_messages WHERE message_id LIKE 'batch-%'"))
+      .rows[0].count,
+    4,
+  );
+});
 
 test("status and assignment never change the handoff or the automation pause", async () => {
   await handoffReady();
