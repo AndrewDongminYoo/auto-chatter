@@ -52,6 +52,7 @@ const branching = flow(
     { id: "set", type: "set_field", config: { field_id: numberField, value: 4 } },
     { id: "has", type: "has_tag", config: { tag: "vip" } },
     { id: "drop", type: "remove_tag", config: { tag: "cold" } },
+    { id: "later", type: "delay", config: { minutes: 60 } },
   ],
   [
     { from: "start", port: "next", to: "follow" },
@@ -62,6 +63,7 @@ const branching = flow(
     { from: "check", port: "true", to: "set" },
     { from: "check", port: "false", to: "has" },
     { from: "has", port: "true", to: "drop" },
+    { from: "drop", port: "next", to: "later" },
   ],
 );
 
@@ -179,6 +181,37 @@ test("publish rejects every cycle because no wait node exists yet", () => {
     ],
   );
   assert.deepEqual(codes(self), ["immediate_cycle"]);
+});
+
+test("a cycle through a delay is still rejected until a node waits for input", () => {
+  const looped = flow(
+    [
+      { id: "wait", type: "delay", config: { minutes: 5 } },
+      { id: "b", type: "has_tag", config: { tag: "a" } },
+    ],
+    [
+      { from: "start", port: "next", to: "wait" },
+      { from: "wait", port: "next", to: "b" },
+      { from: "b", port: "true", to: "wait" },
+    ],
+  );
+  assert.deepEqual(codes(looped), ["immediate_cycle"]);
+});
+
+test("a delay waits a whole number of minutes from 1 through 7 days", () => {
+  const one = (config: unknown) =>
+    codes(flow([{ id: "d", type: "delay", config }], [{ from: "start", port: "next", to: "d" }]));
+  assert.deepEqual(one({ minutes: 1 }), []);
+  assert.deepEqual(one({ minutes: 10080 }), []);
+  for (const config of [
+    { minutes: 0 },
+    { minutes: 10081 },
+    { minutes: 1.5 },
+    { minutes: "60" },
+    {},
+    { minutes: 60, unit: "hours" },
+  ])
+    assert.deepEqual(one(config), ["invalid_config"], JSON.stringify(config));
 });
 
 test("node configs follow the existing rule, tag, field and button limits", () => {

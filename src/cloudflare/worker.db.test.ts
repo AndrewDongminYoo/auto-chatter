@@ -249,6 +249,105 @@ test("cron recovers a committed reply after queue publish failure", async () => 
   assert.equal((await rows())[0].status, "sent");
 });
 
+// A flow run that stopped at a delay and is already due, as ingestion leaves it after the delay passes.
+async function dueDelayedRun(): Promise<void> {
+  const workspace = "11111111-1111-4111-8111-111111111111";
+  const flow = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const version = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const definition = {
+    schema_version: 1,
+    nodes: [
+      {
+        id: "start",
+        type: "instagram_comment",
+        config: {
+          connection_id: connectionId,
+          media_id: "1789",
+          keywords: ["link"],
+          match_mode: "contains",
+          excluded_keywords: [],
+        },
+      },
+      { id: "wait", type: "delay", config: { minutes: 30 } },
+      { id: "reply", type: "instagram_message", config: { text: "Later link" } },
+    ],
+    edges: [
+      { from: "start", port: "next", to: "wait" },
+      { from: "wait", port: "next", to: "reply" },
+    ],
+  };
+  await pool.query("INSERT INTO flows(id,workspace_id,name,draft) VALUES($1,$2,'Later','{}')", [flow, workspace]);
+  await pool.query(
+    `INSERT INTO flow_versions(id,flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,published_by)
+     VALUES($1,$2,$3,1,0,$4,$5,'1789','99999999-9999-4999-8999-999999999999')`,
+    [version, flow, workspace, JSON.stringify(definition), connectionId],
+  );
+  await pool.query("UPDATE flows SET published_version_id=$2,enabled=true WHERE id=$1", [flow, version]);
+  const event = await pool.query<{ id: string }>(
+    `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+     VALUES($1,$2,'comment-late','1789','sender-late','link') RETURNING id`,
+    [workspace, connectionId],
+  );
+  await pool.query(
+    `INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,event_id,status,resume_at,resume_node_id)
+     VALUES($1,$2,$3,$4,$5,'waiting',now()-interval '1 second','wait')`,
+    [workspace, connectionId, flow, version, event.rows[0]!.id],
+  );
+}
+
+test("cron resumes a due flow run while sending is off and sends its reply once sending is on", async () => {
+  await dueDelayedRun();
+  env.SEND_ENABLED = "false";
+  await worker.scheduled({}, env);
+  assert.equal((await pool.query("SELECT status FROM flow_runs")).rows[0].status, "delivering");
+  assert.deepEqual(await rows(), [{ status: "pending", failure_code: null, rate_limit_retries: 0 }]);
+  assert.deepEqual(published, []);
+  assert.equal(sends, 0);
+
+  env.SEND_ENABLED = "true";
+  // Graph answers for the flow's numeric media and its commenter instead of the rule fixture's.
+  mock.restoreAll();
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const graphUrl = new URL(String(input));
+    if (init?.method === "POST") {
+      sends++;
+      return Response.json({ message_id: "message-late" });
+    }
+    if (graphUrl.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (graphUrl.pathname.endsWith("/1789")) return Response.json({ id: "1789", owner: { id: "123" } });
+    return Response.json({
+      id: graphUrl.pathname.split("/").at(-1),
+      from: { id: "sender-late" },
+      media: { id: "1789" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, [{ connectionId }]);
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 1);
+  assert.deepEqual(await rows(), [{ status: "sent", failure_code: null, rate_limit_retries: 0 }]);
+});
+
+test("a failed flow resume still lets the cron wake pending replies, then reports the failure", async () => {
+  const queue = env.REPLY_QUEUE;
+  env.REPLY_QUEUE = {
+    async send() {
+      throw new Error("queue offline");
+    },
+  };
+  assert.equal((await worker.fetch(request(), env)).status, 200);
+  env.REPLY_QUEUE = queue;
+  const originalQuery = Pool.prototype.query;
+  mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    if (typeof sql === "string" && sql.includes("FROM flow_runs") && sql.includes("resume_at<=now()"))
+      throw new Error("flow runs unavailable");
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  await assert.rejects(worker.scheduled({}, env), /scheduled recovery failed/);
+  assert.deepEqual(published, [{ connectionId }]);
+});
+
 test("disabled sending preserves pending replies and does not schedule work", async () => {
   env.SEND_ENABLED = "false";
   assert.equal((await worker.fetch(request(), env)).status, 200);

@@ -341,7 +341,7 @@ export async function listFlowRuns(pool: Pool, user: User, id: string) {
     throw new ApiError(404, "flow_not_found");
   return (
     await pool.query(
-      `SELECT r.id,v.version_no,r.status,r.failure_code,r.created_at,
+      `SELECT r.id,v.version_no,r.status,r.failure_code,r.created_at,r.resume_at,
          reply.status AS delivery_status,reply.failure_code AS delivery_failure_code,reply.sent_at,
          coalesce((SELECT jsonb_agg(jsonb_build_object('node_id',s.node_id,'node_type',s.node_type,'outcome',s.outcome) ORDER BY s.seq)
            FROM flow_step_runs s WHERE s.run_id=r.id),'[]'::jsonb) AS steps

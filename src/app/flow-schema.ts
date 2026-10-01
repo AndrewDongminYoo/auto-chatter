@@ -26,13 +26,17 @@ const PORTS: Record<string, string[]> = {
   add_tag: ["next"],
   remove_tag: ["next"],
   set_field: ["next"],
+  delay: ["next"],
 };
 // Own-property lookup, so names such as "constructor" are unknown types rather than prototype members.
 function portsOf(type: string): string[] | undefined {
   return Object.hasOwn(PORTS, type) ? PORTS[type] : undefined;
 }
-// A cycle is allowed only through a node that waits for time or input; #28 defines none.
+// A cycle is allowed only through a node that waits for input; none exists yet. A delay alone would
+// repeat the same path on a timer, so it does not count.
 const WAIT_TYPES = new Set<string>();
+// Seven days, the comment window a private reply must fit in (service policy, not a Meta limit).
+const MAX_DELAY_MINUTES = 10080;
 
 function error(code: string, path: string, extra: { node_id?: string; edge_index?: number } = {}): FlowError {
   return { code, ...extra, path };
@@ -131,6 +135,13 @@ function validConfig(node: FlowNode): boolean {
       );
     case "set_field":
       return exactKeys(config, ["field_id", "value"]) && isUuid(config.field_id) && config.value !== null;
+    case "delay":
+      return (
+        exactKeys(config, ["minutes"]) &&
+        Number.isInteger(config.minutes) &&
+        (config.minutes as number) >= 1 &&
+        (config.minutes as number) <= MAX_DELAY_MINUTES
+      );
     default:
       return false;
   }
