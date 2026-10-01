@@ -44,13 +44,13 @@ const WAIT_TYPES = new Set<string>();
 const MAX_DELAY_MINUTES = 7 * 24 * 60 - 60;
 // The longest a run waits for a reply to its private reply (operator decision, 7 days).
 const MAX_REPLY_WAIT_MINUTES = 7 * 24 * 60;
-// A time wait resumes at the next occurrence of a 24-hour local time, usually within a day, so it
-// counts as a full day toward the reply window (operator decision). On a day the clocks go back the
-// wait can last a day plus the shift: one hour in most zones and two in Antarctica/Troll (PostgreSQL
-// 17.11 zone data, 2026-2027), so under 1,560 minutes. That can use up or exceed the hour that
-// MAX_DELAY_MINUTES leaves for latency; a reply that then falls outside the seven days is blocked
+// A time wait resumes at the next occurrence of a 24-hour local time, usually within a day. On a day
+// the clocks go back it can last a day plus the shift: one hour in most zones and two in
+// Antarctica/Troll (PostgreSQL 17.11 zone data, 2026-2027). It counts as a day plus that two-hour
+// shift toward the reply window (operator decision, 2026-10-01), so the hour MAX_DELAY_MINUTES leaves
+// for latency stays intact in every zone. A reply that still falls outside the seven days is blocked
 // as comment_expired by reply-policy.ts before the send, never sent late.
-const TIME_WAIT_MINUTES = 24 * 60;
+const TIME_WAIT_MINUTES = 26 * 60;
 const WALL_CLOCK_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 function error(code: string, path: string, extra: { node_id?: string; edge_index?: number } = {}): FlowError {
