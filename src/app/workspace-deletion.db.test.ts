@@ -40,6 +40,8 @@ after(async () => pool.end());
 async function counts(workspace: string, connection: string) {
   const result: Record<string, number> = {};
   for (const [table, { scope }] of Object.entries(EXPORTED_TABLES)) {
+    // The workspace row itself is counted below.
+    if (scope === "self") continue;
     const [column, value] = scope === "workspace" ? ["workspace_id", workspace] : ["connection_id", connection];
     result[table] = Number(
       (await pool.query(`SELECT count(*) FROM ${table} WHERE ${column}=$1`, [value])).rows[0].count,

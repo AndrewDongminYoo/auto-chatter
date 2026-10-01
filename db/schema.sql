@@ -1,6 +1,9 @@
 CREATE TABLE IF NOT EXISTS workspaces (
   id uuid PRIMARY KEY
 );
+-- The workspace's IANA time zone, read when a flow run reaches a wait_until node. The API accepts only
+-- names in pg_timezone_names; there is no CHECK constraint because that list is not immutable.
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS time_zone text NOT NULL DEFAULT 'Asia/Seoul';
 
 CREATE TABLE IF NOT EXISTS workspace_members (
   user_id uuid PRIMARY KEY,

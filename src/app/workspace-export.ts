@@ -3,8 +3,10 @@ import { ApiError, type User } from "./auth.ts";
 import { roleAllows, type WorkspaceRole } from "./settings.ts";
 
 // Every public table is either exported here or listed in EXCLUDED_TABLES; workspace-export.db.test.ts enforces it.
-// "connection" tables carry no workspace_id and are scoped through the workspace's connections.
-export const EXPORTED_TABLES: Record<string, { scope: "workspace" | "connection"; omit?: string[] }> = {
+// "connection" tables carry no workspace_id and are scoped through the workspace's connections; "self"
+// is the workspace row itself, which holds its settings.
+export const EXPORTED_TABLES: Record<string, { scope: "self" | "workspace" | "connection"; omit?: string[] }> = {
+  workspaces: { scope: "self" },
   workspace_members: { scope: "workspace" },
   workspace_invites: { scope: "workspace", omit: ["token_hash"] },
   instagram_connections: { scope: "workspace", omit: ["access_token_encrypted"] },
@@ -32,9 +34,8 @@ export const EXPORTED_TABLES: Record<string, { scope: "workspace" | "connection"
   data_deletion_records: { scope: "workspace" },
 };
 
-// workspaces only holds the ID, which the export carries at the top level; OAuth states hold short-lived login secrets;
-// workspace deletion evidence belongs to workspaces that no longer exist.
-export const EXCLUDED_TABLES = ["workspaces", "instagram_oauth_states", "workspace_deletion_records"];
+// OAuth states hold short-lived login secrets; workspace deletion evidence belongs to workspaces that no longer exist.
+export const EXCLUDED_TABLES = ["instagram_oauth_states", "workspace_deletion_records"];
 // What the export leaves out, derived from the table settings so the file cannot understate it.
 export const EXCLUDED_ITEMS = [
   ...Object.entries(EXPORTED_TABLES).flatMap(([table, { omit = [] }]) => omit.map((column) => `${table}.${column}`)),
@@ -59,9 +60,11 @@ export async function exportWorkspace(pool: Pool, user: User) {
     const tables: string[] = [];
     for (const [table, { scope, omit = [] }] of Object.entries(EXPORTED_TABLES)) {
       const filter =
-        scope === "workspace"
-          ? "t.workspace_id=$1"
-          : "t.connection_id IN (SELECT id FROM instagram_connections WHERE workspace_id=$1)";
+        scope === "self"
+          ? "t.id=$1"
+          : scope === "workspace"
+            ? "t.workspace_id=$1"
+            : "t.connection_id IN (SELECT id FROM instagram_connections WHERE workspace_id=$1)";
       const result = await client.query<{ rows: string }>(
         `SELECT coalesce(jsonb_agg(to_jsonb(t) - $2::text[] ORDER BY to_jsonb(t)::text), '[]'::jsonb)::text AS rows
          FROM ${table} t WHERE ${filter}`,

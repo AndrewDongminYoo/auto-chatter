@@ -15,6 +15,7 @@ export type FlowPlan = { steps: FlowStep[]; changes: FlowChanges } & (
   | { status: "message"; text: string; wait_node_id?: string }
   | { status: "failed"; failure_code: string }
   | { status: "waiting"; resume_node_id: string; delay_minutes: number }
+  | { status: "waiting"; resume_node_id: string; until_time: string; delay_minutes?: undefined }
 );
 
 // Follow checks and message buttons are refused when a flow is enabled rather than skipped at run
@@ -28,11 +29,16 @@ const EXECUTABLE_TYPES = new Set([
   "remove_tag",
   "set_field",
   "delay",
+  "wait_until",
   "wait_for_reply",
 ]);
-// Where a stopped run continues: a delay on next, a reply wait on replied or timeout.
+// Where a stopped run continues: a delay or a time wait on next, a reply wait on replied or timeout.
 export type ResumeEntry = { node_id: string; port: string };
-const RESUME_PORTS: Record<string, string[]> = { delay: ["next"], wait_for_reply: ["replied", "timeout"] };
+const RESUME_PORTS: Record<string, string[]> = {
+  delay: ["next"],
+  wait_until: ["next"],
+  wait_for_reply: ["replied", "timeout"],
+};
 const MAX_TAGS = 20;
 const MAX_MESSAGE = 1000;
 const VARIABLE = /\{\{([^{}]*)\}\}/g;
@@ -117,8 +123,9 @@ function render(
 // Walks one published document from its trigger, or from the delay or reply wait a run stopped at.
 // The result depends only on the document, the facts and the input, so a run records exactly the
 // path that produced its message. Actions change the facts that later nodes read; a failure keeps
-// the changes of the actions before it. A delay ends this walk as waiting, and a message followed by
-// a reply wait names the wait. Resuming after a delay records only the nodes after it; resuming at
+// the changes of the actions before it. A delay or a time wait ends this walk as waiting, and a
+// message followed by a reply wait names the wait. Resuming after either records only the nodes after
+// it; resuming at
 // a reply wait first records the port taken and, when the wait saves the reply, the save outcome, so
 // the run's steps read as one path.
 export function planFlowRun(
@@ -208,6 +215,16 @@ export function planFlowRun(
         steps,
         resume_node_id: node.id,
         delay_minutes: node.config.minutes as number,
+        changes: changes(),
+      };
+    } else if (node.type === "wait_until") {
+      // The resume time depends on the workspace time zone, so the store computes it.
+      steps.push({ node_id: node.id, node_type: node.type, outcome: "waiting" });
+      return {
+        status: "waiting",
+        steps,
+        resume_node_id: node.id,
+        until_time: String(node.config.time),
         changes: changes(),
       };
     } else if (node.type === "instagram_message" && node.config.button_title === undefined && !afterWait) {

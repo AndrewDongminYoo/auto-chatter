@@ -27,15 +27,16 @@ const PORTS: Record<string, string[]> = {
   remove_tag: ["next"],
   set_field: ["next"],
   delay: ["next"],
+  wait_until: ["next"],
   wait_for_reply: ["replied", "timeout"],
 };
 // Own-property lookup, so names such as "constructor" are unknown types rather than prototype members.
 function portsOf(type: string): string[] | undefined {
   return Object.hasOwn(PORTS, type) ? PORTS[type] : undefined;
 }
-// A cycle is allowed only through a node that waits for input. A delay alone would repeat the same
-// path on a timer, so it does not count, and a reply wait cannot close a cycle because it is reached
-// only from a message and no message may follow it; the set stays empty.
+// A cycle is allowed only through a node that waits for input. A delay or a time wait alone would
+// repeat the same path on a timer, so neither counts, and a reply wait cannot close a cycle because it
+// is reached only from a message and no message may follow it; the set stays empty.
 const WAIT_TYPES = new Set<string>();
 // A private reply must be sent within seven days of the comment (reply-policy.ts), and a delay
 // starts when the webhook arrives, so the delays before a message leave an hour of that window for
@@ -43,6 +44,14 @@ const WAIT_TYPES = new Set<string>();
 const MAX_DELAY_MINUTES = 7 * 24 * 60 - 60;
 // The longest a run waits for a reply to its private reply (operator decision, 7 days).
 const MAX_REPLY_WAIT_MINUTES = 7 * 24 * 60;
+// A time wait resumes at the next occurrence of a 24-hour local time, usually within a day, so it
+// counts as a full day toward the reply window (operator decision). On a day the clocks go back the
+// wait can last a day plus the shift: one hour in most zones and two in Antarctica/Troll (PostgreSQL
+// 17.11 zone data, 2026-2027), so under 1,560 minutes. That can use up or exceed the hour that
+// MAX_DELAY_MINUTES leaves for latency; a reply that then falls outside the seven days is blocked
+// as comment_expired by reply-policy.ts before the send, never sent late.
+const TIME_WAIT_MINUTES = 24 * 60;
+const WALL_CLOCK_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 function error(code: string, path: string, extra: { node_id?: string; edge_index?: number } = {}): FlowError {
   return { code, ...extra, path };
@@ -148,6 +157,8 @@ function validConfig(node: FlowNode): boolean {
         (config.minutes as number) >= 1 &&
         (config.minutes as number) <= MAX_DELAY_MINUTES
       );
+    case "wait_until":
+      return exactKeys(config, ["time"]) && typeof config.time === "string" && WALL_CLOCK_TIME.test(config.time);
     case "wait_for_reply":
       return (
         exactKeys(config, ["timeout_minutes"], ["save_field_id"]) &&
@@ -195,8 +206,8 @@ function saveFieldErrors(node: FlowNode, fields: Map<string, string>, path: stri
   return [];
 }
 
-// The longest total delay on any path into each node, including the node's own delay. It assumes
-// the edges have no cycle.
+// The longest total delay on any path into each node, including the node's own delay or time wait.
+// It assumes the edges have no cycle.
 function delayTotals(nodes: FlowNode[], edges: FlowEdge[]): Map<string, number> {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const incoming = new Map<string, string[]>();
@@ -206,7 +217,12 @@ function delayTotals(nodes: FlowNode[], edges: FlowEdge[]): Map<string, number> 
     const known = totals.get(id);
     if (known !== undefined) return known;
     const node = byId.get(id);
-    const own = node?.type === "delay" && Number.isInteger(node.config.minutes) ? (node.config.minutes as number) : 0;
+    const own =
+      node?.type === "delay" && Number.isInteger(node.config.minutes)
+        ? (node.config.minutes as number)
+        : node?.type === "wait_until"
+          ? TIME_WAIT_MINUTES
+          : 0;
     const value = Math.max(0, ...(incoming.get(id) ?? []).map(total)) + own;
     totals.set(id, value);
     return value;

@@ -5,12 +5,13 @@ import { ApiError, AuthClient, json, readJson, requireSameOrigin, type AuthEnv, 
 import { limitAuthRequest, type AuthRateLimitEnv } from "./auth-rate-limit.ts";
 import {
   listActivity,
+  currentWorkspace,
   disconnectConnection,
   ensureWorkspace,
   listConnections,
   listRules,
-  membershipFor,
   saveRule,
+  saveWorkspaceSettings,
   parseRule,
   updateConnection,
 } from "./settings.ts";
@@ -110,8 +111,10 @@ export async function appApi(
         return await finishInstagramOAuth(pool, user, request, env, fetchImpl);
       if (url.pathname === "/api/workspace" && request.method === "POST") {
         await ensureWorkspace(pool, user);
-        return json(await membershipFor(pool, user, "agent"));
+        return json(await currentWorkspace(pool, user));
       }
+      if (url.pathname === "/api/workspace/settings" && request.method === "PUT")
+        return json(await saveWorkspaceSettings(pool, user, await readJson(request)));
       if (url.pathname === "/api/invites/accept" && request.method === "POST")
         return json(await acceptInvite(pool, user, await readJson(request)));
       if (url.pathname === "/api/workspace/members" && request.method === "GET")

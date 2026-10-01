@@ -112,6 +112,7 @@ test("agents are refused the administrative routes that admins can reach", async
     ["POST", `/api/flows/${draft}/disable`],
     ["DELETE", `/api/flows/${archived}`],
     ["GET", "/api/workspace/export"],
+    ["PUT", "/api/workspace/settings", { time_zone: "Asia/Tokyo" }],
     ["DELETE", `/api/connections/${connectionId}`],
   ];
   for (const [method, path, body] of routes) {

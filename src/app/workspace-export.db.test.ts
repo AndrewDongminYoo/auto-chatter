@@ -80,6 +80,14 @@ test("exports every table of the caller's workspace and nothing from another wor
   assert.ok(body.tables.instagram_connections[0].token_expires_at);
 });
 
+test("the export carries the caller's workspace row with its time zone and no other workspace", async () => {
+  await pool.query("UPDATE workspaces SET time_zone='America/New_York' WHERE id=$1", [workspaceId]);
+  await pool.query("UPDATE workspaces SET time_zone='Europe/Paris' WHERE id=$1", [otherWorkspaceId]);
+  const body = await (await request()).json();
+  assert.deepEqual(body.tables.workspaces, [{ id: workspaceId, time_zone: "America/New_York" }]);
+  assert.ok(!body.excluded.includes("workspaces"));
+});
+
 test("every public table is exported or explicitly excluded, and secret-like columns are omitted", async () => {
   const tables = (
     await pool.query<{ table_name: string }>(

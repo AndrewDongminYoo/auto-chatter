@@ -136,6 +136,8 @@ function resetSession() {
   currentUserId = undefined;
   currentRole = undefined;
   byId("members-section").hidden = true;
+  byId("time-zone-form").reset();
+  timeZoneControls();
   byId("members").replaceChildren();
   byId("invites").replaceChildren();
   byId("invite-result").hidden = true;
@@ -203,6 +205,8 @@ const errors = {
   workspace_required: "작업 공간에 참여하고 있지 않습니다. 페이지를 새로 고치거나 새 초대를 요청해 주세요.",
   invalid_email: "초대할 이메일 주소를 확인해 주세요.",
   invalid_role: "역할을 다시 선택해 주세요.",
+  invalid_time_zone:
+    "시간대 이름을 확인해 주세요. 목록에 있는 Asia/Seoul 같은 이름을 대소문자까지 그대로 입력해야 합니다.",
   already_member: "이미 작업 공간의 멤버입니다.",
   invite_limit_reached: "대기 중인 초대가 너무 많습니다. 사용하지 않는 초대를 취소한 뒤 다시 시도해 주세요.",
   invite_not_found: "초대 링크를 확인할 수 없습니다. 링크 전체를 복사했는지 확인하거나 새 초대를 요청해 주세요.",
@@ -627,6 +631,15 @@ async function loadMembers() {
   }
 }
 
+// Admins and owners change the workspace time zone; agents see it read-only.
+function timeZoneControls() {
+  const zoneForm = byId("time-zone-form");
+  const editable = currentRole === "owner" || currentRole === "admin";
+  zoneForm.elements.time_zone.readOnly = !editable;
+  zoneForm.querySelector("button[type=submit]").hidden = !editable;
+  byId("time-zone-readonly").hidden = editable || currentRole === undefined;
+}
+
 async function loadWorkspace() {
   const generation = segmentsGeneration;
   const me = await api("/api/me");
@@ -636,6 +649,8 @@ async function loadWorkspace() {
   if (generation !== segmentsGeneration) return;
   const membership = await api("/api/workspace", "POST");
   currentRole = membership.role;
+  byId("time-zone-form").elements.time_zone.value = membership.time_zone ?? "";
+  timeZoneControls();
   byId("members-section").hidden = currentRole !== "owner";
   if (currentRole === "owner") void loadMembers();
   if (generation !== segmentsGeneration) return;
@@ -1187,6 +1202,21 @@ byId("invite-form").addEventListener("submit", (event) => {
     inviteForm.reset();
     notice(`${created.email} 초대 링크를 만들었습니다. 이 화면을 벗어나면 링크를 다시 볼 수 없습니다.`);
     await loadMembers();
+  });
+});
+// The browser's zone names are only suggestions; the server accepts the names PostgreSQL knows.
+try {
+  byId("time-zone-options").replaceChildren(...Intl.supportedValuesOf("timeZone").map((zone) => new Option(zone)));
+} catch {
+  // Without the list the field still accepts a typed name.
+}
+byId("time-zone-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const zoneForm = event.currentTarget;
+  action(zoneForm.querySelector("button[type=submit]"), async () => {
+    const saved = await api("/api/workspace/settings", "PUT", { time_zone: zoneForm.elements.time_zone.value.trim() });
+    zoneForm.elements.time_zone.value = saved.time_zone;
+    notice(`시간대를 저장했습니다(${saved.time_zone}). 지금부터 정한 시각까지 기다리기 시작하는 실행에 적용됩니다.`);
   });
 });
 byId("copy-invite").addEventListener("click", async () => {
