@@ -249,3 +249,63 @@ test("the trigger uses the legacy rule matcher, including exclusions and match-a
   document.nodes[0]!.config.keywords = [];
   assert.equal(matchesFlowTrigger(document, "hello"), true);
 });
+
+test("a delay stops the run as waiting and keeps the actions taken before it", () => {
+  const document = chain([
+    { id: "tag", type: "add_tag", config: { tag: "lead" } },
+    { id: "wait", type: "delay", config: { minutes: 30 } },
+  ]);
+  assert.deepEqual(flowExecutionErrors(document, types), []);
+  assert.deepEqual(plan(document), {
+    status: "waiting",
+    resume_node_id: "wait",
+    delay_minutes: 30,
+    steps: [
+      { node_id: "start", node_type: "instagram_comment", outcome: "next" },
+      { node_id: "tag", node_type: "add_tag", outcome: "added" },
+      { node_id: "wait", node_type: "delay", outcome: "waiting" },
+    ],
+    changes: { tags: new Map([["lead", true]]), fields: new Map() },
+  });
+});
+
+test("a resumed run continues after its delay with the facts read at resume time", () => {
+  const document = chain([
+    { id: "wait", type: "delay", config: { minutes: 30 } },
+    { id: "vip", type: "has_tag", config: { tag: "vip" } },
+  ]);
+  // The reply hangs off vip's "true" port, so only a contact tagged after the comment gets it.
+  document.edges = document.edges.map((edge) => (edge.from === "vip" ? { ...edge, port: "true" } : edge));
+  assert.equal(planFlowRun(document, noFacts, input, "wait").status, "ended");
+  assert.deepEqual(planFlowRun(document, { tags: new Set(["vip"]), fields: new Map() }, input, "wait"), {
+    status: "message",
+    text: "Thanks",
+    steps: [
+      { node_id: "vip", node_type: "has_tag", outcome: "true" },
+      { node_id: "reply", node_type: "instagram_message", outcome: "queued" },
+    ],
+    changes: { tags: new Map(), fields: new Map() },
+  });
+});
+
+test("a resumed run stops again at the next delay", () => {
+  const document = chain([
+    { id: "first", type: "delay", config: { minutes: 5 } },
+    { id: "second", type: "delay", config: { minutes: 10020 } },
+  ]);
+  const resumed = planFlowRun(document, noFacts, input, "first");
+  assert.equal(resumed.status, "waiting");
+  assert.equal(resumed.status === "waiting" && resumed.resume_node_id, "second");
+  assert.equal(resumed.status === "waiting" && resumed.delay_minutes, 10020);
+  assert.deepEqual(resumed.steps, [{ node_id: "second", node_type: "delay", outcome: "waiting" }]);
+});
+
+test("resuming from a missing node or a node that is not a delay fails the run", () => {
+  const document = chain([{ id: "wait", type: "delay", config: { minutes: 1 } }]);
+  for (const from of ["gone", "reply", "start"]) {
+    const result = planFlowRun(document, noFacts, input, from);
+    assert.equal(result.status, "failed", from);
+    assert.equal(result.status === "failed" && result.failure_code, "invalid_definition");
+    assert.deepEqual(result.steps, []);
+  }
+});

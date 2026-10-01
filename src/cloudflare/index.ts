@@ -355,13 +355,26 @@ export default {
       try {
         if (!env.TOKEN_ENCRYPTION_KEY) throw new Error("Token encryption not configured");
         await refreshDueInstagramTokens(pool, env.TOKEN_ENCRYPTION_KEY, fetch, new Date(), env.META_GRAPH_VERSION);
-        if (env.SEND_ENABLED !== "true") return;
+        // Resuming a delayed flow run only queues its reply, so it runs while sending is off too; a
+        // failed run is reported after the delivery steps below so it cannot hold them back.
+        let resumeFailed = false;
+        try {
+          await resumeDueFlowRuns(pool);
+        } catch {
+          console.error("Flow run resume failed; the next schedule retries it");
+          resumeFailed = true;
+        }
+        if (env.SEND_ENABLED !== "true") {
+          if (resumeFailed) throw new Error("Flow run resume failed");
+          return;
+        }
         await pool.query(
           "UPDATE private_reply_outbox SET status='unknown',failure_code='worker_interrupted' WHERE status='sending' AND attempt_started_at<now()-interval '10 minutes'",
         );
         await recoverStaleManualReplies(pool);
         await recoverStaleFollowReplies(pool, new Date(Date.now() - 10 * 60_000));
         await wakeDueReplies(pool, env);
+        if (resumeFailed) throw new Error("Flow run resume failed");
       } finally {
         await pool.end();
       }
@@ -371,7 +384,7 @@ export default {
   },
 };
 import { Pool } from "pg";
-import { ingestComments } from "../instagram/store.ts";
+import { ingestComments, resumeDueFlowRuns } from "../instagram/store.ts";
 import { parseCommentEvents, verifySignature, verifySubscription } from "../instagram/webhook.ts";
 import { processNextPrivateReply, PreSendVerificationError } from "../instagram/reply-worker.ts";
 import { InstagramLoginPrivateReplyTransport } from "../instagram/instagram-login-private-reply.ts";

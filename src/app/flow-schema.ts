@@ -26,13 +26,19 @@ const PORTS: Record<string, string[]> = {
   add_tag: ["next"],
   remove_tag: ["next"],
   set_field: ["next"],
+  delay: ["next"],
 };
 // Own-property lookup, so names such as "constructor" are unknown types rather than prototype members.
 function portsOf(type: string): string[] | undefined {
   return Object.hasOwn(PORTS, type) ? PORTS[type] : undefined;
 }
-// A cycle is allowed only through a node that waits for time or input; #28 defines none.
+// A cycle is allowed only through a node that waits for input; none exists yet. A delay alone would
+// repeat the same path on a timer, so it does not count.
 const WAIT_TYPES = new Set<string>();
+// A private reply must be sent within seven days of the comment (reply-policy.ts), and a delay
+// starts when the webhook arrives, so the delays before a message leave an hour of that window for
+// webhook, cron and retry latency (service policy, not a Meta limit).
+const MAX_DELAY_MINUTES = 7 * 24 * 60 - 60;
 
 function error(code: string, path: string, extra: { node_id?: string; edge_index?: number } = {}): FlowError {
   return { code, ...extra, path };
@@ -131,6 +137,13 @@ function validConfig(node: FlowNode): boolean {
       );
     case "set_field":
       return exactKeys(config, ["field_id", "value"]) && isUuid(config.field_id) && config.value !== null;
+    case "delay":
+      return (
+        exactKeys(config, ["minutes"]) &&
+        Number.isInteger(config.minutes) &&
+        (config.minutes as number) >= 1 &&
+        (config.minutes as number) <= MAX_DELAY_MINUTES
+      );
     default:
       return false;
   }
@@ -158,6 +171,26 @@ function fieldErrors(node: FlowNode, fields: Map<string, string>, path: string):
   if (value !== undefined && !isValidFieldValue(type, value))
     return [error("invalid_field_value", path, { node_id: node.id })];
   return [];
+}
+
+// The longest total delay on any path into each node, including the node's own delay. It assumes
+// the edges have no cycle.
+function delayTotals(nodes: FlowNode[], edges: FlowEdge[]): Map<string, number> {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const incoming = new Map<string, string[]>();
+  for (const edge of edges) incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), edge.from]);
+  const totals = new Map<string, number>();
+  const total = (id: string): number => {
+    const known = totals.get(id);
+    if (known !== undefined) return known;
+    const node = byId.get(id);
+    const own = node?.type === "delay" && Number.isInteger(node.config.minutes) ? (node.config.minutes as number) : 0;
+    const value = Math.max(0, ...(incoming.get(id) ?? []).map(total)) + own;
+    totals.set(id, value);
+    return value;
+  };
+  for (const node of nodes) total(node.id);
+  return totals;
 }
 
 function hasCycle(nodes: FlowNode[], edges: FlowEdge[]): boolean {
@@ -241,6 +274,13 @@ export function validateFlowForPublish(input: unknown, context: PublishContext):
     if (!reached.has(node.id)) errors.push(error("unreachable_node", `nodes[${index}]`, { node_id: node.id }));
   });
   if (hasCycle(nodes, valid)) errors.push(error("immediate_cycle", "edges"));
+  else {
+    const totals = delayTotals(nodes, valid);
+    nodes.forEach((node, index) => {
+      if (node.type === "instagram_message" && (totals.get(node.id) ?? 0) > MAX_DELAY_MINUTES)
+        errors.push(error("delay_exceeds_reply_window", `nodes[${index}]`, { node_id: node.id }));
+    });
+  }
   if (!configValid.get(trigger.id)) return errors;
   const triggerPath = `nodes[${nodes.indexOf(trigger)}].config`;
   const connection = context.connection;

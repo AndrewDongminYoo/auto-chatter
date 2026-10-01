@@ -9,11 +9,14 @@ export type FlowStep = { node_id: string; node_type: string; outcome: string };
 // Net changes against the facts: a tag maps to its new membership, a field to its new value.
 export type FlowChanges = { tags: Map<string, boolean>; fields: Map<string, unknown> };
 export type FlowPlan = { steps: FlowStep[]; changes: FlowChanges } & (
-  { status: "ended" } | { status: "message"; text: string } | { status: "failed"; failure_code: string }
+  | { status: "ended" }
+  | { status: "message"; text: string }
+  | { status: "failed"; failure_code: string }
+  | { status: "waiting"; resume_node_id: string; delay_minutes: number }
 );
 
-// Waits (#32), follow checks and message buttons are refused when a flow is enabled rather than
-// skipped at run time.
+// Reply waits (#32), follow checks and message buttons are refused when a flow is enabled rather
+// than skipped at run time.
 const EXECUTABLE_TYPES = new Set([
   "instagram_comment",
   "has_tag",
@@ -22,6 +25,7 @@ const EXECUTABLE_TYPES = new Set([
   "add_tag",
   "remove_tag",
   "set_field",
+  "delay",
 ]);
 const MAX_TAGS = 20;
 const MAX_MESSAGE = 1000;
@@ -99,10 +103,17 @@ function render(
   return { text: rendered };
 }
 
-// Walks one published document from its trigger. The result depends only on the document, the
-// facts and the input, so a run records exactly the path that produced its message. Actions change
-// the facts that later nodes read; a failure keeps the changes of the actions before it.
-export function planFlowRun(document: FlowDocument, facts: ContactFacts, input: RunInput): FlowPlan {
+// Walks one published document from its trigger, or from the delay a waiting run stopped at. The
+// result depends only on the document, the facts and the input, so a run records exactly the path
+// that produced its message. Actions change the facts that later nodes read; a failure keeps the
+// changes of the actions before it. A delay ends this walk as waiting; resuming records only the
+// nodes after it, so the run's steps read as one path.
+export function planFlowRun(
+  document: FlowDocument,
+  facts: ContactFacts,
+  input: RunInput,
+  resumeFrom?: string,
+): FlowPlan {
   const tags = new Set(facts.tags);
   const fields = new Map(facts.fields);
   const changes = (): FlowChanges => ({
@@ -113,10 +124,12 @@ export function planFlowRun(document: FlowDocument, facts: ContactFacts, input: 
     ),
     fields: new Map([...fields].filter(([id, value]) => facts.fields.get(id) !== value)),
   });
-  const start = trigger(document);
-  if (!start) return { status: "failed", steps: [], failure_code: "invalid_definition", changes: changes() };
   const byId = new Map(document.nodes.map((node) => [node.id, node]));
-  const steps: FlowStep[] = [{ node_id: start.id, node_type: start.type, outcome: "next" }];
+  const start = resumeFrom === undefined ? trigger(document) : byId.get(resumeFrom);
+  if (!start || (resumeFrom !== undefined && start.type !== "delay"))
+    return { status: "failed", steps: [], failure_code: "invalid_definition", changes: changes() };
+  const steps: FlowStep[] =
+    resumeFrom === undefined ? [{ node_id: start.id, node_type: start.type, outcome: "next" }] : [];
   const fail = (node: FlowNode, code: string): FlowPlan => {
     steps.push({ node_id: node.id, node_type: node.type, outcome: code });
     return { status: "failed", steps, failure_code: code, changes: changes() };
@@ -153,6 +166,15 @@ export function planFlowRun(document: FlowDocument, facts: ContactFacts, input: 
         fields.set(id, node.config.value);
         outcome = "set";
       }
+    } else if (node.type === "delay") {
+      steps.push({ node_id: node.id, node_type: node.type, outcome: "waiting" });
+      return {
+        status: "waiting",
+        steps,
+        resume_node_id: node.id,
+        delay_minutes: node.config.minutes as number,
+        changes: changes(),
+      };
     } else if (
       node.type === "instagram_message" &&
       node.config.button_title === undefined &&
