@@ -455,3 +455,32 @@ test("a resume entry must name a delay's next port or a reply wait's replied or 
     assert.deepEqual(result.steps, []);
   }
 });
+
+test("a time wait stops the run as waiting until a wall-clock time and resumes on next", () => {
+  const document = chain([
+    { id: "tag", type: "add_tag", config: { tag: "lead" } },
+    { id: "morning", type: "wait_until", config: { time: "09:30" } },
+  ]);
+  assert.deepEqual(flowExecutionErrors(document, types), []);
+  assert.deepEqual(plan(document), {
+    status: "waiting",
+    resume_node_id: "morning",
+    until_time: "09:30",
+    steps: [
+      { node_id: "start", node_type: "instagram_comment", outcome: "next" },
+      { node_id: "tag", node_type: "add_tag", outcome: "added" },
+      { node_id: "morning", node_type: "wait_until", outcome: "waiting" },
+    ],
+    changes: { tags: new Map([["lead", true]]), fields: new Map() },
+  });
+  assert.deepEqual(planFlowRun(document, noFacts, input, { node_id: "morning", port: "next" }), {
+    status: "message",
+    text: "Thanks",
+    steps: [{ node_id: "reply", node_type: "instagram_message", outcome: "queued" }],
+    changes: { tags: new Map(), fields: new Map() },
+  });
+  for (const port of ["replied", "timeout"]) {
+    const result = planFlowRun(document, noFacts, input, { node_id: "morning", port });
+    assert.equal(result.status === "failed" && result.failure_code, "invalid_definition", port);
+  }
+});

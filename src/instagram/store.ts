@@ -18,6 +18,35 @@ const REPLY_DEADLINE = `reply.sent_at+make_interval(mins=>jsonb_path_query_first
   'lax $.nodes[*] ? (@.id == $id && @.type == "wait_for_reply").config.timeout_minutes',
   jsonb_build_object('id',run.resume_node_id))::int)`;
 
+// The first instant strictly after `at` at which the wall clock in `zone` reads `time` (#32): today's
+// occurrence in that zone if it is still ahead, otherwise tomorrow's. `at` is read once (the input row
+// is the outer side of every lateral join), so all candidates compare against the same instant. The
+// local day comes from `at AT TIME ZONE zone`, never from the session time zone, and the offsets come
+// from PostgreSQL's zone data. A time skipped when clocks go forward is PostgreSQL's reading, with the
+// offset before the change (02:30 becomes 03:30). A time that occurs twice when clocks go back has one
+// instant per offset in force within three hours of PostgreSQL's reading, and the earliest one still
+// ahead is used, so the first 01:30 comes before the second. Every interval is under a day, so no
+// arithmetic depends on the session time zone. Exported so tests run the same text with fixed instants.
+export function nextWallClockSql(at: string, zone: string, time: string): string {
+  return `(SELECT min(c)
+    FROM (SELECT (${at})::timestamptz AS a,(${zone})::text AS z,(${time})::time AS t) wall_input
+    CROSS JOIN LATERAL (SELECT (a AT TIME ZONE z)::date+d+t AS l FROM generate_series(-1,1) d) wall_day
+    CROSS JOIN LATERAL (SELECT l AT TIME ZONE z AS fold) wall_fold
+    CROSS JOIN LATERAL (SELECT fold AS c UNION ALL
+      SELECT (l AT TIME ZONE 'UTC')-((p AT TIME ZONE z)-(p AT TIME ZONE 'UTC'))
+      FROM unnest(ARRAY[fold-interval '3 hours',fold+interval '3 hours']) p) wall_candidate
+    WHERE c>a AND (c=fold OR c AT TIME ZONE z=l))`;
+}
+
+// When a stopped run resumes: a delay counts its minutes from now, a time wait goes to the next
+// occurrence of its local time in the workspace's current time zone, and any other state has no
+// resume time. clock_timestamp(), not the transaction's now(), so time spent waiting for locks is not
+// taken out of the wait. `workspace` is SQL naming the run's workspace ID.
+function resumeAtSql(workspace: string, minutes: string, until: string): string {
+  return `CASE WHEN ${until}::text IS NULL THEN clock_timestamp()+make_interval(mins=>${minutes})
+    ELSE ${nextWallClockSql("clock_timestamp()", `SELECT time_zone FROM workspaces WHERE id=${workspace}`, `${until}::text`)} END`;
+}
+
 interface ConnectionRow {
   id: string;
   workspace_id: string;
@@ -152,7 +181,7 @@ async function startFlowRun(
   const state = runState(plan);
   const runs = await client.query<{ id: string }>(
     `INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,event_id,status,failure_code,resume_at,resume_node_id)
-     VALUES($1,$2,$3,$4,$5,$6,$7,clock_timestamp()+make_interval(mins=>$8),$9) ON CONFLICT(flow_id,event_id) DO NOTHING RETURNING id`,
+     VALUES($1,$2,$3,$4,$5,$6,$7,${resumeAtSql("$1", "$8", "$10")},$9) ON CONFLICT(flow_id,event_id) DO NOTHING RETURNING id`,
     [
       connection.workspace_id,
       connection.id,
@@ -163,6 +192,7 @@ async function startFlowRun(
       state.failureCode,
       state.delayMinutes,
       state.resumeNodeId,
+      state.untilTime,
     ],
   );
   const run = runs.rows[0];
@@ -185,23 +215,25 @@ function runState(plan: FlowPlan): {
   status: string;
   failureCode: string | null;
   delayMinutes: number | null;
+  untilTime: string | null;
   resumeNodeId: string | null;
 } {
+  const none = { failureCode: null, delayMinutes: null, untilTime: null };
   if (plan.status === "message")
     return plan.wait_node_id === undefined
-      ? { status: "delivering", failureCode: null, delayMinutes: null, resumeNodeId: null }
-      : { status: "awaiting_reply", failureCode: null, delayMinutes: null, resumeNodeId: plan.wait_node_id };
+      ? { ...none, status: "delivering", resumeNodeId: null }
+      : { ...none, status: "awaiting_reply", resumeNodeId: plan.wait_node_id };
   if (plan.status === "waiting")
     return {
+      ...none,
       status: "waiting",
-      failureCode: null,
-      delayMinutes: plan.delay_minutes,
+      ...("until_time" in plan ? { untilTime: plan.until_time } : { delayMinutes: plan.delay_minutes }),
       resumeNodeId: plan.resume_node_id,
     };
   return {
+    ...none,
     status: plan.status,
     failureCode: plan.status === "failed" ? plan.failure_code : null,
-    delayMinutes: null,
     resumeNodeId: null,
   };
 }
@@ -455,24 +487,35 @@ async function continueFlowRun(
   entry: ResumeEntry,
   reply?: { text: string; messageId: string },
 ): Promise<void> {
-  // A delay counts from when the run reaches it: clock_timestamp(), not the transaction's now(), so
-  // time spent waiting for locks is not taken out of the next wait. A reply is recorded on the run
-  // even when it only cancels it, because the message was still used up by this run.
-  const finish = (status: string, failureCode: string | null, delayMinutes: number | null, resumeNode: string | null) =>
+  // A delay or a time wait counts from when the run reaches it (resumeAtSql), and a time wait reads
+  // the workspace time zone at that moment. A reply is recorded on the run even when it only cancels
+  // it, because the message was still used up by this run.
+  const finish = (state: ReturnType<typeof runState>) =>
     client.query(
-      `UPDATE flow_runs SET status=$2,failure_code=$3,resume_at=clock_timestamp()+make_interval(mins=>$4),resume_node_id=$5,
-         reply_message_id=coalesce($7,reply_message_id)
+      `UPDATE flow_runs SET status=$2,failure_code=$3,resume_at=${resumeAtSql("flow_runs.workspace_id", "$4", "$8")},
+         resume_node_id=$5,reply_message_id=coalesce($7,reply_message_id)
        WHERE id=$1 AND status=$6`,
-      [runId, status, failureCode, delayMinutes, resumeNode, run.status, reply?.messageId ?? null],
+      [
+        runId,
+        state.status,
+        state.failureCode,
+        state.delayMinutes,
+        state.resumeNodeId,
+        run.status,
+        reply?.messageId ?? null,
+        state.untilTime,
+      ],
     );
+  const cancelled = (failureCode: string) =>
+    finish({ status: "cancelled", failureCode, delayMinutes: null, untilTime: null, resumeNodeId: null });
   // Turning the flow off or losing the connection during a delay or a reply wait ends the run before
   // any node after it runs; turning it back on does not revive it.
   if (!connection.active) {
-    await finish("cancelled", "connection_unavailable", null, null);
+    await cancelled("connection_unavailable");
     return;
   }
   if (!run.flow_on) {
-    await finish("cancelled", "inactive_flow", null, null);
+    await cancelled("inactive_flow");
     return;
   }
   const owner: ConnectionRow = { id: connectionId, workspace_id: connection.workspace_id };
@@ -493,8 +536,7 @@ async function continueFlowRun(
         failure_code: "invalid_definition",
         changes: { tags: new Map(), fields: new Map() },
       };
-  const state = runState(plan);
-  await finish(state.status, state.failureCode, state.delayMinutes, state.resumeNodeId);
+  await finish(runState(plan));
   const next = await client.query<{ seq: number }>(
     "SELECT coalesce(max(seq),-1)+1 AS seq FROM flow_step_runs WHERE run_id=$1",
     [runId],

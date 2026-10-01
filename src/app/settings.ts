@@ -85,6 +85,31 @@ export async function lockWorkspaceForMember(
   if (!roleAllows(member.role, minimum)) throw new ApiError(403, "role_forbidden");
 }
 
+// The caller's membership and the workspace settings the dashboard shows to every role.
+export async function currentWorkspace(pool: Pool, user: User) {
+  const member = await membershipFor(pool, user, "agent");
+  const settings = await pool.query<{ time_zone: string }>("SELECT time_zone FROM workspaces WHERE id=$1", [
+    member.workspace_id,
+  ]);
+  return { ...member, time_zone: settings.rows[0]?.time_zone ?? null };
+}
+
+// The time zone a wait_until node reads (#32). Only names PostgreSQL knows are stored, compared
+// case-sensitively. A plain UPDATE of a non-key column does not conflict with the key-share locks that
+// ingestion's foreign key checks hold on the workspace row.
+export async function saveWorkspaceSettings(pool: Pool, user: User, input: unknown) {
+  if (!isRecord(input) || typeof input.time_zone !== "string" || input.time_zone.length > 100)
+    throw new ApiError(400, "invalid_time_zone");
+  const workspaceId = await workspaceFor(pool, user, "admin");
+  const result = await pool.query<{ time_zone: string }>(
+    `UPDATE workspaces SET time_zone=$2 WHERE id=$1 AND EXISTS(SELECT 1 FROM pg_timezone_names WHERE name=$2)
+     RETURNING time_zone`,
+    [workspaceId, input.time_zone],
+  );
+  if (!result.rows[0]) throw new ApiError(400, "invalid_time_zone");
+  return { time_zone: result.rows[0].time_zone };
+}
+
 export function normalizeEmail(value: string): string {
   return value.trim().toLowerCase();
 }

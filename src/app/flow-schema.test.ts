@@ -53,6 +53,7 @@ const branching = flow(
     { id: "has", type: "has_tag", config: { tag: "vip" } },
     { id: "drop", type: "remove_tag", config: { tag: "cold" } },
     { id: "later", type: "delay", config: { minutes: 60 } },
+    { id: "morning", type: "wait_until", config: { time: "09:00" } },
     { id: "answer", type: "wait_for_reply", config: { timeout_minutes: 1440, save_field_id: field } },
     { id: "answered", type: "add_tag", config: { tag: "answered" } },
     { id: "silent", type: "remove_tag", config: { tag: "answered" } },
@@ -67,6 +68,7 @@ const branching = flow(
     { from: "check", port: "false", to: "has" },
     { from: "has", port: "true", to: "drop" },
     { from: "drop", port: "next", to: "later" },
+    { from: "later", port: "next", to: "morning" },
     { from: "no", port: "next", to: "answer" },
     { from: "answer", port: "replied", to: "answered" },
     { from: "answer", port: "timeout", to: "silent" },
@@ -258,6 +260,78 @@ test("the delays before a message add up to no more than the reply window allows
     ],
   );
   assert.deepEqual(codes(branches), ["delay_exceeds_reply_window"]);
+});
+
+test("a time wait names one 24-hour wall-clock minute and continues on next", () => {
+  const one = (config: unknown) =>
+    codes(flow([{ id: "t", type: "wait_until", config }], [{ from: "start", port: "next", to: "t" }]));
+  for (const time of ["00:00", "09:30", "23:59"]) assert.deepEqual(one({ time }), [], time);
+  for (const config of [
+    { time: "24:00" },
+    { time: "9:30" },
+    { time: "09:60" },
+    { time: "09:30:00" },
+    { time: " 09:30" },
+    { time: 930 },
+    {},
+    { time: "09:30", time_zone: "UTC" },
+  ])
+    assert.deepEqual(one(config), ["invalid_config"], JSON.stringify(config));
+  assert.deepEqual(
+    codes(
+      flow(
+        [
+          { id: "t", type: "wait_until", config: { time: "09:30" } },
+          { id: "m", type: "instagram_message", config: { text: "Hi" } },
+        ],
+        [
+          { from: "start", port: "next", to: "t" },
+          { from: "t", port: "timeout", to: "m" },
+        ],
+      ),
+    ),
+    ["invalid_port", "unreachable_node"],
+  );
+});
+
+test("a time wait counts as a full day toward the reply window and does not break a cycle", () => {
+  const timed = (waits: number, minutes: number) =>
+    flow(
+      [
+        ...Array.from({ length: waits }, (_, index) => ({
+          id: `t${index}`,
+          type: "wait_until",
+          config: { time: "09:00" },
+        })),
+        { id: "d", type: "delay", config: { minutes } },
+        { id: "m", type: "instagram_message", config: { text: "Hi" } },
+      ],
+      [
+        ...Array.from({ length: waits }, (_, index) => ({
+          from: index === 0 ? "start" : `t${index - 1}`,
+          port: "next",
+          to: `t${index}`,
+        })),
+        { from: `t${waits - 1}`, port: "next", to: "d" },
+        { from: "d", port: "next", to: "m" },
+      ],
+    );
+  // Six time waits are 8,640 minutes, which leaves 1,380 of the 10,020 the reply window allows.
+  assert.deepEqual(codes(timed(6, 1380)), []);
+  assert.deepEqual(codes(timed(6, 1381)), ["delay_exceeds_reply_window"]);
+  assert.deepEqual(codes(timed(7, 1)), ["delay_exceeds_reply_window"]);
+  const looped = flow(
+    [
+      { id: "t", type: "wait_until", config: { time: "09:00" } },
+      { id: "b", type: "has_tag", config: { tag: "a" } },
+    ],
+    [
+      { from: "start", port: "next", to: "t" },
+      { from: "t", port: "next", to: "b" },
+      { from: "b", port: "true", to: "t" },
+    ],
+  );
+  assert.deepEqual(codes(looped), ["immediate_cycle"]);
 });
 
 test("node configs follow the existing rule, tag, field and button limits", () => {

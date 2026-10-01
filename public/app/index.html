@@ -146,10 +146,38 @@
               데이터 내보내기
             </button>
             <p id="export-help" class="hint">
-              연결 계정, 규칙, 댓글·답장 기록, 연락처, 인박스, 동의·삭제 기록과 플로를 JSON 파일 하나로 저장합니다. 연동
-              토큰과 로그인 정보는 포함하지 않습니다.
+              작업 공간 설정, 연결 계정, 규칙, 댓글·답장 기록, 연락처, 인박스, 동의·삭제 기록과 플로를 JSON 파일 하나로
+              저장합니다. 연동 토큰과 로그인 정보는 포함하지 않습니다.
             </p>
           </div>
+        </section>
+        <section id="workspace-settings-section" class="card" aria-labelledby="workspace-settings-title">
+          <div class="section-heading">
+            <div>
+              <h2 id="workspace-settings-title">작업 공간 설정</h2>
+            </div>
+          </div>
+          <form id="time-zone-form" class="invite-form">
+            <label>
+              시간대
+              <input
+                name="time_zone"
+                list="time-zone-options"
+                required
+                maxlength="100"
+                autocomplete="off"
+                spellcheck="false"
+                aria-describedby="time-zone-help"
+              />
+            </label>
+            <datalist id="time-zone-options"></datalist>
+            <button type="submit" data-loading-label="저장 중…">시간대 저장</button>
+          </form>
+          <p id="time-zone-help" class="hint">
+            플로에서 정한 시각까지 기다릴 때 이 시간대의 시각을 따릅니다. 이미 기다리는 중인 실행의 재개 시각은 바뀌지
+            않습니다.
+          </p>
+          <p id="time-zone-readonly" class="hint" hidden>시간대는 관리자와 소유자만 바꿀 수 있습니다.</p>
         </section>
         <section id="members-section" class="card" aria-labelledby="members-title" hidden>
           <div class="section-heading">

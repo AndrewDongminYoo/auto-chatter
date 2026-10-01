@@ -18,10 +18,10 @@
 
 ## 포함과 제외
 
-- `src/app/workspace-export.ts`의 `EXPORTED_TABLES`에 있는 테이블을 내보냅니다. `workspace_id`가 없는 팔로우 대화와 확인 메시지 수신 기록은 작업 공간의 연결을 통해 범위를 정합니다.
+- `src/app/workspace-export.ts`의 `EXPORTED_TABLES`에 있는 테이블을 내보냅니다. `workspace_id`가 없는 팔로우 대화와 확인 메시지 수신 기록은 작업 공간의 연결을 통해 범위를 정하고, `workspaces`는 호출자의 작업 공간 행 하나(ID와 시간대 설정)만 내보냅니다.
 - 댓글·DM 작성자 ID와 본문처럼 작업 공간이 운영하며 쌓은 기록은 포함합니다.
 - 연결의 `access_token_encrypted`와 초대의 `token_hash`는 제외합니다. 토큰 만료·발급 시각은 포함합니다.
-- `workspaces`(ID는 최상위 `workspace_id`로 제공), `instagram_oauth_states`(짧게 쓰이는 로그인 비밀값), `workspace_deletion_records`(이미 삭제된 작업 공간의 증적)는 `EXCLUDED_TABLES`로 제외합니다.
+- `instagram_oauth_states`(짧게 쓰이는 로그인 비밀값), `workspace_deletion_records`(이미 삭제된 작업 공간의 증적)는 `EXCLUDED_TABLES`로 제외합니다.
 - 새 public 테이블은 `EXPORTED_TABLES`나 `EXCLUDED_TABLES` 중 하나에 넣어야 하며, DB 테스트가 이를 강제합니다. 이름에 `token`, `secret`, `encrypt`, `password`, `hash`가 들어간 열은 시각 열 세 개를 빼고 `omit`에 넣어야 합니다.
 
 ## 화면
