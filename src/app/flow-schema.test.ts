@@ -294,7 +294,7 @@ test("a time wait names one 24-hour wall-clock minute and continues on next", ()
   );
 });
 
-test("a time wait counts as a full day toward the reply window and does not break a cycle", () => {
+test("a time wait counts as a day plus the largest clock-back shift toward the reply window and does not break a cycle", () => {
   const timed = (waits: number, minutes: number) =>
     flow(
       [
@@ -316,9 +316,9 @@ test("a time wait counts as a full day toward the reply window and does not brea
         { from: "d", port: "next", to: "m" },
       ],
     );
-  // Six time waits are 8,640 minutes, which leaves 1,380 of the 10,020 the reply window allows.
-  assert.deepEqual(codes(timed(6, 1380)), []);
-  assert.deepEqual(codes(timed(6, 1381)), ["delay_exceeds_reply_window"]);
+  // Six time waits are 9,360 minutes, which leaves 660 of the 10,020 the reply window allows.
+  assert.deepEqual(codes(timed(6, 660)), []);
+  assert.deepEqual(codes(timed(6, 661)), ["delay_exceeds_reply_window"]);
   assert.deepEqual(codes(timed(7, 1)), ["delay_exceeds_reply_window"]);
   const looped = flow(
     [
