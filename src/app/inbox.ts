@@ -1,6 +1,13 @@
 import type { Pool } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { workspaceFor } from "./settings.ts";
+import {
+  INBOX_STATE_GROUP,
+  INBOX_STATE_JOINS,
+  STATE_COLUMNS,
+  conversationState,
+  readConversationState,
+} from "./inbox-conversations.ts";
 
 export async function setInbox(pool: Pool, user: User, id: string, input: unknown) {
   if (!isUuid(id) || !isRecord(input) || Object.keys(input).length !== 1 || typeof input.enabled !== "boolean")
@@ -25,7 +32,16 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
   let after: { connection_id: string; recipient_id: string } | null = null;
   const connection = query.get("connection_id");
   if (connection && !isUuid(connection)) throw new ApiError(400, "invalid_inbox_query");
-  if ([...query.keys()].some((key) => !["connection_id", "after"].includes(key) || query.getAll(key).length !== 1))
+  if (
+    [...query.keys()].some(
+      (key) => !["connection_id", "after", "status", "assignee"].includes(key) || query.getAll(key).length !== 1,
+    )
+  )
+    throw new ApiError(400, "invalid_inbox_query");
+  // status=open|closed and assignee=me|none filter on the conversation state, where no row means open and unassigned.
+  const status = query.get("status"),
+    assignee = query.get("assignee");
+  if ((status && !["open", "closed"].includes(status)) || (assignee && !["me", "none"].includes(assignee)))
     throw new ApiError(400, "invalid_inbox_query");
   if (query.has("after")) {
     try {
@@ -43,14 +59,39 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
     }
   }
   const result = await pool.query(
-    `SELECT m.connection_id,m.recipient_id,c.username,count(*)::integer AS message_count,max(m.message_at) AS last_message_at
+    `SELECT m.connection_id,m.recipient_id,c.username,count(*)::integer AS message_count,max(m.message_at) AS last_message_at,
+      ${STATE_COLUMNS}
     FROM instagram_inbox_messages m JOIN instagram_connections c ON c.id=m.connection_id AND c.workspace_id=m.workspace_id
+    ${INBOX_STATE_JOINS}
     WHERE m.workspace_id=$1 AND ($2::uuid IS NULL OR m.connection_id=$2)
       AND ($3::uuid IS NULL OR (m.connection_id,m.recipient_id)>($3::uuid,$4::text))
-    GROUP BY m.connection_id,m.recipient_id,c.username ORDER BY m.connection_id,m.recipient_id LIMIT 51`,
-    [workspace, connection || null, after?.connection_id ?? null, after?.recipient_id ?? null],
+      AND ($5::text IS NULL OR coalesce(state.status,'open')=$5)
+      AND ($6::text IS NULL OR ($6='none' AND state.assignee_user_id IS NULL) OR ($6='me' AND state.assignee_user_id=$7::uuid))
+    GROUP BY m.connection_id,m.recipient_id,c.username,${INBOX_STATE_GROUP}
+    ORDER BY m.connection_id,m.recipient_id LIMIT 51`,
+    [
+      workspace,
+      connection || null,
+      after?.connection_id ?? null,
+      after?.recipient_id ?? null,
+      status,
+      assignee,
+      user.id,
+    ],
   );
-  const conversations = result.rows.slice(0, 50),
+  const conversations = result.rows.slice(0, 50).map((row) => {
+      const {
+        status: _status,
+        assignee_user_id: _assignee,
+        assignee_email: _email,
+        version: _version,
+        updated_by: _by,
+        updated_by_email: _byEmail,
+        updated_at: _at,
+        ...conversation
+      } = row;
+      return { ...conversation, state: conversationState(row) };
+    }),
     last = conversations.at(-1);
   return {
     conversations,
@@ -89,7 +130,11 @@ export async function inboxMessages(
     [workspace, connection, recipient, query.get("before")],
   );
   const messages = result.rows.slice(0, 50);
-  return { messages, before: result.rows.length > 50 ? messages.at(-1)!.id : null };
+  return {
+    messages,
+    before: result.rows.length > 50 ? messages.at(-1)!.id : null,
+    state: await readConversationState(pool, workspace, connection, recipient),
+  };
 }
 
 export async function inboxContext(

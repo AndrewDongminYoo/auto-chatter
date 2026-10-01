@@ -25,6 +25,8 @@ export const EXPORTED_TABLES: Record<string, { scope: "self" | "workspace" | "co
   instagram_contact_field_values: { scope: "workspace" },
   instagram_inbox_handoffs: { scope: "workspace" },
   instagram_inbox_handoff_events: { scope: "workspace" },
+  instagram_inbox_conversations: { scope: "workspace" },
+  instagram_inbox_conversation_events: { scope: "workspace" },
   instagram_manual_replies: { scope: "workspace" },
   instagram_manual_reply_events: { scope: "workspace" },
   channel_consent_events: { scope: "workspace" },

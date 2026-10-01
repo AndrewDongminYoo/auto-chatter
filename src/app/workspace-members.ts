@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { lockWorkspaceForMember, normalizeEmail, workspaceFor } from "./settings.ts";
+import { unassignRemovedMember } from "./inbox-conversations.ts";
 
 const INVITE_DAYS = 7;
 const MAX_OPEN_INVITES = 20;
@@ -138,15 +139,19 @@ export async function changeMemberRole(pool: Pool, user: User, memberId: string,
 }
 
 // The row stays with removed_at set: server roles cannot DELETE, and every request filters removed members out.
+// The member's conversations become unassigned in the same transaction; replies they already queued are kept.
 export async function removeMember(pool: Pool, user: User, memberId: string) {
   const workspace = await workspaceFor(pool, user, "owner");
   return transaction(pool, async (client) => {
+    // The workspace row first: delete_workspace_data locks it before the connections that unassigning takes.
+    await client.query("SELECT 1 FROM workspaces WHERE id=$1 FOR SHARE", [workspace]);
     await targetMember(client, workspace, user, memberId);
     await client.query(
       "UPDATE workspace_members SET removed_at=now(),removed_by=$3 WHERE user_id=$1 AND workspace_id=$2",
       [memberId, workspace, user.id],
     );
-    return { user_id: memberId, removed: true };
+    const unassigned = await unassignRemovedMember(client, workspace, memberId, user.id);
+    return { user_id: memberId, removed: true, unassigned_conversations: unassigned };
   });
 }
 

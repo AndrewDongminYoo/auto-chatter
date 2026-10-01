@@ -208,6 +208,9 @@ const errors = {
   invalid_time_zone:
     "시간대 이름을 확인해 주세요. 목록에 있는 Asia/Seoul 같은 이름을 대소문자까지 그대로 입력해야 합니다.",
   already_member: "이미 작업 공간의 멤버입니다.",
+  conversation_conflict: "다른 요청으로 대화 상태나 담당자가 먼저 바뀌었습니다. 최신 상태를 확인해 주세요.",
+  assignee_unavailable: "작업 공간에서 제거되었거나 다른 작업 공간의 멤버에게는 배정할 수 없습니다.",
+  invalid_conversation_request: "대화 상태 요청을 확인해 주세요. 새로고침한 뒤 다시 시도해 주세요.",
   invite_limit_reached: "대기 중인 초대가 너무 많습니다. 사용하지 않는 초대를 취소한 뒤 다시 시도해 주세요.",
   invite_not_found: "초대 링크를 확인할 수 없습니다. 링크 전체를 복사했는지 확인하거나 새 초대를 요청해 주세요.",
   invite_used: "이미 사용한 초대 링크입니다. 새 초대를 요청해 주세요.",
@@ -359,6 +362,8 @@ const deletedLabels = {
   instagram_unmatched_replies: "연결 대기 응답 DM",
   instagram_inbox_handoffs: "상담 전환",
   instagram_inbox_handoff_events: "상담 전환 이력",
+  instagram_inbox_conversations: "대화 상태·담당자",
+  instagram_inbox_conversation_events: "대화 상태·담당자 이력",
   instagram_manual_replies: "수동 답장",
   instagram_manual_reply_events: "수동 답장 감사 기록",
   instagram_contact_automation: "자동화 중지 상태",
@@ -581,12 +586,16 @@ function memberItem(member) {
     action(remove, async () => {
       if (
         !confirm(
-          `이 멤버(${member.email ?? "이메일 미기록"})를 작업 공간에서 제거할까요? 다음 요청부터 접근할 수 없습니다.`,
+          `이 멤버(${member.email ?? "이메일 미기록"})를 작업 공간에서 제거할까요? 다음 요청부터 접근할 수 없고, 담당한 대화는 미배정으로 바뀝니다. 이미 예약한 답장과 시작한 상담은 취소되지 않습니다.`,
         )
       )
         return;
-      await api(`/api/workspace/members/${member.user_id}`, "DELETE");
-      notice("멤버를 작업 공간에서 제거했습니다.");
+      const removed = await api(`/api/workspace/members/${member.user_id}`, "DELETE");
+      notice(
+        removed.unassigned_conversations
+          ? `멤버를 작업 공간에서 제거하고 담당하던 대화 ${removed.unassigned_conversations}개를 미배정으로 바꿨습니다.`
+          : "멤버를 작업 공간에서 제거했습니다.",
+      );
       await loadMembers();
     }),
   );
@@ -2102,7 +2111,13 @@ function contactFieldEditor(contact, summary) {
   return details;
 }
 
-const inbox = createInbox({ api, node, getConnections: () => connections });
+const inbox = createInbox({
+  api,
+  node,
+  getConnections: () => connections,
+  getRole: () => currentRole,
+  getUserId: () => currentUserId,
+});
 function resetInbox() {
   inbox.reset();
 }

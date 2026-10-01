@@ -1,5 +1,6 @@
 import { queueManualReply, listManualReplies, resolveManualReply, readManualReplyStatus } from "./manual-replies.ts";
 import { inboxHandoff, saveInboxHandoff } from "./inbox-handoff.ts";
+import { listAssignees, saveConversationState } from "./inbox-conversations.ts";
 import type { Pool } from "pg";
 import { ApiError, AuthClient, json, readJson, requireSameOrigin, type AuthEnv, type User } from "./auth.ts";
 import { limitAuthRequest, type AuthRateLimitEnv } from "./auth-rate-limit.ts";
@@ -156,6 +157,21 @@ export async function appApi(
       }
       if (url.pathname === "/api/inbox" && request.method === "GET")
         return json(await listInbox(pool, user, url.searchParams));
+      if (url.pathname === "/api/inbox/assignees" && request.method === "GET")
+        return json({ assignees: await listAssignees(pool, user) });
+      const conversationState = /^\/api\/inbox\/conversations\/([a-f0-9-]+)\/(\d+)\/state$/.exec(url.pathname);
+      if (conversationState && request.method === "PUT") {
+        const saved = await saveConversationState(
+          pool,
+          user,
+          conversationState[1]!,
+          conversationState[2]!,
+          url.searchParams,
+          await readJson(request),
+        );
+        // A stale expected_version answers with the current state, so the screen can show who changed it.
+        return saved.conflict ? json({ error: "conversation_conflict", state: saved.state }, 409) : json(saved.state);
+      }
       const replyStatus = /^\/api\/connections\/([a-f0-9-]+)\/inbox\/(\d+)\/reply-status$/.exec(url.pathname);
       if (replyStatus && request.method === "GET")
         return json(

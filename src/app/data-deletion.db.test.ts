@@ -34,6 +34,8 @@ const connectionTables = [
   "instagram_contact_field_values",
   "instagram_inbox_handoffs",
   "instagram_inbox_handoff_events",
+  "instagram_inbox_conversations",
+  "instagram_inbox_conversation_events",
   "instagram_manual_replies",
   "instagram_manual_reply_events",
 ];
@@ -109,6 +111,16 @@ async function seedConnection(connection: string, workspace: string, account: st
     `INSERT INTO instagram_inbox_handoff_events(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,actor_id,reason,manual_paused_before,handoff_paused_before,handoff_paused_after)
      VALUES($1,$2,'900','123',$3,true,1,$4,'handoff_started',false,false,true)`,
     [workspace, connection, reply, userId],
+  );
+  await pool.query(
+    `INSERT INTO instagram_inbox_conversations(workspace_id,connection_id,recipient_id,status,assignee_user_id,version,updated_by)
+     VALUES($1,$2,'900','closed',$3,1,$3)`,
+    [workspace, connection, userId],
+  );
+  await pool.query(
+    `INSERT INTO instagram_inbox_conversation_events(workspace_id,connection_id,recipient_id,version,reason,from_status,to_status,from_assignee,to_assignee,actor_id)
+     VALUES($1,$2,'900',1,'manual','open','closed',NULL,$3,$3)`,
+    [workspace, connection, userId],
   );
   const manual = (
     await pool.query(
