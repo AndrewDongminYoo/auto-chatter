@@ -291,12 +291,12 @@ test("a resumed run continues after its delay with the facts read at resume time
 test("a resumed run stops again at the next delay", () => {
   const document = chain([
     { id: "first", type: "delay", config: { minutes: 5 } },
-    { id: "second", type: "delay", config: { minutes: 10080 } },
+    { id: "second", type: "delay", config: { minutes: 10020 } },
   ]);
   const resumed = planFlowRun(document, noFacts, input, "first");
   assert.equal(resumed.status, "waiting");
   assert.equal(resumed.status === "waiting" && resumed.resume_node_id, "second");
-  assert.equal(resumed.status === "waiting" && resumed.delay_minutes, 10080);
+  assert.equal(resumed.status === "waiting" && resumed.delay_minutes, 10020);
   assert.deepEqual(resumed.steps, [{ node_id: "second", node_type: "delay", outcome: "waiting" }]);
 });
 

@@ -198,20 +198,60 @@ test("a cycle through a delay is still rejected until a node waits for input", (
   assert.deepEqual(codes(looped), ["immediate_cycle"]);
 });
 
-test("a delay waits a whole number of minutes from 1 through 7 days", () => {
+test("a delay waits a whole number of minutes, leaving an hour of the 7-day reply window", () => {
   const one = (config: unknown) =>
     codes(flow([{ id: "d", type: "delay", config }], [{ from: "start", port: "next", to: "d" }]));
   assert.deepEqual(one({ minutes: 1 }), []);
-  assert.deepEqual(one({ minutes: 10080 }), []);
+  assert.deepEqual(one({ minutes: 10020 }), []);
   for (const config of [
     { minutes: 0 },
-    { minutes: 10081 },
+    { minutes: 10021 },
+    { minutes: 10080 },
     { minutes: 1.5 },
     { minutes: "60" },
     {},
     { minutes: 60, unit: "hours" },
   ])
     assert.deepEqual(one(config), ["invalid_config"], JSON.stringify(config));
+});
+
+test("the delays before a message add up to no more than the reply window allows", () => {
+  const delayed = (first: number, second: number, message: boolean) =>
+    flow(
+      [
+        { id: "a", type: "delay", config: { minutes: first } },
+        { id: "b", type: "delay", config: { minutes: second } },
+        ...(message ? [{ id: "m", type: "instagram_message", config: { text: "Hi" } }] : []),
+      ],
+      [
+        { from: "start", port: "next", to: "a" },
+        { from: "a", port: "next", to: "b" },
+        ...(message ? [{ from: "b", port: "next", to: "m" }] : []),
+      ],
+    );
+  assert.deepEqual(codes(delayed(5000, 5020, true)), []);
+  assert.deepEqual(validateFlowForPublish(delayed(5000, 5021, true), context()), [
+    { code: "delay_exceeds_reply_window", node_id: "m", path: "nodes[3]" },
+  ]);
+  // Nothing is sent after the delays, so the window does not apply.
+  assert.deepEqual(codes(delayed(5000, 5021, false)), []);
+  // The longest of two branches into one message counts.
+  const branches = flow(
+    [
+      { id: "has", type: "has_tag", config: { tag: "vip" } },
+      { id: "long", type: "delay", config: { minutes: 10020 } },
+      { id: "short", type: "delay", config: { minutes: 1 } },
+      { id: "m", type: "instagram_message", config: { text: "Hi" } },
+    ],
+    [
+      { from: "start", port: "next", to: "short" },
+      { from: "short", port: "next", to: "has" },
+      { from: "has", port: "true", to: "long" },
+      { from: "has", port: "false", to: "m" },
+      { from: "long", port: "next", to: "m" },
+    ],
+  );
+  assert.deepEqual(codes(branches), ["delay_exceeds_reply_window"]);
 });
 
 test("node configs follow the existing rule, tag, field and button limits", () => {
