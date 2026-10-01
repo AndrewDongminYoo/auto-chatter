@@ -1,4 +1,4 @@
-function createInbox({ api, node, getConnections }) {
+function createInbox({ api, node, getConnections, getRole, getUserId }) {
   const byId = (id) => document.getElementById(id);
   const states = new Map();
   let epoch = 0,
@@ -6,6 +6,7 @@ function createInbox({ api, node, getConnections }) {
     selected = null,
     after = null,
     listBusy = false,
+    assignees = [],
     expiryTimer;
   const reasons = {
     global_send_disabled: "전체 발송이 중지되어 있습니다.",
@@ -22,15 +23,92 @@ function createInbox({ api, node, getConnections }) {
     idempotency_conflict: "접수 확인 요청이 일치하지 않습니다. 대화 이력을 확인해 주세요.",
     verification_unavailable: "발송 전 확인에 실패했습니다. 잠시 후 다시 검사합니다.",
     delivery_changed: "발송 전에 연결 상태가 바뀌어 메시지를 보내지 않았습니다.",
+    conversation_conflict: "다른 요청으로 대화 상태나 담당자가 먼저 바뀌어 최신 상태를 다시 불러왔습니다.",
+    assignee_unavailable: "작업 공간에서 제거되었거나 다른 작업 공간의 멤버에게는 배정할 수 없습니다.",
+    role_forbidden: "상담원은 미배정 대화를 맡거나 자신의 담당만 해제할 수 있습니다.",
   };
   const failure = (code) => reasons[code] || "전송 조건을 확인하지 못했습니다. 상태를 새로고침해 주세요.";
   const date = (value) => new Date(value).toLocaleString("ko-KR");
   const base = (state) => `/api/connections/${state.row.connection_id}/inbox/${state.row.recipient_id}`;
   const current = (state, session) => epoch === session && selected === state;
   const expired = (state) => !state.deadline || performance.now() >= state.deadline;
+  const isAdmin = () => ["owner", "admin"].includes(getRole());
+  const person = (member) => (member.user_id === getUserId() ? "나" : member.email || "이메일 미기록 멤버");
+  const summary = (convo) =>
+    `${convo.status === "closed" ? "완료" : "진행 중"} · ${convo.assignee ? `담당 ${person(convo.assignee)}` : "미배정"}`;
+
+  function conversationControls() {
+    const state = selected;
+    byId("inbox-conversation-controls").hidden = !state?.convo;
+    if (!state?.convo) return;
+    const convo = state.convo,
+      mine = convo.assignee?.user_id === getUserId(),
+      locked = state.loading || state.stateBusy;
+    const changed = !convo.version
+      ? ""
+      : convo.updated_by
+        ? ` · 마지막 변경 ${person(convo.updated_by)}, ${date(convo.updated_at)}`
+        : ` · 새 DM으로 다시 열림, ${date(convo.updated_at)}`;
+    byId("inbox-conversation-state").textContent = `${summary(convo)}${changed}`;
+    const claim = byId("inbox-claim");
+    claim.textContent = mine ? "담당 해제" : "내가 담당";
+    claim.hidden = !mine && Boolean(convo.assignee) && !isAdmin();
+    claim.disabled = locked;
+    const close = byId("inbox-close");
+    close.textContent = convo.status === "closed" ? "다시 열기" : "완료 처리";
+    close.disabled = locked;
+    byId("inbox-assign-label").hidden = !isAdmin();
+    const select = byId("inbox-assign");
+    if (isAdmin()) {
+      const options = [new Option("미배정", "")];
+      for (const member of assignees) options.push(new Option(person(member), member.user_id));
+      if (convo.assignee && !assignees.some((member) => member.user_id === convo.assignee.user_id))
+        options.push(new Option(person(convo.assignee), convo.assignee.user_id));
+      select.replaceChildren(...options);
+      select.value = convo.assignee?.user_id ?? "";
+      select.disabled = locked;
+    }
+    byId("inbox-state-status").textContent = state.stateNotice || "";
+  }
+
+  async function changeConversation(change) {
+    const state = selected;
+    if (!state?.convo || state.stateBusy || state.loading) return;
+    const session = epoch;
+    state.stateBusy = true;
+    state.stateNotice = "대화 상태를 바꾸고 있습니다…";
+    conversationControls();
+    try {
+      state.convo = await api(
+        `/api/inbox/conversations/${state.row.connection_id}/${state.row.recipient_id}/state`,
+        "PUT",
+        { expected_version: state.convo.version, ...change },
+      ).finally(() => {
+        // A conversation read that overlapped this write may hold the older state; loadConversation drops it.
+        state.convoWrites++;
+      });
+      if (epoch !== session) return;
+      state.stateNotice = "대화 상태를 변경했습니다.";
+      void loadList();
+    } catch (error) {
+      if (epoch !== session) return;
+      state.stateNotice =
+        error.status >= 400 && error.status < 500
+          ? failure(error.code)
+          : "변경 여부를 확인하지 못했습니다. 대화를 새로고침해 현재 상태를 확인해 주세요.";
+      // A conflict or refusal shows the state another member left, including who changed it.
+      if (error.status === 409 || error.status === 403) void loadConversation();
+    } finally {
+      if (epoch === session) {
+        state.stateBusy = false;
+        if (selected === state) conversationControls();
+      }
+    }
+  }
 
   function controls() {
     const state = selected;
+    conversationControls();
     byId("inbox-composer").hidden = !state;
     byId("inbox-handoff-controls").hidden = !state;
     if (!state) return;
@@ -68,8 +146,8 @@ function createInbox({ api, node, getConnections }) {
       !status ||
       (!status.handoff_active && state.context?.mapping_status !== "verified");
     byId("inbox-handoff-state").textContent = status?.handoff_active
-      ? "상담 중 · 이 사용자의 자동 답장은 중지됩니다."
-      : "자동화 상태 · 직접 답장하려면 상담을 시작하세요.";
+      ? "상담 중 · 이 사용자의 자동 답장은 중지됩니다. 상담 시작 전에 이미 발송 중이던 자동 답장은 취소되지 않습니다."
+      : "자동화 상태 · 직접 답장하려면 상담을 시작하세요. 이미 발송 중인 자동 답장은 상담을 시작해도 취소되지 않습니다.";
     byId("inbox-thread-refresh").disabled = state.loading;
     byId("inbox-older").disabled = state.loading;
     byId("inbox-older").hidden = !state.beforeMessages && !state.beforeReplies;
@@ -209,7 +287,8 @@ function createInbox({ api, node, getConnections }) {
     const state = selected;
     if (!state || (older && (state.loading || (!state.beforeMessages && !state.beforeReplies)))) return;
     const session = epoch,
-      request = ++state.readRequest;
+      request = ++state.readRequest,
+      writes = state.convoWrites;
     state.loading = true;
     byId("inbox-message-status").textContent = "대화와 발송 상태를 불러오고 있습니다…";
     controls();
@@ -230,6 +309,7 @@ function createInbox({ api, node, getConnections }) {
         state.replies.clear();
       }
       for (const row of messages.messages) state.messages.set(row.id, row);
+      if (messages.state && writes === state.convoWrites) state.convo = messages.state;
       for (const row of replies.replies) state.replies.set(row.id, row);
       for (const id of state.notes.keys()) {
         const reply = state.replies.get(id);
@@ -324,6 +404,10 @@ function createInbox({ api, node, getConnections }) {
         loading: false,
         busy: false,
         operation: null,
+        convo: row.state,
+        stateBusy: false,
+        convoWrites: 0,
+        stateNotice: "",
       });
     selected = states.get(key);
     byId("inbox-conversation-title").textContent = `@${row.username || "연결 계정"} · DM 사용자 ${row.recipient_id}`;
@@ -348,6 +432,11 @@ function createInbox({ api, node, getConnections }) {
     byId("inbox-status").textContent = "대화를 불러오고 있습니다…";
     const query = new URLSearchParams();
     if (byId("inbox-account").value) query.set("connection_id", byId("inbox-account").value);
+    // 내 대화 and 미배정 show open conversations; 완료 shows closed ones of every assignee.
+    const filter = byId("inbox-filter").value;
+    if (filter === "mine") query.set("assignee", "me");
+    if (filter === "unassigned") query.set("assignee", "none");
+    if (filter) query.set("status", filter === "closed" ? "closed" : "open");
     if (more) query.set("after", after);
     try {
       const page = await api(`/api/inbox?${query}`);
@@ -355,7 +444,7 @@ function createInbox({ api, node, getConnections }) {
       for (const row of page.conversations) {
         const button = node(
           "button",
-          `@${row.username || "연결 계정"}\nDM 사용자 ${row.recipient_id}\n${row.message_count}개 · ${date(row.last_message_at)}`,
+          `@${row.username || "연결 계정"}\nDM 사용자 ${row.recipient_id}\n${row.message_count}개 · ${date(row.last_message_at)}\n${summary(row.state)}`,
           "secondary",
         );
         button.dataset.key = `${row.connection_id}:${row.recipient_id}`;
@@ -369,7 +458,9 @@ function createInbox({ api, node, getConnections }) {
       after = page.after;
       byId("inbox-status").textContent = byId("inbox-conversations").children.length
         ? "대화를 선택하세요. 초안은 대화마다 따로 보관됩니다."
-        : "보관한 DM이 없습니다. 계정에서 DM 보관을 켠 뒤 새 DM을 받아 주세요.";
+        : byId("inbox-filter").value
+          ? "이 보기에 해당하는 대화가 없습니다."
+          : "보관한 DM이 없습니다. 계정에서 DM 보관을 켠 뒤 새 DM을 받아 주세요.";
     } catch (error) {
       if (epoch === session && request === listRequest) byId("inbox-status").textContent = error.message;
     } finally {
@@ -388,15 +479,34 @@ function createInbox({ api, node, getConnections }) {
     selected = null;
     after = null;
     listBusy = false;
+    assignees = [];
     clearTimeout(expiryTimer);
     byId("inbox-account").replaceChildren(new Option("모든 계정", ""));
+    byId("inbox-filter").value = "";
     for (const id of ["inbox-conversations", "inbox-messages"]) byId(id).replaceChildren();
-    for (const id of ["inbox-status", "inbox-message-status", "inbox-reply-status"]) byId(id).textContent = "";
+    for (const id of ["inbox-status", "inbox-message-status", "inbox-reply-status", "inbox-state-status"])
+      byId(id).textContent = "";
     byId("inbox-reply-text").value = "";
     byId("inbox-conversation-title").textContent = "대화를 선택하세요";
     for (const id of ["inbox-more", "inbox-older", "inbox-thread-refresh"]) byId(id).hidden = true;
     controls();
   }
+  byId("inbox-filter").addEventListener("change", () => void loadList());
+  byId("inbox-claim").addEventListener("click", () => {
+    if (!selected?.convo || byId("inbox-claim").disabled) return;
+    const mine = selected.convo.assignee?.user_id === getUserId();
+    void changeConversation({ assignee_user_id: mine ? null : getUserId() });
+  });
+  byId("inbox-close").addEventListener("click", () => {
+    if (!selected?.convo || byId("inbox-close").disabled) return;
+    void changeConversation({ status: selected.convo.status === "closed" ? "open" : "closed" });
+  });
+  byId("inbox-assign").addEventListener("change", (event) => {
+    if (!selected?.convo) return;
+    const value = event.target.value || null;
+    if (value === (selected.convo.assignee?.user_id ?? null)) return;
+    void changeConversation({ assignee_user_id: value });
+  });
   byId("inbox-account").addEventListener("change", () => {
     selected = null;
     byId("inbox-messages").replaceChildren();
@@ -483,6 +593,16 @@ function createInbox({ api, node, getConnections }) {
         select.append(new Option(account.username || account.account_id, account.id));
       if (getConnections().some((account) => account.id === previous)) select.value = previous;
       void loadList();
+      if (isAdmin()) {
+        const session = epoch;
+        api("/api/inbox/assignees")
+          .then((result) => {
+            if (epoch !== session) return;
+            assignees = result.assignees;
+            conversationControls();
+          })
+          .catch(() => undefined);
+      }
     },
   };
 }

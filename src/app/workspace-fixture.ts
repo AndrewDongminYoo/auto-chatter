@@ -90,6 +90,16 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      VALUES($1,$2,'900','123',$3,true,1,$4,'handoff_started',false,false,true)`,
     [workspace, connection, reply, user],
   );
+  await pool.query(
+    `INSERT INTO instagram_inbox_conversations(workspace_id,connection_id,recipient_id,status,assignee_user_id,version,updated_by)
+     VALUES($1,$2,'900','closed',$3,1,$3)`,
+    [workspace, connection, user],
+  );
+  await pool.query(
+    `INSERT INTO instagram_inbox_conversation_events(workspace_id,connection_id,recipient_id,version,reason,from_status,to_status,from_assignee,to_assignee,actor_id)
+     VALUES($1,$2,'900',1,'manual','open','closed',NULL,$3,$3)`,
+    [workspace, connection, user],
+  );
   const manual = (
     await pool.query(
       `INSERT INTO instagram_manual_replies(workspace_id,connection_id,recipient_id,request_key,created_by,text,handoff_version,status)

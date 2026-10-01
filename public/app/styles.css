@@ -786,6 +786,19 @@ select:disabled {
   gap: 24px;
   margin-top: 24px;
 }
+.inbox-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.inbox-conversation-controls {
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+}
+.inbox-conversation-controls .composer-actions {
+  justify-content: flex-start;
+}
 #inbox-messages {
   overflow-wrap: anywhere;
 }
