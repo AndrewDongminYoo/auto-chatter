@@ -44,7 +44,20 @@ for (const [pathname, title] of [
       );
     if (pathname === "/privacy") assert.ok(html.includes("플로가 저장하도록 지정한 응답을 제외하고 보관하지 않으며"));
     if (pathname === "/privacy")
-      assert.ok(html.includes("인박스를 끄면, 플로가 저장하도록 지정한 응답을 제외하고 이후 DM 본문 보관을 중지하며"));
+      assert.ok(
+        html.includes(
+          "인박스를 끄면, 플로가 저장하도록 지정한 응답과 연결을 위해 임시로 보관하는 응답을 제외하고 이후 DM 본문 보관을 중지하며",
+        ),
+      );
+    if (pathname === "/privacy")
+      assert.ok(
+        html.includes(
+          "발송 기록을 마치기 전에 도착한 응답 DM은 그 메시지와 연결하기 위해 인박스 설정과 관계없이 임시로 보관할 수 있으며, 받은 지 15분이 지나면 연결에 쓰지 않고 그 뒤 처음 실행되는 정기 정리 작업에서 본문을 지웁니다",
+        ),
+      );
+    if (pathname === "/privacy")
+      assert.ok(html.includes("응답 DM의 본문을 받은 지 15분이 지난 뒤 정기 정리 작업에서 지우는 것 외에는"));
+    if (pathname === "/privacy") assert.ok(!html.includes("최대 15분"));
     if (pathname === "/privacy") assert.ok(html.includes("그 브라우저 탭이 수락할 때까지 링크를 임시로 보관하며"));
   });
 

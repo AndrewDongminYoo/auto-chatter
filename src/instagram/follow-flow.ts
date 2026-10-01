@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type { InstagramMessage } from "./message-events.ts";
 import type { FollowTransport } from "./follow-transport.ts";
 import { storeInboxMessage } from "./inbox.ts";
@@ -24,42 +24,10 @@ export async function ingestMessages(
         message.timestamp.getTime() <= now.getTime() - 24 * 3600000
       )
         continue;
-      // A typed DM (not a button postback) answers the flow run waiting for this person's reply.
-      if (!message.confirmationReplyId) await resumeRepliedFlowRun(client, message);
-      // Most recent eligible first DM wins when more than one automation is awaiting the same person.
-      const result = await client.query(
-        `SELECT flow.reply_id,flow.confirmation_keyword,flow.last_message_at,flow.connection_id,
-      NOT coalesce((automation.paused OR automation.handoff_paused),false) AS automation_active
-    FROM instagram_follow_conversations flow
-    JOIN private_reply_outbox reply ON reply.id=flow.reply_id
-    JOIN instagram_connections c ON c.id=flow.connection_id
-    JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
-    LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=reply.workspace_id
-      AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id
-    WHERE c.account_id=$1 AND c.active AND c.send_enabled AND rule.enabled
-      AND flow.recipient_id=$2 AND ($4::text IS NULL OR (flow.reply_id::text=$4 AND flow.confirmation_button_title<>'')) AND (flow.status='waiting' OR (automation.paused OR automation.handoff_paused)) AND reply.status='sent' AND reply.sent_at<=$3
-    ORDER BY reply.sent_at DESC,reply.id DESC LIMIT 1 FOR UPDATE OF flow`,
-        [message.accountId, message.senderId, message.timestamp, message.confirmationReplyId ?? null],
-      );
-      const row = result.rows[0];
-      if (
-        !row ||
-        (!message.confirmationReplyId && normalized(row.confirmation_keyword) !== normalized(message.text)) ||
-        (row.last_message_at && message.timestamp <= row.last_message_at)
-      )
-        continue;
-      const receipt = await client.query(
-        `INSERT INTO instagram_message_receipts(connection_id,message_id,received_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING message_id`,
-        [row.connection_id, message.messageId, message.timestamp],
-      );
-      if (!receipt.rowCount || !row.automation_active) continue;
-      await client.query(
-        `UPDATE instagram_follow_conversations SET status='pending',confirmed_at=$2,last_message_at=$2,next_attempt_at=now(),failure_code=NULL,rate_limit_retries=0
-         WHERE reply_id=$1 AND NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation
-           JOIN private_reply_outbox reply ON reply.workspace_id=automation.workspace_id AND reply.connection_id=automation.connection_id AND reply.sender_id=automation.sender_id
-           WHERE reply.id=$1 AND (automation.paused OR automation.handoff_paused))`,
-        [row.reply_id, message.timestamp],
-      );
+      // Read (and lock the connection) before the lookups: a reply recorded as sent between them would
+      // otherwise leave this DM neither matched nor kept.
+      const keeper = await sendingConnection(client, message);
+      if (!(await offerMessage(client, message, false)) && keeper) await keepUnmatched(client, keeper, message);
     }
     await client.query("COMMIT");
   } catch (error) {
@@ -68,6 +36,195 @@ export async function ingestMessages(
   } finally {
     client.release();
   }
+}
+
+// Offers one DM to the flow run waiting for this person's reply and to the follow confirmation, in the
+// caller's transaction, and returns whether either one took it. Normally the private reply must have
+// been sent no later than the DM; `early` (#108) instead accepts a DM dated from when the reply's last
+// send attempt started, for a DM kept while that reply was being sent.
+async function offerMessage(client: PoolClient, message: InstagramMessage, early: boolean): Promise<boolean> {
+  // A typed DM (not a button postback) answers the flow run waiting for this person's reply.
+  const replied = !message.confirmationReplyId && (await resumeRepliedFlowRun(client, message, early));
+  // Most recent eligible first DM wins when more than one automation is awaiting the same person.
+  const result = await client.query(
+    `SELECT flow.reply_id,flow.confirmation_keyword,flow.last_message_at,flow.connection_id,
+      NOT coalesce((automation.paused OR automation.handoff_paused),false) AS automation_active
+    FROM instagram_follow_conversations flow
+    JOIN private_reply_outbox reply ON reply.id=flow.reply_id
+    JOIN instagram_connections c ON c.id=flow.connection_id
+    JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
+    LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=reply.workspace_id
+      AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id
+    WHERE c.account_id=$1 AND c.active AND c.send_enabled AND rule.enabled
+      AND flow.recipient_id=$2 AND ($4::text IS NULL OR (flow.reply_id::text=$4 AND flow.confirmation_button_title<>'')) AND (flow.status='waiting' OR (automation.paused OR automation.handoff_paused)) AND reply.status='sent' AND ${early ? "reply.attempt_started_at" : "reply.sent_at"}<=$3
+    ORDER BY reply.sent_at DESC,reply.id DESC LIMIT 1 FOR UPDATE OF flow`,
+    [message.accountId, message.senderId, message.timestamp, message.confirmationReplyId ?? null],
+  );
+  const row = result.rows[0];
+  if (
+    !row ||
+    (!message.confirmationReplyId && normalized(row.confirmation_keyword) !== normalized(message.text)) ||
+    (row.last_message_at && message.timestamp <= row.last_message_at)
+  )
+    return replied;
+  const receipt = await client.query(
+    `INSERT INTO instagram_message_receipts(connection_id,message_id,received_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING message_id`,
+    [row.connection_id, message.messageId, message.timestamp],
+  );
+  if (!receipt.rowCount || !row.automation_active) return true;
+  await client.query(
+    `UPDATE instagram_follow_conversations SET status='pending',confirmed_at=$2,last_message_at=$2,next_attempt_at=now(),failure_code=NULL,rate_limit_retries=0
+         WHERE reply_id=$1 AND NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation
+           JOIN private_reply_outbox reply ON reply.workspace_id=automation.workspace_id AND reply.connection_id=automation.connection_id AND reply.sender_id=automation.sender_id
+           WHERE reply.id=$1 AND (automation.paused OR automation.handoff_paused))`,
+    [row.reply_id, message.timestamp],
+  );
+  return true;
+}
+
+type Keeper = { id: string; workspace_id: string };
+
+// The connection that may keep this DM (#108): one with a private reply in `sending` whose attempt
+// started within the last 10 minutes and no later than the DM. A reply's recipient is recorded only
+// after the send returns, so a DM answering it cannot be matched yet. Text with NUL cannot be stored.
+// The connection is locked FOR SHARE until the DM is kept, like the other connection-scoped writes, so a
+// disconnect and connection data deletion cannot commit between this read and the insert.
+async function sendingConnection(client: PoolClient, message: InstagramMessage): Promise<Keeper | undefined> {
+  if (message.text.includes("\u0000")) return undefined;
+  const result = await client.query<Keeper>(
+    `SELECT c.id::text,c.workspace_id::text FROM instagram_connections c
+     WHERE c.account_id=$1 AND c.active AND EXISTS(SELECT 1 FROM private_reply_outbox reply
+       WHERE reply.connection_id=c.id AND reply.status='sending'
+         AND reply.attempt_started_at>now()-interval '10 minutes' AND reply.attempt_started_at<=$2)
+     ORDER BY c.id LIMIT 1 FOR SHARE OF c`,
+    [message.accountId, message.timestamp],
+  );
+  return result.rows[0];
+}
+
+// Keeps a DM that matched nothing while a reply was being sent, unless a follow confirmation or a reply
+// wait already used this message ID (a redelivery).
+async function keepUnmatched(client: PoolClient, keeper: Keeper, message: InstagramMessage): Promise<void> {
+  await client.query(
+    `INSERT INTO instagram_unmatched_replies(workspace_id,connection_id,sender_id,message_id,message_text,confirmation_reply_id,message_at)
+     SELECT $1,$2,$3,$4,$5,$6,$7
+     WHERE NOT EXISTS(SELECT 1 FROM instagram_message_receipts WHERE connection_id=$2 AND message_id=$4)
+       AND NOT EXISTS(SELECT 1 FROM flow_runs WHERE connection_id=$2 AND reply_message_id=$4)
+     ON CONFLICT(connection_id,message_id) DO NOTHING`,
+    [
+      keeper.workspace_id,
+      keeper.id,
+      message.senderId,
+      message.messageId,
+      message.text,
+      message.confirmationReplyId ?? null,
+      message.timestamp,
+    ],
+  );
+}
+
+// Offers each kept DM whose sender is now the recipient of a sent private reply, dated at or after that
+// reply's last attempt start, to the reply wait and the follow confirmation (#108), oldest first. It runs
+// right after a reply is recorded as sent (scope.replyId) and from the scheduled recovery. Both skip a DM
+// while its connection still has a reply in `sending` that may be the one the DM answers (the condition
+// that kept it), so an earlier sent reply to the same person cannot use it up. A confirmation button names
+// its reply, so the post-send pass takes only one bound to its own reply, without that guard, and leaves
+// one bound to another reply to that reply's own pass or the scheduled one. One transaction per DM: the
+// connection is locked FOR SHARE before the kept row, the order the deletion functions use, and the row is
+// claimed with SKIP LOCKED while unmatched, still holding its text and under 15 minutes old, so
+// overlapping reconciles take it once and none links it past the retention boundary (read at the claim,
+// not at BEGIN, since the connection lock can wait). It is marked matched whether or not it advanced
+// anything; the follow receipts and flow_runs.reply_message_id keep a message from being used twice.
+// Returns how many DMs were checked.
+export async function reconcileUnmatchedReplies(
+  pool: Pool,
+  scope: { replyId?: string; connectionId?: string } = {},
+  limit = 100,
+): Promise<number> {
+  const due = await pool.query<{ connection_id: string; message_id: string }>(
+    `SELECT kept.connection_id::text,kept.message_id FROM instagram_unmatched_replies kept
+     WHERE kept.matched_at IS NULL AND kept.message_text IS NOT NULL AND kept.received_at>now()-interval '15 minutes'
+       AND ($2::uuid IS NULL OR kept.connection_id=$2)
+       AND EXISTS(SELECT 1 FROM private_reply_outbox reply WHERE reply.connection_id=kept.connection_id
+         AND reply.recipient_id=kept.sender_id AND reply.status='sent' AND reply.attempt_started_at<=kept.message_at
+         AND ($1::bigint IS NULL OR reply.id=$1))
+       AND ($1::bigint IS NULL OR kept.confirmation_reply_id IS NULL OR kept.confirmation_reply_id=$1::text)
+       AND (($1::bigint IS NOT NULL AND kept.confirmation_reply_id IS NOT NULL)
+         OR NOT EXISTS(SELECT 1 FROM private_reply_outbox pending
+           WHERE pending.connection_id=kept.connection_id AND pending.status='sending'
+           AND pending.attempt_started_at>now()-interval '10 minutes' AND pending.attempt_started_at<=kept.message_at))
+     ORDER BY kept.message_at,kept.message_id LIMIT $3`,
+    [scope.replyId ?? null, scope.connectionId ?? null, limit],
+  );
+  let checked = 0;
+  let failed = 0;
+  for (const candidate of due.rows) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const connection = (
+        await client.query<{ account_id: string }>(
+          "SELECT account_id FROM instagram_connections WHERE id=$1 FOR SHARE",
+          [candidate.connection_id],
+        )
+      ).rows[0];
+      const kept = connection
+        ? (
+            await client.query<{
+              sender_id: string;
+              message_text: string;
+              confirmation_reply_id: string | null;
+              message_at: Date;
+            }>(
+              `SELECT sender_id,message_text,confirmation_reply_id,message_at FROM instagram_unmatched_replies
+               WHERE connection_id=$1 AND message_id=$2 AND matched_at IS NULL AND message_text IS NOT NULL
+                 AND received_at>statement_timestamp()-interval '15 minutes'
+               FOR UPDATE SKIP LOCKED`,
+              [candidate.connection_id, candidate.message_id],
+            )
+          ).rows[0]
+        : undefined;
+      if (connection && kept) {
+        await offerMessage(
+          client,
+          {
+            accountId: connection.account_id,
+            senderId: kept.sender_id,
+            messageId: candidate.message_id,
+            text: kept.message_text,
+            timestamp: kept.message_at,
+            ...(kept.confirmation_reply_id === null ? {} : { confirmationReplyId: kept.confirmation_reply_id }),
+          },
+          true,
+        );
+        await client.query(
+          "UPDATE instagram_unmatched_replies SET matched_at=now() WHERE connection_id=$1 AND message_id=$2",
+          [candidate.connection_id, candidate.message_id],
+        );
+        checked++;
+      }
+      await client.query("COMMIT");
+    } catch {
+      await client.query("ROLLBACK").catch(() => undefined);
+      failed++;
+    } finally {
+      client.release();
+    }
+  }
+  if (failed) throw new Error(`Unmatched reply reconcile failed for ${failed} message(s)`);
+  return checked;
+}
+
+// Removes the text of kept DMs once they are 15 minutes old (service policy, #108), at the first scheduled
+// run after that; the reconcile stops using them at the same boundary. The rows stay, as server roles
+// cannot delete; only the deletion functions remove them.
+export async function clearExpiredUnmatchedReplies(pool: Pool, connectionId?: string): Promise<number> {
+  const result = await pool.query(
+    `UPDATE instagram_unmatched_replies SET message_text=NULL,text_cleared_at=now()
+     WHERE message_text IS NOT NULL AND received_at<=now()-interval '15 minutes' AND ($1::uuid IS NULL OR connection_id=$1)`,
+    [connectionId ?? null],
+  );
+  return result.rowCount ?? 0;
 }
 
 export async function processNextFollowReply(

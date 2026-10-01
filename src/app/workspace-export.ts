@@ -16,6 +16,8 @@ export const EXPORTED_TABLES: Record<string, { scope: "self" | "workspace" | "co
   instagram_follow_conversations: { scope: "connection" },
   instagram_message_receipts: { scope: "connection" },
   instagram_inbox_messages: { scope: "workspace" },
+  // Kept DM text is removed after 15 minutes and is not exported in the meantime either.
+  instagram_unmatched_replies: { scope: "workspace", omit: ["message_text"] },
   instagram_contact_automation: { scope: "workspace" },
   instagram_contact_tags: { scope: "workspace" },
   instagram_contact_segments: { scope: "workspace" },

@@ -63,6 +63,11 @@ async function seedCommenter(sender: string, recipient: string, rule: string, fu
     [workspaceId, connectionId, recipient, `dm-${recipient}`],
   );
   await pool.query(
+    `INSERT INTO instagram_unmatched_replies(workspace_id,connection_id,sender_id,message_id,message_text,message_at)
+     VALUES($1,$2,$3,$4,'kept dm',now())`,
+    [workspaceId, connectionId, recipient, `kept-${recipient}`],
+  );
+  await pool.query(
     "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,$3,'{vip}')",
     [workspaceId, connectionId, sender],
   );
@@ -161,6 +166,7 @@ async function personRows(sender: string, recipient: string) {
       +(SELECT count(*) FROM instagram_contact_field_values WHERE connection_id=$1 AND sender_id=$2)::int
       +(SELECT count(*) FROM instagram_follow_conversations WHERE connection_id=$1 AND recipient_id=$3)::int
       +(SELECT count(*) FROM instagram_inbox_messages WHERE connection_id=$1 AND recipient_id=$3)::int
+      +(SELECT count(*) FROM instagram_unmatched_replies WHERE connection_id=$1 AND sender_id=$3)::int
       +(SELECT count(*) FROM instagram_inbox_handoffs WHERE connection_id=$1 AND recipient_id=$3)::int
       +(SELECT count(*) FROM instagram_inbox_handoff_events WHERE connection_id=$1 AND recipient_id=$3)::int
       +(SELECT count(*) FROM instagram_manual_replies WHERE connection_id=$1 AND recipient_id=$3)::int
@@ -189,6 +195,7 @@ for (const [kind, identity] of [
       "1",
     );
     assert.equal(result.deleted_counts.instagram_comment_events, 1);
+    assert.equal(result.deleted_counts.instagram_unmatched_replies, 1);
     assert.equal(result.deleted_counts.channel_consent_state, 1);
     assert.equal(result.retained_counts.carried_comment_sender_revokes, 1);
 

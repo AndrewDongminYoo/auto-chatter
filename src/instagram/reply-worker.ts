@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Pool } from "pg";
-import { processNextFollowReply, recoverStaleFollowReplies } from "./follow-flow.ts";
+import {
+  clearExpiredUnmatchedReplies,
+  processNextFollowReply,
+  reconcileUnmatchedReplies,
+  recoverStaleFollowReplies,
+} from "./follow-flow.ts";
 import type { FollowTransport } from "./follow-transport.ts";
 import { deliveryRecipientOptedOut } from "./channel-consent.ts";
 import { evaluatePrivateReply } from "./reply-policy.ts";
@@ -352,6 +357,15 @@ export async function processNextPrivateReply(
     ) SELECT id FROM sent`,
     [row.id, attemptId, messageId, recipientId],
   );
+  // A DM answering this reply may have arrived while it was being sent (#108). The sent state above is
+  // already committed, so a failure here only leaves the DM to the scheduled reconcile.
+  if (recipientId) {
+    try {
+      await reconcileUnmatchedReplies(pool, { replyId: row.id });
+    } catch {
+      console.error("Early reply reconcile failed; scheduled recovery retries it");
+    }
+  }
   return true;
 }
 
@@ -386,6 +400,14 @@ export async function runPrivateReplyWorker(
   const recover = async (at: Date) => {
     await recoverStalePrivateReplies(pool, at, connectionId);
     if (options.follow) await recoverStaleFollowReplies(pool, at, connectionId);
+    // This loop is the Node deployment's only schedule, so it also links and expires the DMs kept while
+    // this connection's replies were being sent (#108).
+    try {
+      await reconcileUnmatchedReplies(pool, { connectionId });
+    } catch {
+      console.error("Early reply reconcile failed; the next recovery retries it");
+    }
+    await clearExpiredUnmatchedReplies(pool, connectionId);
   };
   await recover(new Date(now().getTime() - 10 * 60_000));
   let nextRecoveryAt = now().getTime() + recoveryIntervalMs;

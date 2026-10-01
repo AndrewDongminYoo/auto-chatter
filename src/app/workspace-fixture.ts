@@ -54,6 +54,11 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
     [workspace, connection, `dm-${account}`],
   );
   await pool.query(
+    `INSERT INTO instagram_unmatched_replies(workspace_id,connection_id,sender_id,message_id,message_text,message_at)
+     VALUES($1,$2,'900',$3,'kept dm text','2026-10-01T00:00:00Z')`,
+    [workspace, connection, `kept-${account}`],
+  );
+  await pool.query(
     "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'123',true)",
     [workspace, connection],
   );
