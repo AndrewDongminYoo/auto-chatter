@@ -102,10 +102,14 @@ Node 워커는 전송하지 않으므로, Cloudflare Cron 없이 운영하는 Co
 `sending`으로 10분 넘게 남은 행은 `retry`로 돌아가고 시도 한 번으로 셉니다(`worker_interrupted`).
 그래서 전달은 at-least-once이며, 수신자는 이벤트 ID로 중복을 제거해야 합니다.
 한 Cron 실행은 행 수와 시간 예산(`WEBHOOK_MAX_DELIVERIES_PER_RUN`, `WEBHOOK_RUN_BUDGET_MS`) 안에서만 시도합니다.
-행 수 한도는 Workers의 호출당 subrequest 한도에 맞춘 값입니다. 시도 한 번은 DNS-over-HTTPS 조회 두 번과 `POST` 한 번으로 subrequest를 최대 3개 쓰고, 같은 Cron 호출의 토큰 갱신과 Queue 발행도 같은 한도를 나눠 씁니다.
+행 수 한도는 Workers의 호출당 subrequest 한도에 맞춘 값입니다. 시도 한 번은 DNS-over-HTTPS 조회 두 번과 `POST` 한 번으로 subrequest를 최대 3개(`WEBHOOK_SUBREQUESTS_PER_ATTEMPT`) 씁니다.
 [Workers 한도 문서](https://developers.cloudflare.com/workers/platform/limits/)(2026-10-02 확인)는 호출당 subrequest를 Workers Free 50개, Workers Paid 기본 10,000개로 안내합니다.
 이 서비스의 Cloudflare 계정이 어느 플랜인지는 저장소에 기록되어 있지 않으므로 Free 기준으로 정했습니다.
-한도를 넘으면 조회나 요청이 예외로 끝나 그 시도는 `dns_failed` 또는 `request_failed`로 기록되고 재시도 횟수를 하나 씁니다.
+같은 문서는 Cloudflare 서비스로 보내는 요청을 별도 한도("Subrequests to internal services", Free 1,000개)로 둡니다. 그래서 wake 단계의 Queue 발행은 이 50개에 넣어 계산하지 않습니다. 다만 문서는 Queues와 Hyperdrive를 이름으로 지목하지 않습니다.
+같은 Cron 호출의 `fetch`는 모두 한 카운터를 거치고, 토큰 갱신(연결 10개까지, 연결마다 Graph 호출 2번)과 웹훅 전송이 호출당 예산 `CRON_SUBREQUEST_BUDGET`(45개)을 나눠 씁니다.
+45개는 Free 한도 50개에서 카운터가 보지 못하는 요청(데이터베이스 연결 비용 등)을 위해 5개를 남긴 값이며 서비스 정책입니다.
+남은 예산이 시도 한 번에 필요한 3개보다 적으면 그 실행은 전송을 더 점유하지 않으므로, 점유하지 않은 전송은 시도 횟수를 쓰지 않고 `pending` 또는 `retry`로 다음 실행을 기다립니다.
+카운터가 보지 못하는 요청이 남겨 둔 5개를 넘으면 한도를 넘을 수 있고, 그때는 조회나 요청이 예외로 끝나 그 시도가 `dns_failed` 또는 `request_failed`로 기록되고 재시도 횟수를 하나 씁니다.
 한 실행에서 주소별 예산(`WEBHOOK_ENDPOINT_BUDGET_MS`)을 쓴 주소는 그 실행에서 더 시도하지 않으므로, 느린 주소 하나가 실행 전체를 쓰지 못합니다.
 이 값들은 모두 서비스 정책입니다.
 

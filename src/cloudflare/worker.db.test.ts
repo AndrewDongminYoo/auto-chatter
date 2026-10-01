@@ -1907,6 +1907,70 @@ test("the cron delivers a queued flow webhook after the message steps, and only 
   assert.deepEqual(logLines, []);
 });
 
+test("token refresh and webhook delivery share one subrequest budget per cron invocation", async () => {
+  await longLivedToken();
+  // Ten connections whose tokens are due, so token refresh makes two Graph calls for each of them.
+  for (let index = 0; index < 10; index++) {
+    const account = `refresh-${index}`;
+    await pool.query(
+      `INSERT INTO instagram_connections(id,workspace_id,account_id,active,access_token_encrypted,token_expires_at,token_obtained_at)
+       VALUES($1,'11111111-1111-4111-8111-111111111111',$2,true,$3,now()+interval '20 days',now()-interval '2 days')`,
+      [
+        crypto.randomUUID(),
+        account,
+        sealSecret(`token-${account}`, env.TOKEN_ENCRYPTION_KEY!, `11111111-1111-4111-8111-111111111111:${account}`),
+      ],
+    );
+  }
+  await queuedWebhook();
+  await pool.query(
+    `INSERT INTO webhook_deliveries(event_id,workspace_id,endpoint_id,connection_id,flow_id,flow_run_id,node_id,sender_id,payload)
+     SELECT gen_random_uuid(),workspace_id,endpoint_id,connection_id,flow_id,flow_run_id,'notify-'||n,sender_id,payload
+     FROM webhook_deliveries, generate_series(1,9) n`,
+  );
+  restoreMocks();
+  let calls = 0;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    calls++;
+    const target = new URL(String(input));
+    if (target.pathname === "/refresh_access_token")
+      return Response.json({ access_token: target.searchParams.get("access_token"), expires_in: 5_184_000 });
+    if (target.hostname === "graph.instagram.com")
+      return Response.json({
+        user_id: new Headers(init?.headers).get("authorization")!.replace("Bearer token-", ""),
+      });
+    if (target.hostname === "cloudflare-dns.com")
+      return Response.json(
+        target.searchParams.get("type") === "A"
+          ? { Status: 0, Answer: [{ name: "hooks.example.test", type: 1, data: "93.184.216.34" }] }
+          : { Status: 0 },
+      );
+    return new Response("ok");
+  });
+  await worker.scheduled({}, env);
+  // 20 refresh calls leave 25 of the 45: eight attempts of three subrequests, and no claim for the ninth.
+  assert.equal(calls, 20 + 8 * 3);
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT status,attempt_count,count(*)::int AS count FROM webhook_deliveries GROUP BY status,attempt_count ORDER BY status",
+      )
+    ).rows,
+    [
+      { status: "pending", attempt_count: 0, count: 2 },
+      { status: "sent", attempt_count: 1, count: 8 },
+    ],
+  );
+  assert.equal(
+    (
+      await pool.query(
+        "SELECT count(*)::int AS count FROM instagram_connections WHERE account_id LIKE 'refresh-%' AND token_obtained_at>now()-interval '1 minute'",
+      )
+    ).rows[0].count,
+    10,
+  );
+});
+
 test("a failing webhook endpoint or delivery step neither stops nor fails the message steps", async () => {
   await longLivedToken();
   await queuedWebhook();

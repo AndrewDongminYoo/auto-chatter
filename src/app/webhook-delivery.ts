@@ -14,9 +14,16 @@ export const WEBHOOK_STALE_MINUTES = 10;
 // One cron run attempts at most this many deliveries and claims no new one after the time budget. An
 // endpoint that has used its own budget in a run gets no further attempt in that run, so one slow endpoint
 // costs one timeout and the other endpoints keep the rest of the run. Each attempt makes up to three
-// subrequests (two DNS-over-HTTPS lookups and the POST), and the whole cron invocation, including token
-// refresh and queue sends, shares the Workers per-invocation subrequest limit (50 on Workers Free).
+// subrequests (two DNS-over-HTTPS lookups and the POST), and the run claims no delivery once fewer than
+// that are left in the cron invocation's subrequest budget.
 export const WEBHOOK_MAX_DELIVERIES_PER_RUN = 10;
+export const WEBHOOK_SUBREQUESTS_PER_ATTEMPT = 3;
+// The fetch calls one scheduled invocation may make: the per-invocation subrequest limit of Workers Free (50,
+// https://developers.cloudflare.com/workers/platform/limits/, read 2026-10-02) minus a reserve of 5 for
+// requests the cron's fetch counter cannot see, such as whatever the database connection costs. Token refresh
+// and webhook delivery share it. That page limits requests to Cloudflare services separately, so the wake
+// step's Queue sends are not counted here; it does not name Queues or Hyperdrive. This is service policy.
+export const CRON_SUBREQUEST_BUDGET = 45;
 export const WEBHOOK_RUN_BUDGET_MS = 20_000;
 export const WEBHOOK_ENDPOINT_BUDGET_MS = 5_000;
 export const WEBHOOK_USER_AGENT = "auto-chatter-webhook/1";
@@ -227,6 +234,9 @@ export interface WebhookDeliveryOptions {
   now?: () => number;
   timeoutMs?: number;
   correlationId?: string;
+  // The subrequests the invocation may still make; the run claims no delivery once fewer than
+  // WEBHOOK_SUBREQUESTS_PER_ATTEMPT are left. Without it only the row and time limits apply.
+  subrequestsLeft?: () => number;
 }
 
 type Claimed = { event_id: string; workspace_id: string; endpoint_id: string; connection_id: string; payload: unknown };
@@ -317,6 +327,7 @@ export async function deliverDueWebhooks(
   const resolve = options.resolve ?? dohResolver(fetchImpl);
   const now = options.now ?? Date.now;
   const timeoutMs = options.timeoutMs ?? WEBHOOK_TIMEOUT_MS;
+  const subrequestsLeft = options.subrequestsLeft ?? (() => Infinity);
   const log = (event: string, code: string, connectionId: string, level: "warn" | "error") =>
     logOperation({ event, code, correlation_id: options.correlationId, connection_id: connectionId }, level);
   await recoverStaleWebhookDeliveries(pool);
@@ -325,7 +336,11 @@ export async function deliverDueWebhooks(
   const exhausted: string[] = [];
   let attempted = 0;
   let sent = 0;
-  while (attempted < WEBHOOK_MAX_DELIVERIES_PER_RUN && now() - started < WEBHOOK_RUN_BUDGET_MS) {
+  while (
+    attempted < WEBHOOK_MAX_DELIVERIES_PER_RUN &&
+    now() - started < WEBHOOK_RUN_BUDGET_MS &&
+    subrequestsLeft() >= WEBHOOK_SUBREQUESTS_PER_ATTEMPT
+  ) {
     const attemptId = crypto.randomUUID();
     const claimed = (
       await pool.query<Claimed>(

@@ -609,6 +609,42 @@ test("one run attempts a bounded number of deliveries and stops claiming after i
   );
 });
 
+test("a run claims no delivery once the invocation has fewer subrequests left than one attempt needs", async () => {
+  const target = await endpoint();
+  const deliveries = [await delivery(target.id, 400), await delivery(target.id, 300)];
+  const waiting = [await delivery(target.id, 200), await delivery(target.id, 100)];
+  // The lookups go through the same fetch, so every subrequest of an attempt is counted.
+  const { calls, fetchImpl } = recorder((call) =>
+    call.url.startsWith("https://cloudflare-dns.com/")
+      ? Response.json(
+          new URL(call.url).searchParams.get("type") === "A"
+            ? { Status: 0, Answer: [{ type: 1, data: publicAddress }] }
+            : { Status: 0 },
+        )
+      : new Response("ok"),
+  );
+  const budget = 7;
+  assert.deepEqual(
+    await deliverDueWebhooks(pool, encryptionKey, { fetchImpl, subrequestsLeft: () => budget - calls.length }),
+    { attempted: 2, sent: 2 },
+  );
+  assert.equal(calls.length, 6);
+  assert.deepEqual(await Promise.all(deliveries.map(async (eventId) => (await row(eventId)).status)), ["sent", "sent"]);
+  // The rest was never claimed: it waits for the next run without spending an attempt.
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT status,attempt_count,attempt_id,failure_code FROM webhook_deliveries WHERE event_id=ANY($1) ORDER BY next_attempt_at",
+        [waiting],
+      )
+    ).rows,
+    [
+      { status: "pending", attempt_count: 0, attempt_id: null, failure_code: null },
+      { status: "pending", attempt_count: 0, attempt_id: null, failure_code: null },
+    ],
+  );
+});
+
 test("a slow endpoint gets one attempt per run and the other endpoints keep the rest of the run", async () => {
   const slow = await endpoint("slow", "https://slow.example.test/in");
   const fast = await endpoint("fast", "https://fast.example.test/in");
