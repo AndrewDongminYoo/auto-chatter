@@ -33,6 +33,10 @@ for (const [pathname, title] of [
     if (pathname !== "/service")
       assert.ok(html.includes("작업 공간과 로그인 계정 전체의 삭제를 요청하면 수신 거부 기록과"));
     if (pathname === "/privacy") assert.ok(html.includes("'데이터 내보내기'에서 작업 공간의 기록을 JSON 파일로"));
+    if (pathname === "/privacy")
+      assert.ok(html.includes("작업 공간 멤버와 초대 정보:</strong> 작업 공간 소유자가 초대한 사람의 이메일 주소"));
+    if (pathname === "/privacy")
+      assert.ok(html.includes("초대 기록은 취소·만료·사용된 것을 포함해 작업 공간을 삭제할 때까지 보관합니다"));
   });
 
   test(`${pathname} supports HEAD and rejects write methods`, async () => {
