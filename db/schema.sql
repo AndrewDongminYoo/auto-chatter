@@ -1228,3 +1228,14 @@ BEGIN
   );
 END $$;
 REVOKE ALL ON FUNCTION public.delete_workspace_data(uuid,uuid) FROM PUBLIC;
+
+-- Service-wide operations state (#59): one row per scheduled step and one per alert; no workspace data.
+CREATE TABLE IF NOT EXISTS scheduled_steps (
+  name text PRIMARY KEY CHECK(name ~ '^[a-z][a-z0-9_]{0,63}$'),
+  last_success_at timestamptz,
+  last_failure_at timestamptz,
+  failure_code text CHECK(failure_code ~ '^[a-z][a-z0-9_]{0,63}$'),
+  alert_active boolean NOT NULL DEFAULT false,
+  alert_changed_at timestamptz,
+  alert_seen_count bigint CHECK(alert_seen_count>=0)
+);

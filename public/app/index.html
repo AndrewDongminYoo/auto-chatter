@@ -179,6 +179,21 @@
           </p>
           <p id="time-zone-readonly" class="hint" hidden>시간대는 관리자와 소유자만 바꿀 수 있습니다.</p>
         </section>
+        <section id="operations-section" class="card" aria-labelledby="operations-title" hidden>
+          <div class="section-heading">
+            <div>
+              <h2 id="operations-title">운영 상태</h2>
+            </div>
+            <button id="operations-refresh" class="secondary" data-loading-label="확인 중…">다시 확인</button>
+          </div>
+          <p id="operations-summary" class="hint" role="status"></p>
+          <div id="operations-alerts" class="badges"></div>
+          <div id="operations" class="account-list"></div>
+          <p class="hint">
+            발송 대기·처리 시간과 최근 24시간 결과 수, 토큰 만료까지 남은 날을 보여 줍니다. 메시지 내용과 받는 사람
+            정보는 표시하지 않습니다.
+          </p>
+        </section>
         <section id="members-section" class="card" aria-labelledby="members-title" hidden>
           <div class="section-heading">
             <div>

@@ -265,6 +265,8 @@ export async function processNextFollowReply(
       connectionId,
       senderId: replyScope.sender_id,
     });
+  // Like the private outbox, a row keeps its last claim time unless it goes back to pending, so an outcome
+  // is dated by its attempt in the 24-hour operations counts (#59).
   const update = async (
     status: string,
     code: string | null,
@@ -274,7 +276,8 @@ export async function processNextFollowReply(
   ) => {
     const result = await pool.query(
       `UPDATE instagram_follow_conversations SET status=$3,failure_code=$4,next_attempt_at=now()+make_interval(secs=>$5),
-    follow_status=$6,provider_message_id=COALESCE($7,provider_message_id),attempt_id=NULL,attempt_started_at=NULL
+    follow_status=$6,provider_message_id=COALESCE($7,provider_message_id),attempt_id=NULL,
+    attempt_started_at=CASE WHEN $3='pending' THEN NULL ELSE attempt_started_at END
     WHERE reply_id=$1 AND status='sending' AND attempt_id=$2`,
       [row.reply_id, attempt, status, code, delay, followStatus, messageId],
     );
@@ -375,7 +378,8 @@ export async function processNextFollowReply(
       const result = await pool.query(
         `WITH retried AS (
     UPDATE instagram_follow_conversations SET status=$3,failure_code=$4,rate_limit_retries=rate_limit_retries+1,
-    next_attempt_at=now()+make_interval(secs=>$5),attempt_id=NULL,attempt_started_at=NULL
+    next_attempt_at=now()+make_interval(secs=>$5),attempt_id=NULL,
+    attempt_started_at=CASE WHEN $3='pending' THEN NULL ELSE attempt_started_at END
     WHERE reply_id=$1 AND status='sending' AND attempt_id=$2 RETURNING connection_id
    ) UPDATE instagram_connections SET send_paused_until=GREATEST(send_paused_until,now()+make_interval(secs=>$5)) WHERE id IN(SELECT connection_id FROM retried)`,
         [row.reply_id, attempt, row.rate_limit_retries < 3 ? "pending" : "failed", error.failureCode, delay],

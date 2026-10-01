@@ -29,5 +29,6 @@ BEGIN;
 \ir ../db/migrations/027_workspace_time_zone.sql
 \ir ../db/migrations/028_unmatched_replies.sql
 \ir ../db/migrations/029_conversation_assignment.sql
+\ir ../db/migrations/030_scheduled_steps.sql
 \ir supabase-access.sql
 COMMIT;

@@ -28,10 +28,24 @@ export async function refreshDueInstagramTokens(
   now: Date = new Date(),
   graphVersion = "v26.0",
 ): Promise<number> {
+  return (await refreshDueInstagramTokensWithFailures(pool, key, fetchImpl, now, graphVersion)).refreshed;
+}
+
+// Also counts the claimed connections whose token could not be refreshed: a token that does not decrypt, a
+// failed or timed-out Meta call, an invalid refresh body or a profile that does not match the account. A
+// refresh that loses to a newer token or a stopped connection is not a failure.
+export async function refreshDueInstagramTokensWithFailures(
+  pool: Pool,
+  key: string,
+  fetchImpl: typeof fetch = fetch,
+  now: Date = new Date(),
+  graphVersion = "v26.0",
+): Promise<{ refreshed: number; failed: number }> {
   if (!Number.isFinite(now.getTime())) throw new Error("Invalid refresh time");
   if (!/^v\d+\.\d+$/.test(graphVersion)) throw new Error("Invalid Graph API version");
   sealSecret("key-check", key, "config-check");
   let refreshed = 0;
+  let failed = 0;
   for (let count = 0; count < 10; count++) {
     const claimed = await pool.query<DueToken>(
       `UPDATE instagram_connections SET token_refresh_attempted_at=$1
@@ -51,6 +65,7 @@ export async function refreshDueInstagramTokens(
     try {
       accessToken = openSecret(connection.access_token_encrypted, key, context);
     } catch {
+      failed++;
       continue;
     }
     const endpoint = new URL("https://graph.instagram.com/refresh_access_token");
@@ -68,8 +83,10 @@ export async function refreshDueInstagramTokens(
       !Number.isFinite(value.expires_in) ||
       value.expires_in <= 30 * 86400 ||
       value.expires_in > 90 * 86400
-    )
+    ) {
+      failed++;
       continue;
+    }
     const profile = await providerJson(fetchImpl, `https://graph.instagram.com/${graphVersion}/me?fields=user_id`, {
       method: "GET",
       headers: { Authorization: `Bearer ${value.access_token}` },
@@ -78,8 +95,15 @@ export async function refreshDueInstagramTokens(
       profile && typeof profile === "object" && "data" in profile && Array.isArray(profile.data)
         ? profile.data[0]
         : profile;
-    if (!account || typeof account !== "object" || !("user_id" in account) || account.user_id !== connection.account_id)
+    if (
+      !account ||
+      typeof account !== "object" ||
+      !("user_id" in account) ||
+      account.user_id !== connection.account_id
+    ) {
+      failed++;
       continue;
+    }
     const encrypted =
       value.access_token === accessToken
         ? connection.access_token_encrypted
@@ -98,5 +122,5 @@ export async function refreshDueInstagramTokens(
     );
     if (saved.rowCount === 1) refreshed++;
   }
-  return refreshed;
+  return { refreshed, failed };
 }

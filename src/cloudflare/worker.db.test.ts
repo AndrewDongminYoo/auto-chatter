@@ -4,9 +4,10 @@ import { openSecret, sealSecret } from "../app/secrets.ts";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { after, before, beforeEach, mock, test } from "node:test";
+import { after, afterEach, before, beforeEach, mock, test } from "node:test";
 import { Pool } from "pg";
 import worker, { type Env } from "./index.ts";
+import { operationsHealth } from "../app/operations-health.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
@@ -71,7 +72,7 @@ async function rows() {
 
 async function resetStoredFixture() {
   await pool.query(
-    "TRUNCATE private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+    "TRUNCATE private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces, scheduled_steps CASCADE",
   );
   await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
   await pool.query(
@@ -129,6 +130,24 @@ function mockDefaultGraphFetch() {
   });
 }
 
+// Every test captures every console call; afterEach checks that each one is a single-line JSON operations log
+// string that holds only the allow-listed fields. logLines holds the parsed entries.
+type LogLine = Record<string, string>;
+let logLines: LogLine[] = [];
+let logCalls: unknown[][] = [];
+function captureLogs(): void {
+  for (const method of ["log", "warn", "error"] as const)
+    mock.method(console, method, (...args: unknown[]) => {
+      logCalls.push(args);
+      logLines.push(typeof args[0] === "string" ? (JSON.parse(args[0]) as LogLine) : (args[0] as LogLine));
+    });
+}
+// mock.restoreAll() for a test's own mocks, keeping the log capture.
+function restoreMocks(): void {
+  mock.restoreAll();
+  captureLogs();
+}
+
 function failConsentRead(failAt: number): () => number {
   const originalQuery = Pool.prototype.query;
   let consentReads = 0;
@@ -142,12 +161,15 @@ function failConsentRead(failAt: number): () => number {
 
 before(async () => {
   await pool.query(
-    "DROP TABLE IF EXISTS workspace_invites, data_deletion_records, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+    "DROP TABLE IF EXISTS scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
   );
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
 });
 beforeEach(async () => {
   mock.restoreAll();
+  logLines = [];
+  logCalls = [];
+  captureLogs();
   published = [];
   sends = 0;
   env = {
@@ -170,6 +192,18 @@ beforeEach(async () => {
   };
   await resetStoredFixture();
   mockDefaultGraphFetch();
+});
+afterEach(() => {
+  for (const args of logCalls) {
+    assert.equal(args.length, 1);
+    const [line] = args;
+    assert.equal(typeof line, "string");
+    assert.ok(!(line as string).includes("\n"));
+    const entry: unknown = JSON.parse(line as string);
+    assert.ok(entry && typeof entry === "object" && !Array.isArray(entry));
+    for (const key of Object.keys(entry))
+      assert.ok(["event", "code", "correlation_id", "connection_id", "step"].includes(key), key);
+  }
 });
 after(async () => {
   mock.restoreAll();
@@ -195,7 +229,7 @@ test("scheduled token refresh runs while global message sending is disabled", as
     "UPDATE instagram_connections SET token_expires_at=now()+interval '20 days',token_obtained_at=now()-interval '2 days' WHERE id=$1",
     [connectionId],
   );
-  mock.restoreAll();
+  restoreMocks();
   const calls: string[] = [];
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo) => {
     const graphUrl = new URL(String(input));
@@ -223,6 +257,36 @@ test("scheduled token refresh runs while global message sending is disabled", as
   assert.deepEqual(published, []);
 });
 
+test("a failed Meta token refresh fails the token_refresh step without logging the provider response", async () => {
+  await pool.query(
+    "UPDATE instagram_connections SET token_expires_at=now()+interval '20 days',token_obtained_at=now()-interval '2 days' WHERE id=$1",
+    [connectionId],
+  );
+  // A recent successful run keeps cron_stale off, so the only line is the refresh failure.
+  await pool.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now())");
+  restoreMocks();
+  mock.method(globalThis, "fetch", async () =>
+    Response.json({ error: { message: "token for owner@example.test", code: 190 } }, { status: 400 }),
+  );
+  await assert.rejects(worker.scheduled({}, env), /^Error: Cloudflare scheduled recovery failed$/);
+  assert.deepEqual(
+    logLines.map(({ correlation_id, ...line }) => line),
+    [{ event: "cron_step_failed", code: "token_refresh_failed", step: "token_refresh" }],
+  );
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('token_refresh','wake','cron') ORDER BY name",
+      )
+    ).rows,
+    [
+      { name: "cron", failure_code: "step_failed", succeeded: true },
+      { name: "token_refresh", failure_code: "token_refresh_failed", succeeded: false },
+      { name: "wake", failure_code: null, succeeded: true },
+    ],
+  );
+});
+
 test("duplicate webhook and queue delivery send one persisted reply", async () => {
   assert.equal((await worker.fetch(request(), env)).status, 200);
   assert.equal((await worker.fetch(request(), env)).status, 200);
@@ -233,7 +297,55 @@ test("duplicate webhook and queue delivery send one persisted reply", async () =
   assert.deepEqual(await rows(), [{ status: "sent", failure_code: null, rate_limit_retries: 0 }]);
 });
 
+// The stored fixture token expires within the alert window; the operations tests use a longer one.
+async function longLivedToken() {
+  await pool.query("UPDATE instagram_connections SET token_expires_at=now()+interval '30 days'");
+}
+
 test("cron recovers a committed reply after queue publish failure", async () => {
+  await longLivedToken();
+  const lines = logLines;
+  const queue = env.REPLY_QUEUE;
+  env.REPLY_QUEUE = {
+    async send() {
+      throw new Error("queue offline");
+    },
+  };
+  const webhook = request();
+  webhook.headers.set("cf-ray", "8c1f2e3d4b5a6978-ICN");
+  assert.equal((await worker.fetch(webhook, env)).status, 200);
+  assert.equal((await rows())[0].status, "pending");
+  assert.deepEqual(lines, [
+    { event: "queue_publish_failed", code: "reply_notification_failed", correlation_id: "8c1f2e3d4b5a6978-ICN" },
+  ]);
+  env.REPLY_QUEUE = queue;
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, [{ connectionId }]);
+  assert.equal(await consume(), "ack");
+  assert.equal((await rows())[0].status, "sent");
+  assert.equal(lines.length, 1);
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT name FROM scheduled_steps WHERE last_success_at IS NOT NULL AND last_failure_at IS NULL ORDER BY name",
+      )
+    ).rows.map((row) => row.name),
+    [
+      "alerts",
+      "cron",
+      "early_reply_reconcile",
+      "flow_resume",
+      "kept_reply_cleanup",
+      "stale_recovery",
+      "token_refresh",
+      "wake",
+    ],
+  );
+});
+
+test("a database failure in one cron step is recorded and alerted once, other steps continue, and recovery clears it", async () => {
+  await longLivedToken();
+  const lines = logLines;
   const queue = env.REPLY_QUEUE;
   env.REPLY_QUEUE = {
     async send() {
@@ -241,12 +353,162 @@ test("cron recovers a committed reply after queue publish failure", async () => 
     },
   };
   assert.equal((await worker.fetch(request(), env)).status, 200);
-  assert.equal((await rows())[0].status, "pending");
   env.REPLY_QUEUE = queue;
+  await pool.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now()-interval '6 minutes')");
+  const originalQuery = Pool.prototype.query;
+  const failing = mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    if (typeof sql === "string" && sql.includes("FROM flow_runs") && sql.includes("resume_at<=now()"))
+      throw Object.assign(new Error("terminating connection due to administrator command"), { code: "57P01" });
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  await assert.rejects(worker.scheduled({}, env), /scheduled recovery failed/);
+  await assert.rejects(worker.scheduled({}, env), /scheduled recovery failed/);
+  // The wake after the failed step still repaired the lost notification, on both runs.
+  assert.deepEqual(published, [{ connectionId }, { connectionId }]);
+  const failures = lines.filter((line) => line.event === "cron_step_failed");
+  assert.equal(failures.length, 2);
+  assert.deepEqual(
+    failures.map(({ correlation_id, ...line }) => line),
+    [
+      { event: "cron_step_failed", code: "database_unavailable", step: "flow_resume" },
+      { event: "cron_step_failed", code: "database_unavailable", step: "flow_resume" },
+    ],
+  );
+  const started = lines.filter((line) => line.event === "alert_started");
+  assert.deepEqual(
+    started.map(({ correlation_id, ...line }) => line),
+    [{ event: "alert_started", code: "alert_cron_stale" }],
+  );
+  assert.equal(started[0]!.correlation_id, failures[0]!.correlation_id);
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('flow_resume','wake','cron') ORDER BY name",
+      )
+    ).rows,
+    [
+      { name: "cron", failure_code: "step_failed", succeeded: true },
+      { name: "flow_resume", failure_code: "database_unavailable", succeeded: false },
+      { name: "wake", failure_code: null, succeeded: true },
+    ],
+  );
+  failing.mock.restore();
+  lines.length = 0;
   await worker.scheduled({}, env);
-  assert.deepEqual(published, [{ connectionId }]);
+  assert.deepEqual(
+    lines.map(({ correlation_id, ...line }) => line),
+    [{ event: "alert_cleared", code: "alert_cron_stale" }],
+  );
+  assert.equal(
+    (
+      await pool.query(
+        "SELECT last_success_at>last_failure_at AS recovered FROM scheduled_steps WHERE name='flow_resume'",
+      )
+    ).rows[0].recovered,
+    true,
+  );
+});
+
+test("a provider rate limit pauses the connection, and admins see the pause in operations health", async () => {
+  await longLivedToken();
+  await pool.query(
+    "INSERT INTO workspace_members(user_id,workspace_id,role) VALUES('99999999-9999-4999-8999-999999999999','11111111-1111-4111-8111-111111111111','admin')",
+  );
+  const graphFetch = globalThis.fetch;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method === "POST") return Response.json({ error: { code: 4 } }, { status: 400 });
+    return graphFetch(input, init);
+  });
+  assert.equal((await worker.fetch(request(), env)).status, 200);
   assert.equal(await consume(), "ack");
-  assert.equal((await rows())[0].status, "sent");
+  assert.deepEqual(await rows(), [{ status: "pending", failure_code: "meta_error_4", rate_limit_retries: 1 }]);
+  const health = await operationsHealth(pool, { id: "99999999-9999-4999-8999-999999999999", email: "" }, true);
+  const [connection] = health.connections;
+  assert.ok(
+    connection && connection.send_paused_until && Date.parse(connection.send_paused_until) > Date.now() + 14 * 60_000,
+  );
+  // The deferred reply is not due yet, so it is not counted as waiting in the queue.
+  assert.equal(connection.oldest_due_pending_seconds, null);
+  assert.deepEqual(connection.alerts, []);
+  // A rate limit is an expected deferral: it writes no log line, so the Meta response cannot reach the logs.
+  assert.deepEqual(logLines, []);
+});
+
+test("a failed alerts step fails the cron row, so the run is not recorded as a success", async () => {
+  await longLivedToken();
+  const originalQuery = Pool.prototype.query;
+  mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    if (typeof sql === "string" && sql.includes("WITH metrics AS"))
+      throw Object.assign(new Error("metrics for owner@example.test"), { code: "42P01" });
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  await assert.rejects(worker.scheduled({}, env), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.equal(error.message, "Cloudflare scheduled recovery failed");
+    return true;
+  });
+  assert.deepEqual(
+    logLines.map(({ correlation_id, ...line }) => line),
+    [{ event: "cron_step_failed", code: "database_error", step: "alerts" }],
+  );
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('alerts','cron','wake') ORDER BY name",
+      )
+    ).rows,
+    [
+      { name: "alerts", failure_code: "database_error", succeeded: false },
+      { name: "cron", failure_code: "step_failed", succeeded: false },
+      { name: "wake", failure_code: null, succeeded: true },
+    ],
+  );
+});
+
+test("a failed step record write is logged and fails the run, also for the final cron row", async () => {
+  await longLivedToken();
+  const originalQuery = Pool.prototype.query;
+  let failingName = "wake";
+  // A recent successful run keeps cron_stale off, so only the record failure is logged.
+  await pool.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now())");
+  mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    if (typeof sql === "string" && sql.includes("INTO scheduled_steps(name,last_") && values?.[0] === failingName)
+      throw Object.assign(new Error("record for owner@example.test"), { code: "08006" });
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  await assert.rejects(worker.scheduled({}, env), /^Error: Cloudflare scheduled recovery failed$/);
+  assert.deepEqual(
+    logLines.map(({ correlation_id, ...line }) => line),
+    [{ event: "cron_step_record_failed", code: "database_unavailable", step: "wake" }],
+  );
+  // The step succeeded, but its outcome is not stored, so the run is not recorded as a success.
+  assert.equal(
+    (await pool.query("SELECT failure_code FROM scheduled_steps WHERE name='cron'")).rows[0].failure_code,
+    "step_failed",
+  );
+  logLines.length = 0;
+  failingName = "cron";
+  await assert.rejects(worker.scheduled({}, env), /^Error: Cloudflare scheduled recovery failed$/);
+  assert.deepEqual(
+    logLines.map(({ correlation_id, ...line }) => line),
+    [{ event: "cron_record_failed", code: "database_unavailable" }],
+  );
+});
+
+test("a pool that fails to close cannot put its raw error message into the cron failure", async () => {
+  await longLivedToken();
+  mock.method(Pool.prototype, "end", async () => {
+    throw new Error("SENTINEL owner@example.test token");
+  });
+  await assert.rejects(worker.scheduled({}, env), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.equal(error.message, "Cloudflare scheduled recovery failed");
+    return true;
+  });
+  assert.deepEqual(
+    logLines.map(({ correlation_id, ...line }) => line),
+    [{ event: "cron_run_failed", code: "unexpected_error" }],
+  );
 });
 
 // A flow run that stopped at a delay and is already due, as ingestion leaves it after the delay passes.
@@ -306,7 +568,7 @@ test("cron resumes a due flow run while sending is off and sends its reply once 
 
   env.SEND_ENABLED = "true";
   // Graph answers for the flow's numeric media and its commenter instead of the rule fixture's.
-  mock.restoreAll();
+  restoreMocks();
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
     const graphUrl = new URL(String(input));
     if (init?.method === "POST") {
@@ -1237,7 +1499,7 @@ test("Cloudflare opt-out final guards block private follow and manual POST", asy
     (error: unknown) => error instanceof Error && error.message === "recipient_opted_out",
   );
 
-  mock.restoreAll();
+  restoreMocks();
   published = [];
   sends = 0;
   await resetStoredFixture();
@@ -1285,7 +1547,7 @@ test("Cloudflare opt-out final guards block private follow and manual POST", asy
     { status: "blocked", failure_code: "recipient_opted_out", rate_limit_retries: 0 },
   );
 
-  mock.restoreAll();
+  restoreMocks();
   published = [];
   sends = 0;
   await resetStoredFixture();
@@ -1351,7 +1613,7 @@ test("Cloudflare consent read failures defer private follow and manual before PO
     rate_limit_retries: 0,
   });
 
-  mock.restoreAll();
+  restoreMocks();
   published = [];
   sends = 0;
   await resetStoredFixture();
@@ -1392,7 +1654,7 @@ test("Cloudflare consent read failures defer private follow and manual before PO
     { status: "pending", failure_code: "consent_unavailable", attempt_id: null },
   );
 
-  mock.restoreAll();
+  restoreMocks();
   published = [];
   sends = 0;
   await resetStoredFixture();
