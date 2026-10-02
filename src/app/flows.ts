@@ -1,16 +1,28 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { lockWorkspaceForMember, workspaceFor } from "./settings.ts";
 import {
   EMPTY_FLOW,
+  fieldWriteTargets,
   flowReferences,
+  normalizeTag,
   parseFlowDocument,
   validateFlowForPublish,
+  webhookFieldIds,
   type FlowDocument,
   type FlowError,
+  type PublishContext,
 } from "./flow-schema.ts";
-import { flowExecutionErrors } from "./flow-runtime.ts";
-import { replySavedFields } from "./contact-fields.ts";
+import {
+  flowExecutionErrors,
+  flowWebhookPayload,
+  matchesFlowTrigger,
+  planFlowRun,
+  type ContactFacts,
+  type FlowStep,
+  type ResumeEntry,
+} from "./flow-runtime.ts";
+import { isValidFieldValue, replySavedFields } from "./contact-fields.ts";
 
 const MAX_ACTIVE_FLOWS = 50;
 const RUN_HISTORY_LIMIT = 50;
@@ -128,6 +140,95 @@ export async function saveFlowDraft(pool: Pool, user: User, id: string, input: u
   throw new ApiError(409, current.archived ? "flow_archived" : "revision_conflict");
 }
 
+// Field types never change, so the types of a published version's fields decide which variables render.
+async function versionFieldTypes(client: PoolClient, workspace: string, fieldIds: string[]) {
+  return new Map<string, string>(
+    (
+      await client.query<{ id: string; type: string }>(
+        "SELECT id,type FROM instagram_contact_fields WHERE workspace_id=$1 AND id=ANY($2::uuid[])",
+        [workspace, fieldIds],
+      )
+    ).rows.map((row) => [row.id, row.type]),
+  );
+}
+
+// What publish validates a draft against. With `lock` (publish), the connection row is locked FOR NO KEY
+// UPDATE and the field rows FOR SHARE, after the flow row its caller locked; rule enabling takes the same
+// connection lock. Without it (a test run), the same reads take no lock.
+async function readPublishContext(
+  client: PoolClient,
+  workspace: string,
+  id: string,
+  references: ReturnType<typeof flowReferences> | null,
+  lock: boolean,
+): Promise<PublishContext> {
+  const connectionId = references?.connection_id ?? null;
+  const mediaId = references?.media_id ?? null;
+  const connection = connectionId
+    ? ((
+        await client.query(
+          `SELECT id,active,access_token_encrypted IS NOT NULL AS oauth FROM instagram_connections
+           WHERE id=$1 AND workspace_id=$2${lock ? " FOR NO KEY UPDATE" : ""}`,
+          [connectionId, workspace],
+        )
+      ).rows[0] ?? null)
+    : null;
+  const fields = new Map<string, string>(
+    (
+      await client.query<{ id: string; type: string }>(
+        `SELECT id,type FROM instagram_contact_fields WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND NOT archived${lock ? " FOR SHARE" : ""}`,
+        [workspace, references?.field_ids ?? []],
+      )
+    ).rows.map((row) => [row.id, row.type]),
+  );
+  // A webhook node may name only an active endpoint of this workspace. Disabling the endpoint later is
+  // allowed: its deliveries then end as dead (endpoint_inactive) instead of being sent.
+  const endpoints = new Set<string>(
+    (
+      await client.query<{ id: string }>(
+        "SELECT id::text FROM webhook_endpoints WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND active",
+        [workspace, references?.endpoint_ids ?? []],
+      )
+    ).rows.map((row) => row.id),
+  );
+  // Reply text never leaves through a webhook: among the fields the draft names, those a published version
+  // saves a reply into and those another flow's current version sends. Neither read takes a lock, so two
+  // concurrent publishes can pass both; a run then leaves such a field out of its payload (planFlowRun).
+  const replyFields = await replySavedFields(client, workspace, references?.field_ids ?? []);
+  const webhookFields = new Set<string>(
+    (
+      await client.query<{ id: string }>(
+        `SELECT DISTINCT lower(target #>> '{}') AS id FROM flows f JOIN flow_versions v ON v.id=f.published_version_id
+         CROSS JOIN LATERAL jsonb_path_query(v.definition,
+           'lax $.nodes[*] ? (@.type == "webhook").config.field_ids[*]') target
+         WHERE f.workspace_id=$1 AND f.id<>$2 AND NOT f.archived AND v.field_ids && $3::uuid[]
+           AND jsonb_typeof(target)='string'`,
+        [workspace, id, references?.field_ids ?? []],
+      )
+    ).rows.map((row) => row.id),
+  );
+  const conflicts =
+    connection && mediaId
+      ? (
+          await client.query<{ legacy: boolean; other: boolean }>(
+            `SELECT EXISTS(SELECT 1 FROM instagram_comment_rules WHERE workspace_id=$1 AND connection_id=$2 AND media_id=$3 AND enabled) AS legacy,
+              EXISTS(SELECT 1 FROM flows f JOIN flow_versions v ON v.id=f.published_version_id
+                WHERE f.workspace_id=$1 AND f.id<>$4 AND NOT f.archived AND v.trigger_connection_id=$2 AND v.trigger_media_id=$3) AS other`,
+            [workspace, connection.id, mediaId, id],
+          )
+        ).rows[0]!
+      : { legacy: false, other: false };
+  return {
+    connection,
+    fields,
+    endpoints,
+    replyFields,
+    webhookFields,
+    legacyRuleEnabled: conflicts.legacy,
+    otherFlowPublished: conflicts.other,
+  };
+}
+
 export async function publishFlow(
   pool: Pool,
   user: User,
@@ -164,70 +265,9 @@ export async function publishFlow(
     const references = "document" in parsed ? flowReferences(parsed.document) : null;
     const connectionId = references?.connection_id ?? null;
     const mediaId = references?.media_id ?? null;
-    // Lock order: flow row, then connection row. Rule enabling takes the same connection lock.
-    const connection = connectionId
-      ? ((
-          await client.query(
-            `SELECT id,active,access_token_encrypted IS NOT NULL AS oauth FROM instagram_connections
-             WHERE id=$1 AND workspace_id=$2 FOR NO KEY UPDATE`,
-            [connectionId, workspace],
-          )
-        ).rows[0] ?? null)
-      : null;
-    const fields = new Map<string, string>(
-      (
-        await client.query<{ id: string; type: string }>(
-          "SELECT id,type FROM instagram_contact_fields WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND NOT archived FOR SHARE",
-          [workspace, references?.field_ids ?? []],
-        )
-      ).rows.map((row) => [row.id, row.type]),
-    );
-    // A webhook node may name only an active endpoint of this workspace. Disabling the endpoint later is
-    // allowed: its deliveries then end as dead (endpoint_inactive) instead of being sent.
-    const endpoints = new Set<string>(
-      (
-        await client.query<{ id: string }>(
-          "SELECT id::text FROM webhook_endpoints WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND active",
-          [workspace, references?.endpoint_ids ?? []],
-        )
-      ).rows.map((row) => row.id),
-    );
-    // Reply text never leaves through a webhook: among the fields the draft names, those a published version
-    // saves a reply into and those another flow's current version sends. Neither read takes a lock, so two
-    // concurrent publishes can pass both; a run then leaves such a field out of its payload (planFlowRun).
-    const replyFields = await replySavedFields(client, workspace, references?.field_ids ?? []);
-    const webhookFields = new Set<string>(
-      (
-        await client.query<{ id: string }>(
-          `SELECT DISTINCT lower(target #>> '{}') AS id FROM flows f JOIN flow_versions v ON v.id=f.published_version_id
-           CROSS JOIN LATERAL jsonb_path_query(v.definition,
-             'lax $.nodes[*] ? (@.type == "webhook").config.field_ids[*]') target
-           WHERE f.workspace_id=$1 AND f.id<>$2 AND NOT f.archived AND v.field_ids && $3::uuid[]
-             AND jsonb_typeof(target)='string'`,
-          [workspace, id, references?.field_ids ?? []],
-        )
-      ).rows.map((row) => row.id),
-    );
-    const conflicts =
-      connection && mediaId
-        ? (
-            await client.query<{ legacy: boolean; other: boolean }>(
-              `SELECT EXISTS(SELECT 1 FROM instagram_comment_rules WHERE workspace_id=$1 AND connection_id=$2 AND media_id=$3 AND enabled) AS legacy,
-                EXISTS(SELECT 1 FROM flows f JOIN flow_versions v ON v.id=f.published_version_id
-                  WHERE f.workspace_id=$1 AND f.id<>$4 AND NOT f.archived AND v.trigger_connection_id=$2 AND v.trigger_media_id=$3) AS other`,
-              [workspace, connection.id, mediaId, id],
-            )
-          ).rows[0]!
-        : { legacy: false, other: false };
-    const errors = validateFlowForPublish(flow.draft, {
-      connection,
-      fields,
-      endpoints,
-      replyFields,
-      webhookFields,
-      legacyRuleEnabled: conflicts.legacy,
-      otherFlowPublished: conflicts.other,
-    });
+    const context = await readPublishContext(client, workspace, id, references, true);
+    const { connection, fields } = context;
+    const errors = validateFlowForPublish(flow.draft, context);
     // A new version of an enabled flow starts runs immediately, so it must be runnable too.
     if (!errors.length && flow.enabled && "document" in parsed)
       errors.push(...runnableErrors(parsed.document, connection, fields));
@@ -331,15 +371,7 @@ export async function setFlowEnabled(
             [flow.trigger_connection_id, workspace],
           )
         ).rows[0] ?? null;
-      // Field types never change, so the types of the version's fields decide which variables render.
-      const fieldTypes = new Map<string, string>(
-        (
-          await client.query<{ id: string; type: string }>(
-            "SELECT id,type FROM instagram_contact_fields WHERE workspace_id=$1 AND id=ANY($2::uuid[])",
-            [workspace, flow.field_ids],
-          )
-        ).rows.map((row) => [row.id, row.type]),
-      );
+      const fieldTypes = await versionFieldTypes(client, workspace, flow.field_ids);
       const parsed = parseFlowDocument(flow.definition);
       const errors = "document" in parsed ? runnableErrors(parsed.document, connection, fieldTypes) : parsed.errors;
       if (errors.length) {
@@ -381,4 +413,249 @@ export async function listFlowRuns(pool: Pool, user: User, id: string) {
       [id, workspace, RUN_HISTORY_LIMIT],
     )
   ).rows;
+}
+
+// The longest synthetic comment or reply text a test run accepts (service policy).
+const MAX_TEST_TEXT = 2_000;
+const MAX_TEST_TAGS = 20;
+// A test run walks from the trigger, then once more from each delay, time wait or reply wait it stops at.
+// A publishable document has no cycle and at most 100 nodes, so its path stops fewer times than this and
+// records fewer steps (a reply wait records up to two); the caps only bound a walk that would not end.
+const MAX_TEST_RUN_RESUMES = 100;
+const MAX_TEST_RUN_STEPS = 300;
+
+type TestRunInput = {
+  source: "draft" | "published";
+  commentText: string;
+  tags: string[];
+  fields: Map<string, unknown>;
+  replyText?: string;
+  replyBranch: "replied" | "timeout";
+};
+
+function testRunInput(input: unknown): TestRunInput {
+  const keys = ["source", "comment_text", "tags", "fields", "reply_text", "reply_branch"];
+  if (!isRecord(input) || Object.keys(input).some((key) => !keys.includes(key)))
+    throw new ApiError(400, "invalid_test_run");
+  const text = (value: unknown) => typeof value === "string" && value.length <= MAX_TEST_TEXT;
+  if (
+    (input.source !== "draft" && input.source !== "published") ||
+    !text(input.comment_text) ||
+    (input.reply_text !== undefined && !text(input.reply_text)) ||
+    (input.reply_branch !== undefined && input.reply_branch !== "replied" && input.reply_branch !== "timeout") ||
+    (input.tags !== undefined && (!Array.isArray(input.tags) || input.tags.length > MAX_TEST_TAGS)) ||
+    (input.fields !== undefined && !isRecord(input.fields))
+  )
+    throw new ApiError(400, "invalid_test_run");
+  const tags = ((input.tags as unknown[] | undefined) ?? []).map(normalizeTag);
+  if (tags.some((tag) => tag === null)) throw new ApiError(400, "invalid_contact_tags");
+  // Stored field IDs are lower case, and the walk reads them that way.
+  const fields = new Map<string, unknown>();
+  for (const [id, value] of Object.entries((input.fields as Record<string, unknown> | undefined) ?? {})) {
+    if (!isUuid(id) || fields.has(id.toLowerCase())) throw new ApiError(400, "invalid_test_run");
+    fields.set(id.toLowerCase(), value);
+  }
+  return {
+    source: input.source,
+    commentText: input.comment_text as string,
+    tags: [...new Set(tags as string[])],
+    fields,
+    ...(input.reply_text === undefined ? {} : { replyText: input.reply_text as string }),
+    replyBranch: (input.reply_branch as "replied" | "timeout" | undefined) ?? "replied",
+  };
+}
+
+type TestRunResult = {
+  status: "not_matched" | "ended" | "delivering" | "failed";
+  failure_code: string | null;
+  steps: FlowStep[];
+  messages: { node_id: string; text: string }[];
+  waits: { node_id: string; node_type: string; port: string; delay_minutes?: number; until_time?: string }[];
+  changes: { tags: Record<string, boolean>; fields: Record<string, unknown> };
+  webhooks: { node_id: string; endpoint_id: string; payload: ReturnType<typeof flowWebhookPayload> }[];
+};
+
+// Walks a document as a run would, continuing at once from each delay, time wait and reply wait, with
+// synthetic facts in place of a contact. Between walks the facts change as the store writes them
+// (applyContactChanges): removed tags leave, added tags follow the kept ones, and set fields take
+// their values, so every walk reads what a resumed run would read back.
+function simulateFlowRun(
+  document: FlowDocument,
+  facts: ContactFacts,
+  input: Omit<TestRunInput, "source" | "tags" | "fields"> & {
+    writableFields: ReadonlySet<string>;
+    replyFields: ReadonlySet<string>;
+  },
+  ids: { flowId: string; versionNo: number | null },
+): TestRunResult {
+  let tags = [...facts.tags];
+  const fields = new Map(facts.fields);
+  const result: TestRunResult = {
+    status: "not_matched",
+    failure_code: null,
+    steps: [],
+    messages: [],
+    waits: [],
+    changes: { tags: {}, fields: {} },
+    webhooks: [],
+  };
+  if (!matchesFlowTrigger(document, input.commentText)) return result;
+  let entry: ResumeEntry | undefined;
+  for (let resumes = 0; ; resumes++) {
+    if (resumes > MAX_TEST_RUN_RESUMES || result.steps.length > MAX_TEST_RUN_STEPS) {
+      result.status = "failed";
+      result.failure_code = "test_run_limit";
+      break;
+    }
+    const plan = planFlowRun(
+      document,
+      { tags: new Set(tags), fields },
+      {
+        commentText: input.commentText,
+        writableFields: input.writableFields,
+        replyFields: input.replyFields,
+        ...(entry?.port === "replied" && input.replyText !== undefined ? { replyText: input.replyText } : {}),
+      },
+      entry,
+    );
+    result.steps.push(...plan.steps);
+    tags = [
+      ...tags.filter((tag) => plan.changes.tags.get(tag) !== false),
+      ...[...plan.changes.tags].filter(([, member]) => member).map(([tag]) => tag),
+    ];
+    for (const [id, value] of plan.changes.fields) fields.set(id, value);
+    for (const webhook of plan.webhooks ?? [])
+      result.webhooks.push({
+        node_id: webhook.node_id,
+        endpoint_id: webhook.endpoint_id,
+        payload: flowWebhookPayload(
+          { event_id: null, created_at: null, flow_id: ids.flowId, flow_version: ids.versionNo, run_id: null },
+          webhook,
+        ),
+      });
+    const last = plan.steps.at(-1);
+    if (plan.status === "waiting") {
+      result.waits.push({
+        node_id: plan.resume_node_id,
+        node_type: last?.node_type ?? "",
+        port: "next",
+        ...("until_time" in plan ? { until_time: plan.until_time } : { delay_minutes: plan.delay_minutes }),
+      });
+      entry = { node_id: plan.resume_node_id, port: "next" };
+      continue;
+    }
+    if (plan.status === "message") {
+      result.messages.push({ node_id: last!.node_id, text: plan.text });
+      if (plan.wait_node_id !== undefined) {
+        result.waits.push({ node_id: plan.wait_node_id, node_type: "wait_for_reply", port: input.replyBranch });
+        entry = { node_id: plan.wait_node_id, port: input.replyBranch };
+        continue;
+      }
+      result.status = "delivering";
+      break;
+    }
+    result.status = plan.status;
+    if (plan.status === "failed") result.failure_code = plan.failure_code;
+    break;
+  }
+  // Object.fromEntries defines own properties, so a tag named __proto__ is kept instead of
+  // reaching the inherited setter that plain assignment calls.
+  result.changes.tags = Object.fromEntries(
+    [...new Set([...facts.tags, ...tags])]
+      .filter((tag) => facts.tags.has(tag) !== tags.includes(tag))
+      .map((tag) => [tag, tags.includes(tag)]),
+  );
+  for (const [id, value] of fields) if (facts.fields.get(id) !== value) result.changes.fields[id] = value;
+  return result;
+}
+
+// Shows what one comment would do in a flow's draft or published version, with synthetic contact facts
+// and a reply branch chosen by the caller. The role check reads membership first; every other read is
+// in one read-only transaction. Nothing is written or sent, and no stored contact, comment or message is read.
+export async function testFlowRun(
+  pool: Pool,
+  user: User,
+  id: string,
+  input: unknown,
+): Promise<
+  | ({ source: "draft" | "published"; version_no: number | null } & TestRunResult)
+  | { error: "flow_invalid" | "flow_not_executable"; errors: FlowError[] }
+> {
+  if (!isUuid(id)) throw new ApiError(400, "invalid_flow");
+  const body = testRunInput(input);
+  const workspace = await workspaceFor(pool, user, "admin");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    const flow = (
+      await client.query(
+        `SELECT f.id::text,f.draft,f.archived,v.version_no,v.definition,v.field_ids FROM flows f
+         LEFT JOIN flow_versions v ON v.id=f.published_version_id AND v.flow_id=f.id
+         WHERE f.id=$1 AND f.workspace_id=$2`,
+        [id, workspace],
+      )
+    ).rows[0];
+    if (!flow) throw new ApiError(404, "flow_not_found");
+    if (flow.archived) throw new ApiError(409, "flow_archived");
+    if (body.source === "published" && !flow.definition) throw new ApiError(409, "flow_not_published");
+    const types = new Map<string, string>(
+      (
+        await client.query<{ id: string; type: string }>(
+          "SELECT id::text,type FROM instagram_contact_fields WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND NOT archived",
+          [workspace, [...body.fields.keys()]],
+        )
+      ).rows.map((row) => [row.id, row.type]),
+    );
+    for (const [field, value] of body.fields) {
+      const type = types.get(field);
+      if (!type) throw new ApiError(400, "unknown_field");
+      if (!isValidFieldValue(type, value)) throw new ApiError(400, "invalid_field_value");
+    }
+    // A draft must pass publish validation against the same context publish reads, and either source must
+    // pass the enable check's execution rules; otherwise only the errors are returned.
+    const definition = body.source === "draft" ? flow.draft : flow.definition;
+    const parsed = parseFlowDocument(definition);
+    if ("errors" in parsed) return { error: "flow_invalid", errors: parsed.errors };
+    const document = parsed.document;
+    let fieldTypes: ReadonlyMap<string, string>;
+    if (body.source === "draft") {
+      const context = await readPublishContext(client, workspace, id, flowReferences(document), false);
+      const errors = validateFlowForPublish(definition, context);
+      if (errors.length) return { error: "flow_invalid", errors };
+      fieldTypes = context.fields;
+    } else fieldTypes = await versionFieldTypes(client, workspace, flow.field_ids);
+    const executionErrors = flowExecutionErrors(document, fieldTypes);
+    if (executionErrors.length) return { error: "flow_not_executable", errors: executionErrors };
+    // The fields a set_field node or a reply wait may still write, and the fields a reply wait of any
+    // published version saves into, read as a run reads them but without its locks.
+    const writableFields = new Set(
+      (
+        await client.query<{ id: string }>(
+          "SELECT id::text FROM instagram_contact_fields WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND NOT archived",
+          [workspace, fieldWriteTargets(document)],
+        )
+      ).rows.map((row) => row.id),
+    );
+    const replyFields = await replySavedFields(client, workspace, webhookFieldIds(document));
+    const versionNo = body.source === "published" ? (flow.version_no as number) : null;
+    return {
+      source: body.source,
+      version_no: versionNo,
+      ...simulateFlowRun(
+        document,
+        { tags: new Set(body.tags), fields: body.fields },
+        {
+          commentText: body.commentText,
+          replyBranch: body.replyBranch,
+          ...(body.replyText === undefined ? {} : { replyText: body.replyText }),
+          writableFields,
+          replyFields,
+        },
+        { flowId: flow.id, versionNo },
+      ),
+    };
+  } finally {
+    await client.query("ROLLBACK").catch(() => undefined);
+    client.release();
+  }
 }

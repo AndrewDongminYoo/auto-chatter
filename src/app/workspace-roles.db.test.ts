@@ -108,6 +108,7 @@ test("agents are refused the administrative routes that admins can reach", async
     ["POST", "/api/flows", { name: "new" }],
     ["PUT", `/api/flows/${draft}`, { expected_revision: 0, draft: { schema_version: 1, nodes: [], edges: [] } }],
     ["POST", `/api/flows/${draft}/publish`, { expected_revision: 1 }],
+    ["POST", `/api/flows/${draft}/test-run`, { source: "draft", comment_text: "link" }],
     ["POST", `/api/flows/${draft}/enable`],
     ["POST", `/api/flows/${draft}/disable`],
     ["DELETE", `/api/flows/${archived}`],
