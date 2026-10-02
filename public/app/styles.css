@@ -317,6 +317,7 @@ body:has(#workspace:not([hidden]))::before {
 }
 #accounts-section,
 #workspace-settings-section,
+#webhooks-section,
 #members-section {
   padding-bottom: 24px;
   margin-bottom: 28px;
@@ -324,6 +325,7 @@ body:has(#workspace:not([hidden]))::before {
 }
 #accounts-section .section-heading,
 #workspace-settings-section .section-heading,
+#webhooks-section .section-heading,
 #members-section .section-heading {
   margin-bottom: 10px;
 }
@@ -376,10 +378,15 @@ body:has(#workspace:not([hidden]))::before {
   flex: 1;
   min-width: min(260px, 100%);
 }
-.invite-result label {
+.invite-result label,
+.invite-result .hint {
   width: 100%;
 }
-#invites-title {
+.invite-result .hint {
+  margin: 0;
+}
+#invites-title,
+#webhook-deliveries-title {
   margin: 20px 0 8px;
   font-size: 15px;
 }
