@@ -99,4 +99,4 @@ API가 상담원을 거부하므로 상담원에게는 영역을 숨기고 요�
 - 권한 테스트(`access.db.test.ts`)와 workerd 테스트(`runtime.db.test.mjs`): 서버 역할의 upsert 허용과 DELETE 차단, API 역할 차단, 제한된 서버 역할로 실행한 Cron의 단계 기록.
 
 운영 Workers Logs의 실제 기록·검색과 운영 데이터의 경보는 확인하지 않았습니다.
-migration 030은 2026-10-02 운영 DB에 적용했지만([운영 적용 기록](../notes/2026-09-26-cloudflare-runbook.md)), 이 계약을 포함한 Worker는 아직 배포하지 않았습니다.
+migration 030은 2026-10-02 운영 DB에 적용했지만([운영 적용 기록](../notes/2026-09-26-cloudflare-runbook.md)), 이 계약을 포함한 Worker는 2026-10-02 `main` 커밋 `2e45865`로 배포했으며, 운영 데이터의 경보와 Workers Logs 검색은 아직 확인하지 않았습니다.
