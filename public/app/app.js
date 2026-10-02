@@ -44,8 +44,13 @@ function editorState(
 }
 function canDiscard() {
   return (
-    (!dirty && !contactsDirty.size && !segmentNameDirty && !fieldNameDirty && !inbox.hasDrafts()) ||
-    confirm("저장하지 않은 규칙·연락처·필터 변경 사항과 답장 초안을 버릴까요?")
+    (!dirty &&
+      !contactsDirty.size &&
+      !segmentNameDirty &&
+      !fieldNameDirty &&
+      !inbox.hasDrafts() &&
+      !flowEditor.hasChanges()) ||
+    confirm("저장하지 않은 규칙·연락처·필터·플로 변경 사항과 답장 초안을 버릴까요?")
   );
 }
 function canDiscardRule() {
@@ -125,13 +130,21 @@ function markDirty() {
 form.addEventListener("input", markDirty);
 form.addEventListener("change", markDirty);
 window.addEventListener("beforeunload", (event) => {
-  if (dirty || contactsDirty.size || segmentNameDirty || fieldNameDirty || inbox.hasDrafts()) {
+  if (
+    dirty ||
+    contactsDirty.size ||
+    segmentNameDirty ||
+    fieldNameDirty ||
+    inbox.hasDrafts() ||
+    flowEditor.hasChanges()
+  ) {
     event.preventDefault();
     event.returnValue = "";
   }
 });
 function resetSession() {
   resetInbox();
+  flowEditor.reset();
   connections = [];
   currentUserId = undefined;
   currentRole = undefined;
@@ -289,6 +302,14 @@ const errors = {
   webhook_delivery_not_found: "전송 기록을 찾을 수 없습니다. 목록을 새로 고쳐 주세요.",
   webhook_delivery_not_dead: "전송이 중단된 기록만 다시 보낼 수 있습니다. 목록을 새로 고쳐 주세요.",
   webhook_endpoint_inactive: "꺼진 주소로는 다시 보낼 수 없습니다. 주소를 켠 뒤 다시 시도해 주세요.",
+  invalid_flow: "플로 이름은 1–80자로 입력하고 줄바꿈이나 보이지 않는 문자는 빼 주세요.",
+  flow_not_found: "플로를 찾을 수 없습니다. 목록을 새로 고쳐 주세요.",
+  flow_archived: "보관된 플로입니다. 목록을 새로 고쳐 주세요.",
+  revision_conflict: "다른 곳에서 이 플로를 먼저 저장했습니다. 최신 초안을 불러온 뒤 다시 시도해 주세요.",
+  flow_limit_reached: "보관하지 않은 플로는 최대 50개입니다. 사용하지 않는 플로를 보관해 주세요.",
+  flow_not_published: "아직 발행한 버전이 없습니다. 먼저 초안을 발행해 주세요.",
+  invalid_test_run: "테스트 입력을 확인해 주세요. 댓글과 응답 본문은 2,000자, 태그는 20개까지입니다.",
+  unknown_field: "보관됐거나 없는 필드입니다. 필드를 빼거나 다시 선택해 주세요.",
   invalid_credentials: "이메일과 8자 이상의 비밀번호를 입력해 주세요.",
   invalid_recovery_email: "이메일 주소를 확인해 주세요.",
   auth_rate_limited: "요청이 많습니다. 잠시 기다린 뒤 다시 시도해 주세요.",
@@ -330,6 +351,8 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
     const error = new Error(errors[result.error] ?? "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
     error.status = response.status;
     error.code = result.error;
+    // Publish, enable and test-run refusals list their problems (422).
+    error.errors = result.errors;
     throw error;
   }
   return result;
@@ -1183,6 +1206,7 @@ async function loadWorkspace() {
   void loadMedia();
   initializeContacts();
   initializeInbox();
+  flowEditor.initialize();
   void loadContactSegments();
   await loadContactFields();
   if (generation !== segmentsGeneration) return;
@@ -2450,6 +2474,16 @@ const inbox = createInbox({
 function resetInbox() {
   inbox.reset();
 }
+const flowEditor = createFlowEditor({
+  api,
+  node,
+  badge,
+  action,
+  notice,
+  getRole: () => currentRole,
+  getConnections: () => connections,
+  fieldTypeLabels,
+});
 function initializeInbox() {
   inbox.initialize();
 }

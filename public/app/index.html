@@ -8,6 +8,8 @@
     <link rel="stylesheet" href="./styles.css" />
     <script src="./inbox.js" defer></script>
     <script src="./webhook-labels.js" defer></script>
+    <script src="./flow-editor-model.js" defer></script>
+    <script src="./flow-editor.js" defer></script>
     <script src="./app.js" defer></script>
   </head>
   <body>
@@ -126,7 +128,7 @@
       <div id="workspace" hidden>
         <nav class="workspace-nav" aria-label="설정 구역">
           <a href="#accounts-section">연결 계정</a><a href="#automation-section">자동화 규칙</a
-          ><a href="#contacts-section">연락처</a><a href="#inbox-section">인박스</a
+          ><a href="#flows-section">플로</a><a href="#contacts-section">연락처</a><a href="#inbox-section">인박스</a
           ><a href="#activity-section">처리 내역</a>
         </nav>
         <div id="delivery-banner" class="delivery-banner">
@@ -475,6 +477,118 @@
                 </div>
               </div>
             </aside>
+          </div>
+        </section>
+        <section id="flows-section" class="card" aria-labelledby="flows-title">
+          <div class="section-heading">
+            <div>
+              <h2 id="flows-title" tabindex="-1">플로 <span id="flow-count" class="count">0</span></h2>
+            </div>
+            <button id="flows-refresh" class="secondary" data-loading-label="불러오는 중…">다시 불러오기</button>
+          </div>
+          <p class="hint">
+            댓글 트리거에서 시작해 조건, 메시지, 기다림, 태그·필드 저장과 외부 전송 단계를 차례로 잇습니다. 초안을
+            저장하고 발행한 뒤 켜야 새 댓글에 실행됩니다.
+          </p>
+          <p id="flows-readonly" class="hint" hidden>
+            플로는 관리자와 소유자만 만들고 바꿀 수 있습니다. 상담원은 단계와 그래프를 볼 수만 있습니다.
+          </p>
+          <div id="flows" class="account-list"></div>
+          <form id="flow-create" class="invite-form" hidden>
+            <label>
+              새 플로 이름
+              <input name="name" required maxlength="80" autocomplete="off" />
+            </label>
+            <button type="submit" data-loading-label="만드는 중…">플로 만들기</button>
+          </form>
+          <div id="flow-editor" class="flow-editor" hidden>
+            <div class="section-heading">
+              <h3 id="flow-editor-title" tabindex="-1">플로</h3>
+              <button id="flow-close" type="button" class="secondary">편집기 닫기</button>
+            </div>
+            <div id="flow-badges" class="badges"></div>
+            <label id="flow-name-row" class="flow-name">
+              플로 이름
+              <input id="flow-name" maxlength="80" autocomplete="off" />
+            </label>
+            <div id="flow-actions" class="flow-actions">
+              <button id="flow-save" type="button" data-loading-label="저장 중…">초안 저장</button>
+              <button id="flow-publish" type="button" class="secondary" data-loading-label="발행 중…">발행</button>
+              <button id="flow-toggle" type="button" class="secondary" data-loading-label="바꾸는 중…">켜기</button>
+              <button id="flow-archive" type="button" class="secondary danger" data-loading-label="보관 중…">
+                보관
+              </button>
+            </div>
+            <p id="flow-status" class="hint" role="status"></p>
+            <div id="flow-conflict" class="flow-alert warning" hidden>
+              <p>
+                다른 사람이나 다른 탭에서 이 플로를 먼저 저장해 지금 변경 사항을 저장하지 못했습니다. 이 화면의 변경
+                사항은 그대로 남아 있습니다. 최신 초안을 불러오면 이 화면의 변경 사항은 사라집니다.
+              </p>
+              <button id="flow-reload" type="button" class="secondary" data-loading-label="불러오는 중…">
+                최신 초안 불러오기
+              </button>
+            </div>
+            <div id="flow-errors" class="flow-alert" tabindex="-1" hidden></div>
+            <h4 id="flow-steps-title" tabindex="-1">단계</h4>
+            <p id="flow-path-legend" class="hint" hidden>"테스트 경로" 표시는 마지막 테스트 실행이 지난 단계입니다.</p>
+            <div id="flow-outline" class="flow-outline"></div>
+            <h4 id="flow-graph-title">그래프 미리보기</h4>
+            <div
+              id="flow-graph"
+              class="flow-graph"
+              role="region"
+              tabindex="0"
+              aria-label="그래프 미리보기. 같은 내용은 위의 단계 목록에 있습니다."
+            ></div>
+            <section id="flow-test" class="flow-test" aria-labelledby="flow-test-title" hidden>
+              <h4 id="flow-test-title">테스트 실행</h4>
+              <p class="hint">
+                합성 입력 하나가 이 플로를 어떻게 지나는지 봅니다. 입력한 값은 저장하지 않고, 메시지를 보내거나 외부로
+                전송하지 않습니다. 기다림은 시간이 지난 것으로 보고 바로 이어 갑니다.
+              </p>
+              <form id="flow-test-form" class="flow-test-form">
+                <label>
+                  테스트할 버전
+                  <select name="source">
+                    <option value="draft">저장한 초안</option>
+                    <option value="published">발행 버전</option>
+                  </select>
+                </label>
+                <label>
+                  댓글 본문
+                  <textarea name="comment_text" rows="2" maxlength="2000"></textarea>
+                </label>
+                <label>
+                  연락처 태그 <span class="optional">한 줄에 하나씩, 최대 20개</span>
+                  <textarea name="tags" rows="2"></textarea>
+                </label>
+                <fieldset class="flow-test-values">
+                  <legend>연락처 필드 값</legend>
+                  <div id="flow-test-fields"></div>
+                  <div class="flow-slot-form">
+                    <label>
+                      필드
+                      <select name="field_pick"></select>
+                    </label>
+                    <button id="flow-test-add-field" type="button" class="secondary">필드 값 추가</button>
+                  </div>
+                </fieldset>
+                <label>
+                  응답 본문 <span class="optional">응답 받음 가지에서 저장할 DM</span>
+                  <textarea name="reply_text" rows="2" maxlength="2000"></textarea>
+                </label>
+                <label>
+                  응답 기다리기에서 갈 가지
+                  <select name="reply_branch">
+                    <option value="replied">응답 받음</option>
+                    <option value="timeout">시간 초과</option>
+                  </select>
+                </label>
+                <button id="flow-test-run" type="submit" data-loading-label="실행 중…">테스트 실행</button>
+              </form>
+              <div id="flow-test-result" class="flow-test-result"></div>
+            </section>
           </div>
         </section>
         <section id="contacts-section" class="card" aria-labelledby="contacts-title">

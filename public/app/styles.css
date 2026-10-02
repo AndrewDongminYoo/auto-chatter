@@ -1215,3 +1215,305 @@ section {
 .contact-field-values p {
   overflow-wrap: anywhere;
 }
+
+/* Flows (#30): list, step outline, read-only graph and test run. */
+#flows-section {
+  padding-bottom: 24px;
+  margin: 40px 0 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+.flow-editor {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--color-border);
+}
+.flow-editor h4 {
+  margin: 24px 0 8px;
+  font-size: 15px;
+}
+.flow-editor h5 {
+  margin: 16px 0 4px;
+  font-size: 14px;
+}
+.flow-editor h6 {
+  margin: 14px 0 4px;
+  font-size: 13px;
+}
+.flow-name {
+  max-width: 520px;
+}
+.flow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+.flow-alert {
+  margin-top: 12px;
+  padding: 12px 16px;
+  border-left: 3px solid var(--color-danger);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  overflow-wrap: anywhere;
+}
+.flow-alert.warning {
+  border-color: var(--color-warning);
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+.flow-alert p {
+  margin: 0 0 8px;
+}
+.flow-alert ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.flow-alert a {
+  color: inherit;
+}
+.flow-sequence {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.flow-step,
+.flow-slot,
+.flow-link {
+  min-width: 0;
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  overflow-wrap: anywhere;
+}
+.flow-slot {
+  border-style: dashed;
+  background: transparent;
+}
+.flow-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  background: var(--color-canvas);
+}
+.flow-link button {
+  margin-left: auto;
+}
+/* Only the title row: a condition step contains its branches, and the branch not taken is not on the path. */
+.flow-step.on-path > .flow-step-title,
+.flow-link.on-path {
+  border-left: 4px solid var(--color-success);
+  background: var(--color-accent);
+}
+.flow-step.on-path > .flow-step-title {
+  margin: -10px -12px 0;
+  padding: 10px 12px 6px 8px;
+}
+.flow-step.has-error {
+  border-color: var(--color-danger);
+}
+.flow-step-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 0;
+}
+.flow-step-summary {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 4px 0 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+.flow-step-errors {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--color-danger);
+  font-size: 13px;
+}
+.flow-slot-text {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+.flow-branches {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.flow-branch {
+  min-width: 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--color-border);
+}
+.flow-branch-label {
+  margin: 0 0 6px;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.flow-step-menu summary,
+.flow-test-values legend {
+  color: var(--color-brand);
+}
+.flow-step-menu summary {
+  cursor: pointer;
+  min-height: 44px;
+  padding: 10px 0 0;
+}
+.flow-step-menu > button {
+  margin-top: 12px;
+}
+.flow-step-menu button,
+.flow-slot-form button,
+.flow-link button {
+  font-size: 12px;
+  padding: 7px 12px;
+}
+.flow-config label {
+  margin-top: 12px;
+}
+.flow-hint {
+  display: block;
+  font-weight: 400;
+}
+.flow-slot-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  margin-top: 8px;
+}
+.flow-slot-form label {
+  flex: 1 1 180px;
+  min-width: 0;
+  margin: 0;
+}
+.flow-checks {
+  margin-top: 12px;
+}
+.flow-checks legend {
+  font-size: 13px;
+  font-weight: 600;
+}
+.flow-checks label,
+.flow-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  margin: 0;
+  font-weight: 400;
+}
+.flow-checks input,
+.flow-check input {
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  margin: 0;
+  flex: none;
+  accent-color: var(--color-brand);
+}
+.flow-unreachable {
+  margin-top: 16px;
+}
+.flow-graph {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-canvas);
+}
+.flow-graph svg {
+  display: block;
+}
+.flow-graph-node rect {
+  fill: var(--color-surface);
+  stroke: var(--color-border);
+  stroke-width: 1.5;
+}
+.flow-graph-node.unreachable rect {
+  stroke-dasharray: 3 4;
+}
+.flow-graph-node.has-error rect {
+  stroke: var(--color-danger);
+  stroke-width: 2;
+}
+.flow-graph-node.on-path rect {
+  stroke: var(--color-success);
+  stroke-width: 3;
+}
+.flow-graph-node text {
+  fill: var(--color-ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+.flow-graph-node .flow-graph-detail {
+  fill: var(--color-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.flow-graph-edge {
+  fill: none;
+  stroke: var(--color-muted);
+  stroke-width: 1.5;
+}
+.flow-graph-edge.on-path {
+  stroke: var(--color-success);
+  stroke-width: 3;
+}
+.flow-graph-arrow,
+.flow-graph-port {
+  fill: var(--color-muted);
+}
+.flow-graph-port {
+  font-size: 11px;
+}
+.flow-test {
+  margin-top: 24px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+.flow-test-form {
+  max-width: 720px;
+}
+.flow-test-values {
+  margin-top: 16px;
+}
+.flow-test-values legend {
+  font-size: 13px;
+  font-weight: 600;
+}
+#flow-test-run {
+  margin-top: 16px;
+}
+.flow-test-result {
+  max-width: 720px;
+}
+.flow-test-result ol,
+.flow-test-result ul {
+  margin: 0;
+  padding-left: 20px;
+}
+.flow-test-message {
+  margin: 0 0 8px;
+}
+.flow-test-payload {
+  max-width: 100%;
+  margin: 0 0 8px;
+  padding: 8px;
+  overflow-x: auto;
+  background: var(--color-canvas);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
