@@ -55,6 +55,7 @@ import {
   publishFlow,
   saveFlowDraft,
   setFlowEnabled,
+  testFlowRun,
 } from "./flows.ts";
 import {
   createWebhookEndpoint,
@@ -318,9 +319,10 @@ export async function appApi(
         return json({ flows: await listFlows(pool, user) });
       if (url.pathname === "/api/flows" && request.method === "POST")
         return json(await createFlow(pool, user, await readJson(request, FLOW_REQUEST_BYTES)), 201);
-      const flow = /^\/api\/flows\/([a-f0-9-]+)(?:\/(publish|versions|enable|disable|runs)(?:\/(\d{1,9}))?)?$/.exec(
-        url.pathname,
-      );
+      const flow =
+        /^\/api\/flows\/([a-f0-9-]+)(?:\/(publish|versions|enable|disable|runs|test-run)(?:\/(\d{1,9}))?)?$/.exec(
+          url.pathname,
+        );
       if (flow && !flow[2] && request.method === "GET") return json(await getFlow(pool, user, flow[1]!));
       if (flow && !flow[2] && request.method === "PUT")
         return json(await saveFlowDraft(pool, user, flow[1]!, await readJson(request, FLOW_REQUEST_BYTES)));
@@ -343,6 +345,10 @@ export async function appApi(
       }
       if (flow?.[2] === "runs" && !flow[3] && request.method === "GET")
         return json({ runs: await listFlowRuns(pool, user, flow[1]!) });
+      if (flow?.[2] === "test-run" && !flow[3] && request.method === "POST") {
+        const tested = await testFlowRun(pool, user, flow[1]!, await readJson(request, FLOW_REQUEST_BYTES));
+        return json(tested, "errors" in tested ? 422 : 200);
+      }
       if (url.pathname === "/api/webhooks/endpoints" && request.method === "GET")
         return json({ endpoints: await listWebhookEndpoints(pool, user) });
       if (url.pathname === "/api/webhooks/endpoints" && request.method === "POST")

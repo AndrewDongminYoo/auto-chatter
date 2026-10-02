@@ -20,6 +20,30 @@ export type FlowChanges = { tags: Map<string, boolean>; fields: Map<string, unkn
 // tags is present only when the node includes them; fields holds the chosen fields, null when unset. A
 // field that a reply wait saves a reply into is left out, so reply text never leaves through a webhook.
 export type FlowWebhook = { node_id: string; endpoint_id: string; tags?: string[]; fields: Record<string, unknown> };
+// The body of one webhook delivery: the processing identifiers and what the node chose to send. A test
+// run builds the same body with null in place of the identifiers that only a stored delivery has.
+export function flowWebhookPayload(
+  ids: {
+    event_id: string | null;
+    created_at: string | null;
+    flow_id: string;
+    flow_version: number | null;
+    run_id: string | null;
+  },
+  webhook: FlowWebhook,
+) {
+  return {
+    event_id: ids.event_id,
+    type: "flow.webhook",
+    created_at: ids.created_at,
+    flow_id: ids.flow_id,
+    flow_version: ids.flow_version,
+    run_id: ids.run_id,
+    node_id: webhook.node_id,
+    ...(webhook.tags === undefined ? {} : { tags: webhook.tags }),
+    fields: webhook.fields,
+  };
+}
 // webhooks is present only when the walk reached a webhook node.
 export type FlowPlan = { steps: FlowStep[]; changes: FlowChanges; webhooks?: FlowWebhook[] } & (
   | { status: "ended" }

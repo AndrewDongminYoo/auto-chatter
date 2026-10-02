@@ -1,8 +1,9 @@
 import type { Pool, PoolClient } from "pg";
 import type { InstagramComment } from "./webhook.ts";
 import { matchesCommentRule, type CommentRuleMatch } from "./comment-rule.ts";
-import { parseFlowDocument, type FlowDocument } from "../app/flow-schema.ts";
+import { fieldWriteTargets, parseFlowDocument, webhookFieldIds, type FlowDocument } from "../app/flow-schema.ts";
 import {
+  flowWebhookPayload,
   matchesFlowTrigger,
   planFlowRun,
   type FlowChanges,
@@ -271,16 +272,9 @@ async function lockRunContact(
   senderId: string,
 ): Promise<Set<string>> {
   if (!hasActions(document)) return new Set();
-  const targets = document.nodes.flatMap((node) =>
-    node.type === "set_field" && typeof node.config.field_id === "string"
-      ? [node.config.field_id]
-      : node.type === "wait_for_reply" && typeof node.config.save_field_id === "string"
-        ? [node.config.save_field_id]
-        : [],
-  );
   const writable = await client.query<{ id: string }>(
     "SELECT id::text FROM instagram_contact_fields WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND NOT archived FOR SHARE",
-    [connection.workspace_id, targets],
+    [connection.workspace_id, fieldWriteTargets(document)],
   );
   await lockContact(client, connection.id, senderId);
   return new Set(writable.rows.map((row) => row.id));
@@ -308,10 +302,7 @@ async function webhookReplyFields(
   connection: ConnectionRow,
   document: FlowDocument,
 ): Promise<Set<string>> {
-  const named = document.nodes.flatMap((node) =>
-    node.type === "webhook" && Array.isArray(node.config.field_ids) ? node.config.field_ids : [],
-  );
-  return replySavedFields(client, connection.workspace_id, named);
+  return replySavedFields(client, connection.workspace_id, webhookFieldIds(document));
 }
 
 type RunComment = { eventId: string; commentId: string; postId: string; senderId: string };
@@ -347,17 +338,18 @@ async function queueWebhooks(
         run.id,
         webhook.node_id,
         senderId,
-        JSON.stringify({
-          event_id: eventId,
-          type: "flow.webhook",
-          created_at: new Date().toISOString(),
-          flow_id: run.flowId,
-          flow_version: run.versionNo,
-          run_id: run.id,
-          node_id: webhook.node_id,
-          ...(webhook.tags === undefined ? {} : { tags: webhook.tags }),
-          fields: webhook.fields,
-        }),
+        JSON.stringify(
+          flowWebhookPayload(
+            {
+              event_id: eventId,
+              created_at: new Date().toISOString(),
+              flow_id: run.flowId,
+              flow_version: run.versionNo,
+              run_id: run.id,
+            },
+            webhook,
+          ),
+        ),
       ],
     );
     if (queued.rowCount) continue;

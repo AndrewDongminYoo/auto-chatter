@@ -227,6 +227,26 @@ export function replySaveFields(document: Pick<FlowDocument, "nodes">): Set<stri
   );
 }
 
+// The fields a run of a document may write: set_field targets and the fields its reply waits save into.
+// A run and a test run both keep only the unarchived ones.
+export function fieldWriteTargets(document: Pick<FlowDocument, "nodes">): string[] {
+  return document.nodes.flatMap((node) =>
+    node.type === "set_field" && typeof node.config.field_id === "string"
+      ? [node.config.field_id]
+      : node.type === "wait_for_reply" && typeof node.config.save_field_id === "string"
+        ? [node.config.save_field_id]
+        : [],
+  );
+}
+
+// The fields the webhook nodes of a document name, as written; replySavedFields picks the ones a reply
+// wait saves into (#117).
+export function webhookFieldIds(document: Pick<FlowDocument, "nodes">): unknown[] {
+  return document.nodes.flatMap((node) =>
+    node.type === "webhook" && Array.isArray(node.config.field_ids) ? (node.config.field_ids as unknown[]) : [],
+  );
+}
+
 // A reply is saved as text, so the field it goes into must be an active text field, and not one that
 // another flow's webhook node sends.
 function saveFieldErrors(node: FlowNode, context: PublishContext, path: string): FlowError[] {
