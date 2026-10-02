@@ -10,6 +10,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     after = null,
     listBusy = false,
     assignees = [],
+    // Counts applied read marks, so a list response can tell which marks landed after its request started.
+    readSeq = 0,
     expiryTimer;
   const reasons = {
     global_send_disabled: "전체 발송이 중지되어 있습니다.",
@@ -73,6 +75,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
       if (epoch !== session) return;
       if (state.readMark && BigInt(position.last_read_message_id) < BigInt(state.readMark)) return;
       state.readMark = position.last_read_message_id;
+      state.readUnread = position.unread_count;
+      state.readSeq = ++readSeq;
       const entry = listed.get(`${state.row.connection_id}:${state.row.recipient_id}`);
       if (entry) {
         entry.row.unread_count = position.unread_count;
@@ -457,6 +461,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
         convoWrites: 0,
         stateNotice: "",
         readMark: null,
+        readUnread: null,
+        readSeq: 0,
       });
     selected = states.get(key);
     byId("inbox-conversation-title").textContent = `@${row.username || "연결 계정"} · DM 사용자 ${row.recipient_id}`;
@@ -487,10 +493,19 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     if (byId("inbox-unread").checked) query.set("unread", "true");
     if (searchText) query.set("q", searchText);
     if (more) query.set("after", after);
+    const reads = readSeq,
+      unreadOnly = query.has("unread");
     try {
       const page = await api(`/api/inbox?${query}`);
       if (epoch !== session || request !== listRequest) return;
       for (const row of page.conversations) {
+        // A read mark applied after this request started may have committed after the list snapshot, and the
+        // older count would bring the badge back. Taking the lower count is exact when the snapshot came first;
+        // when it came after the mark, a DM that arrived in between is left out (and hidden under the unread
+        // filter) until the next refresh.
+        const known = states.get(`${row.connection_id}:${row.recipient_id}`);
+        if (known?.readSeq > reads) row.unread_count = Math.min(row.unread_count, known.readUnread);
+        if (unreadOnly && row.unread_count === 0) continue;
         const button = node("button", "", "secondary");
         rowContent(button, row);
         button.dataset.key = `${row.connection_id}:${row.recipient_id}`;
