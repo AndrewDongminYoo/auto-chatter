@@ -268,12 +268,14 @@
           </form>
           <p class="hint">
             초대 링크는 입력한 이메일로 가입하고 이메일 인증을 마친 계정만 한 번 사용할 수 있으며 7일 뒤 만료됩니다.
-            링크는 만들 때 한 번만 보여 주므로 복사해 직접 전달해 주세요.
+            링크는 만들 때 한 번만 보여 주므로 복사해 직접 전달해 주세요. 새 초대 링크를 만들려면 지금 보이는 링크를
+            먼저 닫아 주세요.
           </p>
           <div id="invite-result" class="invite-result" hidden>
             <label for="invite-link">새 초대 링크</label>
             <input id="invite-link" readonly />
             <button id="copy-invite" type="button" class="secondary">복사</button>
+            <button id="dismiss-invite" type="button" class="secondary">닫기</button>
           </div>
           <h3 id="invites-title">대기 중인 초대</h3>
           <div id="invites" class="account-list" aria-labelledby="invites-title"></div>

@@ -140,8 +140,7 @@ function resetSession() {
   timeZoneControls();
   byId("members").replaceChildren();
   byId("invites").replaceChildren();
-  byId("invite-result").hidden = true;
-  byId("invite-link").value = "";
+  hideInviteLink();
   byId("operations-section").hidden = true;
   byId("operations-summary").textContent = "";
   byId("operations-alerts").replaceChildren();
@@ -663,6 +662,28 @@ async function loadMembers() {
   } catch (error) {
     if (generation === segmentsGeneration) notice(error.message, true);
   }
+}
+
+// An invite link is returned once, so while a request is in flight or a link is showing, the invite form stays
+// locked: a second link would replace the first in the panel before it is copied. Only "닫기" or a session reset
+// clears the link, and it is kept nowhere else.
+let invitePending = false;
+function inviteLinkLocked() {
+  return invitePending || !byId("invite-result").hidden;
+}
+function inviteControls() {
+  byId("invite-form").querySelector("button[type=submit]").disabled = inviteLinkLocked();
+}
+function showInviteLink(link) {
+  byId("invite-link").value = link;
+  byId("invite-result").hidden = false;
+  byId("invite-link").select();
+  inviteControls();
+}
+function hideInviteLink() {
+  byId("invite-link").value = "";
+  byId("invite-result").hidden = true;
+  inviteControls();
 }
 
 // Admins and owners change the workspace time zone; agents see it read-only.
@@ -1466,22 +1487,33 @@ byId("connect").addEventListener("click", (event) =>
     location.assign(url.href);
   }),
 );
-byId("invite-form").addEventListener("submit", (event) => {
+byId("invite-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (inviteLinkLocked()) return;
   const inviteForm = event.currentTarget;
-  action(inviteForm.querySelector("button[type=submit]"), async () => {
-    const created = await api("/api/workspace/invites", "POST", {
-      email: inviteForm.elements.email.value,
-      role: inviteForm.elements.role.value,
-    });
-    byId("invite-link").value = created.link;
-    byId("invite-result").hidden = false;
-    byId("invite-link").select();
-    inviteForm.reset();
-    notice(`${created.email} 초대 링크를 만들었습니다. 이 화면을 벗어나면 링크를 다시 볼 수 없습니다.`);
-    await loadMembers();
+  await action(inviteForm.querySelector("button[type=submit]"), async () => {
+    invitePending = true;
+    inviteControls();
+    try {
+      const generation = segmentsGeneration;
+      const created = await api("/api/workspace/invites", "POST", {
+        email: inviteForm.elements.email.value,
+        role: inviteForm.elements.role.value,
+      });
+      // A session reset while the request was in flight must not reveal the link to the next session.
+      if (generation !== segmentsGeneration) return;
+      showInviteLink(created.link);
+      inviteForm.reset();
+      notice(`${created.email} 초대 링크를 만들었습니다. 이 화면을 벗어나면 링크를 다시 볼 수 없습니다.`);
+      await loadMembers();
+    } finally {
+      invitePending = false;
+    }
   });
+  // action() restores the disabled state it found before the task, so the lock is applied again here.
+  inviteControls();
 });
+byId("dismiss-invite").addEventListener("click", hideInviteLink);
 // The browser's zone names are only suggestions; the server accepts the names PostgreSQL knows.
 try {
   byId("time-zone-options").replaceChildren(...Intl.supportedValuesOf("timeZone").map((zone) => new Option(zone)));
