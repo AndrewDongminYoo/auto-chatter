@@ -142,6 +142,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
       revision: flow.draft_revision,
       published: flow.published_version_no,
       enabled: flow.enabled,
+      archived: flow.archived === true,
     };
     draft = JSON.parse(JSON.stringify(flow.draft));
     changes = 0;
