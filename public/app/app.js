@@ -410,6 +410,7 @@ const deletedLabels = {
   instagram_inbox_handoff_events: "상담 전환 이력",
   instagram_inbox_conversations: "대화 상태·담당자",
   instagram_inbox_conversation_events: "대화 상태·담당자 이력",
+  instagram_inbox_read_state: "대화 읽음 위치",
   instagram_manual_replies: "수동 답장",
   instagram_manual_reply_events: "수동 답장 감사 기록",
   instagram_contact_automation: "자동화 중지 상태",

@@ -100,6 +100,11 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      VALUES($1,$2,'900',1,'manual','open','closed',NULL,$3,$3)`,
     [workspace, connection, user],
   );
+  await pool.query(
+    `INSERT INTO instagram_inbox_read_state(workspace_id,connection_id,recipient_id,user_id,last_read_message_id)
+     VALUES($1,$2,'900',$3,1)`,
+    [workspace, connection, user],
+  );
   const manual = (
     await pool.query(
       `INSERT INTO instagram_manual_replies(workspace_id,connection_id,recipient_id,request_key,created_by,text,handoff_version,status)

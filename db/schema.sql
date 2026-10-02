@@ -486,6 +486,20 @@ CREATE TABLE IF NOT EXISTS instagram_inbox_conversation_events (
   CHECK(reason<>'auto_reopen' OR (from_status='closed' AND to_status='open' AND from_assignee IS NOT DISTINCT FROM to_assignee)),
   CHECK(reason<>'member_removed' OR (from_status=to_status AND from_assignee IS NOT NULL AND to_assignee IS NULL))
 );
+-- Per-member read position of one DM conversation (#23): the highest inbox message ID the member marked
+-- read. It only moves forward. last_read_message_id has no foreign key (the API checks it belongs to the
+-- conversation when it is written), and user_id has none either: every read and write goes through the
+-- membership check, and a removed member's rows stay until a deletion function removes them.
+CREATE TABLE IF NOT EXISTS instagram_inbox_read_state (
+  workspace_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  recipient_id text NOT NULL CHECK(recipient_id ~ '^[0-9]{1,40}$'),
+  user_id uuid NOT NULL,
+  last_read_message_id bigint NOT NULL CHECK(last_read_message_id>0),
+  read_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY(workspace_id,connection_id,recipient_id,user_id),
+  FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id)
+);
 CREATE TABLE IF NOT EXISTS flows (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id),
@@ -827,6 +841,9 @@ BEGIN
   DELETE FROM public.instagram_inbox_conversations WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_inbox_conversations', affected);
+  DELETE FROM public.instagram_inbox_read_state WHERE workspace_id=p_workspace AND connection_id=p_connection;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_inbox_read_state', affected);
   DELETE FROM public.instagram_inbox_handoff_events WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_inbox_handoff_events', affected);
@@ -1063,6 +1080,11 @@ BEGIN
   WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients);
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_inbox_conversations', affected);
+  -- Every member's read position of the person's conversations, keyed by the DM recipient like the inbox.
+  DELETE FROM public.instagram_inbox_read_state
+  WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients);
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_inbox_read_state', affected);
   DELETE FROM public.instagram_inbox_handoff_events
   WHERE workspace_id=p_workspace AND connection_id=p_connection
     AND (recipient_id=ANY(recipients) OR sender_id=ANY(senders));
@@ -1245,6 +1267,9 @@ BEGIN
   DELETE FROM public.instagram_inbox_conversations WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_inbox_conversations', affected);
+  DELETE FROM public.instagram_inbox_read_state WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_inbox_read_state', affected);
   DELETE FROM public.instagram_inbox_handoff_events WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_inbox_handoff_events', affected);
