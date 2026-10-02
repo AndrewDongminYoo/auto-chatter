@@ -431,10 +431,11 @@ type TestRunInput = {
   fields: Map<string, unknown>;
   replyText?: string;
   replyBranch: "replied" | "timeout";
+  expectedRevision?: number;
 };
 
 function testRunInput(input: unknown): TestRunInput {
-  const keys = ["source", "comment_text", "tags", "fields", "reply_text", "reply_branch"];
+  const keys = ["source", "comment_text", "tags", "fields", "reply_text", "reply_branch", "expected_revision"];
   if (!isRecord(input) || Object.keys(input).some((key) => !keys.includes(key)))
     throw new ApiError(400, "invalid_test_run");
   const text = (value: unknown) => typeof value === "string" && value.length <= MAX_TEST_TEXT;
@@ -444,7 +445,13 @@ function testRunInput(input: unknown): TestRunInput {
     (input.reply_text !== undefined && !text(input.reply_text)) ||
     (input.reply_branch !== undefined && input.reply_branch !== "replied" && input.reply_branch !== "timeout") ||
     (input.tags !== undefined && (!Array.isArray(input.tags) || input.tags.length > MAX_TEST_TAGS)) ||
-    (input.fields !== undefined && !isRecord(input.fields))
+    (input.fields !== undefined && !isRecord(input.fields)) ||
+    // Only a draft has a revision; a published version never changes.
+    (input.expected_revision !== undefined &&
+      (input.source !== "draft" ||
+        !Number.isInteger(input.expected_revision) ||
+        (input.expected_revision as number) < 0 ||
+        (input.expected_revision as number) >= 2147483647))
   )
     throw new ApiError(400, "invalid_test_run");
   const tags = ((input.tags as unknown[] | undefined) ?? []).map(normalizeTag);
@@ -462,6 +469,7 @@ function testRunInput(input: unknown): TestRunInput {
     fields,
     ...(input.reply_text === undefined ? {} : { replyText: input.reply_text as string }),
     replyBranch: (input.reply_branch as "replied" | "timeout" | undefined) ?? "replied",
+    ...(input.expected_revision === undefined ? {} : { expectedRevision: input.expected_revision as number }),
   };
 }
 
@@ -589,7 +597,7 @@ export async function testFlowRun(
     await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
     const flow = (
       await client.query(
-        `SELECT f.id::text,f.draft,f.archived,v.version_no,v.definition,v.field_ids FROM flows f
+        `SELECT f.id::text,f.draft,f.draft_revision,f.archived,v.version_no,v.definition,v.field_ids FROM flows f
          LEFT JOIN flow_versions v ON v.id=f.published_version_id AND v.flow_id=f.id
          WHERE f.id=$1 AND f.workspace_id=$2`,
         [id, workspace],
@@ -598,6 +606,10 @@ export async function testFlowRun(
     if (!flow) throw new ApiError(404, "flow_not_found");
     if (flow.archived) throw new ApiError(409, "flow_archived");
     if (body.source === "published" && !flow.definition) throw new ApiError(409, "flow_not_published");
+    // The draft and its revision come from the same snapshot, so a matching revision means the caller's
+    // copy of the draft is the document that runs.
+    if (body.expectedRevision !== undefined && flow.draft_revision !== body.expectedRevision)
+      throw new ApiError(409, "revision_conflict");
     const types = new Map<string, string>(
       (
         await client.query<{ id: string; type: string }>(

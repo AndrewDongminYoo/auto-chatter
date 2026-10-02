@@ -576,6 +576,32 @@ test("synthetic input is validated against the workspace's fields with fixed cod
   assert.deepEqual(upper.messages, [{ node_id: "ask", text: "Hi Seoul: size" }]);
 });
 
+test("a draft test run with a stale expected_revision is refused before it runs", async () => {
+  const id = await createdFlow(fullDocument());
+  const body = { source: "draft", comment_text: "size", ...contact };
+  const current = await testRun(id, { ...body, expected_revision: 0 });
+  assert.deepEqual([current.status, current.body.source], [200, "draft"]);
+  // Another editor saves a new draft; a run sent with the old revision would describe a document the
+  // caller does not have.
+  const saved = await request("PUT", `/api/flows/${id}`, { expected_revision: 0, draft: fullDocument() });
+  assert.equal(saved.status, 200);
+  const stale = await testRun(id, { ...body, expected_revision: 0 });
+  assert.deepEqual([stale.status, stale.body.error], [409, "revision_conflict"]);
+  assert.equal((await testRun(id, { ...body, expected_revision: 1 })).status, 200);
+  // Without the key the stored draft runs as before.
+  assert.equal((await testRun(id, body)).status, 200);
+  for (const invalid of [
+    { ...body, expected_revision: -1 },
+    { ...body, expected_revision: 1.5 },
+    { ...body, expected_revision: "1" },
+    { ...body, expected_revision: 2147483647 },
+    { ...body, source: "published", expected_revision: 1 },
+  ]) {
+    const result = await testRun(id, invalid);
+    assert.deepEqual([result.status, result.body.error], [400, "invalid_test_run"], JSON.stringify(invalid));
+  }
+});
+
 test("only an admin of the flow's workspace may test it, from the app origin", async () => {
   const id = await createdFlow(fullDocument());
   const body = { source: "draft", comment_text: "size" };
