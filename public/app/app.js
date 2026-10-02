@@ -757,17 +757,45 @@ async function loadOperations() {
 
 // Outbound webhooks are admin-only, like operations. A signing secret is shown once in the panel and kept
 // nowhere else: dismissing it, a reload or a session reset clears it.
+// Create and rotate each return a secret once, so while one is in flight or showing, both stay locked:
+// a second result would replace the first in the panel before it is saved.
+let webhookSecretPending = false;
+function webhookSecretLocked() {
+  return webhookSecretPending || !byId("webhook-secret").hidden;
+}
+function webhookSecretControls() {
+  const locked = webhookSecretLocked();
+  byId("webhook-form").querySelector("button[type=submit]").disabled = locked;
+  for (const rotate of document.querySelectorAll("#webhook-endpoints button[data-key-count]"))
+    rotate.disabled = locked || Number(rotate.dataset.keyCount) >= 2;
+}
+async function webhookSecretAction(button, task) {
+  if (webhookSecretLocked()) return;
+  await action(button, async () => {
+    webhookSecretPending = true;
+    webhookSecretControls();
+    try {
+      await task();
+    } finally {
+      webhookSecretPending = false;
+    }
+  });
+  // action() restores the disabled state it found before the task, so the lock is applied again here.
+  webhookSecretControls();
+}
 function showWebhookSecret(endpointName, key) {
   byId("webhook-secret-value").value = key.secret;
   byId("webhook-secret-help").textContent =
-    `"${endpointName}" 주소의 키 ${key.id} 비밀입니다. 지금 한 번만 보여 주며 닫거나 새로 고치면 다시 볼 수 없으니 수신 서버에 저장한 뒤 닫아 주세요.`;
+    `"${endpointName}" 주소의 키 ${key.id} 비밀입니다. 지금 한 번만 보여 주며 닫거나 새로 고치면 다시 볼 수 없으니 수신 서버에 저장한 뒤 닫아 주세요. 닫기 전에는 주소를 추가하거나 키를 교체할 수 없습니다.`;
   byId("webhook-secret").hidden = false;
   byId("webhook-secret-value").select();
+  webhookSecretControls();
 }
 function hideWebhookSecret() {
   byId("webhook-secret-value").value = "";
   byId("webhook-secret-help").textContent = "";
   byId("webhook-secret").hidden = true;
+  webhookSecretControls();
 }
 function webhookEndpointItem(endpoint) {
   const item = node("div", "", "item");
@@ -781,9 +809,10 @@ function webhookEndpointItem(endpoint) {
     item.append(node("p", `키 ${key.id} · ${new Date(key.created_at).toLocaleString("ko-KR")} 발급`, "hint"));
   const rotate = node("button", "키 교체", "secondary");
   rotate.dataset.loadingLabel = "발급 중…";
-  rotate.disabled = endpoint.keys.length >= 2;
+  rotate.dataset.keyCount = String(endpoint.keys.length);
+  rotate.disabled = endpoint.keys.length >= 2 || webhookSecretLocked();
   rotate.addEventListener("click", () =>
-    action(rotate, async () => {
+    webhookSecretAction(rotate, async () => {
       const generation = segmentsGeneration;
       const rotated = await api(`/api/webhooks/endpoints/${endpoint.id}/rotate`, "POST");
       // A session reset while the request was in flight must not reveal the secret to the next session.
@@ -1473,7 +1502,7 @@ byId("webhooks-refresh").addEventListener("click", (event) => action(event.curre
 byId("webhook-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const webhookForm = event.currentTarget;
-  action(webhookForm.querySelector("button[type=submit]"), async () => {
+  webhookSecretAction(webhookForm.querySelector("button[type=submit]"), async () => {
     const generation = segmentsGeneration;
     const created = await api("/api/webhooks/endpoints", "POST", {
       name: webhookForm.elements.name.value,
