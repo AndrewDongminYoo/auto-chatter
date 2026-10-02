@@ -61,6 +61,18 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     );
   }
 
+  // A list row and a read response each count the messages above the read position they were taken against, and
+  // the server never moves that position backward. The count against the higher position is the current one; two
+  // counts against the same position differ only by DMs that arrived between them, so the larger is the later.
+  function reconcile(row, position) {
+    const listed = row.last_read_message_id == null ? -1n : BigInt(row.last_read_message_id),
+      read = BigInt(position.last_read_message_id);
+    if (listed < read) {
+      row.last_read_message_id = position.last_read_message_id;
+      row.unread_count = position.unread_count;
+    } else if (listed === read) row.unread_count = Math.max(row.unread_count, position.unread_count);
+  }
+
   // Marks the open conversation read up to its newest loaded message. The server keeps the higher position, so
   // a repeated or late request cannot move it backward there; two requests can still be in flight, so a response
   // below the position already shown is dropped instead of bringing back an older unread count.
@@ -72,14 +84,15 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
         "POST",
         { message_id: newest },
       );
-      if (epoch !== session) return;
+      // No position means a deletion removed the conversation after the mark committed; the next list drops it.
+      if (epoch !== session || position.last_read_message_id == null) return;
       if (state.readMark && BigInt(position.last_read_message_id) < BigInt(state.readMark)) return;
       state.readMark = position.last_read_message_id;
       state.readUnread = position.unread_count;
       state.readSeq = ++readSeq;
       const entry = listed.get(`${state.row.connection_id}:${state.row.recipient_id}`);
       if (entry) {
-        entry.row.unread_count = position.unread_count;
+        reconcile(entry.row, position);
         rowContent(entry.button, entry.row);
       }
     } catch {
@@ -499,12 +512,12 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
       const page = await api(`/api/inbox?${query}`);
       if (epoch !== session || request !== listRequest) return;
       for (const row of page.conversations) {
-        // A read mark applied after this request started may have committed after the list snapshot, and the
-        // older count would bring the badge back. Taking the lower count is exact when the snapshot came first;
-        // when it came after the mark, a DM that arrived in between is left out (and hidden under the unread
-        // filter) until the next refresh.
+        // A read mark applied after this request started may have committed after the list snapshot; the row's
+        // read position shows which came first, so an older count cannot bring the badge back and a newer DM
+        // counted after the mark is kept.
         const known = states.get(`${row.connection_id}:${row.recipient_id}`);
-        if (known?.readSeq > reads) row.unread_count = Math.min(row.unread_count, known.readUnread);
+        if (known?.readSeq > reads && known.readMark)
+          reconcile(row, { last_read_message_id: known.readMark, unread_count: known.readUnread });
         if (unreadOnly && row.unread_count === 0) continue;
         const button = node("button", "", "secondary");
         rowContent(button, row);

@@ -65,12 +65,15 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
   }
   // The counts, the last message time and the order cover every message of a conversation; q and unread only
   // decide which conversations are listed. Every request scans the workspace's stored DMs (no search index).
+  // last_read_message_id is the caller's read position the unread count was taken against, so a client can tell
+  // whether this snapshot came before or after a read mark it applied.
   const result = await pool.query(
     `WITH conversations AS (
        SELECT m.workspace_id,m.connection_id,m.recipient_id,count(*)::integer AS message_count,
          max(m.message_at) AS last_message_at,
          (extract(epoch FROM max(m.message_at))*1000000)::bigint AS last_message_us,
          count(*) FILTER (WHERE m.id>coalesce(reads.last_read_message_id,0))::integer AS unread_count,
+         max(reads.last_read_message_id) AS last_read_message_id,
          $9::text IS NOT NULL AND bool_or(strpos(lower(m.text),lower($9::text))>0) AS matched
        FROM instagram_inbox_messages m
        LEFT JOIN instagram_inbox_read_state reads ON reads.workspace_id=m.workspace_id
@@ -79,7 +82,7 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
        GROUP BY m.workspace_id,m.connection_id,m.recipient_id
      )
      SELECT m.connection_id,m.recipient_id,c.username,m.message_count,m.last_message_at,m.unread_count,
-       m.last_message_us::text AS last_message_us,${STATE_COLUMNS}
+       m.last_read_message_id::text AS last_read_message_id,m.last_message_us::text AS last_message_us,${STATE_COLUMNS}
      FROM conversations m JOIN instagram_connections c ON c.id=m.connection_id AND c.workspace_id=m.workspace_id
      ${INBOX_STATE_JOINS}
      WHERE ($3::bigint IS NULL OR m.last_message_us<$3::bigint

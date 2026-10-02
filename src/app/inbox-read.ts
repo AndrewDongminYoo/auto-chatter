@@ -36,15 +36,17 @@ export async function markInboxRead(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const result = await apply(client, user, workspace, connection, recipient, messageId);
+    await apply(client, user, workspace, connection, recipient, messageId);
     await client.query("COMMIT");
-    return result;
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
   } finally {
     client.release();
   }
+  // Counted after the commit: a list snapshot that still shows the older position was taken before this count,
+  // so the count covers every message that snapshot saw, and a client can prefer the higher position's count.
+  return readPosition(pool, workspace, connection, recipient, user.id);
 }
 
 async function apply(
@@ -54,7 +56,7 @@ async function apply(
   connection: string,
   recipient: string,
   messageId: string,
-): Promise<ReadPosition> {
+): Promise<void> {
   // The lock order of the conversation state change (saveConversationState): the workspace row, the caller's
   // membership row, then the connection. delete_workspace_data takes the workspace row FOR UPDATE first and
   // removeMember takes it FOR SHARE before the member row, so the three queue instead of deadlocking; a removal
@@ -88,7 +90,6 @@ async function apply(
        WHERE reads.last_read_message_id<EXCLUDED.last_read_message_id`,
     [workspace, connection, recipient, user.id, messageId],
   );
-  return readPosition(client, workspace, connection, recipient, user.id);
 }
 
 async function readPosition(

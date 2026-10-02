@@ -32,6 +32,7 @@ type Row = {
   recipient_id: string;
   message_count: number;
   unread_count: number;
+  last_read_message_id: string | null;
   last_message_at: string;
   state: { status: string; assignee: { user_id: string } | null; version: number };
 };
@@ -318,7 +319,11 @@ test("a read position is per member, only moves forward and drives the unread co
   const elsewhere = await seed("457", "other conversation", "2026-10-01T00:00:04Z");
   const unread = async (actor: Actor) =>
     Object.fromEntries((await page(actor)).conversations.map((row) => [row.recipient_id, row.unread_count]));
+  // Each listed conversation carries the caller's own read position, the one its unread count was taken against.
+  const positions = async (actor: Actor) =>
+    Object.fromEntries((await page(actor)).conversations.map((row) => [row.recipient_id, row.last_read_message_id]));
   assert.deepEqual(await unread(agent), { "456": 3, "457": 1 });
+  assert.deepEqual(await positions(agent), { "456": null, "457": null });
 
   const advanced = await marked(agent, second);
   assert.equal(advanced.last_read_message_id, second);
@@ -327,11 +332,15 @@ test("a read position is per member, only moves forward and drives the unread co
   // A lower or equal ID is a no-op that answers with the current position and keeps its time.
   for (const id of [first, second]) assert.deepEqual(await marked(agent, id), advanced);
   assert.deepEqual(await unread(agent), { "456": 1, "457": 1 });
+  assert.deepEqual(await positions(agent), { "456": second, "457": null });
   // Another member's position is separate.
   assert.deepEqual(await unread(other), { "456": 3, "457": 1 });
+  assert.deepEqual(await positions(other), { "456": null, "457": null });
   const done = await marked(agent, third);
   assert.equal(done.unread_count, 0);
   assert.notEqual(done.read_at, advanced.read_at);
+  assert.deepEqual(await positions(agent), { "456": third, "457": null });
+  assert.deepEqual(await positions(other), { "456": null, "457": null });
   assert.deepEqual(await recipients(agent, "?unread=true"), ["457"]);
   assert.deepEqual(await recipients(other, "?unread=true"), ["457", "456"]);
   // A new message is unread again.
@@ -357,6 +366,29 @@ test("a read position is per member, only moves forward and drives the unread co
     (await readRows()).map((row) => [row.recipient_id, row.user_id, row.last_read_message_id]),
     [["456", agent.id, third]],
   );
+});
+
+// A list snapshot taken while a read mark is uncommitted still shows the older position, so the mark's response
+// must count at least every message that snapshot saw, or the client would take the lower count and lose a DM.
+test("a read response counts the messages stored before its commit", async () => {
+  const id = await seed("456", "one", "2026-10-01T00:00:01Z");
+  const mark = markHeldBeforeCommit(agent, id);
+  try {
+    await Promise.race([
+      mark.atCommit,
+      mark.response.then((response) => assert.fail(`the read mark finished before COMMIT with ${response.status}`)),
+    ]);
+    await seed("456", "two", "2026-10-01T00:00:02Z");
+    const [row] = (await page(agent)).conversations;
+    assert.deepEqual([row!.last_read_message_id, row!.unread_count], [null, 2]);
+    mark.release();
+    const response = await mark.response;
+    assert.equal(response.status, 200);
+    const position = (await response.json()) as Position;
+    assert.deepEqual([position.last_read_message_id, position.unread_count], [id, 1]);
+  } finally {
+    mark.release();
+  }
 });
 
 test("read requests are validated, need a membership and must be same-origin", async () => {
