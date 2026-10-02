@@ -676,6 +676,20 @@
             DM 보관을 켠 이후의 수신 메시지와 수동 답장 이력입니다. 상담을 시작하면 자동 답장을 잠시 멈추고 직접 답장할
             수 있습니다.
           </p>
+          <form id="inbox-search-form" class="inbox-search" role="search">
+            <label for="inbox-search">받은 DM 검색</label>
+            <div class="inbox-search-row">
+              <input
+                id="inbox-search"
+                type="search"
+                maxlength="100"
+                autocomplete="off"
+                aria-describedby="inbox-search-help"
+              />
+              <button type="submit" class="secondary">검색</button>
+            </div>
+            <p id="inbox-search-help" class="hint">받은 DM 본문에서 대소문자 구분 없이 글자 그대로 찾습니다.</p>
+          </form>
           <div class="inbox-filters">
             <label
               >Instagram 계정<select id="inbox-account">
@@ -683,12 +697,21 @@
               </select></label
             >
             <label
-              >대화 보기<select id="inbox-filter">
-                <option value="">전체 대화</option>
-                <option value="mine">내 대화</option>
-                <option value="unassigned">미배정</option>
+              >상태<select id="inbox-status-filter">
+                <option value="">전체</option>
+                <option value="open">진행 중</option>
                 <option value="closed">완료</option>
               </select></label
+            >
+            <label
+              >담당자<select id="inbox-assignee-filter">
+                <option value="">전체</option>
+                <option value="me">나</option>
+                <option value="none">미배정</option>
+              </select></label
+            >
+            <label class="toggle inbox-unread-toggle"
+              ><input id="inbox-unread" type="checkbox" /><span>안 읽은 대화만</span></label
             >
           </div>
           <p id="inbox-status" class="hint" role="status" aria-live="polite"></p>

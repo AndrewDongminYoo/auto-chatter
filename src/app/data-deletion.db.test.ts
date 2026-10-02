@@ -36,6 +36,7 @@ const connectionTables = [
   "instagram_inbox_handoff_events",
   "instagram_inbox_conversations",
   "instagram_inbox_conversation_events",
+  "instagram_inbox_read_state",
   "instagram_manual_replies",
   "instagram_manual_reply_events",
 ];
@@ -120,6 +121,11 @@ async function seedConnection(connection: string, workspace: string, account: st
   await pool.query(
     `INSERT INTO instagram_inbox_conversation_events(workspace_id,connection_id,recipient_id,version,reason,from_status,to_status,from_assignee,to_assignee,actor_id)
      VALUES($1,$2,'900',1,'manual','open','closed',NULL,$3,$3)`,
+    [workspace, connection, userId],
+  );
+  await pool.query(
+    `INSERT INTO instagram_inbox_read_state(workspace_id,connection_id,recipient_id,user_id,last_read_message_id)
+     VALUES($1,$2,'900',$3,1)`,
     [workspace, connection, userId],
   );
   const manual = (

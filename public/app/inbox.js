@@ -1,12 +1,17 @@
 function createInbox({ api, node, getConnections, getRole, getUserId }) {
   const byId = (id) => document.getElementById(id);
   const states = new Map();
+  // Listed conversation buttons by key, so a read mark can update its unread badge without reloading the list.
+  const listed = new Map();
   let epoch = 0,
+    searchText = "",
     listRequest = 0,
     selected = null,
     after = null,
     listBusy = false,
     assignees = [],
+    // Counts applied read marks, so a list response can tell which marks landed after its request started.
+    readSeq = 0,
     expiryTimer;
   const reasons = {
     global_send_disabled: "전체 발송이 중지되어 있습니다.",
@@ -36,6 +41,64 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
   const person = (member) => (member.user_id === getUserId() ? "나" : member.email || "이메일 미기록 멤버");
   const summary = (convo) =>
     `${convo.status === "closed" ? "완료" : "진행 중"} · ${convo.assignee ? `담당 ${person(convo.assignee)}` : "미배정"}`;
+  const filtered = () =>
+    Boolean(
+      searchText ||
+      byId("inbox-status-filter").value ||
+      byId("inbox-assignee-filter").value ||
+      byId("inbox-unread").checked,
+    );
+
+  function rowContent(button, row) {
+    const head = node("span", "", "conversation-head");
+    head.append(node("span", `@${row.username || "연결 계정"}`));
+    if (row.unread_count > 0) head.append(node("span", `안 읽음 ${row.unread_count}`, "unread-badge"));
+    button.replaceChildren(
+      head,
+      node("span", `DM 사용자 ${row.recipient_id}`, "conversation-line"),
+      node("span", `${row.message_count}개 · ${date(row.last_message_at)}`, "conversation-line"),
+      node("span", summary(row.state), "conversation-line"),
+    );
+  }
+
+  // A list row and a read response each count the messages above the read position they were taken against, and
+  // the server never moves that position backward. The count against the higher position is the current one; two
+  // counts against the same position differ only by DMs that arrived between them, so the larger is the later.
+  function reconcile(row, position) {
+    const listed = row.last_read_message_id == null ? -1n : BigInt(row.last_read_message_id),
+      read = BigInt(position.last_read_message_id);
+    if (listed < read) {
+      row.last_read_message_id = position.last_read_message_id;
+      row.unread_count = position.unread_count;
+    } else if (listed === read) row.unread_count = Math.max(row.unread_count, position.unread_count);
+  }
+
+  // Marks the open conversation read up to its newest loaded message. The server keeps the higher position, so
+  // a repeated or late request cannot move it backward there; two requests can still be in flight, so a response
+  // below the position already shown is dropped instead of bringing back an older unread count.
+  async function markRead(state, session, newest) {
+    if (state.readMark && BigInt(state.readMark) >= BigInt(newest)) return;
+    try {
+      const position = await api(
+        `/api/inbox/conversations/${state.row.connection_id}/${state.row.recipient_id}/read`,
+        "POST",
+        { message_id: newest },
+      );
+      // No position means a deletion removed the conversation after the mark committed; the next list drops it.
+      if (epoch !== session || position.last_read_message_id == null) return;
+      if (state.readMark && BigInt(position.last_read_message_id) < BigInt(state.readMark)) return;
+      state.readMark = position.last_read_message_id;
+      state.readUnread = position.unread_count;
+      state.readSeq = ++readSeq;
+      const entry = listed.get(`${state.row.connection_id}:${state.row.recipient_id}`);
+      if (entry) {
+        reconcile(entry.row, position);
+        rowContent(entry.button, entry.row);
+      }
+    } catch {
+      // The badge stays as it was; the next open or refresh tries again.
+    }
+  }
 
   function conversationControls() {
     const state = selected;
@@ -341,6 +404,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
       timeline(state);
       byId("inbox-message-status").textContent =
         "수신과 수동 답장 이력입니다. 새로고침으로 최신 발송 상태를 확인하세요.";
+      // Messages arrive newest first, so the first one of a fresh load is the newest stored message.
+      if (!older && messages.messages.length) void markRead(state, session, messages.messages[0].id);
     } catch (error) {
       if (!current(state, session) || request !== state.readRequest) return;
       state.status = null;
@@ -408,6 +473,9 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
         stateBusy: false,
         convoWrites: 0,
         stateNotice: "",
+        readMark: null,
+        readUnread: null,
+        readSeq: 0,
       });
     selected = states.get(key);
     byId("inbox-conversation-title").textContent = `@${row.username || "연결 계정"} · DM 사용자 ${row.recipient_id}`;
@@ -425,6 +493,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
       request = more ? listRequest : ++listRequest;
     if (!more) {
       byId("inbox-conversations").replaceChildren();
+      listed.clear();
       after = null;
     }
     listBusy = true;
@@ -432,22 +501,28 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     byId("inbox-status").textContent = "대화를 불러오고 있습니다…";
     const query = new URLSearchParams();
     if (byId("inbox-account").value) query.set("connection_id", byId("inbox-account").value);
-    // 내 대화 and 미배정 show open conversations; 완료 shows closed ones of every assignee.
-    const filter = byId("inbox-filter").value;
-    if (filter === "mine") query.set("assignee", "me");
-    if (filter === "unassigned") query.set("assignee", "none");
-    if (filter) query.set("status", filter === "closed" ? "closed" : "open");
+    if (byId("inbox-status-filter").value) query.set("status", byId("inbox-status-filter").value);
+    if (byId("inbox-assignee-filter").value) query.set("assignee", byId("inbox-assignee-filter").value);
+    if (byId("inbox-unread").checked) query.set("unread", "true");
+    if (searchText) query.set("q", searchText);
     if (more) query.set("after", after);
+    const reads = readSeq,
+      unreadOnly = query.has("unread");
     try {
       const page = await api(`/api/inbox?${query}`);
       if (epoch !== session || request !== listRequest) return;
       for (const row of page.conversations) {
-        const button = node(
-          "button",
-          `@${row.username || "연결 계정"}\nDM 사용자 ${row.recipient_id}\n${row.message_count}개 · ${date(row.last_message_at)}\n${summary(row.state)}`,
-          "secondary",
-        );
+        // A read mark applied after this request started may have committed after the list snapshot; the row's
+        // read position shows which came first, so an older count cannot bring the badge back and a newer DM
+        // counted after the mark is kept.
+        const known = states.get(`${row.connection_id}:${row.recipient_id}`);
+        if (known?.readSeq > reads && known.readMark)
+          reconcile(row, { last_read_message_id: known.readMark, unread_count: known.readUnread });
+        if (unreadOnly && row.unread_count === 0) continue;
+        const button = node("button", "", "secondary");
+        rowContent(button, row);
         button.dataset.key = `${row.connection_id}:${row.recipient_id}`;
+        listed.set(button.dataset.key, { row, button });
         button.setAttribute(
           "aria-pressed",
           String(selected?.row.connection_id === row.connection_id && selected?.row.recipient_id === row.recipient_id),
@@ -458,8 +533,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
       after = page.after;
       byId("inbox-status").textContent = byId("inbox-conversations").children.length
         ? "대화를 선택하세요. 초안은 대화마다 따로 보관됩니다."
-        : byId("inbox-filter").value
-          ? "이 보기에 해당하는 대화가 없습니다."
+        : filtered()
+          ? "검색어나 보기 조건에 맞는 대화가 없습니다."
           : "보관한 DM이 없습니다. 계정에서 DM 보관을 켠 뒤 새 DM을 받아 주세요.";
     } catch (error) {
       if (epoch === session && request === listRequest) byId("inbox-status").textContent = error.message;
@@ -480,9 +555,15 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     after = null;
     listBusy = false;
     assignees = [];
+    searchText = "";
+    listed.clear();
     clearTimeout(expiryTimer);
     byId("inbox-account").replaceChildren(new Option("모든 계정", ""));
-    byId("inbox-filter").value = "";
+    byId("inbox-status-filter").value = "";
+    byId("inbox-assignee-filter").value = "";
+    assigneeOptions();
+    byId("inbox-unread").checked = false;
+    byId("inbox-search").value = "";
     for (const id of ["inbox-conversations", "inbox-messages"]) byId(id).replaceChildren();
     for (const id of ["inbox-status", "inbox-message-status", "inbox-reply-status", "inbox-state-status"])
       byId(id).textContent = "";
@@ -491,7 +572,30 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     for (const id of ["inbox-more", "inbox-older", "inbox-thread-refresh"]) byId(id).hidden = true;
     controls();
   }
-  byId("inbox-filter").addEventListener("change", () => void loadList());
+  // Admins can also pick a member; agents filter by themselves or unassigned only.
+  function assigneeOptions() {
+    const select = byId("inbox-assignee-filter"),
+      previous = select.value;
+    const options = [new Option("전체", ""), new Option("나", "me"), new Option("미배정", "none")];
+    for (const member of assignees)
+      if (member.user_id !== getUserId()) options.push(new Option(person(member), member.user_id));
+    select.replaceChildren(...options);
+    select.value = options.some((option) => option.value === previous) ? previous : "";
+  }
+  for (const id of ["inbox-status-filter", "inbox-assignee-filter", "inbox-unread"])
+    byId(id).addEventListener("change", () => void loadList());
+  byId("inbox-search-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    searchText = byId("inbox-search").value.trim();
+    void loadList();
+  });
+  // Clearing the box (including its clear button) shows every conversation again.
+  byId("inbox-search").addEventListener("input", (event) => {
+    if (!event.target.value && searchText) {
+      searchText = "";
+      void loadList();
+    }
+  });
   byId("inbox-claim").addEventListener("click", () => {
     if (!selected?.convo || byId("inbox-claim").disabled) return;
     const mine = selected.convo.assignee?.user_id === getUserId();
@@ -599,6 +703,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
           .then((result) => {
             if (epoch !== session) return;
             assignees = result.assignees;
+            assigneeOptions();
             conversationControls();
           })
           .catch(() => undefined);

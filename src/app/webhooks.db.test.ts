@@ -1126,7 +1126,7 @@ test("a deletion waits for an uncommitted webhook claim and refuses once it comm
   assert.deepEqual(await webhookCounts(), { endpoints: 1, keys: 1, deliveries: 2, audit: 1 });
 });
 
-test("migration 031 replays and leaves the deletion functions as the current schema defines them", async () => {
+test("migration 031 replays and, with the later migrations, leaves the deletion functions as the current schema defines them", async () => {
   const functions = async () =>
     (
       await pool.query(
@@ -1141,9 +1141,13 @@ test("migration 031 replays and leaves the deletion functions as the current sch
   assert.equal(current.length, 3);
   for (const { proname, body } of current) assert.match(body, /webhook_deliveries/, proname);
   const migration = await readFile(new URL("../../db/migrations/031_flow_webhooks.sql", import.meta.url), "utf8");
+  // Migration 032 redefines the same functions after 031, in the order deploy/migrate-multi-user.sql runs them.
+  const later = await readFile(new URL("../../db/migrations/032_inbox_read_state.sql", import.meta.url), "utf8");
   await deliveredPeople();
-  await pool.query(migration);
-  await pool.query(migration);
+  for (let run = 0; run < 2; run++) {
+    await pool.query(migration);
+    await pool.query(later);
+  }
   assert.deepEqual(await functions(), current);
   assert.deepEqual(await webhookCounts(), { endpoints: 1, keys: 1, deliveries: 2, audit: 1 });
 

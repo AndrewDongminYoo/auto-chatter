@@ -1,6 +1,7 @@
 import { queueManualReply, listManualReplies, resolveManualReply, readManualReplyStatus } from "./manual-replies.ts";
 import { inboxHandoff, saveInboxHandoff } from "./inbox-handoff.ts";
 import { listAssignees, saveConversationState } from "./inbox-conversations.ts";
+import { markInboxRead } from "./inbox-read.ts";
 import type { Pool } from "pg";
 import { ApiError, AuthClient, json, readJson, requireSameOrigin, type AuthEnv, type User } from "./auth.ts";
 import { limitAuthRequest, type AuthRateLimitEnv } from "./auth-rate-limit.ts";
@@ -198,6 +199,18 @@ export async function appApi(
         // A stale expected_version answers with the current state, so the screen can show who changed it.
         return saved.conflict ? json({ error: "conversation_conflict", state: saved.state }, 409) : json(saved.state);
       }
+      const conversationRead = /^\/api\/inbox\/conversations\/([a-f0-9-]+)\/(\d+)\/read$/.exec(url.pathname);
+      if (conversationRead && request.method === "POST")
+        return json(
+          await markInboxRead(
+            pool,
+            user,
+            conversationRead[1]!,
+            conversationRead[2]!,
+            url.searchParams,
+            await readJson(request),
+          ),
+        );
       const replyStatus = /^\/api\/connections\/([a-f0-9-]+)\/inbox\/(\d+)\/reply-status$/.exec(url.pathname);
       if (replyStatus && request.method === "GET")
         return json(
