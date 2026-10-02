@@ -62,6 +62,12 @@
 멤버 ID에도 외래 키가 없으며, 모든 읽기와 쓰기가 제거되지 않은 멤버인지 확인합니다.
 제거된 멤버의 행은 삭제 함수가 지울 때까지 남습니다.
 
+알려진 한계([#127](https://github.com/AndrewDongminYoo/auto-chatter/issues/127)): 인박스 메시지 ID는 할당 순서이고 커밋 순서가 아닙니다.
+DM 수집은 INSERT로 ID를 받은 뒤에 대화 잠금을 공유로 잡으므로, 같은 대화로 DM 두 건이 동시에 들어오면 더 작은 ID가 나중에 커밋될 수 있습니다.
+그 사이 더 큰 ID까지 읽음으로 표시되면, 늦게 보인 작은 ID 메시지는 읽은 것으로 세어져 배지가 붙지 않고 `unread=true`에서도 빠집니다.
+메시지 자체는 대화에 그대로 보이고, 다음 DM이 오면 그 대화는 다시 안 읽음으로 셉니다.
+고치려면 DM 수집이 INSERT 전에 대화 잠금을 배타로 잡아야 하는데, 이는 두 DM이 서로를 기다리지 않는다는 지금의 수집 규칙을 바꾸므로 #127에서 결정합니다.
+
 `POST /api/inbox/conversations/<connection>/<recipient>/read`는 본문 `{"message_id": "<ID>"}`로 호출한 멤버의 읽은 위치를 그 메시지까지 옮기고 `{last_read_message_id, read_at, unread_count}`를 돌려줍니다.
 ID는 그 작업 공간의 그 대화에 저장된 인박스 메시지여야 하며, 아니면 `404 message_not_found`입니다(연결이 다른 작업 공간이면 `404 connection_not_found`).
 더 낮거나 같은 ID는 아무것도 바꾸지 않고 현재 위치를 돌려주므로, 읽은 위치는 뒤로 가지 않습니다.
