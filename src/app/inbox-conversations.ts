@@ -58,12 +58,10 @@ export async function readConversationState(
   return conversationState(result.rows[0]!);
 }
 
-// Joins and grouping listInbox adds to its query over instagram_inbox_messages m.
+// Joins listInbox adds to its query over the conversations it grouped from the inbox messages, aliased m.
 export const INBOX_STATE_JOINS = `LEFT JOIN instagram_inbox_conversations state ON state.workspace_id=m.workspace_id
     AND state.connection_id=m.connection_id AND state.recipient_id=m.recipient_id
   ${STATE_JOINS}`;
-export const INBOX_STATE_GROUP = `state.status,state.assignee_user_id,assignee.email,state.version,state.updated_by,
-  updater.email,state.updated_at`;
 
 // Active members an admin can assign. Agents only claim or release, so they do not need the list.
 export async function listAssignees(pool: Pool, user: User) {

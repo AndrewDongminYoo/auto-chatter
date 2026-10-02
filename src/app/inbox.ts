@@ -1,13 +1,7 @@
 import type { Pool } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { workspaceFor } from "./settings.ts";
-import {
-  INBOX_STATE_GROUP,
-  INBOX_STATE_JOINS,
-  STATE_COLUMNS,
-  conversationState,
-  readConversationState,
-} from "./inbox-conversations.ts";
+import { INBOX_STATE_JOINS, STATE_COLUMNS, conversationState, readConversationState } from "./inbox-conversations.ts";
 
 export async function setInbox(pool: Pool, user: User, id: string, input: unknown) {
   if (!isUuid(id) || !isRecord(input) || Object.keys(input).length !== 1 || typeof input.enabled !== "boolean")
@@ -27,56 +21,87 @@ export async function setInbox(pool: Pool, user: User, id: string, input: unknow
   if (!result.rows[0]) throw new ApiError(409, "connection_unavailable");
   return { enabled: result.rows[0].inbox_enabled };
 }
+const INBOX_QUERY_KEYS = ["connection_id", "after", "status", "assignee", "unread", "q"];
+
+// Conversations newest first (#23). The keyset is (last message time DESC, connection, recipient); the time
+// travels in the cursor as integer microseconds, the precision PostgreSQL stores, so rows that tie on the
+// millisecond a JavaScript Date keeps are neither skipped nor repeated at a page boundary.
 export async function listInbox(pool: Pool, user: User, query: URLSearchParams) {
   const workspace = await workspaceFor(pool, user, "agent");
-  let after: { connection_id: string; recipient_id: string } | null = null;
-  const connection = query.get("connection_id");
-  if (connection && !isUuid(connection)) throw new ApiError(400, "invalid_inbox_query");
+  if ([...query.keys()].some((key) => !INBOX_QUERY_KEYS.includes(key) || query.getAll(key).length !== 1))
+    throw new ApiError(400, "invalid_inbox_query");
+  const connection = query.get("connection_id"),
+    status = query.get("status"),
+    assignee = query.get("assignee"),
+    unread = query.get("unread"),
+    search = query.get("q");
+  // status=open|closed and assignee=me|none|<member> filter on the conversation state, where no row means open
+  // and unassigned. q is matched literally against stored DM text, so % _ and \ have no special meaning.
   if (
-    [...query.keys()].some(
-      (key) => !["connection_id", "after", "status", "assignee"].includes(key) || query.getAll(key).length !== 1,
-    )
+    (connection !== null && !isUuid(connection)) ||
+    (status !== null && !["open", "closed"].includes(status)) ||
+    (assignee !== null && !["me", "none"].includes(assignee) && !isUuid(assignee)) ||
+    (unread !== null && unread !== "true") ||
+    (search !== null && ([...search].length < 1 || [...search].length > 100 || search.includes("\u0000")))
   )
     throw new ApiError(400, "invalid_inbox_query");
-  // status=open|closed and assignee=me|none filter on the conversation state, where no row means open and unassigned.
-  const status = query.get("status"),
-    assignee = query.get("assignee");
-  if ((status && !["open", "closed"].includes(status)) || (assignee && !["me", "none"].includes(assignee)))
-    throw new ApiError(400, "invalid_inbox_query");
+  let after: { at: string; connection_id: string; recipient_id: string } | null = null;
   if (query.has("after")) {
     try {
       const value: unknown = JSON.parse(Buffer.from(query.get("after")!, "base64url").toString());
       if (
         !isRecord(value) ||
+        typeof value.at !== "string" ||
+        !/^-?\d{1,18}$/.test(value.at) ||
         !isUuid(value.connection_id) ||
         typeof value.recipient_id !== "string" ||
-        !/^\d+$/.test(value.recipient_id)
+        !/^\d{1,40}$/.test(value.recipient_id)
       )
         throw new Error();
-      after = { connection_id: value.connection_id, recipient_id: value.recipient_id };
+      after = { at: value.at, connection_id: value.connection_id, recipient_id: value.recipient_id };
     } catch {
       throw new ApiError(400, "invalid_inbox_query");
     }
   }
+  // The counts, the last message time and the order cover every message of a conversation; q and unread only
+  // decide which conversations are listed. Every request scans the workspace's stored DMs (no search index).
   const result = await pool.query(
-    `SELECT m.connection_id,m.recipient_id,c.username,count(*)::integer AS message_count,max(m.message_at) AS last_message_at,
-      ${STATE_COLUMNS}
-    FROM instagram_inbox_messages m JOIN instagram_connections c ON c.id=m.connection_id AND c.workspace_id=m.workspace_id
-    ${INBOX_STATE_JOINS}
-    WHERE m.workspace_id=$1 AND ($2::uuid IS NULL OR m.connection_id=$2)
-      AND ($3::uuid IS NULL OR (m.connection_id,m.recipient_id)>($3::uuid,$4::text))
-      AND ($5::text IS NULL OR coalesce(state.status,'open')=$5)
-      AND ($6::text IS NULL OR ($6='none' AND state.assignee_user_id IS NULL) OR ($6='me' AND state.assignee_user_id=$7::uuid))
-    GROUP BY m.connection_id,m.recipient_id,c.username,${INBOX_STATE_GROUP}
-    ORDER BY m.connection_id,m.recipient_id LIMIT 51`,
+    `WITH conversations AS (
+       SELECT m.workspace_id,m.connection_id,m.recipient_id,count(*)::integer AS message_count,
+         max(m.message_at) AS last_message_at,
+         (extract(epoch FROM max(m.message_at))*1000000)::bigint AS last_message_us,
+         count(*) FILTER (WHERE m.id>coalesce(reads.last_read_message_id,0))::integer AS unread_count,
+         $9::text IS NOT NULL AND bool_or(strpos(lower(m.text),lower($9::text))>0) AS matched
+       FROM instagram_inbox_messages m
+       LEFT JOIN instagram_inbox_read_state reads ON reads.workspace_id=m.workspace_id
+         AND reads.connection_id=m.connection_id AND reads.recipient_id=m.recipient_id AND reads.user_id=$7::uuid
+       WHERE m.workspace_id=$1 AND ($2::uuid IS NULL OR m.connection_id=$2)
+       GROUP BY m.workspace_id,m.connection_id,m.recipient_id
+     )
+     SELECT m.connection_id,m.recipient_id,c.username,m.message_count,m.last_message_at,m.unread_count,
+       m.last_message_us::text AS last_message_us,${STATE_COLUMNS}
+     FROM conversations m JOIN instagram_connections c ON c.id=m.connection_id AND c.workspace_id=m.workspace_id
+     ${INBOX_STATE_JOINS}
+     WHERE ($3::bigint IS NULL OR m.last_message_us<$3::bigint
+         OR (m.last_message_us=$3::bigint AND (m.connection_id,m.recipient_id)>($4::uuid,$5::text)))
+       AND ($6::text IS NULL OR coalesce(state.status,'open')=$6)
+       AND ($8::uuid IS NULL OR state.assignee_user_id=$8::uuid)
+       AND (NOT $11::boolean OR state.assignee_user_id IS NULL)
+       AND ($9::text IS NULL OR m.matched)
+       AND (NOT $10::boolean OR m.unread_count>0)
+     ORDER BY m.last_message_us DESC,m.connection_id,m.recipient_id LIMIT 51`,
     [
       workspace,
-      connection || null,
+      connection,
+      after?.at ?? null,
       after?.connection_id ?? null,
       after?.recipient_id ?? null,
       status,
-      assignee,
       user.id,
+      assignee === "me" ? user.id : assignee === "none" ? null : assignee,
+      search,
+      unread === "true",
+      assignee === "none",
     ],
   );
   const conversations = result.rows.slice(0, 50).map((row) => {
@@ -88,18 +113,23 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
         updated_by: _by,
         updated_by_email: _byEmail,
         updated_at: _at,
+        last_message_us: _us,
         ...conversation
       } = row;
       return { ...conversation, state: conversationState(row) };
     }),
-    last = conversations.at(-1);
+    last = result.rows[49];
   return {
     conversations,
     after:
       result.rows.length > 50
-        ? Buffer.from(JSON.stringify({ connection_id: last.connection_id, recipient_id: last.recipient_id })).toString(
-            "base64url",
-          )
+        ? Buffer.from(
+            JSON.stringify({
+              at: last.last_message_us,
+              connection_id: last.connection_id,
+              recipient_id: last.recipient_id,
+            }),
+          ).toString("base64url")
         : null,
   };
 }
