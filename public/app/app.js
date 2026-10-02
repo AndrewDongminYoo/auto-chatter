@@ -146,6 +146,11 @@ function resetSession() {
   byId("operations-summary").textContent = "";
   byId("operations-alerts").replaceChildren();
   byId("operations").replaceChildren();
+  byId("webhooks-section").hidden = true;
+  byId("webhook-endpoints").replaceChildren();
+  byId("webhook-deliveries").replaceChildren();
+  byId("webhook-form").reset();
+  hideWebhookSecret();
   contactsGeneration++;
   contactsDirty.clear();
   purgedContactConnections.clear();
@@ -272,6 +277,19 @@ const errors = {
   instagram_permissions_required: "필수 Instagram 권한을 받지 못했습니다. 계정과 앱 권한을 확인해 주세요.",
   health_rate_limited: "상태 확인 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
   health_unavailable: "지금은 Meta 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+  invalid_webhook_endpoint:
+    "주소 이름은 1–60자로 입력하고, 줄바꿈이나 보이지 않는 문자(여러 이모지를 이어 붙인 기호 등)는 빼 주세요. 계속 실패하면 목록을 새로 고친 뒤 다시 시도해 주세요.",
+  invalid_webhook_url:
+    "443 포트를 쓰는 https:// 주소만 등록할 수 있습니다. IP 주소, localhost와 .local·.internal 주소, 사용자 정보가 들어간 주소는 쓸 수 없습니다.",
+  webhooks_unavailable: "지금은 주소를 추가하거나 키를 교체할 수 없습니다. 서비스 운영자에게 문의해 주세요.",
+  webhook_endpoint_not_found: "주소를 찾을 수 없습니다. 목록을 새로 고쳐 주세요.",
+  webhook_endpoint_limit_reached: "켜 둘 수 있는 주소는 최대 5개입니다. 사용하지 않는 주소를 끈 뒤 다시 시도해 주세요.",
+  webhook_rotation_in_progress: "이미 키를 교체하는 중입니다. 이전 키를 폐기한 뒤 다시 교체해 주세요.",
+  webhook_key_required: "유효한 키가 하나뿐이라 폐기할 수 없습니다. 먼저 키를 교체해 주세요.",
+  invalid_webhook_delivery: "전송 기록을 확인할 수 없습니다. 목록을 새로 고쳐 주세요.",
+  webhook_delivery_not_found: "전송 기록을 찾을 수 없습니다. 목록을 새로 고쳐 주세요.",
+  webhook_delivery_not_dead: "전송이 중단된 기록만 다시 보낼 수 있습니다. 목록을 새로 고쳐 주세요.",
+  webhook_endpoint_inactive: "꺼진 주소로는 다시 보낼 수 없습니다. 주소를 켠 뒤 다시 시도해 주세요.",
   invalid_credentials: "이메일과 8자 이상의 비밀번호를 입력해 주세요.",
   invalid_recovery_email: "이메일 주소를 확인해 주세요.",
   auth_rate_limited: "요청이 많습니다. 잠시 기다린 뒤 다시 시도해 주세요.",
@@ -737,6 +755,162 @@ async function loadOperations() {
   }
 }
 
+// Outbound webhooks are admin-only, like operations. A signing secret is shown once in the panel and kept
+// nowhere else: dismissing it, a reload or a session reset clears it.
+// Create and rotate each return a secret once, so while one is in flight or showing, both stay locked:
+// a second result would replace the first in the panel before it is saved.
+let webhookSecretPending = false;
+function webhookSecretLocked() {
+  return webhookSecretPending || !byId("webhook-secret").hidden;
+}
+function webhookSecretControls() {
+  const locked = webhookSecretLocked();
+  byId("webhook-form").querySelector("button[type=submit]").disabled = locked;
+  for (const rotate of document.querySelectorAll("#webhook-endpoints button[data-key-count]"))
+    rotate.disabled = locked || Number(rotate.dataset.keyCount) >= 2;
+}
+async function webhookSecretAction(button, task) {
+  if (webhookSecretLocked()) return;
+  await action(button, async () => {
+    webhookSecretPending = true;
+    webhookSecretControls();
+    try {
+      await task();
+    } finally {
+      webhookSecretPending = false;
+    }
+  });
+  // action() restores the disabled state it found before the task, so the lock is applied again here.
+  webhookSecretControls();
+}
+function showWebhookSecret(endpointName, key) {
+  byId("webhook-secret-value").value = key.secret;
+  byId("webhook-secret-help").textContent =
+    `"${endpointName}" 주소의 키 ${key.id} 비밀입니다. 지금 한 번만 보여 주며 닫거나 새로 고치면 다시 볼 수 없으니 수신 서버에 저장한 뒤 닫아 주세요. 닫기 전에는 주소를 추가하거나 키를 교체할 수 없습니다.`;
+  byId("webhook-secret").hidden = false;
+  byId("webhook-secret-value").select();
+  webhookSecretControls();
+}
+function hideWebhookSecret() {
+  byId("webhook-secret-value").value = "";
+  byId("webhook-secret-help").textContent = "";
+  byId("webhook-secret").hidden = true;
+  webhookSecretControls();
+}
+function webhookEndpointItem(endpoint) {
+  const item = node("div", "", "item");
+  const badges = node("div", "", "badges");
+  badges.append(
+    badge(endpoint.active ? "켜짐" : "꺼짐", endpoint.active ? "success" : "warning"),
+    badge(webhookKeyState(endpoint.keys)),
+  );
+  item.append(node("strong", endpoint.name), badges, node("p", endpoint.url, "hint"));
+  for (const key of endpoint.keys)
+    item.append(node("p", `키 ${key.id} · ${new Date(key.created_at).toLocaleString("ko-KR")} 발급`, "hint"));
+  const rotate = node("button", "키 교체", "secondary");
+  rotate.dataset.loadingLabel = "발급 중…";
+  rotate.dataset.keyCount = String(endpoint.keys.length);
+  rotate.disabled = endpoint.keys.length >= 2 || webhookSecretLocked();
+  rotate.addEventListener("click", () =>
+    webhookSecretAction(rotate, async () => {
+      const generation = segmentsGeneration;
+      const rotated = await api(`/api/webhooks/endpoints/${endpoint.id}/rotate`, "POST");
+      // A session reset while the request was in flight must not reveal the secret to the next session.
+      if (generation !== segmentsGeneration) return;
+      showWebhookSecret(endpoint.name, rotated.key);
+      notice("새 키를 발급했습니다. 수신 서버가 새 비밀로 검증하도록 바꾼 뒤 이전 키를 폐기해 주세요.");
+      await loadWebhooks();
+    }),
+  );
+  const retire = node("button", "이전 키 폐기", "secondary danger");
+  retire.disabled = endpoint.keys.length < 2;
+  retire.addEventListener("click", () =>
+    action(retire, async () => {
+      if (
+        !confirm(
+          `"${endpoint.name}" 주소의 이전 키를 폐기할까요? 폐기하면 그 키로 서명하지 않으므로, 수신 서버가 새 비밀로 검증하는지 먼저 확인해 주세요.`,
+        )
+      )
+        return;
+      await api(`/api/webhooks/endpoints/${endpoint.id}/retire`, "POST");
+      notice("이전 키를 폐기했습니다. 이제 새 키로만 서명합니다.");
+      await loadWebhooks();
+    }),
+  );
+  const toggle = node("button", endpoint.active ? "끄기" : "켜기", "secondary");
+  toggle.addEventListener("click", () =>
+    action(toggle, async () => {
+      if (
+        endpoint.active &&
+        !confirm(
+          `"${endpoint.name}" 주소를 끌까요? 꺼진 동안 이 주소로 보낼 전송은 보내지 않고 중단됩니다. 다시 켜도 자동으로 다시 보내지 않습니다.`,
+        )
+      )
+        return;
+      await api(`/api/webhooks/endpoints/${endpoint.id}/${endpoint.active ? "disable" : "enable"}`, "POST");
+      notice(endpoint.active ? "주소를 껐습니다." : "주소를 켰습니다.");
+      await loadWebhooks();
+    }),
+  );
+  item.append(rotate, retire, toggle);
+  return item;
+}
+function webhookDeliveryItem(delivery, endpointName) {
+  const item = node("div", "", "item");
+  const badges = node("div", "", "badges");
+  badges.append(badge(webhookStatusLabel(delivery.status), delivery.status === "dead" ? "warning" : ""));
+  item.append(
+    node("strong", endpointName ?? "알 수 없는 주소"),
+    badges,
+    node("p", webhookAttemptSummary(delivery), "hint"),
+    node(
+      "p",
+      webhookDeliveryTimes(delivery, (value) => new Date(value).toLocaleString("ko-KR")),
+      "hint",
+    ),
+  );
+  if (delivery.status !== "dead") return item;
+  const redeliver = node("button", "다시 보내기", "secondary");
+  redeliver.addEventListener("click", () =>
+    action(redeliver, async () => {
+      if (
+        !confirm(
+          "이 전송을 같은 이벤트 ID로 다시 보낼까요? 수신 서버가 이미 받은 이벤트라면 이벤트 ID로 중복을 걸러야 합니다.",
+        )
+      )
+        return;
+      await api(`/api/webhooks/deliveries/${delivery.event_id}/redeliver`, "POST");
+      notice("전송을 다시 대기열에 넣었습니다. 전체 발송이 켜져 있으면 다음 정기 작업에서 보냅니다.");
+      await loadWebhooks();
+    }),
+  );
+  item.append(redeliver);
+  return item;
+}
+async function loadWebhooks() {
+  const generation = segmentsGeneration;
+  try {
+    const [endpoints, deliveries] = await Promise.all([
+      api("/api/webhooks/endpoints"),
+      api("/api/webhooks/deliveries"),
+    ]);
+    if (generation !== segmentsGeneration) return;
+    const names = new Map(endpoints.endpoints.map((endpoint) => [endpoint.id, endpoint.name]));
+    byId("webhook-endpoints").replaceChildren(
+      ...(endpoints.endpoints.length
+        ? endpoints.endpoints.map(webhookEndpointItem)
+        : [node("p", "등록한 주소가 없습니다.", "hint")]),
+    );
+    byId("webhook-deliveries").replaceChildren(
+      ...(deliveries.deliveries.length
+        ? deliveries.deliveries.map((delivery) => webhookDeliveryItem(delivery, names.get(delivery.endpoint_id)))
+        : [node("p", "아직 전송 기록이 없습니다.", "hint")]),
+    );
+  } catch (error) {
+    if (generation === segmentsGeneration) notice(error.message, true);
+  }
+}
+
 async function loadWorkspace() {
   const generation = segmentsGeneration;
   const me = await api("/api/me");
@@ -750,7 +924,11 @@ async function loadWorkspace() {
   timeZoneControls();
   const operationsVisible = currentRole === "owner" || currentRole === "admin";
   byId("operations-section").hidden = !operationsVisible;
-  if (operationsVisible) void loadOperations();
+  byId("webhooks-section").hidden = !operationsVisible;
+  if (operationsVisible) {
+    void loadOperations();
+    void loadWebhooks();
+  }
   byId("members-section").hidden = currentRole !== "owner";
   if (currentRole === "owner") void loadMembers();
   if (generation !== segmentsGeneration) return;
@@ -1320,6 +1498,34 @@ byId("time-zone-form").addEventListener("submit", (event) => {
   });
 });
 byId("operations-refresh").addEventListener("click", (event) => action(event.currentTarget, loadOperations));
+byId("webhooks-refresh").addEventListener("click", (event) => action(event.currentTarget, loadWebhooks));
+byId("webhook-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const webhookForm = event.currentTarget;
+  webhookSecretAction(webhookForm.querySelector("button[type=submit]"), async () => {
+    const generation = segmentsGeneration;
+    const created = await api("/api/webhooks/endpoints", "POST", {
+      name: webhookForm.elements.name.value,
+      url: webhookForm.elements.url.value.trim(),
+    });
+    if (generation !== segmentsGeneration) return;
+    showWebhookSecret(created.name, created.key);
+    webhookForm.reset();
+    notice(`"${created.name}" 주소를 추가했습니다. 서명 비밀은 지금 한 번만 보여 줍니다.`);
+    await loadWebhooks();
+  });
+});
+byId("copy-webhook-secret").addEventListener("click", async () => {
+  const secret = byId("webhook-secret-value");
+  try {
+    await navigator.clipboard.writeText(secret.value);
+    notice("서명 비밀을 복사했습니다.");
+  } catch {
+    secret.select();
+    notice("서명 비밀을 선택했습니다. 직접 복사해 주세요.", true);
+  }
+});
+byId("dismiss-webhook-secret").addEventListener("click", hideWebhookSecret);
 byId("copy-invite").addEventListener("click", async () => {
   const link = byId("invite-link");
   try {

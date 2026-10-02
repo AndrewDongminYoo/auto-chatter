@@ -7,6 +7,7 @@
     <link rel="icon" href="../icons/auto-chatter.png" type="image/png" />
     <link rel="stylesheet" href="./styles.css" />
     <script src="./inbox.js" defer></script>
+    <script src="./webhook-labels.js" defer></script>
     <script src="./app.js" defer></script>
   </head>
   <body>
@@ -193,6 +194,53 @@
             발송 대기·처리 시간과 최근 24시간 결과 수, 토큰 만료까지 남은 날을 보여 줍니다. 메시지 내용과 받는 사람
             정보는 표시하지 않습니다.
           </p>
+        </section>
+        <section id="webhooks-section" class="card" aria-labelledby="webhooks-title" hidden>
+          <div class="section-heading">
+            <div>
+              <h2 id="webhooks-title">외부 전송</h2>
+            </div>
+            <button id="webhooks-refresh" class="secondary" data-loading-label="불러오는 중…">다시 불러오기</button>
+          </div>
+          <p class="hint">
+            플로의 외부 전송 단계가 고른 태그·필드 값을 등록한 주소로 서명해서 보냅니다. 켜 둘 수 있는 주소는 최대
+            5개입니다.
+          </p>
+          <div id="webhook-endpoints" class="account-list"></div>
+          <form id="webhook-form" class="invite-form">
+            <label>
+              주소 이름
+              <input name="name" required maxlength="60" autocomplete="off" />
+            </label>
+            <label>
+              받을 주소
+              <input
+                name="url"
+                type="url"
+                required
+                maxlength="2048"
+                placeholder="https://"
+                autocomplete="off"
+                spellcheck="false"
+                aria-describedby="webhook-url-help"
+              />
+            </label>
+            <button type="submit" data-loading-label="추가하는 중…">주소 추가</button>
+          </form>
+          <p id="webhook-url-help" class="hint">
+            443 포트를 쓰는 https:// 주소만 등록할 수 있습니다. IP 주소, localhost와 .local·.internal 주소, 사용자
+            정보가 들어간 주소는 쓸 수 없습니다.
+          </p>
+          <div id="webhook-secret" class="invite-result" hidden>
+            <label for="webhook-secret-value">새 서명 비밀</label>
+            <input id="webhook-secret-value" readonly autocomplete="off" spellcheck="false" />
+            <button id="copy-webhook-secret" type="button" class="secondary">복사</button>
+            <button id="dismiss-webhook-secret" type="button" class="secondary">닫기</button>
+            <p id="webhook-secret-help" class="hint"></p>
+          </div>
+          <h3 id="webhook-deliveries-title">최근 전송</h3>
+          <div id="webhook-deliveries" class="account-list" aria-labelledby="webhook-deliveries-title"></div>
+          <p class="hint">최근 50건의 결과만 보여 줍니다. 보낸 내용과 받는 사람 정보는 표시하지 않습니다.</p>
         </section>
         <section id="members-section" class="card" aria-labelledby="members-title" hidden>
           <div class="section-heading">
