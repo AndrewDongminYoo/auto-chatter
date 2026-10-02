@@ -273,6 +273,15 @@ Worker 버전 `94be1bcd-d527-464c-a7a3-fb8dda6470fe`를 해당 커밋에서 배�
 이 배포에는 DB 마이그레이션이 없으며 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 앞과 같은 점검(공개 페이지, 로그인하지 않은 API와 다른 출처 요청 거부, 서명 없는 웹훅 거부, 정적 파일 해시, `/privacy` 문구와 시행일)을 모두 통과했고, 배포 후 새 버전에서 cron 3회가 예외와 오류 로그 없이 완료됐습니다.
 운영에는 플로가 없으므로 바뀐 발행 검증은 운영 데이터로 실행하지 않았습니다.
+2026-10-02에는 운영자 승인에 따라 PR #114(migration 028, 발송 기록 전 응답 보관), PR #115(migration 029, 대화 담당자와 상태), PR #116(migration 030, 정기 작업 기록), PR #117·#118(migration 031, 플로 외부 전송)을 포함한 `main` 커밋 `dc17c72cd562a45c095e8706cdfffc7e0a1ff9d9`의 마이그레이션을 운영 DB에 적용했습니다. Worker는 배포하지 않았습니다.
+적용 전 운영 DB는 027까지 적용된 상태였고, 네 migration의 테이블 8개가 모두 없었으며, 연결 1개(수신 켜짐·발송 꺼짐)·켜진 플로 0개·활성 규칙 0개·발송 중 행 0개였습니다.
+public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-10-02-pr118/public-before-028-031.dump`에 백업했으며 데이터 테이블 28개가 들어 있습니다.
+관리자 연결은 앞과 같은 Session pooler를 TLS `verify-full`(Git에서 제외된 `deploy/secrets/supabase-ca.crt`)로 사용했고, 해당 커밋의 `deploy/migrate-multi-user.sql`을 실행해 migration 028~031을 한 트랜잭션으로 적용했습니다. 실행 로그에 오류나 경고는 없었습니다.
+적용 후 public 테이블은 28개에서 36개가 됐고, 새 테이블 8개(`instagram_unmatched_replies`, `instagram_inbox_conversations`, `instagram_inbox_conversation_events`, `scheduled_steps`, `webhook_endpoints`, `webhook_signing_keys`, `webhook_deliveries`, `webhook_redelivery_events`) 모두 RLS가 켜진 것을 조회했습니다.
+서버 역할의 제품 테이블 DELETE 권한은 0개였고, `webhook_redelivery_events`와 `instagram_inbox_conversation_events`의 UPDATE 권한도 없었으며, `anon`과 `authenticated`에는 public 테이블 권한이 없었습니다.
+세 삭제 함수의 정의에는 `webhook_deliveries`가 들어 있었고, 소유자(`postgres`), `SECURITY DEFINER` 여부(연결 삭제 함수만), 서버 역할의 실행 권한(연결 삭제 함수만)은 그대로였습니다.
+기존 행 수(작업 공간 2, 멤버 1, 연결 1, 댓글 9, outbox 3, 플로 0, 플로 실행 0)와 발송 꺼짐 상태는 유지됐습니다.
+운영 Worker는 `d23cef2`에서 배포한 `01e7f0b9-9bf9-478c-9fe1-3ca35824ee52` 그대로이므로, 새 테이블을 쓰는 기능(발송 전 응답 보관, 대화 담당자, 운영 상태, 외부 전송)은 운영에서 아직 동작하지 않습니다. 이후 `main`을 배포할 때는 `/privacy` 시행일을 배포일로 옮겨야 합니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.

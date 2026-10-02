@@ -98,4 +98,5 @@ API가 상담원을 거부하므로 상담원에게는 영역을 숨기고 요�
 - DB 테스트(`operations-health.db.test.ts`): 관리자 지표·경보 계산, 상담원 거부, 응답의 비밀·본문·ID 부재, 경보 전환 한 번 기록, 켜진 경보의 새 `unknown` 한 번 기록, `cf-ray`가 없는 API 요청의 UUID 상관 ID(풀에도 같은 ID).
 - 권한 테스트(`access.db.test.ts`)와 workerd 테스트(`runtime.db.test.mjs`): 서버 역할의 upsert 허용과 DELETE 차단, API 역할 차단, 제한된 서버 역할로 실행한 Cron의 단계 기록.
 
-운영 Workers Logs의 실제 기록·검색, 운영 DB의 migration 030, 운영 데이터의 경보는 확인하지 않았습니다.
+운영 Workers Logs의 실제 기록·검색과 운영 데이터의 경보는 확인하지 않았습니다.
+migration 030은 2026-10-02 운영 DB에 적용했지만([운영 적용 기록](../notes/2026-09-26-cloudflare-runbook.md)), 이 계약을 포함한 Worker는 아직 배포하지 않았습니다.
