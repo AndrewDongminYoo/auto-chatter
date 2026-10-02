@@ -2,7 +2,7 @@ const contact = '<a href="mailto:ydm2790@gmail.com">ydm2790@gmail.com</a>';
 
 const privacy = `
 <h1>개인정보처리방침</h1>
-<p class="meta">auto-chatter · 시행일: 2026년 10월 1일</p>
+<p class="meta">auto-chatter · 시행일: 2026년 10월 2일</p>
 <p>auto-chatter는 이용자가 연결한 Instagram 전문 계정의 댓글을 확인하고, 설정한 규칙에 따라 비공개 답장을 제공하는 서비스입니다. Meta 개발자 화면의 앱 이름은 AutoMessage - IG입니다. 이 방침은 이 서비스가 처리하는 개인정보에 적용됩니다.</p>
 <h2>1. 운영자와 문의처</h2>
 <p>운영자 및 개인정보 보호 담당자: 유동민(Dongmin Yu)<br>개인정보 문의 및 권리 행사: ${contact}</p>
