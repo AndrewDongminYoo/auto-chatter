@@ -12,6 +12,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     assignees = [],
     // The workspace's inbox labels, archived ones included, as GET /api/inbox/labels lists them.
     labels = [],
+    labelsRequest = 0,
     labelsBusy = false,
     // Counts applied read marks, so a list response can tell which marks landed after its request started.
     readSeq = 0,
@@ -83,17 +84,19 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     select.value = options.some((option) => option.value === previous) ? previous : "";
   }
 
+  // Several loads can overlap in one session (the first load, a refresh, a label change), so only the latest applies.
   async function loadLabels() {
-    const session = epoch;
+    const session = epoch,
+      request = ++labelsRequest;
     try {
       const result = await api("/api/inbox/labels");
-      if (epoch !== session) return;
+      if (epoch !== session || request !== labelsRequest) return;
       labels = result.labels;
       labelFilterOptions();
       labelControls();
       labelAdmin();
     } catch (error) {
-      if (epoch === session) byId("inbox-labels-status").textContent = error.message;
+      if (epoch === session && request === labelsRequest) byId("inbox-labels-status").textContent = error.message;
     }
   }
 
