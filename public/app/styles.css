@@ -326,6 +326,7 @@ body:has(#workspace:not([hidden]))::before {
 #accounts-section .section-heading,
 #workspace-settings-section .section-heading,
 #webhooks-section .section-heading,
+#inbox-labels-section .section-heading,
 #members-section .section-heading {
   margin-bottom: 10px;
 }
@@ -900,6 +901,96 @@ select:disabled {
 }
 .reply-warning {
   color: var(--color-warning);
+}
+.label-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.label-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-accent);
+  color: var(--color-success);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.label-chip.archived {
+  background: var(--color-soft);
+  color: var(--color-muted);
+  border-style: dashed;
+}
+.inbox-label-editor {
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+}
+.label-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 16px;
+}
+.label-option {
+  margin: 0;
+  align-items: center;
+  font-weight: 500;
+}
+.label-option input {
+  margin: 0;
+}
+.inbox-notes {
+  margin-top: 24px;
+  padding: 16px;
+  border: 1px dashed var(--color-warning);
+  border-radius: var(--radius-control);
+  background: var(--color-warning-soft);
+}
+.inbox-notes h4 {
+  margin: 0;
+}
+.note-scope {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--color-surface);
+  color: var(--color-warning);
+  font-size: 11px;
+  font-weight: 600;
+}
+.inbox-note-form textarea {
+  width: 100%;
+}
+.note-list {
+  margin-top: 12px;
+}
+.note-item {
+  padding: 10px 0;
+  border-top: 1px solid var(--color-border);
+  overflow-wrap: anywhere;
+}
+.note-item p {
+  margin: 0;
+}
+.note-body {
+  white-space: pre-wrap;
+}
+#inbox-note-count {
+  font-variant-numeric: tabular-nums;
+}
+.label-rename {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-width: min(260px, 100%);
+}
+.label-rename input {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
 }
 .reply-decision {
   border: 1px solid var(--color-border);

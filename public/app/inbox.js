@@ -10,6 +10,9 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     after = null,
     listBusy = false,
     assignees = [],
+    // The workspace's inbox labels, archived ones included, as GET /api/inbox/labels lists them.
+    labels = [],
+    labelsBusy = false,
     // Counts applied read marks, so a list response can tell which marks landed after its request started.
     readSeq = 0,
     expiryTimer;
@@ -46,8 +49,12 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
       searchText ||
       byId("inbox-status-filter").value ||
       byId("inbox-assignee-filter").value ||
+      byId("inbox-label-filter").value ||
       byId("inbox-unread").checked,
     );
+  const conversationPath = (state) => `/api/inbox/conversations/${state.row.connection_id}/${state.row.recipient_id}`;
+  const labelText = (label) => (label.archived ? `${label.name} (보관됨)` : label.name);
+  const sameIds = (ids, set) => ids.size === set.size && [...ids].every((id) => set.has(id));
 
   function rowContent(button, row) {
     const head = node("span", "", "conversation-head");
@@ -59,6 +66,342 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
       node("span", `${row.message_count}개 · ${date(row.last_message_at)}`, "conversation-line"),
       node("span", summary(row.state), "conversation-line"),
     );
+    if (row.label_set?.labels.length) {
+      const chips = node("span", "", "label-chips");
+      for (const label of row.label_set.labels)
+        chips.append(node("span", labelText(label), `label-chip${label.archived ? " archived" : ""}`));
+      button.append(chips);
+    }
+  }
+
+  function labelFilterOptions() {
+    const select = byId("inbox-label-filter"),
+      previous = select.value;
+    const options = [new Option("전체", "")];
+    for (const label of labels) options.push(new Option(labelText(label), label.id));
+    select.replaceChildren(...options);
+    select.value = options.some((option) => option.value === previous) ? previous : "";
+  }
+
+  async function loadLabels() {
+    const session = epoch;
+    try {
+      const result = await api("/api/inbox/labels");
+      if (epoch !== session) return;
+      labels = result.labels;
+      labelFilterOptions();
+      labelControls();
+      labelAdmin();
+    } catch (error) {
+      if (epoch === session) byId("inbox-labels-status").textContent = error.message;
+    }
+  }
+
+  // The labels a conversation shows in its editor: the ones it has (archived ones too, so they can stay or be
+  // removed) and every active label it could add. The workspace list is newer than a loaded set for a rename.
+  function labelChoices(state) {
+    const options = new Map(state.labelSet.labels.map((label) => [label.id, label]));
+    for (const label of labels) if (!label.archived || options.has(label.id)) options.set(label.id, label);
+    return [...options.values()].sort((a, b) => a.name.localeCompare(b.name, "ko") || a.id.localeCompare(b.id));
+  }
+  const labelChosen = (state) => state.labelDraft ?? new Set(state.labelSet.labels.map((label) => label.id));
+
+  function labelControls() {
+    const state = selected,
+      form = byId("inbox-label-editor");
+    form.hidden = !state;
+    if (!state) return;
+    const choices = labelChoices(state),
+      chosen = labelChosen(state),
+      attached = new Set(state.labelSet.labels.map((label) => label.id));
+    const container = byId("inbox-label-options");
+    const key = `${conversationKey(state)}|${choices.map((label) => `${label.id}:${label.name}:${label.archived}`).join("|")}`;
+    // Rebuilt only when the choices change, so a checkbox keeps keyboard focus while the rest re-renders.
+    if (container.dataset.key !== key) {
+      const focused = document.activeElement?.dataset?.labelId;
+      container.dataset.key = key;
+      container.replaceChildren(
+        ...choices.map((label) => {
+          const item = node("label", "", "toggle label-option");
+          const input = node("input");
+          input.type = "checkbox";
+          input.value = label.id;
+          input.dataset.labelId = label.id;
+          input.addEventListener("change", () => toggleLabel(label.id, input.checked));
+          item.append(input, node("span", labelText(label)));
+          return item;
+        }),
+      );
+      if (!choices.length)
+        container.append(
+          node(
+            "p",
+            isAdmin()
+              ? "아직 라벨이 없습니다. 인박스 라벨 설정에서 추가해 주세요."
+              : "아직 라벨이 없습니다. 관리자에게 라벨 추가를 요청해 주세요.",
+            "hint",
+          ),
+        );
+      if (focused) container.querySelector(`[data-label-id="${focused}"]`)?.focus();
+    }
+    for (const input of container.querySelectorAll("input")) {
+      input.checked = chosen.has(input.value);
+      // Ten is the most a conversation holds.
+      input.disabled = state.labelBusy || (!input.checked && chosen.size >= 10);
+    }
+    const dirty = !sameIds(chosen, attached);
+    const save = byId("inbox-label-save");
+    save.disabled = state.labelBusy || !dirty;
+    save.textContent = state.labelBusy ? "저장 중…" : "라벨 저장";
+    byId("inbox-label-status").textContent =
+      state.labelNotice || (dirty ? `저장하지 않은 변경 · ${chosen.size} / 10` : `${chosen.size} / 10`);
+  }
+
+  function toggleLabel(id, checked) {
+    const state = selected;
+    if (!state || state.labelBusy) return;
+    const next = new Set(labelChosen(state));
+    if (checked) next.add(id);
+    else next.delete(id);
+    // A draft keeps the version it was built on: a later conversation read can replace labelSet, and saving the
+    // draft against that newer version would silently undo another member's change instead of answering 409.
+    if (!state.labelDraft) state.labelBase = state.labelSet.version;
+    state.labelDraft = sameIds(next, new Set(state.labelSet.labels.map((label) => label.id))) ? null : next;
+    state.labelNotice = "";
+    labelControls();
+  }
+
+  function showLabelSet(state, labelSet) {
+    state.labelSet = labelSet;
+    if (state.labelDraft && sameIds(state.labelDraft, new Set(labelSet.labels.map((label) => label.id))))
+      state.labelDraft = null;
+    const entry = listed.get(conversationKey(state));
+    if (entry) {
+      entry.row.label_set = labelSet;
+      rowContent(entry.button, entry.row);
+    }
+  }
+
+  async function saveLabels() {
+    const state = selected;
+    if (!state || state.labelBusy || !state.labelDraft) return;
+    const session = epoch;
+    state.labelBusy = true;
+    state.labelNotice = "라벨을 저장하고 있습니다…";
+    labelControls();
+    try {
+      const saved = await api(`${conversationPath(state)}/labels`, "PUT", {
+        expected_version: state.labelBase,
+        label_ids: [...state.labelDraft],
+      }).finally(() => {
+        // A conversation read that overlapped this write may hold the older set; loadConversation drops it.
+        state.labelWrites++;
+      });
+      if (epoch !== session) return;
+      state.labelDraft = null;
+      showLabelSet(state, saved);
+      state.labelNotice = "라벨을 저장했습니다.";
+      if (byId("inbox-label-filter").value) void loadList();
+    } catch (error) {
+      if (epoch !== session) return;
+      if (error.status >= 400 && error.status < 500) {
+        state.labelDraft = null;
+        state.labelNotice =
+          error.code === "label_conflict"
+            ? "다른 멤버가 먼저 라벨을 바꿔 최신 라벨을 다시 불러왔습니다. 확인한 뒤 다시 저장해 주세요."
+            : error.message;
+        if (["label_archived", "label_not_found"].includes(error.code)) void loadLabels();
+        if (selected === state) void loadConversation();
+      } else state.labelNotice = "저장 여부를 확인하지 못했습니다. 대화를 새로고침해 현재 라벨을 확인해 주세요.";
+    } finally {
+      if (epoch === session) {
+        state.labelBusy = false;
+        if (selected === state) labelControls();
+      }
+    }
+  }
+
+  function memoControls() {
+    const state = selected;
+    byId("inbox-notes").hidden = !state;
+    if (!state) return;
+    const textarea = byId("inbox-note-text");
+    if (textarea.value !== state.memoDraft) textarea.value = state.memoDraft;
+    textarea.disabled = state.memoBusy;
+    const length = [...state.memoDraft.trim()].length;
+    byId("inbox-note-count").textContent = `${length.toLocaleString("ko-KR")} / 2,000`;
+    const add = byId("inbox-note-add");
+    add.disabled = state.memoBusy || !length || length > 2000;
+    add.textContent = state.memoBusy ? "남기는 중…" : "메모 남기기";
+    byId("inbox-notes-status").textContent = state.memoNotice;
+    byId("inbox-notes-older").hidden = !state.memoBefore;
+    byId("inbox-notes-older").disabled = state.memoLoading;
+  }
+
+  function renderMemos(state) {
+    const list = byId("inbox-note-list");
+    if (!state.memoLoaded) return list.replaceChildren();
+    if (!state.memos.length) return list.replaceChildren(node("p", "아직 남긴 메모가 없습니다.", "hint"));
+    list.replaceChildren(
+      ...state.memos.map((memo) => {
+        const item = node("article", "", "note-item");
+        item.append(
+          node("p", `${person(memo.author)} · ${date(memo.created_at)}`, "hint note-meta"),
+          node("p", memo.body, "note-body"),
+        );
+        return item;
+      }),
+    );
+  }
+
+  // Newest first; `older` appends the next page below.
+  async function loadMemos(older = false) {
+    const state = selected;
+    if (!state || (older && (state.memoLoading || !state.memoBefore))) return;
+    const session = epoch,
+      request = ++state.memoRequest;
+    state.memoLoading = true;
+    memoControls();
+    try {
+      const page = await api(
+        `${conversationPath(state)}/notes${older ? `?before=${encodeURIComponent(state.memoBefore)}` : ""}`,
+      );
+      if (!current(state, session) || request !== state.memoRequest) return;
+      state.memos = older ? [...state.memos, ...page.notes] : page.notes;
+      state.memoBefore = page.before;
+      state.memoLoaded = true;
+      renderMemos(state);
+    } catch (error) {
+      if (current(state, session) && request === state.memoRequest) state.memoNotice = error.message;
+    } finally {
+      if (current(state, session) && request === state.memoRequest) {
+        state.memoLoading = false;
+        memoControls();
+      }
+    }
+  }
+
+  async function addMemo() {
+    const state = selected;
+    if (!state || state.memoBusy || !state.memoDraft.trim()) return;
+    const session = epoch;
+    state.memoBusy = true;
+    state.memoNotice = "메모를 남기고 있습니다…";
+    memoControls();
+    try {
+      const memo = await api(`${conversationPath(state)}/notes`, "POST", { body: state.memoDraft });
+      if (epoch !== session) return;
+      state.memoDraft = "";
+      state.memoNotice = "메모를 남겼습니다.";
+      // A list request still in flight may have been read before this note committed; drop it and reload.
+      const stale = state.memoLoading;
+      if (stale) {
+        state.memoRequest++;
+        state.memoLoading = false;
+      }
+      if (!state.memos.some((item) => item.id === memo.id)) state.memos = [memo, ...state.memos];
+      state.memoLoaded = true;
+      if (selected === state) {
+        renderMemos(state);
+        if (stale) void loadMemos();
+      }
+    } catch (error) {
+      if (epoch !== session) return;
+      const refused = error.status >= 400 && error.status < 500;
+      // The draft stays, so a refused or unconfirmed note can be sent again after checking the list.
+      state.memoNotice = refused
+        ? error.message
+        : "메모가 저장됐는지 확인하지 못했습니다. 메모 목록을 확인한 뒤 필요하면 다시 남겨 주세요.";
+      if (!refused && selected === state) void loadMemos();
+    } finally {
+      if (epoch === session) {
+        state.memoBusy = false;
+        if (selected === state) memoControls();
+      }
+    }
+  }
+
+  // The server counts code points like PostgreSQL length(); HTML maxlength counts UTF-16 units.
+  function checkLabelName(input) {
+    input.setCustomValidity([...input.value.trim()].length > 30 ? "라벨 이름은 30자까지 입력할 수 있습니다." : "");
+  }
+
+  function labelAdmin() {
+    byId("inbox-labels-section").hidden = !isAdmin();
+    if (!isAdmin()) return;
+    byId("inbox-label-count").textContent = `${labels.filter((label) => !label.archived).length} / 50`;
+    const list = byId("inbox-label-list");
+    if (!labels.length) return list.replaceChildren(node("p", "아직 라벨이 없습니다.", "hint"));
+    list.replaceChildren(
+      ...labels.map((label) => {
+        const item = node("div", "", "item");
+        if (label.archived) {
+          const badges = node("div", "", "badges");
+          badges.append(node("span", "보관됨", "badge"));
+          item.append(node("strong", label.name), badges);
+          return item;
+        }
+        const form = node("form", "", "label-rename");
+        const input = node("input");
+        input.name = "name";
+        input.required = true;
+        input.autocomplete = "off";
+        input.addEventListener("input", () => checkLabelName(input));
+        input.value = label.name;
+        input.setAttribute("aria-label", `${label.name} 라벨 이름`);
+        const save = node("button", "이름 저장", "secondary");
+        save.type = "submit";
+        form.append(input, save);
+        form.addEventListener("submit", (event) => {
+          event.preventDefault();
+          if (input.value.trim() === label.name) return;
+          void manageLabels(async () => {
+            await api(`/api/inbox/labels/${label.id}`, "PATCH", { name: input.value });
+            return "라벨 이름을 바꿨습니다. 이 라벨이 붙은 대화에 새 이름이 보입니다.";
+          });
+        });
+        const archive = node("button", "보관", "secondary danger");
+        archive.type = "button";
+        archive.addEventListener("click", () => {
+          if (
+            !confirm(
+              `"${label.name}" 라벨을 보관할까요? 보관한 라벨은 대화에 새로 붙일 수 없고, 이미 붙은 대화에는 보관됨으로 남습니다. 보관은 되돌릴 수 없습니다.`,
+            )
+          )
+            return;
+          void manageLabels(async () => {
+            await api(`/api/inbox/labels/${label.id}`, "DELETE");
+            return "라벨을 보관했습니다.";
+          });
+        });
+        item.append(form, archive);
+        return item;
+      }),
+    );
+  }
+
+  async function manageLabels(task) {
+    if (labelsBusy) return;
+    const session = epoch,
+      section = byId("inbox-labels-section");
+    labelsBusy = true;
+    for (const button of section.querySelectorAll("button")) button.disabled = true;
+    byId("inbox-labels-status").textContent = "처리하고 있습니다…";
+    try {
+      const message = await task();
+      if (epoch !== session) return;
+      byId("inbox-labels-status").textContent = message;
+      await loadLabels();
+      // List rows carry label names, so a rename or an archive shows on the next list.
+      void loadList();
+    } catch (error) {
+      if (epoch === session) byId("inbox-labels-status").textContent = error.message;
+    } finally {
+      if (epoch === session) {
+        labelsBusy = false;
+        for (const button of section.querySelectorAll("button")) button.disabled = false;
+      }
+    }
   }
 
   // A list row and a read response each count the messages above the read position they were taken against, and
@@ -172,6 +515,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
   function controls() {
     const state = selected;
     conversationControls();
+    labelControls();
+    memoControls();
     byId("inbox-composer").hidden = !state;
     byId("inbox-handoff-controls").hidden = !state;
     if (!state) return;
@@ -351,7 +696,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     if (!state || (older && (state.loading || (!state.beforeMessages && !state.beforeReplies)))) return;
     const session = epoch,
       request = ++state.readRequest,
-      writes = state.convoWrites;
+      writes = state.convoWrites,
+      labelWrites = state.labelWrites;
     state.loading = true;
     byId("inbox-message-status").textContent = "대화와 발송 상태를 불러오고 있습니다…";
     controls();
@@ -373,6 +719,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
       }
       for (const row of messages.messages) state.messages.set(row.id, row);
       if (messages.state && writes === state.convoWrites) state.convo = messages.state;
+      if (messages.label_set && labelWrites === state.labelWrites) showLabelSet(state, messages.label_set);
       for (const row of replies.replies) state.replies.set(row.id, row);
       for (const id of state.notes.keys()) {
         const reply = state.replies.get(id);
@@ -455,6 +802,10 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     }
   }
 
+  function conversationKey(state) {
+    return `${state.row.connection_id}:${state.row.recipient_id}`;
+  }
+
   function choose(row) {
     clearTimeout(expiryTimer);
     const key = `${row.connection_id}:${row.recipient_id}`;
@@ -476,6 +827,20 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
         readMark: null,
         readUnread: null,
         readSeq: 0,
+        labelSet: row.label_set ?? { version: 0, labels: [] },
+        labelDraft: null,
+        labelBase: 0,
+        labelBusy: false,
+        labelNotice: "",
+        labelWrites: 0,
+        memos: [],
+        memoBefore: null,
+        memoLoaded: false,
+        memoLoading: false,
+        memoRequest: 0,
+        memoDraft: "",
+        memoBusy: false,
+        memoNotice: "",
       });
     selected = states.get(key);
     byId("inbox-conversation-title").textContent = `@${row.username || "연결 계정"} · DM 사용자 ${row.recipient_id}`;
@@ -483,8 +848,10 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     for (const button of byId("inbox-conversations").children)
       button.setAttribute("aria-pressed", String(button.dataset.key === key));
     timeline(selected);
+    renderMemos(selected);
     controls();
     void loadConversation();
+    void loadMemos();
   }
 
   async function loadList(more = false) {
@@ -503,6 +870,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     if (byId("inbox-account").value) query.set("connection_id", byId("inbox-account").value);
     if (byId("inbox-status-filter").value) query.set("status", byId("inbox-status-filter").value);
     if (byId("inbox-assignee-filter").value) query.set("assignee", byId("inbox-assignee-filter").value);
+    if (byId("inbox-label-filter").value) query.set("label", byId("inbox-label-filter").value);
     if (byId("inbox-unread").checked) query.set("unread", "true");
     if (searchText) query.set("q", searchText);
     if (more) query.set("after", after);
@@ -555,6 +923,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     after = null;
     listBusy = false;
     assignees = [];
+    labels = [];
+    labelsBusy = false;
     searchText = "";
     listed.clear();
     clearTimeout(expiryTimer);
@@ -564,10 +934,28 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     assigneeOptions();
     byId("inbox-unread").checked = false;
     byId("inbox-search").value = "";
-    for (const id of ["inbox-conversations", "inbox-messages"]) byId(id).replaceChildren();
-    for (const id of ["inbox-status", "inbox-message-status", "inbox-reply-status", "inbox-state-status"])
+    byId("inbox-label-filter").replaceChildren(new Option("전체", ""));
+    byId("inbox-labels-section").hidden = true;
+    byId("inbox-label-form").reset();
+    byId("inbox-label-options").dataset.key = "";
+    for (const id of [
+      "inbox-conversations",
+      "inbox-messages",
+      "inbox-label-list",
+      "inbox-label-options",
+      "inbox-note-list",
+    ])
+      byId(id).replaceChildren();
+    for (const id of [
+      "inbox-status",
+      "inbox-message-status",
+      "inbox-reply-status",
+      "inbox-state-status",
+      "inbox-labels-status",
+    ])
       byId(id).textContent = "";
     byId("inbox-reply-text").value = "";
+    byId("inbox-note-text").value = "";
     byId("inbox-conversation-title").textContent = "대화를 선택하세요";
     for (const id of ["inbox-more", "inbox-older", "inbox-thread-refresh"]) byId(id).hidden = true;
     controls();
@@ -582,7 +970,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     select.replaceChildren(...options);
     select.value = options.some((option) => option.value === previous) ? previous : "";
   }
-  for (const id of ["inbox-status-filter", "inbox-assignee-filter", "inbox-unread"])
+  for (const id of ["inbox-status-filter", "inbox-assignee-filter", "inbox-label-filter", "inbox-unread"])
     byId(id).addEventListener("change", () => void loadList());
   byId("inbox-search-form").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -621,12 +1009,52 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     void loadList();
   });
   byId("inbox-refresh").addEventListener("click", () => {
+    void loadLabels();
     void loadList();
-    if (selected) void loadConversation();
+    if (selected) {
+      void loadConversation();
+      void loadMemos();
+    }
   });
   byId("inbox-more").addEventListener("click", () => void loadList(true));
   byId("inbox-older").addEventListener("click", () => void loadConversation(true));
-  byId("inbox-thread-refresh").addEventListener("click", () => void loadConversation());
+  byId("inbox-thread-refresh").addEventListener("click", () => {
+    void loadConversation();
+    void loadMemos();
+  });
+  byId("inbox-label-editor").addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!byId("inbox-label-save").disabled) void saveLabels();
+  });
+  byId("inbox-note-text").addEventListener("input", (event) => {
+    if (selected && !selected.memoBusy) {
+      selected.memoDraft = event.target.value;
+      selected.memoNotice = "";
+      memoControls();
+    }
+  });
+  byId("inbox-note-text").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing) {
+      event.preventDefault();
+      if (!byId("inbox-note-add").disabled) byId("inbox-note-form").requestSubmit();
+    }
+  });
+  byId("inbox-note-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!byId("inbox-note-add").disabled) void addMemo();
+  });
+  byId("inbox-notes-older").addEventListener("click", () => void loadMemos(true));
+  byId("inbox-label-form").elements.name.addEventListener("input", (event) => checkLabelName(event.target));
+  byId("inbox-label-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    if (labelsBusy || !form.reportValidity()) return;
+    void manageLabels(async () => {
+      await api("/api/inbox/labels", "POST", { name: form.elements.name.value });
+      form.reset();
+      return "라벨을 추가했습니다.";
+    });
+  });
   byId("inbox-reply-text").addEventListener("input", (event) => {
     if (selected && !selected.operation && !selected.busy) {
       selected.draft = event.target.value;
@@ -688,7 +1116,14 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     loadList,
     loadConversation,
     hasDrafts: () =>
-      [...states.values()].some((state) => state.draft || state.operation || [...state.notes.values()].some(Boolean)),
+      [...states.values()].some(
+        (state) =>
+          state.draft ||
+          state.operation ||
+          state.memoDraft.trim() ||
+          state.labelDraft ||
+          [...state.notes.values()].some(Boolean),
+      ),
     initialize() {
       const select = byId("inbox-account"),
         previous = select.value;
@@ -696,6 +1131,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
       for (const account of getConnections())
         select.append(new Option(account.username || account.account_id, account.id));
       if (getConnections().some((account) => account.id === previous)) select.value = previous;
+      byId("inbox-labels-section").hidden = !isAdmin();
+      void loadLabels();
       void loadList();
       if (isAdmin()) {
         const session = epoch;
