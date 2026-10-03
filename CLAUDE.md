@@ -117,6 +117,7 @@ The auth client wraps injected fetch in a standalone call because workerd reject
 `instagram_follow_conversations` snapshots the first reply configuration; a nonfollower response returns to waiting, a follower response completes, and ambiguous sends remain unknown.
 A missing recipient ID after a successful first DM records `follow_recipient_unavailable` without resending.
 Inbound DM text is compared in memory for follow confirmation; receipt IDs and timestamps deduplicate confirmation events.
+DM ingestion holds its connections `FOR SHARE` before it locks a follow row, so a rate-limited follow send locks the connection `FOR NO KEY UPDATE` before it updates the follow row and the connection pause ([#130](https://github.com/AndrewDongminYoo/auto-chatter/issues/130)).
 Optional `confirmation_button_title` adds a single postback template button to the first DM and nonfollower response; empty defaults preserve text-only delivery.
 Button clicks are bound to the queued reply ID and validated against account, recipient and waiting flow; typed confirmation still works.
 The service caps button labels at 20 and button-message text at 640.

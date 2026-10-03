@@ -685,6 +685,78 @@ test("a pause committed while the confirmation receipt waits prevents later acti
   }
 });
 
+test("a throttled follow send and a DM that waits for its row both commit (#130)", async () => {
+  await ingestMessages(pool, [incoming()]);
+  const lockWaiters = async (count: number) => {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const waiting = await pool.query<{ n: number }>(
+        "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'",
+      );
+      if (waiting.rows[0]!.n >= count) return true;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    return false;
+  };
+  const blocker = await pool.connect();
+  let reject: ((error: Error) => void) | undefined;
+  let sending!: () => void;
+  const inSend = new Promise<void>((resolve) => (sending = resolve));
+  let ingestion: Promise<void> | undefined;
+  const worker = processNextFollowReply(pool, connection, {
+    followStatus: async () => true,
+    send: () => {
+      sending();
+      return new Promise<{ messageId: string }>((_, fail) => (reject = fail));
+    },
+  });
+  try {
+    await Promise.race([inSend, worker.then(() => assert.fail("The worker must reach send"))]);
+    // A pause after the final guard makes the DM select this `sending` row (FOR UPDATE OF flow).
+    await pauseAutomation();
+    // Ingestion stops after its connection pre-lock, at the reply-wait lookup that reads flow_runs.
+    await blocker.query("BEGIN");
+    await blocker.query("LOCK TABLE flow_runs IN ACCESS EXCLUSIVE MODE");
+    ingestion = ingestMessages(pool, [incoming("race", "확인", new Date(Date.now() + 10))]);
+    assert.equal(await lockWaiters(1), true, "Fixture must stop ingestion before its follow lookup");
+    await assert.rejects(
+      pool.query("SELECT 1 FROM instagram_connections WHERE id=$1 FOR NO KEY UPDATE NOWAIT", [connection]),
+      { code: "55P03" },
+      "Ingestion must hold the connection lock while it is stopped",
+    );
+    reject!(new ProviderRateLimitedError(4));
+    assert.equal(await lockWaiters(2), true, "The rate-limit write must wait for the connection lock");
+    await blocker.query("COMMIT");
+    const [ingested, throttled] = await Promise.allSettled([ingestion, worker]);
+    assert.deepEqual(
+      [ingested, throttled].map((outcome) =>
+        outcome.status === "fulfilled"
+          ? "fulfilled"
+          : ((outcome.reason as { code?: string }).code ?? String(outcome.reason)),
+      ),
+      ["fulfilled", "fulfilled"],
+    );
+    const flow = await state();
+    assert.equal(flow.status, "pending");
+    assert.equal(flow.rate_limit_retries, 1);
+    assert.equal(flow.attempt_id, null);
+    assert.equal(
+      (
+        await pool.query("SELECT send_paused_until>now() AS paused FROM instagram_connections WHERE id=$1", [
+          connection,
+        ])
+      ).rows[0].paused,
+      true,
+    );
+    // The DM reached the follow row: a paused contact's confirmation keeps only its receipt.
+    assert.equal((await pool.query("SELECT 1 FROM instagram_message_receipts WHERE message_id='race'")).rowCount, 1);
+  } finally {
+    await blocker.query("ROLLBACK").catch(() => undefined);
+    blocker.release();
+    reject?.(new ProviderRateLimitedError(4));
+    await Promise.allSettled([ingestion, worker]);
+  }
+});
+
 test("confirmations received while paused pending work cannot restart a waiting flow after resume", async () => {
   const first = incoming("first");
   await ingestMessages(pool, [first]);
