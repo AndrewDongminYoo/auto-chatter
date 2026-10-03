@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import type { InstagramMessage } from "./message-events.ts";
 import type { FollowTransport } from "./follow-transport.ts";
-import { storeInboxMessage } from "./inbox.ts";
+import { lockInboxConversations, storeInboxMessage } from "./inbox.ts";
 import { deliveryRecipientOptedOut } from "./channel-consent.ts";
 import { PreSendVerificationError, ProviderRateLimitedError, ProviderRejectedError } from "./reply-worker.ts";
 import { resumeRepliedFlowRun } from "./store.ts";
@@ -17,6 +17,7 @@ export async function ingestMessages(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await lockInboxConversations(client, messages, now);
     for (const message of messages) {
       await storeInboxMessage(client, message, now);
       if (

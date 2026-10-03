@@ -8,6 +8,7 @@ import { ingestComments } from "../instagram/store.ts";
 import { processNextPrivateReply, type PrivateReplyTransport } from "../instagram/reply-worker.ts";
 import { processNextManualReply } from "../instagram/manual-reply-worker.ts";
 import { storeInboxMessage } from "../instagram/inbox.ts";
+import type { InstagramMessage } from "../instagram/message-events.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
@@ -86,10 +87,59 @@ async function body<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
+const message = (recipient: string, messageId: string, text = "hello"): InstagramMessage => ({
+  accountId: "123",
+  senderId: recipient,
+  messageId,
+  text,
+  timestamp: new Date(Date.now() - 1000),
+});
+
 function dm(recipient: string, messageId: string, text = "hello") {
-  return ingestMessages(pool, [
-    { accountId: "123", senderId: recipient, messageId, text, timestamp: new Date(Date.now() - 1000) },
-  ]);
+  return ingestMessages(pool, [message(recipient, messageId, text)]);
+}
+
+// Runs one ingestion batch whose transaction stops before the first query that `pause` picks, until `release`.
+function ingestHeld(messages: InstagramMessage[], pause: (text: string) => boolean) {
+  let reached!: () => void;
+  let release!: () => void;
+  const atPause = new Promise<void>((resolve) => (reached = resolve));
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let paused = false;
+  const connect = async () => {
+    const client = await pool.connect();
+    return new Proxy(client, {
+      get(target, key) {
+        if (key === "query")
+          return async (text: string, values?: unknown[]) => {
+            if (!paused && pause(text)) {
+              paused = true;
+              reached();
+              await released;
+            }
+            return target.query(text, values);
+          };
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  };
+  const done = ingestMessages({ connect } as unknown as Pool, messages);
+  return { done, atPause, release };
+}
+
+// Returns true once `operation` finished without any backend waiting for a lock, false once one waits.
+async function finishedWithoutWaiting(operation: Promise<unknown>): Promise<boolean> {
+  let settled = false;
+  void operation.finally(() => (settled = true)).catch(() => undefined);
+  for (let attempt = 0; attempt < 200 && !settled; attempt += 1) {
+    const waiting = await pool.query(
+      "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()",
+    );
+    if (waiting.rows[0].waiting >= 1) return false;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return settled;
 }
 
 const statePath = (recipient = "456") => `/api/inbox/conversations/${connectionId}/${recipient}/state`;
@@ -544,44 +594,82 @@ test("a DM stored while the first close of a conversation is uncommitted reopens
   );
 });
 
-test("two DM batches with their senders in opposite orders do not wait on each other", async () => {
-  const message = (recipient: string, messageId: string) => ({
-    accountId: "123",
-    senderId: recipient,
-    messageId,
-    text: "hello",
-    timestamp: new Date(Date.now() - 1000),
-  });
-  const first = await pool.connect();
-  const second = await pool.connect();
+// #127: the read position is an ID watermark, so the DMs of one conversation must commit in ID order. A DM that
+// took a higher ID and committed before a lower one would let a read mark on it count the lower one as read.
+test("a DM of one conversation waits for an uncommitted earlier DM, so a read mark never skips it", async () => {
+  const held = ingestHeld([message("456", "earlier")], (text) => text === "COMMIT");
+  let waited = false;
+  let later: Promise<void> | undefined;
   try {
-    await first.query("BEGIN");
-    await second.query("BEGIN");
-    await storeInboxMessage(first, message("456", "batch-a-1"), new Date());
-    await storeInboxMessage(second, message("789", "batch-b-1"), new Date());
-    const settle = (promise: Promise<void>) =>
-      promise.then(
-        () => null,
-        (error: { code?: string }) => error.code ?? String(error),
-      );
-    const outcomes = await Promise.all([
-      settle(storeInboxMessage(first, message("789", "batch-a-2"), new Date())),
-      settle(storeInboxMessage(second, message("456", "batch-b-2"), new Date())),
+    await Promise.race([
+      held.atPause,
+      held.done.then(() => assert.fail("the earlier DM committed without reaching COMMIT")),
     ]);
-    assert.deepEqual(outcomes, [null, null]);
-    await first.query("COMMIT");
-    await second.query("COMMIT");
+    later = dm("456", "later");
+    waited = !(await finishedWithoutWaiting(later));
+    // The reader marks the newest message it can see while the earlier DM is still uncommitted.
+    const newest = (
+      await pool.query("SELECT max(id)::text AS id FROM instagram_inbox_messages WHERE recipient_id='456'")
+    ).rows[0].id as string;
+    const mark = await request(agent, "POST", `/api/inbox/conversations/${connectionId}/456/read`, {
+      message_id: newest,
+    });
+    assert.equal(mark.status, 200, JSON.stringify(await mark.clone().json()));
   } finally {
-    await first.query("ROLLBACK").catch(() => undefined);
-    await second.query("ROLLBACK").catch(() => undefined);
-    first.release();
-    second.release();
+    held.release();
   }
+  await held.done;
+  await later;
+  const [row] = (
+    await body<{ conversations: { recipient_id: string; message_count: number; unread_count: number }[] }>(
+      await request(agent, "GET", "/api/inbox"),
+    )
+  ).conversations;
+  assert.deepEqual([row!.message_count, row!.unread_count], [3, 2], "both DMs stored after the read mark are unread");
+  assert.ok(waited, "the later DM did not wait for the earlier one");
+});
+
+test("two DM batches with their senders in opposite orders both complete", async () => {
+  // Batch A stops after its first conversation lock, before its second.
+  let locks = 0;
+  const first = ingestHeld(
+    [message("456", "batch-a-1"), message("789", "batch-a-2")],
+    (text) => text.includes("pg_advisory_xact_lock(") && ++locks === 2,
+  );
+  const settle = (promise: Promise<void>) =>
+    promise.then(
+      () => null,
+      (error: { code?: string }) => error.code ?? String(error),
+    );
+  let second: Promise<string | null> | undefined;
+  try {
+    await Promise.race([first.atPause, first.done]);
+    second = settle(ingestMessages(pool, [message("789", "batch-b-1"), message("456", "batch-b-2")]));
+    await waitForLockWaiters(1);
+  } finally {
+    first.release();
+  }
+  assert.deepEqual(await Promise.all([settle(first.done), second]), [null, null]);
   assert.equal(
     (await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_messages WHERE message_id LIKE 'batch-%'"))
       .rows[0].count,
     4,
   );
+});
+
+test("DMs of different conversations do not wait on each other", async () => {
+  const held = ingestHeld([message("456", "held")], (text) => text === "COMMIT");
+  try {
+    await Promise.race([
+      held.atPause,
+      held.done.then(() => assert.fail("the held DM committed without reaching COMMIT")),
+    ]);
+    assert.equal(await finishedWithoutWaiting(dm("789", "elsewhere")), true);
+  } finally {
+    held.release();
+  }
+  await held.done;
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_messages")).rows[0].count, 3);
 });
 
 test("status and assignment never change the handoff or the automation pause", async () => {
