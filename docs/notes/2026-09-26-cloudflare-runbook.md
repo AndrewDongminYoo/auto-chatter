@@ -294,6 +294,20 @@ public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-10-0
 앞과 같은 공개 점검에 다른 출처에서 보낸 `POST /api/flows/<id>/test-run` 거부(403)와 새 정적 파일 두 개(`flow-editor.js`, `flow-editor-model.js`)의 해시를 더해 22개 항목이 모두 통과했습니다. 같은 점검을 배포 전에 실행했을 때는 정적 파일 네 개의 해시가 일치하지 않았습니다.
 배포 후 새 버전에서 cron 3회가 예외와 오류 로그 없이 완료됐습니다(`wrangler tail`).
 운영에는 플로가 없으므로 편집기와 테스트 실행은 운영 데이터로 조작하지 않았습니다.
+2026-10-03에는 운영자 승인에 따라 PR #126(인박스 검색·필터·멤버별 읽음 상태, migration 032)을 포함한 `main` 커밋 `b227782`의 마이그레이션을 운영 DB에 적용하고 Worker를 배포했습니다.
+적용 전 운영 DB는 031까지 적용된 상태였고(`instagram_inbox_read_state` 없음, public 테이블 36개), 연결 1개(수신 켜짐·발송 꺼짐)·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
+public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-10-03-pr126/public-before-032.dump`에 백업했으며 데이터 테이블 36개가 들어 있습니다.
+관리자 연결은 앞과 같은 Session pooler를 TLS `verify-full`로 사용했고, 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 실행 로그에 오류나 경고는 없었습니다.
+적용 후 public 테이블은 37개가 됐고, `instagram_inbox_read_state`는 RLS가 켜져 있으며 서버 역할의 권한은 SELECT·INSERT·UPDATE뿐이었습니다.
+서버 역할의 제품 테이블 DELETE 권한은 0개, `anon`과 `authenticated`의 public 테이블 권한도 0개였습니다.
+세 삭제 함수의 정의에는 `instagram_inbox_read_state`가 들어 있었고, 소유자(`postgres`), `SECURITY DEFINER` 여부와 서버 역할의 실행 권한(둘 다 연결 삭제 함수만)은 그대로였습니다.
+기존 행 수(작업 공간 2, 멤버 1, 연결 1, 댓글 9, outbox 3, 인박스 메시지 3, 플로 0, 플로 실행 0)와 발송 꺼짐 상태는 유지됐습니다.
+이어서 같은 커밋의 Worker를 버전 `ca3b077b-2dcc-4bc2-8227-d2b7380c4328`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `1e19dc31-3ca2-4436-967f-092401636003`였습니다.
+배포 명령은 이번에도 운영자가 직접 실행했고 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. `wrangler.json`과 공개 페이지는 바뀌지 않아 `/privacy` 시행일은 2026년 10월 2일 그대로입니다.
+앞과 같은 공개 점검에 로그인하지 않은 `GET /api/inbox`(검색·안 읽음 조건 포함)의 401과 다른 출처에서 보낸 읽음 표시 `POST`의 403, `/app/`의 정적 파일 7개 해시를 더해 24개 항목이 모두 통과했습니다.
+같은 점검을 배포 전에 실행했을 때는 `app.js`, `inbox.js`, `styles.css`의 해시가 일치하지 않았습니다. `index.html`은 그때 `/app/index.html`의 빈 응답으로 비교했으므로, 배포 전후 구별은 확인하지 않았습니다.
+배포 후 cron 3회(05:36, 05:37, 05:38 UTC)에서 `scheduled_steps`에 기록된 6개 단계가 모두 성공으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
+운영에는 여러 멤버가 없고 인박스 메시지가 3건뿐이므로 검색·필터·읽음 표시는 운영 화면에서 조작하지 않았습니다. 읽음 기준선의 알려진 한계는 [#127](https://github.com/AndrewDongminYoo/auto-chatter/issues/127)에 있습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
