@@ -187,6 +187,32 @@ test("an invitee moves out of their own empty workspace but not out of one with 
   );
 });
 
+test("a sole owner whose workspace holds only an inbox label is not moved by accepting an invite", async () => {
+  const { token } = await invite(stranger.email, "agent");
+  await body(await request(stranger, "POST", "/api/workspace"));
+  const ownWorkspace = (await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [stranger.id]))
+    .rows[0].workspace_id;
+  const created = await request(stranger, "POST", "/api/inbox/labels", { name: "VIP" });
+  assert.equal(created.status, 201);
+  const label = await body<{ id: string }>(created);
+  // An archived label is still workspace data that only a member can read, export or delete.
+  for (const archived of [false, true]) {
+    if (archived) assert.equal((await request(stranger, "DELETE", `/api/inbox/labels/${label.id}`)).status, 200);
+    const refused = await accept(stranger, token);
+    assert.equal(refused.status, 409);
+    assert.equal((await body<{ error: string }>(refused)).error, "workspace_not_empty");
+    assert.deepEqual(
+      (await pool.query("SELECT workspace_id,role FROM workspace_members WHERE user_id=$1", [stranger.id])).rows,
+      [{ workspace_id: ownWorkspace, role: "owner" }],
+    );
+  }
+  assert.equal(
+    (await pool.query("SELECT accepted_at FROM workspace_invites WHERE email=$1", [stranger.email])).rows[0]
+      .accepted_at,
+    null,
+  );
+});
+
 test("a removed member is refused on the next request and a role change applies at once", async () => {
   const { token } = await invite();
   assert.equal((await accept(invitee, token)).status, 200);
@@ -320,6 +346,7 @@ test("creations that resolved the old workspace before an acceptance moved the u
     ["/api/flows", { name: "late flow" }],
     ["/api/contact-fields", { name: "late field", type: "text" }],
     ["/api/contact-segments", { name: "late segment" }],
+    ["/api/inbox/labels", { name: "late label" }],
     ["/api/workspace/invites", { email: "late@example.test", role: "agent" }],
   ];
   const { token } = await invite(stranger.email, "admin");
@@ -343,6 +370,7 @@ test("creations that resolved the old workspace before an acceptance moved the u
     `SELECT (SELECT count(*) FROM flows WHERE workspace_id=$1)
       + (SELECT count(*) FROM instagram_contact_fields WHERE workspace_id=$1)
       + (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1)
+      + (SELECT count(*) FROM instagram_inbox_labels WHERE workspace_id=$1)
       + (SELECT count(*) FROM workspace_invites WHERE workspace_id=$1) AS n`,
     [ownWorkspace],
   );

@@ -165,6 +165,7 @@ async function currentWorkspaceMovable(client: PoolClient, workspace: string, us
        OR EXISTS(SELECT 1 FROM flows WHERE workspace_id=$1)
        OR EXISTS(SELECT 1 FROM instagram_contact_fields WHERE workspace_id=$1)
        OR EXISTS(SELECT 1 FROM instagram_contact_segments WHERE workspace_id=$1)
+       OR EXISTS(SELECT 1 FROM instagram_inbox_labels WHERE workspace_id=$1)
        OR EXISTS(SELECT 1 FROM workspace_invites WHERE workspace_id=$1)
        OR EXISTS(SELECT 1 FROM instagram_oauth_states WHERE workspace_id=$1 AND consumed_at IS NULL AND expires_at>now())
        AS busy`,
