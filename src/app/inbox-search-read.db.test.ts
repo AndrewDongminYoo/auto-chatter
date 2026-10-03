@@ -573,7 +573,7 @@ test("person deletion removes only that DM recipient's read rows, for every memb
   assert.deepEqual(await readRows(), []);
 });
 
-test("migration 032 replays, every deletion function removes read rows, and the export lists the table", async () => {
+test("migration 032 replays (with 033 after it), every deletion function removes read rows, and the export lists the table", async () => {
   const functions = async () =>
     (
       await pool.query(
@@ -589,8 +589,12 @@ test("migration 032 replays, every deletion function removes read rows, and the 
   for (const { proname, body } of current)
     assert.match(body, /DELETE FROM public\.instagram_inbox_read_state\b/, proname);
   const migration = await readFile(new URL("../../db/migrations/032_inbox_read_state.sql", import.meta.url), "utf8");
-  await pool.query(migration);
-  await pool.query(migration);
+  // Migration 033 redefines the same functions after 032, in the order deploy/migrate-multi-user.sql runs them.
+  const later = await readFile(new URL("../../db/migrations/033_inbox_labels_notes.sql", import.meta.url), "utf8");
+  for (let run = 0; run < 2; run++) {
+    await pool.query(migration);
+    await pool.query(later);
+  }
   assert.deepEqual(await functions(), current);
   assert.deepEqual(EXPORTED_TABLES.instagram_inbox_read_state, { scope: "workspace" });
   const foreignKeys = await pool.query(

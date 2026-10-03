@@ -244,6 +244,26 @@
           <div id="webhook-deliveries" class="account-list" aria-labelledby="webhook-deliveries-title"></div>
           <p class="hint">최근 50건의 결과만 보여 줍니다. 보낸 내용과 받는 사람 정보는 표시하지 않습니다.</p>
         </section>
+        <section id="inbox-labels-section" class="card" aria-labelledby="inbox-labels-title" hidden>
+          <div class="section-heading">
+            <div>
+              <h2 id="inbox-labels-title">인박스 라벨 <span id="inbox-label-count" class="count">0</span></h2>
+            </div>
+          </div>
+          <p class="hint">
+            멤버가 인박스 대화에 붙이는 라벨입니다. 연락처 태그와는 따로 관리합니다. 사용 중인 라벨은 최대 50개입니다.
+            보관한 라벨은 대화에 새로 붙일 수 없지만, 이미 붙은 대화에는 보관됨으로 남습니다.
+          </p>
+          <form id="inbox-label-form" class="invite-form">
+            <label>
+              새 라벨 이름
+              <input name="name" required autocomplete="off" />
+            </label>
+            <button type="submit">라벨 추가</button>
+          </form>
+          <p id="inbox-labels-status" class="hint" role="status" aria-live="polite"></p>
+          <div id="inbox-label-list" class="account-list"></div>
+        </section>
         <section id="members-section" class="card" aria-labelledby="members-title" hidden>
           <div class="section-heading">
             <div>
@@ -710,6 +730,11 @@
                 <option value="none">미배정</option>
               </select></label
             >
+            <label
+              >라벨<select id="inbox-label-filter">
+                <option value="">전체</option>
+              </select></label
+            >
             <label class="toggle inbox-unread-toggle"
               ><input id="inbox-unread" type="checkbox" /><span>안 읽은 대화만</span></label
             >
@@ -738,6 +763,19 @@
                   완료한 대화에 새 DM이 오면 다시 열립니다.
                 </p>
               </div>
+              <form id="inbox-label-editor" class="inbox-label-editor" hidden>
+                <fieldset aria-describedby="inbox-label-help">
+                  <legend>라벨</legend>
+                  <div id="inbox-label-options" class="label-options"></div>
+                </fieldset>
+                <p id="inbox-label-help" class="hint">
+                  대화마다 최대 10개까지 붙일 수 있습니다. 보관한 라벨은 새로 붙일 수 없고 이미 붙은 대화에만 남습니다.
+                </p>
+                <div class="composer-footer">
+                  <p id="inbox-label-status" class="hint" role="status" aria-live="polite"></p>
+                  <button id="inbox-label-save" type="submit" class="secondary" disabled>라벨 저장</button>
+                </div>
+              </form>
               <div id="inbox-handoff-controls" hidden>
                 <p id="inbox-handoff-state" class="hint"></p>
                 <button id="inbox-handoff" class="secondary">상담 시작</button>
@@ -766,6 +804,32 @@
                   <button id="inbox-send" type="submit" disabled>답장 예약</button>
                 </div>
               </form>
+              <section id="inbox-notes" class="inbox-notes" aria-labelledby="inbox-notes-title" hidden>
+                <h4 id="inbox-notes-title">내부 메모 <span class="note-scope">팀 전용</span></h4>
+                <p class="hint">
+                  작업 공간 멤버만 보는 메모입니다. 고객에게 보내지 않고 플로·외부 전송·DM 검색에도 쓰지 않습니다. 남긴
+                  메모는 고치거나 지울 수 없으니, 바로잡을 내용은 새 메모로 남겨 주세요.
+                </p>
+                <form id="inbox-note-form" class="inbox-note-form">
+                  <label for="inbox-note-text">새 메모</label>
+                  <textarea
+                    id="inbox-note-text"
+                    rows="3"
+                    required
+                    aria-describedby="inbox-note-help inbox-note-count"
+                  ></textarea>
+                  <div class="composer-footer">
+                    <p id="inbox-note-help" class="hint">Ctrl/⌘ + Enter로 추가</p>
+                    <span id="inbox-note-count" class="hint">0 / 2,000</span>
+                  </div>
+                  <div class="composer-footer">
+                    <p id="inbox-notes-status" class="hint" role="status" aria-live="polite"></p>
+                    <button id="inbox-note-add" type="submit" class="secondary" disabled>메모 남기기</button>
+                  </div>
+                </form>
+                <div id="inbox-note-list" class="note-list"></div>
+                <button id="inbox-notes-older" type="button" class="secondary" hidden>이전 메모 보기</button>
+              </section>
             </section>
           </div>
         </section>

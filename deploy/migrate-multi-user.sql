@@ -32,5 +32,6 @@ BEGIN;
 \ir ../db/migrations/030_scheduled_steps.sql
 \ir ../db/migrations/031_flow_webhooks.sql
 \ir ../db/migrations/032_inbox_read_state.sql
+\ir ../db/migrations/033_inbox_labels_notes.sql
 \ir supabase-access.sql
 COMMIT;

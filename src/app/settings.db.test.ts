@@ -933,6 +933,13 @@ test("administrator ownership assignment refuses to leave a workspace holding in
     );
     await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
     await client.query("TRUNCATE workspace_invites");
+    // An archived inbox label is still workspace data.
+    await client.query(
+      "INSERT INTO instagram_inbox_labels(workspace_id,name,archived,created_by) VALUES($1,'kept',true,$2)",
+      [own, mover],
+    );
+    await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
+    await client.query("TRUNCATE instagram_inbox_labels");
     await client.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'kept','{}')", [own]);
     await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
   } finally {

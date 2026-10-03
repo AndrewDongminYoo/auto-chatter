@@ -37,6 +37,9 @@ const connectionTables = [
   "instagram_inbox_conversations",
   "instagram_inbox_conversation_events",
   "instagram_inbox_read_state",
+  "instagram_inbox_conversation_labels",
+  "instagram_inbox_label_events",
+  "instagram_inbox_notes",
   "instagram_manual_replies",
   "instagram_manual_reply_events",
 ];
@@ -126,6 +129,27 @@ async function seedConnection(connection: string, workspace: string, account: st
   await pool.query(
     `INSERT INTO instagram_inbox_read_state(workspace_id,connection_id,recipient_id,user_id,last_read_message_id)
      VALUES($1,$2,'900',$3,1)`,
+    [workspace, connection, userId],
+  );
+  const label = (
+    await pool.query("INSERT INTO instagram_inbox_labels(workspace_id,name,created_by) VALUES($1,$2,$3) RETURNING id", [
+      workspace,
+      `vip ${account}`,
+      userId,
+    ])
+  ).rows[0].id;
+  await pool.query(
+    `INSERT INTO instagram_inbox_conversation_labels(workspace_id,connection_id,recipient_id,label_ids,version,updated_by)
+     VALUES($1,$2,'900',ARRAY[$3::uuid],1,$4)`,
+    [workspace, connection, label, userId],
+  );
+  await pool.query(
+    `INSERT INTO instagram_inbox_label_events(workspace_id,connection_id,recipient_id,version,added,removed,actor_id)
+     VALUES($1,$2,'900',1,ARRAY[$3::uuid],'{}',$4)`,
+    [workspace, connection, label, userId],
+  );
+  await pool.query(
+    "INSERT INTO instagram_inbox_notes(workspace_id,connection_id,recipient_id,author_id,body) VALUES($1,$2,'900',$3,'note text')",
     [workspace, connection, userId],
   );
   const manual = (
@@ -254,10 +278,12 @@ test("connection deletion removes personal data, keeps revokes and records evide
   const kept = await pool.query(
     `SELECT (SELECT count(*) FROM instagram_connections WHERE id=$1)::int AS connection,
             (SELECT count(*) FROM instagram_comment_rules WHERE connection_id=$1)::int AS rules,
-            (SELECT count(*) FROM instagram_contact_fields WHERE workspace_id=$2)::int AS fields`,
+            (SELECT count(*) FROM instagram_contact_fields WHERE workspace_id=$2)::int AS fields,
+            (SELECT count(*) FROM instagram_inbox_labels WHERE workspace_id=$2)::int AS labels`,
     [connectionId, workspaceId],
   );
-  assert.deepEqual(kept.rows[0], { connection: 1, rules: 1, fields: 1 });
+  // The workspace's label definitions stay; only the deleted connection's label sets, audit and notes go.
+  assert.deepEqual(kept.rows[0], { connection: 1, rules: 1, fields: 1, labels: 2 });
   assert.ok(Object.values(await counts(keptConnectionId)).every((count) => count > 0));
   assert.ok(Object.values(await counts(foreignConnectionId)).every((count) => count > 0));
 
