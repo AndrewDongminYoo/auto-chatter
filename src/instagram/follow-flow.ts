@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import type { InstagramMessage } from "./message-events.ts";
 import type { FollowTransport } from "./follow-transport.ts";
-import { storeInboxMessage } from "./inbox.ts";
+import { lockInboxConversations, storeInboxMessage } from "./inbox.ts";
 import { deliveryRecipientOptedOut } from "./channel-consent.ts";
 import { PreSendVerificationError, ProviderRateLimitedError, ProviderRejectedError } from "./reply-worker.ts";
 import { resumeRepliedFlowRun } from "./store.ts";
@@ -17,6 +17,7 @@ export async function ingestMessages(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await lockInboxConversations(client, messages, now);
     for (const message of messages) {
       await storeInboxMessage(client, message, now);
       if (
@@ -375,16 +376,29 @@ export async function processNextFollowReply(
     if (error instanceof ProviderRateLimitedError) {
       const delays = [900, 3600, 14400];
       const delay = Math.max(delays[Math.min(row.rate_limit_retries, 2)]!, error.retryAfterSeconds ?? 0);
-      const result = await pool.query(
-        `WITH retried AS (
+      // The connection is locked before the follow row, the order of DM ingestion (which holds the connection
+      // FOR SHARE and then locks the follow row) and of the deletion functions, so the two cannot deadlock (#130).
+      const writer = await pool.connect();
+      try {
+        await writer.query("BEGIN");
+        await writer.query("SELECT 1 FROM instagram_connections WHERE id=$1 FOR NO KEY UPDATE", [connectionId]);
+        const result = await writer.query(
+          `WITH retried AS (
     UPDATE instagram_follow_conversations SET status=$3,failure_code=$4,rate_limit_retries=rate_limit_retries+1,
     next_attempt_at=now()+make_interval(secs=>$5),attempt_id=NULL,
     attempt_started_at=CASE WHEN $3='pending' THEN NULL ELSE attempt_started_at END
     WHERE reply_id=$1 AND status='sending' AND attempt_id=$2 RETURNING connection_id
    ) UPDATE instagram_connections SET send_paused_until=GREATEST(send_paused_until,now()+make_interval(secs=>$5)) WHERE id IN(SELECT connection_id FROM retried)`,
-        [row.reply_id, attempt, row.rate_limit_retries < 3 ? "pending" : "failed", error.failureCode, delay],
-      );
-      if (result.rowCount !== 1) throw new Error("Follow reply claim was lost");
+          [row.reply_id, attempt, row.rate_limit_retries < 3 ? "pending" : "failed", error.failureCode, delay],
+        );
+        if (result.rowCount !== 1) throw new Error("Follow reply claim was lost");
+        await writer.query("COMMIT");
+      } catch (failure) {
+        await writer.query("ROLLBACK").catch(() => undefined);
+        throw failure;
+      } finally {
+        writer.release();
+      }
     } else if (error instanceof PreSendVerificationError) {
       if (now().getTime() - row.confirmed_at.getTime() >= 24 * 3600000)
         await update("waiting", "response_window_expired");
