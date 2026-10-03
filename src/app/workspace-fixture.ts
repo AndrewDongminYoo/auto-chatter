@@ -105,6 +105,27 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      VALUES($1,$2,'900',$3,1)`,
     [workspace, connection, user],
   );
+  const label = (
+    await pool.query("INSERT INTO instagram_inbox_labels(workspace_id,name,created_by) VALUES($1,$2,$3) RETURNING id", [
+      workspace,
+      `vip ${account}`,
+      user,
+    ])
+  ).rows[0].id;
+  await pool.query(
+    `INSERT INTO instagram_inbox_conversation_labels(workspace_id,connection_id,recipient_id,label_ids,version,updated_by)
+     VALUES($1,$2,'900',ARRAY[$3::uuid],1,$4)`,
+    [workspace, connection, label, user],
+  );
+  await pool.query(
+    `INSERT INTO instagram_inbox_label_events(workspace_id,connection_id,recipient_id,version,added,removed,actor_id)
+     VALUES($1,$2,'900',1,ARRAY[$3::uuid],'{}',$4)`,
+    [workspace, connection, label, user],
+  );
+  await pool.query(
+    "INSERT INTO instagram_inbox_notes(workspace_id,connection_id,recipient_id,author_id,body) VALUES($1,$2,'900',$3,'note text')",
+    [workspace, connection, user],
+  );
   const manual = (
     await pool.query(
       `INSERT INTO instagram_manual_replies(workspace_id,connection_id,recipient_id,request_key,created_by,text,handoff_version,status)
