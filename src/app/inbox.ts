@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { workspaceFor } from "./settings.ts";
 import { INBOX_STATE_JOINS, STATE_COLUMNS, conversationState, readConversationState } from "./inbox-conversations.ts";
+import { labelsJson, readConversationLabels } from "./inbox-labels.ts";
 
 export async function setInbox(pool: Pool, user: User, id: string, input: unknown) {
   if (!isUuid(id) || !isRecord(input) || Object.keys(input).length !== 1 || typeof input.enabled !== "boolean")
@@ -21,7 +22,7 @@ export async function setInbox(pool: Pool, user: User, id: string, input: unknow
   if (!result.rows[0]) throw new ApiError(409, "connection_unavailable");
   return { enabled: result.rows[0].inbox_enabled };
 }
-const INBOX_QUERY_KEYS = ["connection_id", "after", "status", "assignee", "unread", "q"];
+const INBOX_QUERY_KEYS = ["connection_id", "after", "status", "assignee", "unread", "q", "label"];
 
 // Conversations newest first (#23). The keyset is (last message time DESC, connection, recipient); the time
 // travels in the cursor as integer microseconds, the precision PostgreSQL stores, so rows that tie on the
@@ -34,14 +35,17 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
     status = query.get("status"),
     assignee = query.get("assignee"),
     unread = query.get("unread"),
-    search = query.get("q");
+    search = query.get("q"),
+    label = query.get("label");
   // status=open|closed and assignee=me|none|<member> filter on the conversation state, where no row means open
-  // and unassigned. q is matched literally against stored DM text, so % _ and \ have no special meaning.
+  // and unassigned. q is matched literally against stored DM text, so % _ and \ have no special meaning; internal
+  // notes are never searched. label=<label ID> lists the conversations whose label set has that label.
   if (
     (connection !== null && !isUuid(connection)) ||
     (status !== null && !["open", "closed"].includes(status)) ||
     (assignee !== null && !["me", "none"].includes(assignee) && !isUuid(assignee)) ||
     (unread !== null && unread !== "true") ||
+    (label !== null && !isUuid(label)) ||
     (search !== null && ([...search].length < 1 || [...search].length > 100 || search.includes("\u0000")))
   )
     throw new ApiError(400, "invalid_inbox_query");
@@ -82,9 +86,13 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
        GROUP BY m.workspace_id,m.connection_id,m.recipient_id
      )
      SELECT m.connection_id,m.recipient_id,c.username,m.message_count,m.last_message_at,m.unread_count,
-       m.last_read_message_id::text AS last_read_message_id,m.last_message_us::text AS last_message_us,${STATE_COLUMNS}
+       m.last_read_message_id::text AS last_read_message_id,m.last_message_us::text AS last_message_us,${STATE_COLUMNS},
+       jsonb_build_object('version',coalesce(sets.version,0),
+         'labels',${labelsJson("m.workspace_id", "coalesce(sets.label_ids,'{}')")}) AS label_set
      FROM conversations m JOIN instagram_connections c ON c.id=m.connection_id AND c.workspace_id=m.workspace_id
      ${INBOX_STATE_JOINS}
+     LEFT JOIN instagram_inbox_conversation_labels sets ON sets.workspace_id=m.workspace_id
+       AND sets.connection_id=m.connection_id AND sets.recipient_id=m.recipient_id
      WHERE ($3::bigint IS NULL OR m.last_message_us<$3::bigint
          OR (m.last_message_us=$3::bigint AND (m.connection_id,m.recipient_id)>($4::uuid,$5::text)))
        AND ($6::text IS NULL OR coalesce(state.status,'open')=$6)
@@ -92,6 +100,7 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
        AND (NOT $11::boolean OR state.assignee_user_id IS NULL)
        AND ($9::text IS NULL OR m.matched)
        AND (NOT $10::boolean OR m.unread_count>0)
+       AND ($12::uuid IS NULL OR $12::uuid=ANY(sets.label_ids))
      ORDER BY m.last_message_us DESC,m.connection_id,m.recipient_id LIMIT 51`,
     [
       workspace,
@@ -105,6 +114,7 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
       search,
       unread === "true",
       assignee === "none",
+      label,
     ],
   );
   const conversations = result.rows.slice(0, 50).map((row) => {
@@ -167,6 +177,7 @@ export async function inboxMessages(
     messages,
     before: result.rows.length > 50 ? messages.at(-1)!.id : null,
     state: await readConversationState(pool, workspace, connection, recipient),
+    label_set: await readConversationLabels(pool, workspace, connection, recipient),
   };
 }
 

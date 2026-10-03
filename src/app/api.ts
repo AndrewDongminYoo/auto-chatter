@@ -2,6 +2,14 @@ import { queueManualReply, listManualReplies, resolveManualReply, readManualRepl
 import { inboxHandoff, saveInboxHandoff } from "./inbox-handoff.ts";
 import { listAssignees, saveConversationState } from "./inbox-conversations.ts";
 import { markInboxRead } from "./inbox-read.ts";
+import {
+  archiveInboxLabel,
+  createInboxLabel,
+  listInboxLabels,
+  renameInboxLabel,
+  saveConversationLabels,
+} from "./inbox-labels.ts";
+import { addInboxNote, listInboxNotes } from "./inbox-notes.ts";
 import type { Pool } from "pg";
 import { ApiError, AuthClient, json, readJson, requireSameOrigin, type AuthEnv, type User } from "./auth.ts";
 import { limitAuthRequest, type AuthRateLimitEnv } from "./auth-rate-limit.ts";
@@ -199,6 +207,44 @@ export async function appApi(
         // A stale expected_version answers with the current state, so the screen can show who changed it.
         return saved.conflict ? json({ error: "conversation_conflict", state: saved.state }, 409) : json(saved.state);
       }
+      if (url.pathname === "/api/inbox/labels" && request.method === "GET")
+        return json({ labels: await listInboxLabels(pool, user) });
+      if (url.pathname === "/api/inbox/labels" && request.method === "POST")
+        return json(await createInboxLabel(pool, user, await readJson(request)), 201);
+      const inboxLabel = /^\/api\/inbox\/labels\/([a-f0-9-]+)$/.exec(url.pathname);
+      if (inboxLabel && request.method === "PATCH")
+        return json(await renameInboxLabel(pool, user, inboxLabel[1]!, await readJson(request)));
+      if (inboxLabel && request.method === "DELETE") return json(await archiveInboxLabel(pool, user, inboxLabel[1]!));
+      const conversationLabels = /^\/api\/inbox\/conversations\/([a-f0-9-]+)\/(\d+)\/labels$/.exec(url.pathname);
+      if (conversationLabels && request.method === "PUT") {
+        const saved = await saveConversationLabels(
+          pool,
+          user,
+          conversationLabels[1]!,
+          conversationLabels[2]!,
+          url.searchParams,
+          await readJson(request),
+        );
+        // A stale expected_version answers with the current label set, like the conversation state.
+        return saved.conflict
+          ? json({ error: "label_conflict", label_set: saved.label_set }, 409)
+          : json(saved.label_set);
+      }
+      const conversationNotes = /^\/api\/inbox\/conversations\/([a-f0-9-]+)\/(\d+)\/notes$/.exec(url.pathname);
+      if (conversationNotes && request.method === "GET")
+        return json(await listInboxNotes(pool, user, conversationNotes[1]!, conversationNotes[2]!, url.searchParams));
+      if (conversationNotes && request.method === "POST")
+        return json(
+          await addInboxNote(
+            pool,
+            user,
+            conversationNotes[1]!,
+            conversationNotes[2]!,
+            url.searchParams,
+            await readJson(request),
+          ),
+          201,
+        );
       const conversationRead = /^\/api\/inbox\/conversations\/([a-f0-9-]+)\/(\d+)\/read$/.exec(url.pathname);
       if (conversationRead && request.method === "POST")
         return json(
