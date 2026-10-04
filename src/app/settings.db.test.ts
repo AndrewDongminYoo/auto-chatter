@@ -959,6 +959,21 @@ test("administrator ownership assignment refuses to leave a workspace holding in
     await client.query("RESET session_replication_role");
     await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
     await client.query("TRUNCATE instagram_inbox_label_rules CASCADE");
+    // Even an inactive endpoint keeps workspace data (including its signing keys and delivery history).
+    await client.query(
+      "INSERT INTO webhook_endpoints(workspace_id,name,url) VALUES($1,'kept','https://hooks.example.test/in')",
+      [own],
+    );
+    for (const active of [true, false]) {
+      await client.query("UPDATE webhook_endpoints SET active=$2 WHERE workspace_id=$1", [own, active]);
+      await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
+      assert.equal(
+        (await client.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [mover])).rows[0]
+          .workspace_id,
+        own,
+      );
+    }
+    await client.query("TRUNCATE webhook_endpoints CASCADE");
     await client.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'kept','{}')", [own]);
     await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
   } finally {

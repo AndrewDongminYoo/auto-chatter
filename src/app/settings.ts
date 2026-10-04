@@ -51,7 +51,7 @@ export async function workspaceFor(pool: Pool, user: User, minimum: WorkspaceRol
 }
 
 export async function membershipFor(
-  pool: Pool,
+  pool: Pick<Pool, "query">,
   user: User,
   minimum: WorkspaceRole,
 ): Promise<{ workspace_id: string; role: WorkspaceRole }> {

@@ -2020,7 +2020,166 @@ function contactCard(contact) {
   }
   summary.append(fieldSummary);
   if (contactFields.length) editors.append(contactFieldEditor(contact, fieldSummary));
+  item.append(contactDetail(contact));
   return item;
+}
+// Independent read-only disclosure: never re-render the tag/field editors or replace their drafts.
+function contactDetail(contact) {
+  const details = node("details", "", "contact-detail");
+  const summary = node("summary", "상세 보기");
+  const status = node("p", "", "hint");
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  const content = node("div", "", "contact-detail-content");
+  const refresh = node("button", "상세 새로고침", "secondary");
+  const more = node("button", "다음 대화 보기", "secondary");
+  refresh.type = more.type = "button";
+  more.hidden = true;
+  const controls = node("div", "", "contact-detail-controls");
+  controls.append(refresh, more);
+  details.append(summary, status, controls, content);
+  const generation = contactsGeneration;
+  let requestId = 0;
+  let after = null;
+  const date = (value) => new Date(value).toLocaleString("ko-KR");
+  const section = (title) => {
+    const part = node("section");
+    part.append(node("h4", title));
+    return part;
+  };
+  function consentRecords(records) {
+    const list = node("ul", "", "contact-consent");
+    const evidence = { explicit: "명시적 확인", comment: "댓글", inbound_dm: "수신 DM", import: "가져온 자료" };
+    for (const [purpose, label] of [
+      ["service_reply", "서비스 답장"],
+      ["marketing", "마케팅"],
+    ]) {
+      const record = records.find((item) => item.purpose === purpose);
+      const entry = node("li");
+      entry.append(
+        node(
+          "strong",
+          `${label} · ${record ? (record.decision === "revoke" ? "철회 기록" : "동의 기록") : "기록 없음"}`,
+        ),
+      );
+      if (record)
+        entry.append(
+          node(
+            "p",
+            `근거 종류: ${evidence[record.evidence_kind] || "확인 전"} · 근거 발생: ${date(record.occurred_at)} · 서버 기록: ${date(record.recorded_at)}`,
+            "hint",
+          ),
+        );
+      list.append(entry);
+    }
+    return list;
+  }
+  function render(detail) {
+    const facts = section("저장된 연락처 정보");
+    facts.append(
+      node("p", `댓글 참여자 ${detail.sender_id} · 댓글 ${detail.comment_count}개`),
+      node("p", `첫 댓글 ${date(detail.first_comment_at)} · 최근 댓글 ${date(detail.last_comment_at)}`, "hint"),
+    );
+    const tags = node("div", "", "badges");
+    for (const tag of detail.tags) tags.append(badge(tag));
+    if (!detail.tags.length) tags.append(node("span", "태그 없음", "hint"));
+    facts.append(tags);
+    const fields = section("추가 정보");
+    for (const field of detail.fields)
+      fields.append(
+        node(
+          "p",
+          `${field.name} · ${fieldTypeLabels[field.type]} · ${field.value === null ? "미설정" : displayFieldValue(field.value)}`,
+        ),
+      );
+    if (!detail.fields.length) fields.append(node("p", "활성 필드가 없습니다.", "hint"));
+    const pause = section("자동화 중지 사유");
+    const reasons = [];
+    if (detail.automation.manual_paused) reasons.push("직접 중지");
+    if (detail.automation.handoff_paused) reasons.push("상담 전환으로 중지");
+    pause.append(node("p", reasons.length ? reasons.join(" · ") : "연락처 중지 설정 없음"));
+    const consent = section("댓글 참여자의 동의 기록");
+    consent.append(
+      consentRecords(detail.consent),
+      node(
+        "p",
+        "같은 작업 공간·연결·식별자·목적의 현재 기록입니다. 기록 없음이나 다른 식별자의 동의를 발송 허가로 보지 않습니다.",
+        "hint",
+      ),
+    );
+    const conversations = section("연결 근거가 확인된 DM 대화");
+    conversations.append(
+      node(
+        "p",
+        "현재 연결 근거가 확인된 저장 대화만 표시합니다. 전체 대화 이력이나 발송 가능 여부를 뜻하지 않습니다. 대화마다 동의 범위를 따로 표시합니다.",
+        "hint",
+      ),
+    );
+    for (const conversation of detail.conversations) {
+      const row = node("article", "", "contact-detail-conversation");
+      row.append(
+        node("h5", `DM 상대 ${conversation.recipient_id}`),
+        node(
+          "p",
+          `저장 메시지 ${conversation.message_count}개 · ${conversation.state === "closed" ? "종료된 대화" : "열린 대화"} · ${conversation.handoff_active ? "상담 전환 중" : "상담 전환 없음"}`,
+        ),
+        node(
+          "p",
+          `첫 수신 ${date(conversation.first_message_at)} · 최근 수신 ${date(conversation.last_message_at)}`,
+          "hint",
+        ),
+        node("p", `연결 근거 답장 기록 ${conversation.evidence_reply_id}`, "hint"),
+        consentRecords(conversation.consent),
+      );
+      conversations.append(row);
+    }
+    if (!detail.conversations.length) conversations.append(node("p", "현재 조회에서 표시할 대화가 없습니다.", "hint"));
+    content.replaceChildren(facts, fields, pause, consent, conversations);
+  }
+  async function load(next = false) {
+    const id = ++requestId;
+    const current = () => id === requestId && generation === contactsGeneration && details.isConnected && details.open;
+    const cursor = next ? after : null;
+    after = null;
+    content.replaceChildren();
+    more.hidden = true;
+    refresh.disabled = true;
+    details.setAttribute("aria-busy", "true");
+    status.textContent = "상세 정보를 불러오고 있습니다…";
+    try {
+      const detail = await api(
+        `/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}${cursor ? `?after=${encodeURIComponent(cursor)}` : ""}`,
+      );
+      if (!current()) return;
+      render(detail);
+      after = detail.after;
+      more.hidden = !after;
+      status.textContent = `${next ? "다음 대화 페이지" : "현재 저장된 정보"} · 대화 ${detail.conversations.length}개. 편집 중인 내용은 저장 후 상세 새로고침으로 확인해 주세요.`;
+    } catch (error) {
+      if (current()) status.textContent = `${error.message} 상세 새로고침으로 다시 시도할 수 있습니다.`;
+    } finally {
+      if (current()) {
+        refresh.disabled = false;
+        details.removeAttribute("aria-busy");
+      }
+    }
+  }
+  details.addEventListener("toggle", () => {
+    if (details.open) void load();
+    else {
+      requestId++;
+      content.replaceChildren();
+      status.textContent = "";
+      details.removeAttribute("aria-busy");
+    }
+  });
+  refresh.addEventListener("click", () => {
+    void load();
+  });
+  more.addEventListener("click", () => {
+    if (after) void load(true);
+  });
+  return details;
 }
 function clearContactResults() {
   contactsGeneration++;
