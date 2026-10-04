@@ -293,8 +293,8 @@ test("Supabase roles cannot read product data; the server role has DML without D
     // The cron's batched record write runs as this role; the second run takes the conflict path.
     for (let run = 0; run < 2; run++)
       await recordSteps(client as unknown as Pool, [
-        { name: "wake", failure: null },
-        { name: "token_refresh", failure: "token_refresh_failed" },
+        { name: "wake", failure: null, at: new Date() },
+        { name: "token_refresh", failure: "token_refresh_failed", at: new Date() },
       ]);
     assert.deepEqual(
       (

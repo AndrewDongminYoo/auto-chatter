@@ -405,16 +405,17 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
       failure = failureCode(error);
       logOperation({ event: "cron_step_failed", code: failure, correlation_id: correlationId, step: name });
     }
-    outcomes.push({ name, failure });
+    // The time after the step's last query, which is when it finished.
+    outcomes.push({ name, failure, at: new Date() });
   };
   const logRecordFailure = (name: OperationStep | "cron", code: string): void => {
     if (name === "cron") logOperation({ event: "cron_record_failed", code, correlation_id: correlationId });
     else logOperation({ event: "cron_step_record_failed", code, correlation_id: correlationId, step: name });
   };
   // Returns whether the row was stored.
-  const recordOne = async (name: OperationStep | "cron", failure: string | null): Promise<boolean> => {
+  const recordOne = async ({ name, failure, at }: StepOutcome): Promise<boolean> => {
     try {
-      await recordStep(pool, name, failure);
+      await recordStep(pool, name, failure, at);
       return true;
     } catch (error) {
       failed = true;
@@ -432,7 +433,7 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
     const pending = outcomes;
     outcomes = [];
     const rows = (): StepOutcome[] =>
-      withCron ? [...pending, { name: "cron", failure: failed ? "step_failed" : null }] : pending;
+      withCron ? [...pending, { name: "cron", failure: failed ? "step_failed" : null, at: new Date() }] : pending;
     let statementFailure: string;
     try {
       await recordSteps(pool, rows());
@@ -443,7 +444,7 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
     }
     const retried = rows();
     let stored = true;
-    for (const { name, failure } of retried) if (!(await recordOne(name, failure))) stored = false;
+    for (const outcome of retried) if (!(await recordOne(outcome))) stored = false;
     if (stored) for (const { name } of retried) logRecordFailure(name, statementFailure);
   };
   try {

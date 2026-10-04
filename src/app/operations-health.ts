@@ -125,41 +125,68 @@ async function cronStatus(pool: Pool): Promise<{ last_success_at: Date | null; s
 }
 
 // Records one cron step outcome; name 'cron' is a run in which every step that ran succeeded, alerts included.
-export async function recordStep(pool: Pool, name: OperationStep | "cron", failure: string | null): Promise<void> {
+// at is when the step finished, defaulting to now(); a run that records later passes the time it captured.
+// A stored time never moves back, and failure_code changes only with a failure that is not older than the
+// stored one, so an overlapping run that records an older outcome later leaves the newer one in place.
+export async function recordStep(
+  pool: Pool,
+  name: OperationStep | "cron",
+  failure: string | null,
+  at: Date | null = null,
+): Promise<void> {
+  const time = at?.toISOString() ?? null;
   if (failure === null)
     await pool.query(
-      `INSERT INTO scheduled_steps(name,last_success_at) VALUES($1,now())
-       ON CONFLICT(name) DO UPDATE SET last_success_at=now()`,
-      [name],
+      `INSERT INTO scheduled_steps(name,last_success_at) VALUES($1,coalesce($2::timestamptz,now()))
+       ON CONFLICT(name) DO UPDATE SET
+         last_success_at=greatest(scheduled_steps.last_success_at,excluded.last_success_at)`,
+      [name, time],
     );
   else
     await pool.query(
-      `INSERT INTO scheduled_steps(name,last_failure_at,failure_code) VALUES($1,now(),$2)
-       ON CONFLICT(name) DO UPDATE SET last_failure_at=now(),failure_code=$2`,
-      [name, failure],
+      `INSERT INTO scheduled_steps(name,last_failure_at,failure_code) VALUES($1,coalesce($3::timestamptz,now()),$2)
+       ON CONFLICT(name) DO UPDATE SET
+         last_failure_at=greatest(scheduled_steps.last_failure_at,excluded.last_failure_at),
+         failure_code=CASE WHEN scheduled_steps.last_failure_at IS NULL
+           OR excluded.last_failure_at>=scheduled_steps.last_failure_at THEN excluded.failure_code
+           ELSE scheduled_steps.failure_code END`,
+      [name, failure, time],
     );
 }
 
+// at is when the step finished, so an outcome written later by a stalled run keeps its own time and does not
+// read as newer than an outcome another run recorded meanwhile.
 export interface StepOutcome {
   name: OperationStep | "cron";
   failure: string | null;
+  at: Date;
 }
 
 // Records several outcomes in one statement, each with recordStep's effect on its own row: a success sets only
-// last_success_at, a failure only last_failure_at and failure_code. A name may appear only once. The rows are
-// written in name order, so two overlapping runs lock them in the same order.
+// last_success_at, a failure only last_failure_at and failure_code, each to the outcome's at, and no stored time
+// moves back. A name may appear only once. The rows are written in name order, so two overlapping runs lock them
+// in the same order.
 export async function recordSteps(pool: Pool, outcomes: readonly StepOutcome[]): Promise<void> {
   if (outcomes.length === 0) return;
   await pool.query(
     `INSERT INTO scheduled_steps(name,last_success_at,last_failure_at,failure_code)
-     SELECT outcome.name,CASE WHEN outcome.failure IS NULL THEN now() END,
-       CASE WHEN outcome.failure IS NOT NULL THEN now() END,outcome.failure
-     FROM unnest($1::text[],$2::text[]) AS outcome(name,failure) ORDER BY outcome.name
+     SELECT outcome.name,CASE WHEN outcome.failure IS NULL THEN outcome.at END,
+       CASE WHEN outcome.failure IS NOT NULL THEN outcome.at END,outcome.failure
+     FROM unnest($1::text[],$2::text[],$3::timestamptz[]) AS outcome(name,failure,at) ORDER BY outcome.name
      ON CONFLICT(name) DO UPDATE SET
-       last_success_at=CASE WHEN excluded.failure_code IS NULL THEN now() ELSE scheduled_steps.last_success_at END,
-       last_failure_at=CASE WHEN excluded.failure_code IS NULL THEN scheduled_steps.last_failure_at ELSE now() END,
-       failure_code=coalesce(excluded.failure_code,scheduled_steps.failure_code)`,
-    [outcomes.map((outcome) => outcome.name), outcomes.map((outcome) => outcome.failure)],
+       last_success_at=CASE WHEN excluded.failure_code IS NULL
+         THEN greatest(scheduled_steps.last_success_at,excluded.last_success_at)
+         ELSE scheduled_steps.last_success_at END,
+       last_failure_at=CASE WHEN excluded.failure_code IS NULL THEN scheduled_steps.last_failure_at
+         ELSE greatest(scheduled_steps.last_failure_at,excluded.last_failure_at) END,
+       failure_code=CASE WHEN excluded.failure_code IS NOT NULL AND (scheduled_steps.last_failure_at IS NULL
+           OR excluded.last_failure_at>=scheduled_steps.last_failure_at) THEN excluded.failure_code
+         ELSE scheduled_steps.failure_code END`,
+    [
+      outcomes.map((outcome) => outcome.name),
+      outcomes.map((outcome) => outcome.failure),
+      outcomes.map((outcome) => outcome.at.toISOString()),
+    ],
   );
 }
 

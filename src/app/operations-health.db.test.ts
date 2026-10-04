@@ -454,11 +454,12 @@ test("a batched record changes each row as a single-row record would", async () 
       )
     ).rows;
   const [flowBefore, wakeBefore] = await read();
+  const at = new Date();
   await recordSteps(pool, [
-    { name: "wake", failure: null },
-    { name: "flow_resume", failure: "database_unavailable" },
-    { name: "alerts", failure: null },
-    { name: "cron", failure: "step_failed" },
+    { name: "wake", failure: null, at },
+    { name: "flow_resume", failure: "database_unavailable", at },
+    { name: "alerts", failure: null, at },
+    { name: "cron", failure: "step_failed", at },
   ]);
   const [alerts, cron, flow, wake] = await read();
   // A success sets only last_success_at and keeps the last failure; a failure keeps the last success.
@@ -472,6 +473,59 @@ test("a batched record changes each row as a single-row record would", async () 
   assert.equal(cron.last_success_at, null);
   assert.ok(cron.last_failure_at instanceof Date);
   assert.equal(cron.failure_code, "step_failed");
+});
+
+test("a record keeps each outcome's own time, so a stalled run's older failure stays older", async () => {
+  // Run B finished token_refresh successfully at t2 and recorded first; run A failed it at t1 < t2 and
+  // recorded later. The step has recovered, whichever run wrote last.
+  const t2 = new Date(Date.now() - 1_000);
+  const t1 = new Date(t2.getTime() - 30_000);
+  await recordSteps(pool, [{ name: "token_refresh", failure: null, at: t2 }]);
+  await recordSteps(pool, [{ name: "token_refresh", failure: "token_refresh_failed", at: t1 }]);
+  await recordStep(pool, "wake", null, t2);
+  await recordStep(pool, "wake", "database_error", t1);
+  const rows = (
+    await pool.query(
+      `SELECT name,last_success_at,last_failure_at,last_success_at>last_failure_at AS recovered
+       FROM scheduled_steps WHERE name IN ('token_refresh','wake') ORDER BY name`,
+    )
+  ).rows;
+  assert.deepEqual(
+    rows.map((row) => [row.name, row.last_success_at, row.last_failure_at, row.recovered]),
+    [
+      ["token_refresh", t2, t1, true],
+      ["wake", t2, t1, true],
+    ],
+  );
+});
+
+test("an older outcome recorded later never moves a stored time back or replaces a newer failure", async () => {
+  // C succeeded at t15 and B failed at t2, both recorded; stalled A failed at t1 < t15 and records last. The
+  // newest outcome is B's failure, so the step has not recovered.
+  const t2 = new Date(Date.now() - 1_000);
+  const t15 = new Date(t2.getTime() - 15_000);
+  const t1 = new Date(t2.getTime() - 30_000);
+  await recordSteps(pool, [{ name: "token_refresh", failure: null, at: t15 }]);
+  await recordSteps(pool, [{ name: "token_refresh", failure: "b", at: t2 }]);
+  await recordSteps(pool, [{ name: "token_refresh", failure: "a", at: t1 }]);
+  await recordSteps(pool, [{ name: "token_refresh", failure: null, at: t1 }]);
+  await recordStep(pool, "wake", null, t15);
+  await recordStep(pool, "wake", "b", t2);
+  await recordStep(pool, "wake", "a", t1);
+  await recordStep(pool, "wake", null, t1);
+  const rows = (
+    await pool.query(
+      `SELECT name,last_success_at,last_failure_at,failure_code,last_success_at>last_failure_at AS recovered
+       FROM scheduled_steps WHERE name IN ('token_refresh','wake') ORDER BY name`,
+    )
+  ).rows;
+  assert.deepEqual(
+    rows.map((row) => [row.name, row.last_success_at, row.last_failure_at, row.failure_code, row.recovered]),
+    [
+      ["token_refresh", t15, t2, "b", false],
+      ["wake", t15, t2, "b", false],
+    ],
+  );
 });
 
 test("a database failure behind an API request returns 503 and logs only a fixed code", async () => {
