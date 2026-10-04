@@ -43,6 +43,7 @@ migration 029가 테이블과 삭제 함수 변경을 더하며, 운영 DB 적�
 
 ## 자동 변경
 
+열린 대화를 완료하면 같은 트랜잭션에서 모든 멤버의 그 대화 진행 중 리마인더를 취소하고, 다시 열어도 되살리지 않습니다([리마인더](2026-10-04-inbox-reminders.md#자동-취소)).
 인박스에 새로 저장된 DM이나 확인 버튼 응답은 같은 트랜잭션에서 완료한 대화를 다시 엽니다(`auto_reopen`). 담당자는 그대로 둡니다.
 DM 수집은 배치의 메시지를 저장하기 전에 상태 API와 삭제 함수처럼 연결 행을 ID 순서로 `FOR SHARE` 잠그므로, 같은 사람의 데이터 삭제와는 교착 없이 차례를 기다립니다.
 연결 행 다음에는 저장될 수 있는 대화마다 대화별 트랜잭션 advisory lock(`lockConversation`)을 (연결, 수신자) 순서로 배타적으로 잡고(`lockInboxConversations`, [#127](https://github.com/AndrewDongminYoo/auto-chatter/issues/127)), 저장한 뒤 새 스냅숏으로 상태를 다시 읽습니다. 상태 API도 이 잠금을 배타적으로 잡습니다.
