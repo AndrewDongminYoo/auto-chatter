@@ -1,4 +1,4 @@
-function createInbox({ api, node, getConnections, getRole, getUserId }) {
+function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZone }) {
   const byId = (id) => document.getElementById(id);
   const states = new Map();
   // Listed conversation buttons by key, so a read mark can update its unread badge without reloading the list.
@@ -16,7 +16,18 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     labelsBusy = false,
     // Counts applied read marks, so a list response can tell which marks landed after its request started.
     readSeq = 0,
-    expiryTimer;
+    expiryTimer,
+    // The reminder filter (reminder=due), the caller's due reminder count from the last list load, the server time
+    // that count was taken at, and the server clock minus the local one at that load, so due states can be
+    // re-rendered without asking the server.
+    reminderFilter = false,
+    dueCount = 0,
+    dueCheckedAt = 0,
+    clockOffset = 0,
+    reminderTimer,
+    // Counts workspace time zone changes saved in this tab. A reminder returned by a write that started before a
+    // change holds due_local in the old zone, so the write's response is replaced by a conversation read.
+    zoneChanges = 0;
   const reasons = {
     global_send_disabled: "전체 발송이 중지되어 있습니다.",
     connection_disabled: "이 계정의 수신·DM 보관·발송 설정을 확인해 주세요.",
@@ -51,10 +62,50 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
       byId("inbox-status-filter").value ||
       byId("inbox-assignee-filter").value ||
       byId("inbox-label-filter").value ||
-      byId("inbox-unread").checked,
+      byId("inbox-unread").checked ||
+      reminderFilter,
     );
   const conversationPath = (state) => `/api/inbox/conversations/${state.row.connection_id}/${state.row.recipient_id}`;
   const labelText = (label) => (label.archived ? `${label.name} (보관됨)` : label.name);
+  const serverNow = () => Date.now() + clockOffset;
+  const isDue = (reminder) => serverNow() >= Date.parse(reminder.due_at);
+  // A stored "YYYY-MM-DDTHH:MM" wall-clock value as Korean text, with the year only when it is not this year.
+  const reminderLabel = (local) => {
+    const [day, time] = local.split("T");
+    const [year, month, date] = day.split("-");
+    const prefix = year === String(new Date(serverNow()).getFullYear()) ? "" : `${year}년 `;
+    return `${prefix}${Number(month)}월 ${Number(date)}일 ${time}`;
+  };
+  const reminderZone = () => selected?.reminder?.time_zone || getTimeZone() || "Asia/Seoul";
+  // An instant as the "YYYY-MM-DDTHH:MM" a datetime-local input takes, in the workspace time zone.
+  function wallClock(ms, zone) {
+    let format;
+    try {
+      format = new Intl.DateTimeFormat("en-CA", {
+        timeZone: zone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      });
+    } catch {
+      return "";
+    }
+    const part = Object.fromEntries(format.formatToParts(new Date(ms)).map((item) => [item.type, item.value]));
+    return `${part.year}-${part.month}-${part.day}T${part.hour}:${part.minute}`;
+  }
+  // The earliest due time the picker offers: one minute ahead, lowered by a backward clock shift (a daylight-saving
+  // end) within the next three hours, because PostgreSQL reads a repeated wall-clock time as the later instant, which
+  // can still be ahead. The server checks the real instant against the 1-minute bound.
+  function earliestDue(zone) {
+    const start = serverNow() + 60000;
+    const offset = (ms) => Date.parse(`${wallClock(ms, zone)}Z`) - Math.floor(ms / 60000) * 60000;
+    return wallClock(start - Math.max(0, offset(start) - offset(start + 3 * 3600000)), zone);
+  }
+  // A new reminder starts an hour ahead, rounded up to ten minutes.
+  const defaultDue = (zone) => wallClock(Math.ceil((serverNow() + 3600000) / 600000) * 600000, zone);
   const sameIds = (ids, set) => ids.size === set.size && [...ids].every((id) => set.has(id));
 
   function rowContent(button, row) {
@@ -67,12 +118,21 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
       node("span", `${row.message_count}개 · ${date(row.last_message_at)}`, "conversation-line"),
       node("span", summary(row.state), "conversation-line"),
     );
-    if (row.label_set?.labels.length) {
-      const chips = node("span", "", "label-chips");
-      for (const label of row.label_set.labels)
-        chips.append(node("span", labelText(label), `label-chip${label.archived ? " archived" : ""}`));
-      button.append(chips);
-    }
+    const chips = node("span", "", "label-chips");
+    if (row.reminder) {
+      const due = isDue(row.reminder);
+      button.dataset.reminderDue = String(due);
+      chips.append(
+        node(
+          "span",
+          `${due ? "리마인더 기한" : "리마인더"} · ${reminderLabel(row.reminder.due_local)}`,
+          `reminder-chip${due ? " due" : ""}`,
+        ),
+      );
+    } else delete button.dataset.reminderDue;
+    for (const label of row.label_set?.labels ?? [])
+      chips.append(node("span", labelText(label), `label-chip${label.archived ? " archived" : ""}`));
+    if (chips.children.length) button.append(chips);
   }
 
   function labelFilterOptions() {
@@ -222,6 +282,239 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
         if (selected === state) labelControls();
       }
     }
+  }
+
+  // The badge counts the caller's reminders the last list load found due, plus listed ones that became due since.
+  // "Since" is the count's own server time, not a row's due flag: rows from an earlier page or a conversation read
+  // carry flags taken at other times, so a flag would count a reminder the count already holds or miss one it does not.
+  function reminderBadge() {
+    const later = [...listed.values()].filter(
+      ({ row }) => row.reminder && Date.parse(row.reminder.due_at) > dueCheckedAt && isDue(row.reminder),
+    ).length;
+    const count = dueCount + later,
+      button = byId("inbox-reminder-filter");
+    byId("inbox-reminder-count").textContent = count.toLocaleString("ko-KR");
+    button.classList.toggle("has-due", count > 0);
+    button.setAttribute("aria-pressed", String(reminderFilter));
+    button.setAttribute("aria-label", `리마인더: 기한이 된 내 리마인더 ${count}개, 누르면 그 대화만 봅니다`);
+  }
+
+  // Keeps the open conversation's pending reminder and its list row in step; anything not pending clears both.
+  function showReminder(state, reminder) {
+    state.reminder = reminder?.status === undefined || reminder.status === "pending" ? reminder : null;
+    // Every caller passes a reminder from a request that started after the last time zone change in this tab (null,
+    // or a conversation read newer than the change), so its due_local is in the current time zone.
+    state.reminderZoneStale = false;
+    // A draft equal to the newer reminder is no draft, so the next edit starts from that reminder's version.
+    if (state.reminderDraft && !reminderDirty(state)) state.reminderDraft = null;
+    const entry = listed.get(conversationKey(state));
+    if (entry) {
+      const shown = state.reminder;
+      entry.row.reminder = shown
+        ? {
+            id: shown.id,
+            due_at: shown.due_at,
+            due_local: shown.due_local,
+            due: isDue(shown),
+            version: shown.version,
+            note: shown.note,
+          }
+        : null;
+      rowContent(entry.button, entry.row);
+    }
+  }
+
+  const reminderNoteLength = (value) => [...value.trim()].length;
+
+  // Whether the editor holds a change the member would lose: a draft that differs from the stored reminder or, with
+  // none stored, a note or a due time other than the default shown. A closed conversation without a reminder disables
+  // the editor, so a draft left there cannot be cleared and does not count.
+  function reminderDirty(state) {
+    const draft = state.reminderDraft,
+      reminder = state.reminder;
+    if (!draft) return false;
+    if (reminder) return draft.due !== reminder.due_local || draft.note.trim() !== (reminder.note ?? "");
+    if (state.convo?.status === "closed") return false;
+    return Boolean(draft.note.trim()) || draft.due !== state.reminderDefault;
+  }
+
+  function reminderControls() {
+    const state = selected,
+      form = byId("inbox-reminder-editor");
+    form.hidden = !state;
+    if (!state) return;
+    const reminder = state.reminder,
+      zone = reminderZone(),
+      saving = state.reminderBusy,
+      // A state change in flight may close the conversation and cancel the reminder, so the editor waits for it.
+      busy = saving || state.stateBusy,
+      closed = !reminder && state.convo?.status === "closed",
+      stale = Boolean(reminder && state.reminderZoneStale);
+    const dueInput = byId("inbox-reminder-due"),
+      noteInput = byId("inbox-reminder-note");
+    const draft = state.reminderDraft ?? {
+      due: reminder ? reminder.due_local : defaultDue(zone),
+      note: reminder?.note ?? "",
+    };
+    if (!state.reminderDraft && !reminder) state.reminderDefault = draft.due;
+    if (dueInput.value !== draft.due) dueInput.value = draft.due;
+    if (noteInput.value !== draft.note) noteInput.value = draft.note;
+    // The picker offers 1 minute to 90 days ahead; an unchanged due time (a note-only change of a due reminder) is
+    // not checked, since the server keeps it as it is.
+    if (reminder && draft.due === reminder.due_local) {
+      dueInput.removeAttribute("min");
+      dueInput.removeAttribute("max");
+    } else {
+      dueInput.min = earliestDue(zone);
+      dueInput.max = wallClock(serverNow() + 90 * 86400000, zone);
+    }
+    dueInput.disabled = noteInput.disabled = busy || closed || stale;
+    // The server counts code points like PostgreSQL length(); maxlength would count UTF-16 units.
+    const length = reminderNoteLength(draft.note);
+    noteInput.setCustomValidity(length > 200 ? "리마인더 메모는 200자까지 입력할 수 있습니다." : "");
+    byId("inbox-reminder-note-count").textContent = `${length.toLocaleString("ko-KR")} / 200`;
+    byId("inbox-reminder-zone").textContent = `작업 공간 시간대(${zone})`;
+    const due = Boolean(reminder && isDue(reminder));
+    form.classList.toggle("due", due);
+    byId("inbox-reminder-state").textContent = stale
+      ? "작업 공간 시간대가 바뀌어 리마인더를 새 시간대로 다시 불러오고 있습니다."
+      : reminder
+        ? `${due ? "기한이 지났습니다" : "기한 전"} · ${reminderLabel(reminder.due_local)}${reminder.note ? ` · ${reminder.note}` : ""}`
+        : closed
+          ? "완료한 대화에는 리마인더를 둘 수 없습니다. 대화를 다시 열면 정할 수 있습니다."
+          : "아직 내 리마인더가 없습니다.";
+    const dirty = reminder ? reminderDirty(state) : Boolean(draft.due);
+    const save = byId("inbox-reminder-save");
+    save.textContent = saving ? "저장 중…" : reminder ? "리마인더 변경" : "리마인더 저장";
+    save.disabled = busy || closed || stale || !draft.due || !dirty;
+    for (const id of ["inbox-reminder-done", "inbox-reminder-cancel"]) {
+      byId(id).hidden = !reminder;
+      byId(id).disabled = busy;
+    }
+    byId("inbox-reminder-status").textContent =
+      state.reminderNotice || (reminder && dirty ? "저장하지 않은 변경이 있습니다." : "");
+  }
+
+  function reminderInput() {
+    const state = selected;
+    if (!state || state.reminderBusy) return;
+    // A draft keeps the reminder it was started on, like labelBase: a later conversation read can replace the stored
+    // reminder, and saving the draft against that newer version would overwrite another screen's change, not get 409.
+    if (!state.reminderDraft) state.reminderBase = state.reminder;
+    state.reminderDraft = { due: byId("inbox-reminder-due").value, note: byId("inbox-reminder-note").value };
+    // A draft equal to the stored reminder, or to the empty editor when none is stored, is no draft.
+    if (!reminderDirty(state)) state.reminderDraft = null;
+    state.reminderNotice = "";
+    reminderControls();
+  }
+
+  // Creates the reminder or changes the existing one with the values in the editor.
+  async function saveReminder() {
+    const state = selected;
+    if (!state || state.reminderBusy || state.stateBusy) return;
+    const due = byId("inbox-reminder-due").value,
+      note = byId("inbox-reminder-note").value;
+    const session = epoch,
+      zone = zoneChanges,
+      reminder = state.reminderDraft ? state.reminderBase : state.reminder;
+    state.reminderBusy = true;
+    state.reminderNotice = "리마인더를 저장하고 있습니다…";
+    reminderControls();
+    conversationControls();
+    try {
+      const body = { note: note.trim() ? note : null };
+      const saved = await (
+        reminder
+          ? api(`/api/inbox/reminders/${reminder.id}`, "PATCH", {
+              expected_version: reminder.version,
+              ...(due === reminder.due_local ? {} : { due_local: due }),
+              ...body,
+            })
+          : api(`${conversationPath(state)}/reminders`, "POST", { due_local: due, ...body })
+      ).finally(() => {
+        // A conversation read that overlapped this write may hold the older reminder; loadConversation drops it.
+        state.reminderWrites++;
+      });
+      if (epoch !== session) return;
+      state.reminderDraft = null;
+      if (zone === zoneChanges) showReminder(state, saved);
+      else if (selected === state) void loadConversation();
+      state.reminderNotice = reminder ? "리마인더를 변경했습니다." : "리마인더를 저장했습니다.";
+      void loadList();
+    } catch (error) {
+      if (epoch !== session) return;
+      if (error.status >= 400 && error.status < 500) {
+        state.reminderNotice = error.message;
+        // An existing or newer reminder comes back with the refusal; the editor keeps the values to save onto it,
+        // unless the time zone changed since, which makes both the values and the returned reminder old-zone times.
+        if (error.reminder && zone === zoneChanges) {
+          state.reminderDraft = { due, note };
+          showReminder(state, error.reminder);
+          state.reminderBase = state.reminder;
+        } else if (
+          error.reminder ||
+          ["reminder_not_found", "reminder_not_pending", "conversation_closed"].includes(error.code)
+        ) {
+          state.reminderDraft = null;
+          if (selected === state) void loadConversation();
+        }
+      } else state.reminderNotice = "저장 여부를 확인하지 못했습니다. 대화를 새로고침해 리마인더를 확인해 주세요.";
+    } finally {
+      if (epoch === session) {
+        state.reminderBusy = false;
+        if (selected === state) {
+          reminderControls();
+          conversationControls();
+        }
+      }
+    }
+  }
+
+  async function finishReminder(action) {
+    const state = selected,
+      reminder = state?.reminder;
+    if (!reminder || state.reminderBusy || state.stateBusy) return;
+    const session = epoch,
+      zone = zoneChanges;
+    state.reminderBusy = true;
+    state.reminderNotice = action === "complete" ? "완료로 표시하고 있습니다…" : "리마인더를 취소하고 있습니다…";
+    reminderControls();
+    conversationControls();
+    try {
+      await api(`/api/inbox/reminders/${reminder.id}/${action}`, "POST", {
+        expected_version: reminder.version,
+      }).finally(() => {
+        state.reminderWrites++;
+      });
+      if (epoch !== session) return;
+      state.reminderDraft = null;
+      showReminder(state, null);
+      state.reminderNotice = action === "complete" ? "리마인더를 완료로 표시했습니다." : "리마인더를 취소했습니다.";
+      void loadList();
+    } catch (error) {
+      if (epoch !== session) return;
+      if (error.status >= 400 && error.status < 500) {
+        state.reminderNotice = error.message;
+        if (error.reminder && zone === zoneChanges) showReminder(state, error.reminder);
+        else if (selected === state) void loadConversation();
+      } else state.reminderNotice = "처리 여부를 확인하지 못했습니다. 대화를 새로고침해 리마인더를 확인해 주세요.";
+    } finally {
+      if (epoch === session) {
+        state.reminderBusy = false;
+        if (selected === state) {
+          reminderControls();
+          conversationControls();
+        }
+      }
+    }
+  }
+
+  // Once a minute: re-renders the due state from the loaded due_at values, without a request.
+  function tickReminders() {
+    for (const { row, button } of listed.values())
+      if (row.reminder && button.dataset.reminderDue !== String(isDue(row.reminder))) rowContent(button, row);
+    reminderBadge();
+    reminderControls();
   }
 
   function memoControls() {
@@ -452,7 +745,9 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     if (!state?.convo) return;
     const convo = state.convo,
       mine = convo.assignee?.user_id === getUserId(),
-      locked = state.loading || state.stateBusy;
+      // A close cancels the pending reminders it finds, so a reminder write and a state change never overlap: a save
+      // response arriving after the close would otherwise show a cancelled reminder as pending.
+      locked = state.loading || state.stateBusy || state.reminderBusy;
     const changed = !convo.version
       ? ""
       : convo.updated_by
@@ -482,22 +777,30 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
 
   async function changeConversation(change) {
     const state = selected;
-    if (!state?.convo || state.stateBusy || state.loading) return;
+    if (!state?.convo || state.stateBusy || state.loading || state.reminderBusy) return;
     const session = epoch;
     state.stateBusy = true;
     state.stateNotice = "대화 상태를 바꾸고 있습니다…";
     conversationControls();
+    reminderControls();
     try {
       state.convo = await api(
         `/api/inbox/conversations/${state.row.connection_id}/${state.row.recipient_id}/state`,
         "PUT",
         { expected_version: state.convo.version, ...change },
       ).finally(() => {
-        // A conversation read that overlapped this write may hold the older state; loadConversation drops it.
+        // A conversation read that overlapped this write may hold the older state, or a pending reminder a close
+        // cancelled; loadConversation drops both.
         state.convoWrites++;
+        state.reminderWrites++;
       });
       if (epoch !== session) return;
       state.stateNotice = "대화 상태를 변경했습니다.";
+      // Closing cancelled every pending reminder on the conversation, the caller's included.
+      if (state.convo.status === "closed") {
+        state.reminderDraft = null;
+        showReminder(state, null);
+      }
       void loadList();
     } catch (error) {
       if (epoch !== session) return;
@@ -510,7 +813,11 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     } finally {
       if (epoch === session) {
         state.stateBusy = false;
-        if (selected === state) conversationControls();
+        if (selected === state) {
+          conversationControls();
+          // The reminder editor depends on the status: a closed conversation holds no reminder.
+          reminderControls();
+        }
       }
     }
   }
@@ -519,6 +826,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     const state = selected;
     conversationControls();
     labelControls();
+    reminderControls();
     memoControls();
     byId("inbox-composer").hidden = !state;
     byId("inbox-handoff-controls").hidden = !state;
@@ -700,7 +1008,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     const session = epoch,
       request = ++state.readRequest,
       writes = state.convoWrites,
-      labelWrites = state.labelWrites;
+      labelWrites = state.labelWrites,
+      reminderWrites = state.reminderWrites;
     state.loading = true;
     byId("inbox-message-status").textContent = "대화와 발송 상태를 불러오고 있습니다…";
     controls();
@@ -723,6 +1032,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
       for (const row of messages.messages) state.messages.set(row.id, row);
       if (messages.state && writes === state.convoWrites) state.convo = messages.state;
       if (messages.label_set && labelWrites === state.labelWrites) showLabelSet(state, messages.label_set);
+      if ("reminder" in messages && reminderWrites === state.reminderWrites) showReminder(state, messages.reminder);
       for (const row of replies.replies) state.replies.set(row.id, row);
       for (const id of state.notes.keys()) {
         const reply = state.replies.get(id);
@@ -844,6 +1154,17 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
         memoDraft: "",
         memoBusy: false,
         memoNotice: "",
+        reminder: row.reminder ?? null,
+        reminderDraft: null,
+        // The stored reminder a draft was started on; saveReminder sends its ID and version, not the latest read's.
+        reminderBase: null,
+        // Set when this tab saved a new workspace time zone, until a reread returns due_local in that zone.
+        reminderZoneStale: false,
+        // The default due time the editor showed when the member started a draft with no stored reminder.
+        reminderDefault: "",
+        reminderBusy: false,
+        reminderNotice: "",
+        reminderWrites: 0,
       });
     selected = states.get(key);
     byId("inbox-conversation-title").textContent = `@${row.username || "연결 계정"} · DM 사용자 ${row.recipient_id}`;
@@ -875,6 +1196,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     if (byId("inbox-assignee-filter").value) query.set("assignee", byId("inbox-assignee-filter").value);
     if (byId("inbox-label-filter").value) query.set("label", byId("inbox-label-filter").value);
     if (byId("inbox-unread").checked) query.set("unread", "true");
+    if (reminderFilter) query.set("reminder", "due");
     if (searchText) query.set("q", searchText);
     if (more) query.set("after", after);
     const reads = readSeq,
@@ -882,6 +1204,9 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     try {
       const page = await api(`/api/inbox?${query}`);
       if (epoch !== session || request !== listRequest) return;
+      dueCheckedAt = Date.parse(page.checked_at);
+      clockOffset = dueCheckedAt - Date.now();
+      dueCount = page.due_reminder_count;
       for (const row of page.conversations) {
         // A read mark applied after this request started may have committed after the list snapshot; the row's
         // read position shows which came first, so an older count cannot bring the badge back and a newer DM
@@ -902,11 +1227,14 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
         byId("inbox-conversations").append(button);
       }
       after = page.after;
+      reminderBadge();
       byId("inbox-status").textContent = byId("inbox-conversations").children.length
         ? "대화를 선택하세요. 초안은 대화마다 따로 보관됩니다."
-        : filtered()
-          ? "검색어나 보기 조건에 맞는 대화가 없습니다."
-          : "보관한 DM이 없습니다. 계정에서 DM 보관을 켠 뒤 새 DM을 받아 주세요.";
+        : reminderFilter && !searchText
+          ? "기한이 된 내 리마인더가 없거나 다른 보기 조건에 맞지 않습니다."
+          : filtered()
+            ? "검색어나 보기 조건에 맞는 대화가 없습니다."
+            : "보관한 DM이 없습니다. 계정에서 DM 보관을 켠 뒤 새 DM을 받아 주세요.";
     } catch (error) {
       if (epoch === session && request === listRequest) byId("inbox-status").textContent = error.message;
     } finally {
@@ -931,6 +1259,13 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     searchText = "";
     listed.clear();
     clearTimeout(expiryTimer);
+    clearInterval(reminderTimer);
+    reminderTimer = undefined;
+    reminderFilter = false;
+    dueCount = 0;
+    dueCheckedAt = 0;
+    clockOffset = 0;
+    reminderBadge();
     byId("inbox-account").replaceChildren(new Option("모든 계정", ""));
     byId("inbox-status-filter").value = "";
     byId("inbox-assignee-filter").value = "";
@@ -959,6 +1294,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
       byId(id).textContent = "";
     byId("inbox-reply-text").value = "";
     byId("inbox-note-text").value = "";
+    byId("inbox-reminder-editor").reset();
+    byId("inbox-reminder-status").textContent = "";
     byId("inbox-conversation-title").textContent = "대화를 선택하세요";
     for (const id of ["inbox-more", "inbox-older", "inbox-thread-refresh"]) byId(id).hidden = true;
     controls();
@@ -975,6 +1312,20 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
   }
   for (const id of ["inbox-status-filter", "inbox-assignee-filter", "inbox-label-filter", "inbox-unread"])
     byId(id).addEventListener("change", () => void loadList());
+  byId("inbox-reminder-filter").addEventListener("click", () => {
+    reminderFilter = !reminderFilter;
+    reminderBadge();
+    void loadList();
+  });
+  byId("inbox-reminder-due").addEventListener("input", reminderInput);
+  byId("inbox-reminder-note").addEventListener("input", reminderInput);
+  byId("inbox-reminder-editor").addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (byId("inbox-reminder-save").disabled || !event.currentTarget.reportValidity()) return;
+    void saveReminder();
+  });
+  byId("inbox-reminder-done").addEventListener("click", () => void finishReminder("complete"));
+  byId("inbox-reminder-cancel").addEventListener("click", () => void finishReminder("cancel"));
   byId("inbox-search-form").addEventListener("submit", (event) => {
     event.preventDefault();
     searchText = byId("inbox-search").value.trim();
@@ -1118,6 +1469,24 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
     },
     loadList,
     loadConversation,
+    // After this tab saves a new workspace time zone: stored due_local values and draft due times are in the old zone,
+    // while the server reads a sent due_local in the new one. Drafts are dropped, edits of a stored reminder wait for
+    // a reread, and the open conversation and the list are read again.
+    timeZoneChanged() {
+      zoneChanges++;
+      for (const state of states.values()) {
+        if (reminderDirty(state))
+          state.reminderNotice =
+            "작업 공간 시간대가 바뀌어 편집하던 리마인더를 지웠습니다. 새 시간대로 다시 정해 주세요.";
+        state.reminderDraft = null;
+        state.reminderZoneStale = Boolean(state.reminder);
+      }
+      if (selected) {
+        reminderControls();
+        void loadConversation();
+      }
+      if (listed.size) void loadList();
+    },
     hasDrafts: () =>
       [...states.values()].some(
         (state) =>
@@ -1125,6 +1494,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
           state.operation ||
           state.memoDraft.trim() ||
           state.labelDraft ||
+          reminderDirty(state) ||
           [...state.notes.values()].some(Boolean),
       ),
     initialize() {
@@ -1135,6 +1505,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId }) {
         select.append(new Option(account.username || account.account_id, account.id));
       if (getConnections().some((account) => account.id === previous)) select.value = previous;
       byId("inbox-labels-section").hidden = !isAdmin();
+      clearInterval(reminderTimer);
+      reminderTimer = setInterval(tickReminders, 60000);
       void loadLabels();
       void loadList();
       if (isAdmin()) {

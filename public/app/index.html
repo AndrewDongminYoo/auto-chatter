@@ -690,7 +690,12 @@
         <section id="inbox-section" class="card" aria-labelledby="inbox-title">
           <div class="section-heading">
             <h2 id="inbox-title">인박스</h2>
-            <button id="inbox-refresh" class="secondary">새로고침</button>
+            <div class="inbox-heading-actions">
+              <button id="inbox-reminder-filter" type="button" class="secondary reminder-filter" aria-pressed="false">
+                리마인더 <span id="inbox-reminder-count" class="reminder-count">0</span>
+              </button>
+              <button id="inbox-refresh" class="secondary">새로고침</button>
+            </div>
           </div>
           <p class="hint">
             DM 보관을 켠 이후의 수신 메시지와 수동 답장 이력입니다. 상담을 시작하면 자동 답장을 잠시 멈추고 직접 답장할
@@ -774,6 +779,37 @@
                 <div class="composer-footer">
                   <p id="inbox-label-status" class="hint" role="status" aria-live="polite"></p>
                   <button id="inbox-label-save" type="submit" class="secondary" disabled>라벨 저장</button>
+                </div>
+              </form>
+              <form id="inbox-reminder-editor" class="inbox-reminder-editor" hidden novalidate>
+                <fieldset aria-describedby="inbox-reminder-state inbox-reminder-help">
+                  <legend>내 리마인더 <span class="note-scope">나만 보기</span></legend>
+                  <p id="inbox-reminder-state" class="hint"></p>
+                  <div class="reminder-fields">
+                    <label>날짜와 시각<input id="inbox-reminder-due" type="datetime-local" step="60" required /></label>
+                    <label
+                      >메모 (선택)<input
+                        id="inbox-reminder-note"
+                        type="text"
+                        autocomplete="off"
+                        aria-describedby="inbox-reminder-note-count"
+                    /></label>
+                  </div>
+                </fieldset>
+                <p id="inbox-reminder-help" class="hint">
+                  <span id="inbox-reminder-zone">작업 공간 시간대</span> 기준입니다. 알림을 보내지 않고 인박스의
+                  리마인더 목록에만 보입니다. 대화를 완료 처리하면 취소됩니다.
+                </p>
+                <div class="composer-footer">
+                  <p id="inbox-reminder-status" class="hint" role="status" aria-live="polite"></p>
+                  <span id="inbox-reminder-note-count" class="hint">0 / 200</span>
+                </div>
+                <div class="composer-actions">
+                  <button id="inbox-reminder-done" type="button" class="secondary" hidden>완료로 표시</button>
+                  <button id="inbox-reminder-cancel" type="button" class="secondary danger" hidden>
+                    리마인더 취소
+                  </button>
+                  <button id="inbox-reminder-save" type="submit" class="secondary">리마인더 저장</button>
                 </div>
               </form>
               <div id="inbox-handoff-controls" hidden>
