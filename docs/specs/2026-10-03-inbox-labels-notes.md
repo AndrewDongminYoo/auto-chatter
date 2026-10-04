@@ -4,7 +4,7 @@
 
 [이슈 #23](https://github.com/AndrewDongminYoo/auto-chatter/issues/23)의 두 번째 부분(#23-B)입니다.
 첫 부분인 [검색·필터와 읽음 상태](2026-09-27-instagram-inbox.md#검색-필터와-읽음-상태)(#23-A) 위에, 인박스 대화에 붙이는 라벨과 멤버끼리만 보는 내부 메모를 더합니다.
-리마인더(#23-C)는 다음 회차에서 다루고, 키워드로 라벨을 자동으로 붙이는 규칙은 별도 이슈로 나눕니다.
+리마인더(#23-C)는 다음 회차에서 다루고, 키워드로 라벨을 자동으로 붙이는 규칙은 별도 이슈 [#132](https://github.com/AndrewDongminYoo/auto-chatter/issues/132)의 [자동 라벨 규칙](2026-10-04-inbox-label-rules.md)에서 다룹니다.
 migration 033이 테이블 넷과 삭제 함수 변경을 더하며, 운영 DB 적용과 배포는 이 PR의 범위가 아닙니다.
 PR #131과 migration 033은 2026-10-04 `main` 커밋 `6e3df5b`으로 운영 DB에 적용하고 배포했습니다([운영 기록](../notes/2026-09-26-cloudflare-runbook.md)). 운영에는 여러 멤버와 라벨이 없어, 라벨·라벨 필터·내부 메모를 운영 데이터로 조작하지 않았습니다.
 
@@ -31,7 +31,7 @@ PR #131과 migration 033은 2026-10-04 `main` 커밋 `6e3df5b`으로 운영 DB�
 
 - `instagram_inbox_labels`: 작업 공간의 라벨 정의입니다. 이름, 보관 여부, 만든 멤버와 시각을 저장합니다. 지우지 않고 보관만 하며, 보관하지 않은 라벨의 이름은 작업 공간 안에서 대소문자를 무시하고 하나뿐입니다(부분 고유 인덱스 `lower(name) WHERE NOT archived`).
 - `instagram_inbox_conversation_labels`: 대화마다 한 행으로 라벨 ID 배열(`uuid[]`)과 버전을 저장합니다. 서버 역할에 DELETE 권한이 없으므로 라벨을 붙이고 떼는 일은 배열을 바꾸는 UPDATE입니다. 배열은 10개 이하이고 NULL과 중복이 없어야 합니다(`inbox_label_ids_valid` CHECK).
-- `instagram_inbox_label_events`: 버전마다 한 행씩 붙인 라벨, 뗀 라벨, 실행한 멤버와 시각을 남기는 추가 전용 감사 기록입니다.
+- `instagram_inbox_label_events`: 버전마다 한 행씩 붙인 라벨, 뗀 라벨, 실행한 멤버와 시각을 남기는 추가 전용 감사 기록입니다. migration 035부터 자동 라벨 규칙이 붙인 변경은 멤버 대신 규칙(`rule_id`)을 남깁니다([자동 라벨 규칙](2026-10-04-inbox-label-rules.md#감사-기록)).
 - `instagram_inbox_notes`: 작성 멤버, 본문, 시각을 저장하는 추가 전용 메모입니다.
 
 서버 역할은 라벨 정의와 대화 라벨 행을 SELECT·INSERT·UPDATE하고, 감사 기록과 메모는 SELECT·INSERT만 할 수 있습니다. 네 테이블 모두 DELETE 권한이 없고 RLS가 켜져 있으며 Supabase API 역할은 접근할 수 없습니다.
