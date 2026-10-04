@@ -2,6 +2,8 @@ const byId = (id) => document.getElementById(id);
 const form = byId("rule-form");
 let connections = [];
 let contactsGeneration = 0;
+let contactsExportGeneration = 0;
+let contactsExportBusy = false;
 let contactsAfter = null;
 let contactsBusy = false;
 let contactsSaving = false;
@@ -145,6 +147,11 @@ window.addEventListener("beforeunload", (event) => {
   }
 });
 function resetSession() {
+  invalidateContactExport();
+  byId("contacts-export").hidden = true;
+  byId("contacts-export-help").hidden = true;
+  byId("contacts-export-format").hidden = true;
+  byId("contacts-export-format").open = false;
   resetInbox();
   flowEditor.reset();
   connections = [];
@@ -262,6 +269,9 @@ const errors = {
   keywords_required: "키워드를 하나 이상 입력해 주세요.",
   invalid_contact_automation: "연락처 자동화 설정을 확인해 주세요.",
   invalid_contact_tags: "태그는 한 줄에 하나씩 최대 20개, 각각 40자까지 입력해 주세요.",
+  invalid_contact_export_request: "전체 연락처 내보내기 요청을 확인해 주세요.",
+  contact_export_too_large: "내보내기 한도(5,000명 또는 5 MiB)를 넘었습니다. 파일을 만들지 않았습니다.",
+  contact_export_timeout: "내보내기 처리 시간 한도를 넘었습니다. 파일을 만들지 않았습니다. 잠시 후 다시 시도해 주세요.",
   invalid_contact_request: "연락처 필터를 확인한 뒤 다시 불러와 주세요.",
   contact_not_found: "연락처에 접근할 수 없습니다. 목록을 다시 불러와 주세요.",
   invalid_segment: "필터 이름은 1–60자이며 계정과 태그 조건을 확인해 주세요.",
@@ -496,6 +506,9 @@ function deletionRecord(record) {
 
 // Removes the deleted connection's contacts, inbox drafts and activity from the screen, then reloads those views.
 function forgetDeletedConnection(connectionId) {
+  invalidateContactExport(
+    "연락처 기록이 삭제되어 진행 중인 내보내기를 취소했습니다. 다시 요청하면 현재 저장된 정보로 만듭니다.",
+  );
   purgedContactConnections.add(connectionId);
   for (const key of contactsDirty) if (key.startsWith(`${connectionId}:`)) contactsDirty.delete(key);
   for (const card of byId("contacts-list").querySelectorAll(".contact-row"))
@@ -994,6 +1007,7 @@ async function loadWebhooks() {
 }
 
 async function loadWorkspace() {
+  invalidateContactExport();
   const generation = segmentsGeneration;
   const me = await api("/api/me");
   if (generation !== segmentsGeneration) return;
@@ -1006,6 +1020,9 @@ async function loadWorkspace() {
   byId("time-zone-form").elements.time_zone.value = membership.time_zone ?? "";
   timeZoneControls();
   const operationsVisible = currentRole === "owner" || currentRole === "admin";
+  byId("contacts-export").hidden = !operationsVisible;
+  byId("contacts-export-help").hidden = !operationsVisible;
+  byId("contacts-export-format").hidden = !operationsVisible;
   byId("operations-section").hidden = !operationsVisible;
   byId("webhooks-section").hidden = !operationsVisible;
   if (operationsVisible) {
@@ -1633,6 +1650,54 @@ byId("copy-invite").addEventListener("click", async () => {
   } catch {
     link.select();
     notice("링크를 선택했습니다. 직접 복사해 주세요.", true);
+  }
+});
+// Independent of contact-list generations: changing filters never narrows or cancels this full export.
+function invalidateContactExport(message = "") {
+  contactsExportGeneration++;
+  contactsExportBusy = false;
+  const button = byId("contacts-export");
+  button.disabled = false;
+  button.textContent = "전체 연락처 CSV";
+  button.removeAttribute("aria-busy");
+  byId("contacts-export-status").textContent = message;
+}
+byId("contacts-export").addEventListener("click", async () => {
+  if (contactsExportBusy || !["owner", "admin"].includes(currentRole)) return;
+  const generation = contactsExportGeneration;
+  const button = byId("contacts-export");
+  const status = byId("contacts-export-status");
+  contactsExportBusy = true;
+  button.disabled = true;
+  button.textContent = "내보내는 중…";
+  button.setAttribute("aria-busy", "true");
+  status.textContent = "저장된 전체 연락처 CSV를 만들고 있습니다…";
+  try {
+    const text = await api("/api/contacts/export.csv", "GET", undefined, true, true);
+    if (generation !== contactsExportGeneration) return;
+    // Response.text() removes a UTF-8 BOM during decoding. Restore exactly one in the actual file.
+    const normalized = "\ufeff" + text.replace(/^\ufeff/, "");
+    const exportedOn = /\r\n"1","(\d{4}-\d{2}-\d{2})/.exec(text)?.[1] ?? new Date().toISOString().slice(0, 10);
+    const url = URL.createObjectURL(new Blob([normalized], { type: "text/csv;charset=utf-8" }));
+    try {
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `auto-chatter-contacts-v1-${exportedOn}.csv`;
+      link.click();
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    }
+    status.textContent =
+      "전체 연락처 CSV를 저장했습니다. 필터와 저장 전 수정은 적용하지 않았습니다. 개인정보가 포함되므로 안전하게 보관하세요.";
+  } catch (error) {
+    if (generation === contactsExportGeneration) status.textContent = error.message;
+  } finally {
+    if (generation === contactsExportGeneration) {
+      contactsExportBusy = false;
+      button.disabled = false;
+      button.textContent = "전체 연락처 CSV";
+      button.removeAttribute("aria-busy");
+    }
   }
 });
 byId("export-data").addEventListener("click", (event) =>

@@ -659,8 +659,32 @@
         <section id="contacts-section" class="card" aria-labelledby="contacts-title">
           <div class="section-heading">
             <h2 id="contacts-title">연락처</h2>
-            <button id="contacts-reload" class="secondary">새로고침</button>
+            <div class="contacts-heading-actions">
+              <button
+                id="contacts-export"
+                type="button"
+                class="secondary"
+                aria-describedby="contacts-export-help"
+                hidden
+              >
+                전체 연락처 CSV
+              </button>
+              <button id="contacts-reload" class="secondary">새로고침</button>
+            </div>
           </div>
+          <p id="contacts-export-help" class="hint" hidden>
+            저장된 전체 연락처를 내보냅니다. 현재 필터와 저장 전 수정은 적용하지 않습니다. 활성 사용자 정의 필드에는
+            수집한 답장 등 개인정보가 포함될 수 있으니 파일을 안전하게 보관하세요.
+          </p>
+          <details id="contacts-export-format" hidden>
+            <summary>CSV 값 읽는 방법</summary>
+            <p class="hint">
+              식별자·주의가 필요한 계정 이름에는 앞에 작은따옴표를 붙이고, 태그·필드는 JSON 셀로 저장합니다.
+              프로그램에서 원래 값을 쓰려면 표시용 작은따옴표 하나를 제거해야 합니다. 스프레드시트에서 다시 저장하면
+              보호 표식이 사라질 수 있습니다.
+            </p>
+          </details>
+          <p id="contacts-export-status" class="hint" role="status" aria-live="polite"></p>
           <p class="hint">
             저장된 댓글 참여자입니다. 계정별로 구분하며, 댓글 참여만으로 DM 수신에 동의한 것은 아닙니다.
           </p>
