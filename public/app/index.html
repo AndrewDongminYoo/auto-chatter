@@ -264,6 +264,51 @@
           <p id="inbox-labels-status" class="hint" role="status" aria-live="polite"></p>
           <div id="inbox-label-list" class="account-list"></div>
         </section>
+        <section id="inbox-label-rules-section" class="card" aria-labelledby="inbox-label-rules-title" hidden>
+          <div class="section-heading">
+            <div>
+              <h2 id="inbox-label-rules-title">
+                자동 라벨 규칙 <span id="inbox-label-rule-count" class="count">0 / 50</span>
+              </h2>
+            </div>
+          </div>
+          <p class="hint">
+            새로 받은 텍스트 DM이 키워드와 맞으면 대화에 라벨을 자동으로 붙입니다. 규칙을 만들기 전에 받은 DM과 버튼
+            응답에는 적용하지 않고, 멤버가 대화에서 뗀 라벨은 그 대화에 다시 붙이지 않습니다. 사용 중인 규칙은 최대
+            50개입니다.
+          </p>
+          <form id="inbox-label-rule-form" class="label-rule-form">
+            <label>
+              붙일 라벨
+              <select name="label_id" required></select>
+            </label>
+            <label>
+              맞추는 방식
+              <select name="match_mode">
+                <option value="contains">키워드 포함</option>
+                <option value="exact">DM 전체가 키워드와 같음</option>
+              </select>
+            </label>
+            <label class="wide">
+              키워드
+              <input name="keywords" required autocomplete="off" aria-describedby="inbox-label-rule-help" />
+            </label>
+            <label class="wide">
+              제외 키워드 (선택)
+              <input name="excluded_keywords" autocomplete="off" aria-describedby="inbox-label-rule-help" />
+            </label>
+            <p id="inbox-label-rule-help" class="hint wide">
+              쉼표로 구분해 최대 20개, 각각 100자까지 입력하세요. 대소문자와 앞뒤 공백은 구분하지 않고, 제외 키워드가
+              들어 있는 DM에는 라벨을 붙이지 않습니다.
+            </p>
+            <div class="form-actions wide">
+              <button type="submit" id="inbox-label-rule-save">규칙 추가</button>
+              <button type="button" id="inbox-label-rule-cancel" class="secondary" hidden>수정 취소</button>
+            </div>
+          </form>
+          <p id="inbox-label-rules-status" class="hint" role="status" aria-live="polite"></p>
+          <div id="inbox-label-rule-list" class="account-list"></div>
+        </section>
         <section id="members-section" class="card" aria-labelledby="members-title" hidden>
           <div class="section-heading">
             <div>
