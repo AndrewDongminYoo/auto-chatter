@@ -1,3 +1,5 @@
+import { CONTENT_TYPES, checkCapability } from "../channels/contract.ts";
+import { instagramCapabilities } from "../instagram/channel-adapter.ts";
 import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { workspaceFor } from "./settings.ts";
@@ -28,7 +30,13 @@ export async function readManualReplyStatus(
     recipient_id: recipient,
   });
   const failure_code = status.failure_code ?? (enabled ? null : "global_send_disabled");
-  return { ...status, failure_code, allowed: failure_code === null };
+  return {
+    ...status,
+    failure_code,
+    allowed: failure_code === null,
+    channel: "instagram",
+    capabilities: instagramCapabilities("cloudflare_oauth"),
+  };
 }
 function requestKey(input: unknown, fields: string[]) {
   if (
@@ -75,6 +83,14 @@ export async function queueManualReply(
 ) {
   validate(connection, recipient, query);
   if (retryOf && !isUuid(retryOf)) throw new ApiError(400, "invalid_manual_reply_request");
+  let contentType = "text";
+  if (!retryOf && isRecord(input) && Object.hasOwn(input, "content_type")) {
+    const { content_type, ...rest } = input;
+    if (typeof content_type !== "string" || !CONTENT_TYPES.some((type) => type === content_type))
+      throw new ApiError(400, "invalid_manual_reply_request");
+    contentType = content_type;
+    input = rest;
+  }
   const body = requestKey(
     input,
     retryOf
@@ -90,6 +106,8 @@ export async function queueManualReply(
   try {
     await client.query("BEGIN");
     await lockConnection(client, workspace, connection);
+    if (!checkCapability(instagramCapabilities("cloudflare_oauth"), "manual_reply", contentType))
+      throw new ApiError(422, "channel_capability_unsupported");
     const old = (
       await client.query(
         `SELECT ${columns},created_by,retry_reason FROM instagram_manual_replies WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 AND request_key=$4`,

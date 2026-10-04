@@ -640,6 +640,9 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.equal(composerStatus.handoff_version, 1);
     assert.equal(composerStatus.failure_code, null);
     assert.equal(composerStatus.allowed, true);
+    assert.equal(composerStatus.channel, "instagram");
+    assert.deepEqual(composerStatus.capabilities.operations.manual_reply, { supported: true, content_types: ["text"] });
+    assert.equal(composerStatus.capabilities.templates.approved_message, false);
     assert.equal(JSON.stringify(composerStatus).includes("synthetic-encrypted"), false);
     assert.equal(
       (
@@ -654,6 +657,23 @@ test("workerd contact API uses restricted server privileges and verified workspa
       expected_handoff_version: 1,
       text: "Manual runtime reply",
     };
+    for (const content_type of ["attachment", "provider_template"]) {
+      const unsupported = await runtime.dispatchFetch(manualPath, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ...manualBody, content_type }),
+      });
+      assert.equal(unsupported.status, 422);
+      assert.deepEqual(await unsupported.json(), { error: "channel_capability_unsupported" });
+    }
+    const invalidContent = await runtime.dispatchFetch(manualPath, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ ...manualBody, content_type: "text", attachment_url: "https://example.test/image" }),
+    });
+    assert.equal(invalidContent.status, 400);
+    assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_replies")).rows[0].count, "0");
+    assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_reply_events")).rows[0].count, "0");
     const queued = await runtime.dispatchFetch(manualPath, {
       method: "POST",
       headers,
@@ -662,6 +682,13 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.equal(queued.status, 202);
     const manual = await queued.json();
     assert.equal(manual.status, "pending");
+    const explicitText = await runtime.dispatchFetch(manualPath, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ ...manualBody, content_type: "text" }),
+    });
+    assert.equal(explicitText.status, 202);
+    assert.equal((await explicitText.json()).id, manual.id);
     assert.equal(
       (
         await runtime.dispatchFetch(manualPath, {

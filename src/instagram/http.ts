@@ -1,9 +1,9 @@
-import { parseMessageEvents } from "./message-events.ts";
+import { instagramAdapter, partitionInstagramEvents } from "./channel-adapter.ts";
 import { ingestMessages } from "./follow-flow.ts";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Pool } from "pg";
 import { ingestComments } from "./store.ts";
-import { parseCommentEvents, verifySignature, verifySubscription } from "./webhook.ts";
+import { verifySignature, verifySubscription } from "./webhook.ts";
 
 const maxBodyBytes = 1024 * 1024;
 
@@ -61,8 +61,7 @@ async function handleRequest(
   let comments;
   let messages;
   try {
-    comments = parseCommentEvents(body);
-    messages = parseMessageEvents(body);
+    ({ comments, messages } = partitionInstagramEvents(instagramAdapter.decodeWebhook(body)));
   } catch {
     response.writeHead(400).end();
     return;

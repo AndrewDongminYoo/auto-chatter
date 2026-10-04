@@ -1,30 +1,15 @@
 import type { Pool, PoolClient } from "pg";
 
-export type ConsentPurpose = "service_reply" | "marketing";
-export type ConsentEventPurpose = ConsentPurpose | "all";
-export type ConsentDecision = "grant" | "revoke";
-export type ConsentEvidenceKind = "comment" | "inbound_dm" | "explicit" | "import";
-
-export interface ChannelConsentScope {
-  workspaceId: string;
-  connectionId: string;
-  channel: string;
-  identityKind: string;
-  identityValue: string;
-  purpose: ConsentPurpose;
-}
-
-export interface ChannelConsentState extends ChannelConsentScope {
-  decision: ConsentDecision;
-  evidenceKind: ConsentEvidenceKind;
-}
-
-export interface ServiceReplyEvidence extends Omit<ChannelConsentScope, "purpose"> {
-  kind: "comment" | "inbound_dm";
-  withinWindow: boolean;
-}
-
-export type ChannelConsentIdentityScope = Omit<ChannelConsentScope, "purpose">;
+// Preserve existing imports while the pure policy is shared with other channel adapters.
+export * from "../channels/policy.ts";
+import type {
+  ChannelConsentIdentityScope,
+  ChannelConsentState,
+  ConsentPurpose,
+  ConsentEventPurpose,
+  ConsentDecision,
+  ConsentEvidenceKind,
+} from "../channels/policy.ts";
 
 export type ConsentQueryable = Pool | PoolClient;
 
@@ -84,44 +69,6 @@ export async function deliveryRecipientOptedOut(
     [input.workspaceId, input.connectionId, input.senderId],
   );
   return result.rows[0]?.opted_out === true;
-}
-
-export interface ChannelConsentPolicyInput {
-  scope: ChannelConsentScope;
-  state: ChannelConsentState | null;
-  serviceEvidence?: ServiceReplyEvidence;
-}
-
-export type ChannelConsentPolicyResult =
-  | { eligible: true }
-  | { eligible: false; reason: "recipient_opted_out" | "marketing_consent_required" | "service_reply_window_required" };
-
-function sameIdentity(
-  left: Omit<ChannelConsentScope, "purpose">,
-  right: Omit<ChannelConsentScope, "purpose">,
-): boolean {
-  return (
-    left.workspaceId === right.workspaceId &&
-    left.connectionId === right.connectionId &&
-    left.channel === right.channel &&
-    left.identityKind === right.identityKind &&
-    left.identityValue === right.identityValue
-  );
-}
-
-export function evaluateChannelConsent(input: ChannelConsentPolicyInput): ChannelConsentPolicyResult {
-  const exactState =
-    input.state !== null && sameIdentity(input.scope, input.state) && input.scope.purpose === input.state.purpose
-      ? input.state
-      : null;
-  if (exactState?.decision === "revoke") return { eligible: false, reason: "recipient_opted_out" };
-  if (input.scope.purpose === "marketing") {
-    if (exactState?.decision === "grant" && exactState.evidenceKind === "explicit") return { eligible: true };
-    return { eligible: false, reason: "marketing_consent_required" };
-  }
-  if (input.serviceEvidence?.withinWindow && sameIdentity(input.scope, input.serviceEvidence))
-    return { eligible: true };
-  return { eligible: false, reason: "service_reply_window_required" };
 }
 
 export interface RecordChannelConsentEventInput {

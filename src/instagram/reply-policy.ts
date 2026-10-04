@@ -1,3 +1,5 @@
+import { evaluateWindow } from "../channels/policy.ts";
+
 export interface PrivateReplyPolicyInput {
   now: Date;
   commentCreatedAt: Date | null;
@@ -28,11 +30,8 @@ export function evaluatePrivateReply(input: PrivateReplyPolicyInput): PrivateRep
   if (!input.mediaOwned) return { eligible: false, reason: "media_unverified" };
   if (input.isOwnComment) return { eligible: false, reason: "own_comment" };
 
-  const now = input.now.getTime();
-  const createdAt = input.commentCreatedAt?.getTime();
-  if (createdAt === undefined || !Number.isFinite(createdAt) || !Number.isFinite(now) || createdAt > now) {
-    return { eligible: false, reason: "comment_time_unverified" };
-  }
-  if (now - createdAt >= replyWindowMs) return { eligible: false, reason: "comment_expired" };
+  const window = evaluateWindow(input.now, input.commentCreatedAt, replyWindowMs);
+  if (window === "unverified") return { eligible: false, reason: "comment_time_unverified" };
+  if (window === "expired") return { eligible: false, reason: "comment_expired" };
   return { eligible: true };
 }

@@ -562,7 +562,14 @@ after(async () => {
   await pool.end();
 });
 
-async function fieldRequest(method: string, path: string, body?: unknown, user = a, sendEnabled?: string) {
+async function fieldRequest(
+  method: string,
+  path: string,
+  body?: unknown,
+  user = a,
+  sendEnabled?: string,
+  notifyReply?: (connectionId: string) => Promise<void>,
+) {
   return appApi(
     new Request(`https://app.test${path}`, {
       method,
@@ -572,6 +579,7 @@ async function fieldRequest(method: string, path: string, body?: unknown, user =
     { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "test", SEND_ENABLED: sendEnabled },
     () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
     (async () => Response.json({ ...user, email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    notifyReply,
   );
 }
 async function createField(name: string, type: string) {
@@ -1369,6 +1377,67 @@ async function readyManual() {
   assert.equal((await setHandoff(true, 0)).status, 200);
   await pool.query("UPDATE instagram_connections SET send_enabled=true WHERE id=$1", [connectionId]);
 }
+
+test("manual reply capabilities describe support without overriding current eligibility", async () => {
+  await readyManual();
+  const path = `/api/connections/${connectionId}/inbox/456/reply-status`;
+  for (const send of ["true", "false"]) {
+    const result = await (await fieldRequest("GET", path, undefined, a, send)).json();
+    assert.equal(result.channel, "instagram");
+    assert.deepEqual(result.capabilities.operations.manual_reply, { supported: true, content_types: ["text"] });
+    assert.equal(result.capabilities.templates.approved_message, false);
+    assert.equal(result.allowed, send === "true");
+  }
+  await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '24 hours'");
+  const expired = await (await fieldRequest("GET", path, undefined, a, "true")).json();
+  assert.equal(expired.capabilities.operations.manual_reply.supported, true);
+  assert.equal(expired.allowed, false);
+  assert.equal(expired.failure_code, "reply_window_closed");
+});
+
+test("manual reply rejects unsupported content without enqueueing or accepting extra fields", async () => {
+  await readyManual();
+  let notifications = 0;
+  const notify = async () => {
+    notifications++;
+  };
+  for (const content_type of ["attachment", "provider_template"]) {
+    const response = await fieldRequest("POST", manualPath(), { ...manualBody, content_type }, a, "true", notify);
+    assert.equal(response.status, 422);
+    assert.equal((await response.json()).error, "channel_capability_unsupported");
+    assert.equal((await manualRequest("POST", "", { ...manualBody, content_type }, b)).status, 404);
+  }
+  for (const extra of [
+    { attachment_url: "https://example.test/image" },
+    { content_type: "text", attachment_url: "https://example.test/image" },
+    { content_type: "attachment", attachment_url: "https://example.test/image" },
+    { content_type: "unknown" },
+    { content_type: null },
+    { content_type: 1 },
+  ])
+    assert.equal((await manualRequest("POST", "", { ...manualBody, ...extra })).status, 400);
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_replies")).rows[0].count, "0");
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_reply_events")).rows[0].count, "0");
+  assert.equal(notifications, 0);
+});
+
+test("explicit text content is the same idempotent manual request as the old text shape", async () => {
+  await readyManual();
+  const first = await manualRequest("POST", "", { ...manualBody, content_type: "text" });
+  assert.equal(first.status, 202);
+  const reply = await first.json();
+  const oldShape = await manualRequest("POST", "", manualBody);
+  assert.equal(oldShape.status, 202);
+  assert.equal((await oldShape.json()).id, reply.id);
+  await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours'");
+  const confirmed = await manualRequest("POST", "", { ...manualBody, content_type: "text" });
+  assert.equal(confirmed.status, 202);
+  assert.equal((await confirmed.json()).id, reply.id);
+  assert.equal((await manualRequest("POST", "", { ...manualBody, content_type: "text", text: "changed" })).status, 409);
+  assert.equal((await manualRequest("POST", "", { ...manualBody, content_type: "attachment" })).status, 422);
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_replies")).rows[0].count, "1");
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_reply_events")).rows[0].count, "1");
+});
 
 test("manual reply status reports the server window and current handoff without credentials", async () => {
   await readyManual();

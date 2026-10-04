@@ -3,7 +3,7 @@ import {
   assertManualReplyAllowed,
   recoverStaleManualReplies,
 } from "../instagram/manual-reply-worker.ts";
-import { parseMessageEvents } from "../instagram/message-events.ts";
+import { instagramAdapter, partitionInstagramEvents } from "../instagram/channel-adapter.ts";
 import {
   clearExpiredUnmatchedReplies,
   ingestMessages,
@@ -137,8 +137,7 @@ async function receive(request: Request, env: Env, correlationId: string): Promi
   let comments;
   let messages;
   try {
-    comments = parseCommentEvents(body);
-    messages = parseMessageEvents(body);
+    ({ comments, messages } = partitionInstagramEvents(instagramAdapter.decodeWebhook(body)));
   } catch {
     return new Response(null, { status: 400 });
   }
@@ -475,7 +474,7 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
 }
 import { Pool } from "pg";
 import { ingestComments, resumeDueFlowRuns } from "../instagram/store.ts";
-import { parseCommentEvents, verifySignature, verifySubscription } from "../instagram/webhook.ts";
+import { verifySignature, verifySubscription } from "../instagram/webhook.ts";
 import { processNextPrivateReply, PreSendVerificationError } from "../instagram/reply-worker.ts";
 import { InstagramLoginPrivateReplyTransport } from "../instagram/instagram-login-private-reply.ts";
 import { publicPage } from "./public-pages.ts";
