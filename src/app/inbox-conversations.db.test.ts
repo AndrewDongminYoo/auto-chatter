@@ -459,7 +459,12 @@ test("removing a member unassigns their conversations with audit and keeps statu
 
   const removed = await request(owner, "DELETE", `/api/workspace/members/${agent.id}`);
   assert.equal(removed.status, 200);
-  assert.deepEqual(await body(removed), { user_id: agent.id, removed: true, unassigned_conversations: 2 });
+  assert.deepEqual(await body(removed), {
+    user_id: agent.id,
+    removed: true,
+    unassigned_conversations: 2,
+    cancelled_reminders: 0,
+  });
 
   const first = await detail();
   assert.equal(first.assignee, null);

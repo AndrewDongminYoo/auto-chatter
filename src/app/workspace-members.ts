@@ -3,6 +3,7 @@ import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { lockWorkspaceForMember, normalizeEmail, workspaceFor } from "./settings.ts";
 import { unassignRemovedMember } from "./inbox-conversations.ts";
+import { cancelRemovedMemberReminders } from "./inbox-reminders.ts";
 
 const INVITE_DAYS = 7;
 const MAX_OPEN_INVITES = 20;
@@ -139,7 +140,8 @@ export async function changeMemberRole(pool: Pool, user: User, memberId: string,
 }
 
 // The row stays with removed_at set: server roles cannot DELETE, and every request filters removed members out.
-// The member's conversations become unassigned in the same transaction; replies they already queued are kept.
+// The member's conversations become unassigned and their pending reminders are cancelled in the same transaction;
+// replies they already queued are kept.
 export async function removeMember(pool: Pool, user: User, memberId: string) {
   const workspace = await workspaceFor(pool, user, "owner");
   return transaction(pool, async (client) => {
@@ -151,7 +153,8 @@ export async function removeMember(pool: Pool, user: User, memberId: string) {
       [memberId, workspace, user.id],
     );
     const unassigned = await unassignRemovedMember(client, workspace, memberId, user.id);
-    return { user_id: memberId, removed: true, unassigned_conversations: unassigned };
+    const cancelled = await cancelRemovedMemberReminders(client, workspace, memberId);
+    return { user_id: memberId, removed: true, unassigned_conversations: unassigned, cancelled_reminders: cancelled };
   });
 }
 
