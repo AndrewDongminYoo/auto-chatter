@@ -1,4 +1,5 @@
 import { contactDetails } from "./contact-details.ts";
+import { exportContactCsv } from "./contact-csv.ts";
 import { queueManualReply, listManualReplies, resolveManualReply, readManualReplyStatus } from "./manual-replies.ts";
 import { inboxHandoff, saveInboxHandoff } from "./inbox-handoff.ts";
 import { listAssignees, saveConversationState } from "./inbox-conversations.ts";
@@ -371,6 +372,18 @@ export async function appApi(
         return json(await setInbox(pool, user, inbox[1]!, await readJson(request)));
       if (inbox?.[2] && request.method === "GET")
         return json(await inboxMessages(pool, user, inbox[1]!, inbox[2], url.searchParams));
+      if (url.pathname === "/api/contacts/export.csv" && request.method === "GET") {
+        if (url.searchParams.size) throw new ApiError(400, "invalid_contact_export_request");
+        const exported = await exportContactCsv(pool, user);
+        return new Response(exported.body, {
+          headers: {
+            "Content-Type": "text/csv; charset=utf-8",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": `attachment; filename="auto-chatter-contacts-v1-${exported.exportedAt.slice(0, 10)}.csv"`,
+          },
+        });
+      }
       if (url.pathname === "/api/contacts" && request.method === "GET")
         return json(await listContacts(pool, user, url.searchParams));
       if (url.pathname === "/api/contact-fields" && request.method === "GET")

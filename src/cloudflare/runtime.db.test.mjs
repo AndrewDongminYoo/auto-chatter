@@ -838,6 +838,22 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.equal(exportBody.tables.instagram_contact_field_values[0].value, 0);
     assert.ok(exportBody.tables.instagram_connections.length > 0);
     assert.ok(exportBody.tables.instagram_connections.every((row) => !("access_token_encrypted" in row)));
+    const csvExport = await runtime.dispatchFetch("https://app.test/api/contacts/export.csv", { headers });
+    assert.equal(csvExport.status, 200);
+    assert.equal(csvExport.headers.get("content-type"), "text/csv; charset=utf-8");
+    const csvBytes = Buffer.from(await csvExport.arrayBuffer());
+    assert.equal(csvBytes.subarray(0, 3).toString("hex"), "efbbbf");
+    assert.ok(csvBytes.toString().includes("'sender-1"));
+    assert.doesNotMatch(csvBytes.toString(), /private comment|access_token_encrypted/);
+    assert.equal(
+      (await runtime.dispatchFetch("https://app.test/api/contacts/export.csv?tag=lead", { headers })).status,
+      400,
+    );
+    await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [user]);
+    const deniedCsv = await runtime.dispatchFetch("https://app.test/api/contacts/export.csv", { headers });
+    assert.equal(deniedCsv.status, 403);
+    assert.equal(deniedCsv.headers.has("content-disposition"), false);
+    await pool.query("UPDATE workspace_members SET role='owner' WHERE user_id=$1", [user]);
     const foreignField = await runtime.dispatchFetch(valuePath, {
       method: "PUT",
       headers: { ...headers, cookie: "__Host-ac-access=foreign" },

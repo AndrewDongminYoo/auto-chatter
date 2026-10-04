@@ -940,6 +940,7 @@ select:disabled {
 .label-option input {
   margin: 0;
 }
+.contacts-heading-actions,
 .inbox-heading-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1778,4 +1779,11 @@ section {
   font-size: 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+#contacts-export-format summary {
+  cursor: pointer;
+  min-height: 44px;
+  padding: 8px 0;
+  color: var(--color-brand);
 }
