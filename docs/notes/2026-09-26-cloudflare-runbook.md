@@ -352,7 +352,7 @@ public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-10-0
 Cloudflare GraphQL 분석 API(`workersInvocationsAdaptive`)로 확인한 결과, 2026-10-03 14:30Z부터 24시간 동안 호출 1,585번 가운데 837번이 `exceededResources`로 끝났고, 정상 종료된 748번의 CPU 중앙값도 17ms였습니다. 호출의 대부분은 매분 실행하는 cron입니다.
 시간대별 CPU 중앙값은 2026-10-02 09:57Z 배포(`3174fdde`, `main` `2e45865`) 직후 3.2ms에서 21.7ms로 올랐습니다. 그 배포에 들어간 PR #114·#116으로 cron 단계와 단계별 기록이 늘어, 빈 로컬 DB에서 발송을 끈 cron 한 번의 쿼리가 직전 배포 커밋 `d23cef2`의 2개에서 18개가 됐습니다.
 발송이 꺼져 있어 잘못 보낸 것은 없었고, 끊긴 회차의 남은 단계는 다음 분의 실행이 이어서 처리했습니다.
-운영자가 계정을 Workers Paid로 전환했습니다(호출당 CPU 기본 30초, cron은 최대 15분, [가격 문서](https://developers.cloudflare.com/workers/platform/pricing/) 2026-10-04 확인). 결제 시각은 이 문서에 기록하지 않았습니다.
+운영자가 계정을 Workers Paid로 전환했습니다. HTTP 요청의 CPU 한도는 기본 30초(최대 5분)이고, cron은 주기가 1시간 미만이면 30초, 1시간 이상이면 15분이므로 매분 실행하는 이 cron의 한도는 30초입니다([한도 문서](https://developers.cloudflare.com/workers/platform/limits/#cpu-time)와 [가격 문서](https://developers.cloudflare.com/workers/platform/pricing/), 2026-10-05 확인). 결제 시각은 이 문서에 기록하지 않았습니다.
 분석 API에서 마지막 `exceededResources`는 2026-10-04 14:07Z였고, 14:10Z부터 확인한 15:30Z까지 강제 종료는 0번, CPU가 10ms를 넘는 정상 종료는 66번이었습니다.
 cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongminYoo/auto-chatter/issues/142)에서 다룹니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
