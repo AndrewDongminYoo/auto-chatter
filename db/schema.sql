@@ -535,7 +535,38 @@ CREATE TABLE IF NOT EXISTS instagram_inbox_conversation_labels (
   PRIMARY KEY(workspace_id,connection_id,recipient_id),
   FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id)
 );
--- Append-only audit of the label set: one row per version with the labels added and removed and the member.
+-- Keyword auto-labeling rules (#132). A rule belongs to the workspace (no connection scope) and adds one of the
+-- workspace's labels to an inbox conversation when a newly stored text DM matches its keywords. Rules are only
+-- archived, never deleted by the API; only delete_workspace_data removes them.
+-- True when a keyword list has no NULL and every keyword is 1 to 100 characters after trimming.
+CREATE OR REPLACE FUNCTION public.inbox_label_rule_keywords_valid(keywords text[])
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+SET search_path = pg_catalog, pg_temp
+AS $$ SELECT array_position(keywords,NULL) IS NULL
+  AND NOT EXISTS(SELECT 1 FROM unnest(keywords) AS keyword WHERE char_length(btrim(keyword)) NOT BETWEEN 1 AND 100) $$;
+CREATE TABLE IF NOT EXISTS instagram_inbox_label_rules (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  label_id uuid NOT NULL,
+  match_mode text NOT NULL CHECK(match_mode IN ('contains','exact')),
+  keywords text[] NOT NULL CHECK(cardinality(keywords) BETWEEN 1 AND 20 AND public.inbox_label_rule_keywords_valid(keywords)),
+  excluded_keywords text[] NOT NULL DEFAULT '{}'
+    CHECK(cardinality(excluded_keywords)<=20 AND public.inbox_label_rule_keywords_valid(excluded_keywords)),
+  archived boolean NOT NULL DEFAULT false,
+  version integer NOT NULL DEFAULT 1 CHECK(version>0),
+  created_by uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  updated_by uuid NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE(id,workspace_id),
+  FOREIGN KEY(label_id,workspace_id) REFERENCES instagram_inbox_labels(id,workspace_id)
+);
+CREATE INDEX IF NOT EXISTS instagram_inbox_label_rules_active_idx
+  ON instagram_inbox_label_rules(workspace_id,created_at,id) WHERE NOT archived;
+-- Append-only audit of the label set: one row per version with the labels added and removed, and either the member
+-- (actor_id) or, for a change made by a keyword rule, the rule (rule_id).
 CREATE TABLE IF NOT EXISTS instagram_inbox_label_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL,
@@ -544,13 +575,31 @@ CREATE TABLE IF NOT EXISTS instagram_inbox_label_events (
   version integer NOT NULL CHECK(version>0),
   added uuid[] NOT NULL CHECK(public.inbox_label_ids_valid(added)),
   removed uuid[] NOT NULL CHECK(public.inbox_label_ids_valid(removed)),
-  actor_id uuid NOT NULL,
+  actor_id uuid,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  rule_id uuid,
   UNIQUE(workspace_id,connection_id,recipient_id,version),
   FOREIGN KEY(workspace_id,connection_id,recipient_id)
     REFERENCES instagram_inbox_conversation_labels(workspace_id,connection_id,recipient_id),
   CHECK(cardinality(added)+cardinality(removed)>0 AND NOT added && removed)
 );
+-- A database created before #132 gets the rule column here; both constraints are added by name, so a replay
+-- finds them.
+ALTER TABLE instagram_inbox_label_events ADD COLUMN IF NOT EXISTS rule_id uuid;
+ALTER TABLE instagram_inbox_label_events ALTER COLUMN actor_id DROP NOT NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='instagram_inbox_label_events'::regclass AND conname='instagram_inbox_label_events_rule') THEN
+    ALTER TABLE instagram_inbox_label_events ADD CONSTRAINT instagram_inbox_label_events_rule
+      FOREIGN KEY(rule_id,workspace_id) REFERENCES instagram_inbox_label_rules(id,workspace_id);
+  END IF;
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='instagram_inbox_label_events'::regclass AND conname='instagram_inbox_label_events_source') THEN
+    ALTER TABLE instagram_inbox_label_events ADD CONSTRAINT instagram_inbox_label_events_source
+      CHECK((actor_id IS NULL)<>(rule_id IS NULL));
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS instagram_inbox_label_events_rule_idx
+  ON instagram_inbox_label_events(rule_id) WHERE rule_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS instagram_inbox_notes (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   workspace_id uuid NOT NULL,
@@ -1432,6 +1481,10 @@ BEGIN
   DELETE FROM public.instagram_inbox_reminders WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_inbox_reminders', affected);
+  -- Keyword rules follow the label events that name them and precede the labels they add.
+  DELETE FROM public.instagram_inbox_label_rules WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_inbox_label_rules', affected);
   DELETE FROM public.instagram_inbox_labels WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_inbox_labels', affected);

@@ -750,7 +750,7 @@ test("person deletion removes only that DM recipient's label sets, audit and not
   assert.equal(await noteCount(), 0);
 });
 
-test("migration 033 replays (with 034 after it), every deletion function removes label and note rows, and the export lists the tables", async () => {
+test("migration 033 replays (with 034 and 035 after it), every deletion function removes label and note rows, and the export lists the tables", async () => {
   const functions = async () =>
     (
       await pool.query(
@@ -769,11 +769,15 @@ test("migration 033 replays (with 034 after it), every deletion function removes
     assert.match(text, /DELETE FROM public\.instagram_inbox_notes\b/, proname);
   }
   const migration = await readFile(new URL("../../db/migrations/033_inbox_labels_notes.sql", import.meta.url), "utf8");
-  // Migration 034 redefines the same functions after 033, in the order deploy/migrate-multi-user.sql runs them.
-  const later = await readFile(new URL("../../db/migrations/034_inbox_reminders.sql", import.meta.url), "utf8");
+  // Migrations 034 and 035 redefine the same functions after 033, in the order deploy/migrate-multi-user.sql runs them.
+  const later = await Promise.all(
+    ["034_inbox_reminders.sql", "035_inbox_label_rules.sql"].map((file) =>
+      readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8"),
+    ),
+  );
   for (let run = 0; run < 2; run++) {
     await pool.query(migration);
-    await pool.query(later);
+    for (const sql of later) await pool.query(sql);
   }
   assert.deepEqual(await functions(), current);
   for (const table of [

@@ -1,5 +1,7 @@
 import type { PoolClient } from "pg";
 import type { InstagramMessage } from "./message-events.ts";
+import { matchesCommentRule } from "./comment-rule.ts";
+import { CONVERSATION_LABEL_LIMIT } from "../app/inbox-labels.ts";
 
 // Serializes the state changes of one inbox conversation (connection and DM recipient) for the rest of the
 // transaction. A row lock cannot do this alone: the first close inserts the state row, which a concurrent
@@ -99,5 +101,132 @@ export async function storeInboxMessage(client: PoolClient, message: InstagramMe
        SELECT $1,$2,$3,version,'auto_reopen','closed','open',assignee_user_id,assignee_user_id,NULL FROM reopened`,
       [row.workspace_id, row.connection_id, message.senderId],
     );
+    // A button postback is never matched against keyword rules; only a typed DM is.
+    if (!message.confirmationReplyId)
+      await applyLabelRules(client, row.workspace_id, row.connection_id, message.senderId, message.text);
   }
+}
+
+type LabelRule = {
+  id: string;
+  label_id: string;
+  match_mode: "contains" | "exact";
+  keywords: string[];
+  excluded_keywords: string[];
+};
+
+// The labels the matching rules add, in rule order: only active labels that the conversation does not have and that
+// no member ever removed from it, and only as many as fit in the set.
+function labelsToAdd(
+  candidates: readonly string[],
+  current: readonly string[],
+  active: readonly string[],
+  removed: readonly string[],
+): string[] {
+  const room = CONVERSATION_LABEL_LIMIT - current.length;
+  if (room <= 0) return [];
+  return candidates
+    .filter((id) => active.includes(id) && !current.includes(id) && !removed.includes(id))
+    .slice(0, room);
+}
+
+// Keyword label rules (#132), for a text DM this ingestion stored. The caller holds the connection FOR SHARE and the
+// conversation lock, and nothing here locks a rule or the workspace, so a rule write never queues ingestion.
+// A rule must never make ingestion throw, because that would roll back the stored DM and the confirmations of the
+// same batch: every label that would make the write fail (archived, already on the conversation, over the set limit)
+// is skipped, and so is a label that a member removed from this conversation, which no rule adds back. A sender ID
+// that the label tables cannot store (more than 40 digits) skips the rules altogether. One DM writes at most one
+// label-set version and one audit row, attributed to the first matching rule by (created_at, id), even when that
+// rule's own label was skipped. Labelling sends nothing, so paused and handed-off contacts are labelled too.
+async function applyLabelRules(
+  client: PoolClient,
+  workspace: string,
+  connection: string,
+  recipient: string,
+  text: string,
+): Promise<void> {
+  // The recipient_id CHECK of the label tables would raise, and the stored DM would roll back with it.
+  if (!/^[0-9]{1,40}$/.test(recipient)) return;
+  // Read without a lock: a rule change that is not committed yet applies from the next DM.
+  const rules = (
+    await client.query<LabelRule>(
+      `SELECT id::text,label_id::text,match_mode,keywords,excluded_keywords FROM instagram_inbox_label_rules
+       WHERE workspace_id=$1 AND NOT archived ORDER BY created_at,id`,
+      [workspace],
+    )
+  ).rows;
+  // The labels of the matching rules in rule order, and the first matching rule, which the audit row names.
+  const candidates: string[] = [];
+  let firstRule: string | undefined;
+  for (const rule of rules)
+    if (matchesCommentRule(text, { keyword: "", ...rule })) {
+      firstRule ??= rule.id;
+      if (!candidates.includes(rule.label_id)) candidates.push(rule.label_id);
+    }
+  if (!firstRule) return;
+  const conversation = [workspace, connection, recipient];
+  // Only a member's removal counts (actor_id set); a rule never removes a label.
+  const removedByMember = async () =>
+    (
+      await client.query<{ id: string }>(
+        `SELECT DISTINCT removed.id::text FROM instagram_inbox_label_events e, unnest(e.removed) AS removed(id)
+         WHERE e.workspace_id=$1 AND e.connection_id=$2 AND e.recipient_id=$3 AND e.actor_id IS NOT NULL
+           AND removed.id=ANY($4::uuid[])`,
+        [...conversation, candidates],
+      )
+    ).rows.map((row) => row.id);
+  const activeLabels = async (lock: string) =>
+    (
+      await client.query<{ id: string }>(
+        `SELECT id::text FROM instagram_inbox_labels WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND NOT archived
+         ORDER BY id ${lock}`,
+        [workspace, candidates],
+      )
+    ).rows.map((row) => row.id);
+  // Decide before writing anything, so a DM whose labels are all skipped leaves no version 0 row behind. The labels
+  // are locked FOR SHARE here already, so no archive commits between this decision and the write; a label whose
+  // archive was not committed yet is read again once the lock is granted and is skipped. The set and the member
+  // removals cannot change either, because every writer of them takes the conversation lock this ingestion holds.
+  const existing = await client.query<{ label_ids: string[] }>(
+    `SELECT label_ids::text[] AS label_ids FROM instagram_inbox_conversation_labels
+     WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3`,
+    conversation,
+  );
+  if (
+    !labelsToAdd(
+      candidates,
+      existing.rows[0]?.label_ids ?? [],
+      await activeLabels("FOR SHARE"),
+      await removedByMember(),
+    ).length
+  )
+    return;
+  // Then the manual path's order: the version 0 placeholder (the same as no row) gives concurrent writers a row to
+  // queue on, the label-set row FOR UPDATE, and the labels FOR SHARE by ID, which this transaction already holds.
+  await client.query(
+    `INSERT INTO instagram_inbox_conversation_labels(workspace_id,connection_id,recipient_id) VALUES($1,$2,$3)
+     ON CONFLICT(workspace_id,connection_id,recipient_id) DO NOTHING`,
+    conversation,
+  );
+  const current = (
+    await client.query<{ label_ids: string[] }>(
+      `SELECT label_ids::text[] AS label_ids FROM instagram_inbox_conversation_labels
+       WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 FOR UPDATE`,
+      conversation,
+    )
+  ).rows[0]!.label_ids;
+  const added = labelsToAdd(candidates, current, await activeLabels("FOR SHARE"), await removedByMember());
+  // The same inputs under the same locks as the decision above, so this is never empty.
+  if (!added.length) return;
+  const saved = await client.query<{ version: number }>(
+    `UPDATE instagram_inbox_conversation_labels SET label_ids=label_ids||$4::uuid[],version=version+1,updated_by=NULL,
+       updated_at=clock_timestamp()
+     WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 RETURNING version`,
+    [...conversation, added],
+  );
+  await client.query(
+    `INSERT INTO instagram_inbox_label_events(workspace_id,connection_id,recipient_id,version,added,removed,actor_id,rule_id)
+     VALUES($1,$2,$3,$4,$5::uuid[],'{}',NULL,$6)`,
+    [...conversation, saved.rows[0]!.version, added, firstRule],
+  );
 }

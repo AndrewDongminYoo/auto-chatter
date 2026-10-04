@@ -14,6 +14,12 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     labels = [],
     labelsRequest = 0,
     labelsBusy = false,
+    // The workspace's keyword label rules (admins only), archived ones included, as GET /api/inbox/label-rules lists
+    // them, and the rule the form is editing ({ id, version }), or null while it adds a new rule.
+    rules = [],
+    rulesRequest = 0,
+    rulesBusy = false,
+    ruleEditing = null,
     // Counts applied read marks, so a list response can tell which marks landed after its request started.
     readSeq = 0,
     expiryTimer,
@@ -155,6 +161,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       labelFilterOptions();
       labelControls();
       labelAdmin();
+      ruleAdmin();
     } catch (error) {
       if (epoch === session && request === labelsRequest) byId("inbox-labels-status").textContent = error.message;
     }
@@ -688,8 +695,9 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       if (epoch !== session) return;
       byId("inbox-labels-status").textContent = message;
       await loadLabels();
-      // List rows carry label names, so a rename or an archive shows on the next list.
+      // List rows and rules carry label names, so a rename or an archive shows on the next load.
       void loadList();
+      void loadRules();
     } catch (error) {
       if (epoch === session) byId("inbox-labels-status").textContent = error.message;
     } finally {
@@ -698,6 +706,206 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         for (const button of section.querySelectorAll("button")) button.disabled = false;
       }
     }
+  }
+
+  const ruleModes = { contains: "키워드 포함", exact: "DM 전체가 키워드와 같음" };
+  const ruleWords = (value) =>
+    value
+      .split(/[,\n]/)
+      .map((word) => word.trim())
+      .filter(Boolean);
+
+  // The server counts code points like PostgreSQL char_length(), after trimming each keyword.
+  function checkRuleWords(input) {
+    const words = ruleWords(input.value);
+    input.setCustomValidity(
+      input.required && !words.length
+        ? "키워드를 하나 이상 입력해 주세요."
+        : words.length > 20
+          ? "키워드는 최대 20개까지 입력할 수 있습니다."
+          : words.some((word) => [...word].length > 100)
+            ? "키워드는 각각 100자까지 입력할 수 있습니다."
+            : "",
+    );
+  }
+
+  // Only admins read the rules; an agent's request would be refused, so it is never sent.
+  async function loadRules() {
+    if (!isAdmin()) return ruleAdmin();
+    const session = epoch,
+      request = ++rulesRequest;
+    try {
+      const result = await api("/api/inbox/label-rules");
+      if (epoch !== session || request !== rulesRequest) return;
+      rules = result.rules;
+      ruleAdmin();
+    } catch (error) {
+      if (epoch === session && request === rulesRequest) byId("inbox-label-rules-status").textContent = error.message;
+    }
+  }
+
+  // A rule can only be written with an active label, so the form offers active labels only.
+  function ruleLabelOptions() {
+    const select = byId("inbox-label-rule-form").elements.label_id,
+      previous = select.value;
+    const active = labels.filter((label) => !label.archived);
+    select.replaceChildren(
+      ...(active.length ? [] : [new Option("먼저 인박스 라벨을 추가해 주세요", "")]),
+      ...active.map((label) => new Option(label.name, label.id)),
+    );
+    if (active.some((label) => label.id === previous)) select.value = previous;
+  }
+
+  function ruleForm() {
+    const form = byId("inbox-label-rule-form");
+    form.classList.toggle("editing", Boolean(ruleEditing));
+    byId("inbox-label-rule-save").textContent = ruleEditing ? "규칙 저장" : "규칙 추가";
+    byId("inbox-label-rule-cancel").hidden = !ruleEditing;
+    const noLabels = !labels.some((label) => !label.archived);
+    for (const control of form.elements) control.disabled = rulesBusy || (noLabels && control.type !== "button");
+  }
+
+  // Values set from code fire no input event, so the keyword checks are run again by hand.
+  function checkRuleForm() {
+    const form = byId("inbox-label-rule-form");
+    for (const name of ["keywords", "excluded_keywords"]) checkRuleWords(form.elements[name]);
+  }
+
+  function stopRuleEdit() {
+    ruleEditing = null;
+    byId("inbox-label-rule-form").reset();
+    for (const name of ["keywords", "excluded_keywords"])
+      byId("inbox-label-rule-form").elements[name].setCustomValidity("");
+    ruleLabelOptions();
+    ruleForm();
+  }
+
+  function editRule(rule) {
+    const form = byId("inbox-label-rule-form");
+    ruleEditing = { id: rule.id, version: rule.version };
+    ruleLabelOptions();
+    form.elements.label_id.value = rule.label.archived ? "" : rule.label.id;
+    form.elements.match_mode.value = rule.match_mode;
+    form.elements.keywords.value = rule.keywords.join(", ");
+    form.elements.excluded_keywords.value = rule.excluded_keywords.join(", ");
+    checkRuleForm();
+    ruleForm();
+    byId("inbox-label-rules-status").textContent = rule.label.archived
+      ? "이 규칙의 라벨은 보관되어 있습니다. 붙일 라벨을 다시 선택한 뒤 저장해 주세요."
+      : "규칙을 수정하고 있습니다.";
+    form.elements.label_id.focus();
+  }
+
+  function ruleAdmin() {
+    byId("inbox-label-rules-section").hidden = !isAdmin();
+    if (!isAdmin()) return;
+    const active = rules.filter((rule) => !rule.archived);
+    byId("inbox-label-rule-count").textContent = `${active.length} / 50`;
+    if (ruleEditing && !active.some((rule) => rule.id === ruleEditing.id)) stopRuleEdit();
+    ruleLabelOptions();
+    ruleForm();
+    const list = byId("inbox-label-rule-list");
+    if (!active.length) return list.replaceChildren(node("p", "아직 자동 라벨 규칙이 없습니다.", "hint"));
+    list.replaceChildren(
+      ...active.map((rule) => {
+        const item = node("div", "", "item");
+        const badges = node("div", "", "badges");
+        badges.append(
+          node("span", rule.label.name, `label-chip${rule.label.archived ? " archived" : ""}`),
+          ...(rule.label.archived ? [node("span", "보관된 라벨", "badge warning")] : []),
+          node("span", ruleModes[rule.match_mode] ?? rule.match_mode, "badge"),
+        );
+        const edit = node("button", "수정", "secondary");
+        edit.type = "button";
+        edit.setAttribute("aria-label", `${rule.label.name} 라벨 규칙 수정`);
+        edit.addEventListener("click", () => editRule(rule));
+        const archive = node("button", "보관", "secondary danger");
+        archive.type = "button";
+        archive.setAttribute("aria-label", `${rule.label.name} 라벨 규칙 보관`);
+        archive.addEventListener("click", () => {
+          if (
+            !confirm(
+              `"${rule.label.name}" 라벨 규칙을 보관할까요? 다음 DM부터 이 규칙으로 라벨을 붙이지 않고, 이미 붙은 라벨은 그대로 둡니다. 보관은 되돌릴 수 없습니다.`,
+            )
+          )
+            return;
+          void manageRules(
+            async () => {
+              await api(`/api/inbox/label-rules/${rule.id}`, "DELETE");
+              return "라벨 규칙을 보관했습니다.";
+            },
+            () => {
+              if (ruleEditing?.id === rule.id) stopRuleEdit();
+            },
+          );
+        });
+        item.append(badges, edit, archive, node("p", `키워드: ${rule.keywords.join(", ")}`, "label-rule-terms"));
+        if (rule.excluded_keywords.length)
+          item.append(node("p", `제외: ${rule.excluded_keywords.join(", ")}`, "hint label-rule-terms"));
+        if (rule.label.archived)
+          item.append(
+            node("p", "라벨이 보관되어 이 규칙은 라벨을 붙이지 않습니다. 다른 라벨로 바꾸거나 보관해 주세요.", "hint"),
+          );
+        return item;
+      }),
+    );
+  }
+
+  // `done` touches the form, so it runs only after the epoch check: a request from an earlier session must not
+  // clear what the current session is typing.
+  async function manageRules(task, done) {
+    if (rulesBusy) return;
+    const session = epoch,
+      section = byId("inbox-label-rules-section");
+    rulesBusy = true;
+    for (const button of section.querySelectorAll("button")) button.disabled = true;
+    ruleForm();
+    byId("inbox-label-rules-status").textContent = "처리하고 있습니다…";
+    try {
+      const message = await task();
+      if (epoch !== session) return;
+      done?.();
+      byId("inbox-label-rules-status").textContent = message;
+      await loadRules();
+    } catch (error) {
+      if (epoch !== session) return;
+      // A refusal can come from a label archived or a rule changed elsewhere, so both lists are read again.
+      if (error.status === 404 || error.status === 409) {
+        await loadLabels();
+        await loadRules();
+        if (epoch !== session) return;
+        // A rule changed elsewhere first opens again with its current content, so a save never overwrites it.
+        const current = rules.find((rule) => rule.id === ruleEditing?.id && !rule.archived);
+        if (error.code === "label_rule_conflict") current ? editRule(current) : stopRuleEdit();
+      }
+      byId("inbox-label-rules-status").textContent = error.message;
+    } finally {
+      if (epoch === session) {
+        rulesBusy = false;
+        for (const button of section.querySelectorAll("button")) button.disabled = false;
+        ruleForm();
+      }
+    }
+  }
+
+  function saveRule(form) {
+    checkRuleForm();
+    if (rulesBusy || !form.reportValidity()) return;
+    const input = {
+      label_id: form.elements.label_id.value,
+      match_mode: form.elements.match_mode.value,
+      keywords: ruleWords(form.elements.keywords.value),
+      excluded_keywords: ruleWords(form.elements.excluded_keywords.value),
+    };
+    const editing = ruleEditing;
+    void manageRules(async () => {
+      if (!editing) {
+        await api("/api/inbox/label-rules", "POST", input);
+        return "라벨 규칙을 추가했습니다. 다음에 받는 DM부터 적용합니다.";
+      }
+      await api(`/api/inbox/label-rules/${editing.id}`, "PATCH", { ...input, expected_version: editing.version });
+      return "라벨 규칙을 저장했습니다. 다음에 받는 DM부터 적용합니다.";
+    }, stopRuleEdit);
   }
 
   // A list row and a read response each count the messages above the read position they were taken against, and
@@ -1275,11 +1483,18 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     byId("inbox-label-filter").replaceChildren(new Option("전체", ""));
     byId("inbox-labels-section").hidden = true;
     byId("inbox-label-form").reset();
+    rules = [];
+    rulesBusy = false;
+    ruleEditing = null;
+    byId("inbox-label-rules-section").hidden = true;
+    byId("inbox-label-rule-form").reset();
+    byId("inbox-label-rule-form").classList.remove("editing");
     byId("inbox-label-options").dataset.key = "";
     for (const id of [
       "inbox-conversations",
       "inbox-messages",
       "inbox-label-list",
+      "inbox-label-rule-list",
       "inbox-label-options",
       "inbox-note-list",
     ])
@@ -1290,6 +1505,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       "inbox-reply-status",
       "inbox-state-status",
       "inbox-labels-status",
+      "inbox-label-rules-status",
     ])
       byId(id).textContent = "";
     byId("inbox-reply-text").value = "";
@@ -1409,6 +1625,16 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       return "라벨을 추가했습니다.";
     });
   });
+  for (const name of ["keywords", "excluded_keywords"])
+    byId("inbox-label-rule-form").elements[name].addEventListener("input", (event) => checkRuleWords(event.target));
+  byId("inbox-label-rule-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveRule(event.currentTarget);
+  });
+  byId("inbox-label-rule-cancel").addEventListener("click", () => {
+    stopRuleEdit();
+    byId("inbox-label-rules-status").textContent = "";
+  });
   byId("inbox-reply-text").addEventListener("input", (event) => {
     if (selected && !selected.operation && !selected.busy) {
       selected.draft = event.target.value;
@@ -1505,9 +1731,11 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         select.append(new Option(account.username || account.account_id, account.id));
       if (getConnections().some((account) => account.id === previous)) select.value = previous;
       byId("inbox-labels-section").hidden = !isAdmin();
+      byId("inbox-label-rules-section").hidden = !isAdmin();
       clearInterval(reminderTimer);
       reminderTimer = setInterval(tickReminders, 60000);
       void loadLabels();
+      void loadRules();
       void loadList();
       if (isAdmin()) {
         const session = epoch;

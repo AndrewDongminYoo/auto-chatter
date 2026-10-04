@@ -1141,11 +1141,14 @@ test("migration 031 replays and, with the later migrations, leaves the deletion 
   assert.equal(current.length, 3);
   for (const { proname, body } of current) assert.match(body, /webhook_deliveries/, proname);
   const migration = await readFile(new URL("../../db/migrations/031_flow_webhooks.sql", import.meta.url), "utf8");
-  // Migrations 032 to 034 redefine the same functions after 031, in the order deploy/migrate-multi-user.sql runs them.
+  // Migrations 032 to 035 redefine the same functions after 031, in the order deploy/migrate-multi-user.sql runs them.
   const later = await Promise.all(
-    ["032_inbox_read_state.sql", "033_inbox_labels_notes.sql", "034_inbox_reminders.sql"].map((file) =>
-      readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8"),
-    ),
+    [
+      "032_inbox_read_state.sql",
+      "033_inbox_labels_notes.sql",
+      "034_inbox_reminders.sql",
+      "035_inbox_label_rules.sql",
+    ].map((file) => readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8")),
   );
   await deliveredPeople();
   for (let run = 0; run < 2; run++) {

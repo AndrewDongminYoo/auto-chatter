@@ -275,6 +275,13 @@ const errors = {
   label_not_found: "라벨을 찾을 수 없습니다. 인박스를 새로고침해 주세요.",
   label_conflict: "다른 요청으로 이 대화의 라벨이 먼저 바뀌었습니다. 최신 라벨을 확인해 주세요.",
   invalid_label_request: "라벨 요청을 확인해 주세요. 대화에는 라벨을 최대 10개까지 붙일 수 있습니다.",
+  invalid_label_rule: "붙일 라벨과 맞추는 방식을 확인해 주세요.",
+  invalid_label_rule_keywords: "키워드는 1–20개, 제외 키워드는 20개까지 입력하고 각각 100자를 넘지 않게 해 주세요.",
+  label_rule_limit_reached: "사용 중인 라벨 규칙은 최대 50개입니다. 쓰지 않는 규칙을 보관해 주세요.",
+  label_rule_archived: "보관한 라벨 규칙은 수정할 수 없습니다.",
+  label_rule_not_found: "라벨 규칙을 찾을 수 없습니다. 목록을 다시 불러왔습니다.",
+  label_rule_conflict:
+    "다른 화면에서 이 규칙이 먼저 바뀌어 최신 내용을 다시 불러왔습니다. 확인한 뒤 다시 저장해 주세요.",
   invalid_note: "메모는 1–2,000자로 입력해 주세요.",
   invalid_note_request: "메모 요청을 확인해 주세요. 새로고침한 뒤 다시 시도해 주세요.",
   conversation_not_found: "대화를 찾을 수 없습니다. 삭제되었을 수 있으니 인박스를 새로고침해 주세요.",

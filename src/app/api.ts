@@ -10,6 +10,7 @@ import {
   saveConversationLabels,
 } from "./inbox-labels.ts";
 import { addInboxNote, listInboxNotes } from "./inbox-notes.ts";
+import { archiveLabelRule, createLabelRule, listLabelRules, updateLabelRule } from "./inbox-label-rules.ts";
 import { changeReminder, closeReminder, createReminder, listReminders } from "./inbox-reminders.ts";
 import type { Pool } from "pg";
 import { ApiError, AuthClient, json, readJson, requireSameOrigin, type AuthEnv, type User } from "./auth.ts";
@@ -216,6 +217,17 @@ export async function appApi(
       if (inboxLabel && request.method === "PATCH")
         return json(await renameInboxLabel(pool, user, inboxLabel[1]!, await readJson(request)));
       if (inboxLabel && request.method === "DELETE") return json(await archiveInboxLabel(pool, user, inboxLabel[1]!));
+      if (url.pathname === "/api/inbox/label-rules" && request.method === "GET")
+        return json({ rules: await listLabelRules(pool, user) });
+      if (url.pathname === "/api/inbox/label-rules" && request.method === "POST")
+        return json(await createLabelRule(pool, user, await readJson(request)), 201);
+      const labelRule = /^\/api\/inbox\/label-rules\/([a-f0-9-]+)$/.exec(url.pathname);
+      if (labelRule && request.method === "PATCH") {
+        const saved = await updateLabelRule(pool, user, labelRule[1]!, await readJson(request));
+        // A stale expected_version answers with the current rule, like the label set.
+        return saved.conflict ? json({ error: "label_rule_conflict", rule: saved.rule }, 409) : json(saved.rule);
+      }
+      if (labelRule && request.method === "DELETE") return json(await archiveLabelRule(pool, user, labelRule[1]!));
       const conversationLabels = /^\/api\/inbox\/conversations\/([a-f0-9-]+)\/(\d+)\/labels$/.exec(url.pathname);
       if (conversationLabels && request.method === "PUT") {
         const saved = await saveConversationLabels(

@@ -112,15 +112,30 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
       user,
     ])
   ).rows[0].id;
+  // A keyword rule added a second label at version 2; its audit row names the rule and no member.
+  const ruleLabel = (
+    await pool.query("INSERT INTO instagram_inbox_labels(workspace_id,name,created_by) VALUES($1,$2,$3) RETURNING id", [
+      workspace,
+      `refund ${account}`,
+      user,
+    ])
+  ).rows[0].id;
+  const labelRule = (
+    await pool.query(
+      `INSERT INTO instagram_inbox_label_rules(workspace_id,label_id,match_mode,keywords,created_by,updated_by)
+       VALUES($1,$2,'contains',ARRAY['refund'],$3,$3) RETURNING id`,
+      [workspace, ruleLabel, user],
+    )
+  ).rows[0].id;
   await pool.query(
     `INSERT INTO instagram_inbox_conversation_labels(workspace_id,connection_id,recipient_id,label_ids,version,updated_by)
-     VALUES($1,$2,'900',ARRAY[$3::uuid],1,$4)`,
-    [workspace, connection, label, user],
+     VALUES($1,$2,'900',ARRAY[$3::uuid,$4::uuid],2,NULL)`,
+    [workspace, connection, label, ruleLabel],
   );
   await pool.query(
-    `INSERT INTO instagram_inbox_label_events(workspace_id,connection_id,recipient_id,version,added,removed,actor_id)
-     VALUES($1,$2,'900',1,ARRAY[$3::uuid],'{}',$4)`,
-    [workspace, connection, label, user],
+    `INSERT INTO instagram_inbox_label_events(workspace_id,connection_id,recipient_id,version,added,removed,actor_id,rule_id)
+     VALUES($1,$2,'900',1,ARRAY[$3::uuid],'{}',$4,NULL),($1,$2,'900',2,ARRAY[$5::uuid],'{}',NULL,$6)`,
+    [workspace, connection, label, user, ruleLabel, labelRule],
   );
   await pool.query(
     "INSERT INTO instagram_inbox_notes(workspace_id,connection_id,recipient_id,author_id,body) VALUES($1,$2,'900',$3,'note text')",

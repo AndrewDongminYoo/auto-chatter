@@ -29,6 +29,7 @@ export const EXPORTED_TABLES: Record<string, { scope: "self" | "workspace" | "co
   instagram_inbox_conversation_events: { scope: "workspace" },
   instagram_inbox_read_state: { scope: "workspace" },
   instagram_inbox_labels: { scope: "workspace" },
+  instagram_inbox_label_rules: { scope: "workspace" },
   instagram_inbox_conversation_labels: { scope: "workspace" },
   instagram_inbox_label_events: { scope: "workspace" },
   // Internal notes are exported as their own table, never mixed into the DM messages.
