@@ -27,6 +27,7 @@ BEGIN
       OR EXISTS(SELECT 1 FROM instagram_contact_segments WHERE workspace_id=previous_workspace)
       OR EXISTS(SELECT 1 FROM instagram_inbox_labels WHERE workspace_id=previous_workspace)
       OR EXISTS(SELECT 1 FROM instagram_inbox_label_rules WHERE workspace_id=previous_workspace)
+      OR EXISTS(SELECT 1 FROM webhook_endpoints WHERE workspace_id=previous_workspace)
       OR EXISTS(SELECT 1 FROM workspace_invites WHERE workspace_id=previous_workspace)
       OR EXISTS(SELECT 1 FROM instagram_oauth_states WHERE workspace_id=previous_workspace AND consumed_at IS NULL AND expires_at>now()) THEN
       RAISE EXCEPTION 'Existing workspace is not empty or has an active OAuth flow';

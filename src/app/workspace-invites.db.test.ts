@@ -19,7 +19,11 @@ const stranger = { id: "44444444-4444-4444-8444-444444444444", email: "stranger@
 const outsider = { id: "55555555-5555-4555-8555-555555555555", email: "outsider@example.test" };
 const workspaceId = "66666666-6666-4666-8666-666666666666";
 const otherWorkspaceId = "77777777-7777-4777-8777-777777777777";
-const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "test" };
+const apiEnv = {
+  SUPABASE_URL: "https://project.supabase.co",
+  SUPABASE_PUBLISHABLE_KEY: "test",
+  TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 5).toString("base64"),
+};
 
 type Actor = { id: string; email: string };
 
@@ -213,6 +217,42 @@ test("a sole owner whose workspace holds only an inbox label is not moved by acc
   );
 });
 
+for (const active of [true, false]) {
+  test(`a sole owner whose workspace holds only an ${active ? "active" : "inactive"} webhook endpoint cannot leave it`, async () => {
+    const { id: inviteId, token } = await invite(stranger.email, "agent");
+    const { workspace_id: ownWorkspace } = await body<{ workspace_id: string }>(
+      await request(stranger, "POST", "/api/workspace"),
+    );
+    const created = await request(stranger, "POST", "/api/webhooks/endpoints", {
+      name: "kept endpoint",
+      url: "https://hooks.example.test/in",
+    });
+    assert.equal(created.status, 201);
+    const endpoint = await body<{ id: string }>(created);
+    if (!active)
+      assert.equal((await request(stranger, "POST", `/api/webhooks/endpoints/${endpoint.id}/disable`)).status, 200);
+
+    const refused = await accept(stranger, token);
+    assert.equal(refused.status, 409);
+    assert.equal((await body<{ error: string }>(refused)).error, "workspace_not_empty");
+    assert.deepEqual(
+      (await pool.query("SELECT workspace_id,role FROM workspace_members WHERE user_id=$1", [stranger.id])).rows,
+      [{ workspace_id: ownWorkspace, role: "owner" }],
+    );
+    assert.equal(
+      (await pool.query("SELECT accepted_at FROM workspace_invites WHERE id=$1", [inviteId])).rows[0].accepted_at,
+      null,
+    );
+    const listed = await request(stranger, "GET", "/api/webhooks/endpoints");
+    assert.equal(listed.status, 200);
+    const { endpoints } = await body<{ endpoints: { id: string; active: boolean; keys: unknown[] }[] }>(listed);
+    assert.equal(endpoints.length, 1);
+    assert.equal(endpoints[0]!.id, endpoint.id);
+    assert.equal(endpoints[0]!.active, active);
+    assert.equal(endpoints[0]!.keys.length, 1);
+  });
+}
+
 test("a removed member is refused on the next request and a role change applies at once", async () => {
   const { token } = await invite();
   assert.equal((await accept(invitee, token)).status, 200);
@@ -347,6 +387,7 @@ test("creations that resolved the old workspace before an acceptance moved the u
     ["/api/contact-fields", { name: "late field", type: "text" }],
     ["/api/contact-segments", { name: "late segment" }],
     ["/api/inbox/labels", { name: "late label" }],
+    ["/api/webhooks/endpoints", { name: "late endpoint", url: "https://hooks.example.test/in" }],
     // The membership recheck comes before the label lookup, so a rule is refused before its (absent) label is read.
     [
       "/api/inbox/label-rules",
@@ -377,6 +418,8 @@ test("creations that resolved the old workspace before an acceptance moved the u
       + (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1)
       + (SELECT count(*) FROM instagram_inbox_labels WHERE workspace_id=$1)
       + (SELECT count(*) FROM instagram_inbox_label_rules WHERE workspace_id=$1)
+      + (SELECT count(*) FROM webhook_endpoints WHERE workspace_id=$1)
+      + (SELECT count(*) FROM webhook_signing_keys WHERE workspace_id=$1)
       + (SELECT count(*) FROM workspace_invites WHERE workspace_id=$1) AS n`,
     [ownWorkspace],
   );
