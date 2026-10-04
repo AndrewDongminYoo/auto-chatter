@@ -23,6 +23,8 @@ let fieldNameDirty = false;
 let refreshPromise;
 let currentUserId;
 let currentRole;
+// The workspace time zone, which the inbox reminder editor shows its date and time in.
+let workspaceTimeZone;
 let pendingInvite = null;
 // Set when acceptPendingInvite reports an outcome, so the login notice does not overwrite it.
 let inviteNoticeShown = false;
@@ -148,6 +150,7 @@ function resetSession() {
   connections = [];
   currentUserId = undefined;
   currentRole = undefined;
+  workspaceTimeZone = undefined;
   byId("members-section").hidden = true;
   byId("time-zone-form").reset();
   timeZoneControls();
@@ -275,6 +278,15 @@ const errors = {
   invalid_note: "메모는 1–2,000자로 입력해 주세요.",
   invalid_note_request: "메모 요청을 확인해 주세요. 새로고침한 뒤 다시 시도해 주세요.",
   conversation_not_found: "대화를 찾을 수 없습니다. 삭제되었을 수 있으니 인박스를 새로고침해 주세요.",
+  invalid_reminder_due: "리마인더 날짜와 시각을 확인해 주세요.",
+  reminder_due_out_of_range: "리마인더는 지금부터 1분 뒤에서 90일 안으로 정해 주세요.",
+  invalid_reminder_note: "리마인더 메모는 200자까지 입력할 수 있습니다.",
+  invalid_reminder_request: "리마인더 요청을 확인해 주세요. 새로고침한 뒤 다시 시도해 주세요.",
+  reminder_exists: "이 대화에는 이미 내 리마인더가 있습니다. 기존 리마인더를 바꿔 주세요.",
+  reminder_conflict: "다른 화면에서 이 리마인더가 먼저 바뀌어 최신 내용을 다시 불러왔습니다.",
+  reminder_not_found: "리마인더를 찾을 수 없습니다. 삭제되었을 수 있으니 인박스를 새로고침해 주세요.",
+  reminder_not_pending: "이미 완료했거나 취소한 리마인더입니다.",
+  conversation_closed: "완료 처리한 대화에는 리마인더를 둘 수 없습니다. 대화를 다시 연 뒤 정해 주세요.",
   invalid_contact_field: "필드 이름은 1–60자이며 값 종류를 선택해 주세요.",
   invalid_field_value: "선택한 종류에 맞는 값을 입력해 주세요. 텍스트는 최대 1000자입니다.",
   invalid_field_condition: "추가 정보의 필드·조건·찾을 값을 확인해 주세요.",
@@ -363,6 +375,8 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
     error.code = result.error;
     // Publish, enable and test-run refusals list their problems (422).
     error.errors = result.errors;
+    // A reminder refusal for an existing or newer reminder carries that reminder (409).
+    error.reminder = result.reminder;
     throw error;
   }
   return result;
@@ -424,6 +438,8 @@ const deletedLabels = {
   instagram_inbox_conversation_labels: "대화별 라벨",
   instagram_inbox_label_events: "대화 라벨 변경 이력",
   instagram_inbox_notes: "내부 메모",
+  instagram_inbox_reminders: "리마인더",
+  instagram_inbox_reminder_events: "리마인더 변경 이력",
   instagram_manual_replies: "수동 답장",
   instagram_manual_reply_events: "수동 답장 감사 기록",
   instagram_contact_automation: "자동화 중지 상태",
@@ -978,6 +994,7 @@ async function loadWorkspace() {
   if (generation !== segmentsGeneration) return;
   const membership = await api("/api/workspace", "POST");
   currentRole = membership.role;
+  workspaceTimeZone = membership.time_zone ?? undefined;
   byId("time-zone-form").elements.time_zone.value = membership.time_zone ?? "";
   timeZoneControls();
   const operationsVisible = currentRole === "owner" || currentRole === "admin";
@@ -1564,6 +1581,10 @@ byId("time-zone-form").addEventListener("submit", (event) => {
   action(zoneForm.querySelector("button[type=submit]"), async () => {
     const saved = await api("/api/workspace/settings", "PUT", { time_zone: zoneForm.elements.time_zone.value.trim() });
     zoneForm.elements.time_zone.value = saved.time_zone;
+    const changed = saved.time_zone !== workspaceTimeZone;
+    workspaceTimeZone = saved.time_zone;
+    // Reminder due times on screen are wall-clock values in the previous zone.
+    if (changed) inbox.timeZoneChanged();
     notice(`시간대를 저장했습니다(${saved.time_zone}). 지금부터 정한 시각까지 기다리기 시작하는 실행에 적용됩니다.`);
   });
 });
@@ -2484,6 +2505,7 @@ const inbox = createInbox({
   getConnections: () => connections,
   getRole: () => currentRole,
   getUserId: () => currentUserId,
+  getTimeZone: () => workspaceTimeZone,
 });
 function resetInbox() {
   inbox.reset();

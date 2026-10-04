@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { membershipFor, roleAllows, workspaceFor, type WorkspaceRole } from "./settings.ts";
 import { lockConversation } from "../instagram/inbox.ts";
+import { cancelClosedConversationReminders } from "./inbox-reminders.ts";
 
 // Conversation status and assignment (#22). A conversation without a state row is open and unassigned at
 // version 0. Neither value changes the handoff or the automation pause; the two are independent.
@@ -202,6 +203,10 @@ async function apply(
        VALUES($1,$2,$3,$4,'manual',$5,$6,$7,$8,$9)`,
       [workspace, connection, recipient, version, current.status, status, current.assignee_user_id, assignee, user.id],
     );
+    // Closing cancels every member's pending reminder on the conversation under the conversation lock taken above,
+    // so a reminder write either committed before (and is cancelled here) or waits and then sees the closed status.
+    if (current.status === "open" && status === "closed")
+      await cancelClosedConversationReminders(client, workspace, connection, recipient);
   }
   return { conflict: false, state: await readConversationState(client, workspace, connection, recipient) };
 }

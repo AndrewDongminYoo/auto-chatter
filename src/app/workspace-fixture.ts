@@ -126,6 +126,19 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
     "INSERT INTO instagram_inbox_notes(workspace_id,connection_id,recipient_id,author_id,body) VALUES($1,$2,'900',$3,'note text')",
     [workspace, connection, user],
   );
+  // The seeded conversation is closed, so its reminder was cancelled by the close.
+  const reminder = (
+    await pool.query(
+      `INSERT INTO instagram_inbox_reminders(workspace_id,connection_id,recipient_id,creator_id,due_at,note,status,cancel_reason,version)
+       VALUES($1,$2,'900',$3,now()+interval '1 day','call back','cancelled','conversation_closed',2) RETURNING id`,
+      [workspace, connection, user],
+    )
+  ).rows[0].id;
+  await pool.query(
+    `INSERT INTO instagram_inbox_reminder_events(reminder_id,workspace_id,connection_id,recipient_id,version,kind,reason,due_at,note,actor_id)
+     VALUES($1,$2,$3,'900',2,'cancelled','conversation_closed',now()+interval '1 day','call back',NULL)`,
+    [reminder, workspace, connection],
+  );
   const manual = (
     await pool.query(
       `INSERT INTO instagram_manual_replies(workspace_id,connection_id,recipient_id,request_key,created_by,text,handoff_version,status)

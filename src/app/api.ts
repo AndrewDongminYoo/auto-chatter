@@ -10,6 +10,7 @@ import {
   saveConversationLabels,
 } from "./inbox-labels.ts";
 import { addInboxNote, listInboxNotes } from "./inbox-notes.ts";
+import { changeReminder, closeReminder, createReminder, listReminders } from "./inbox-reminders.ts";
 import type { Pool } from "pg";
 import { ApiError, AuthClient, json, readJson, requireSameOrigin, type AuthEnv, type User } from "./auth.ts";
 import { limitAuthRequest, type AuthRateLimitEnv } from "./auth-rate-limit.ts";
@@ -245,6 +246,37 @@ export async function appApi(
           ),
           201,
         );
+      const conversationReminders = /^\/api\/inbox\/conversations\/([a-f0-9-]+)\/(\d+)\/reminders$/.exec(url.pathname);
+      if (conversationReminders && request.method === "POST") {
+        const created = await createReminder(
+          pool,
+          user,
+          conversationReminders[1]!,
+          conversationReminders[2]!,
+          url.searchParams,
+          await readJson(request),
+        );
+        // A pending reminder of the caller already exists: answer with it, so the screen changes that one instead.
+        return created.conflict
+          ? json({ error: "reminder_exists", reminder: created.reminder }, 409)
+          : json(created.reminder, 201);
+      }
+      if (url.pathname === "/api/inbox/reminders" && request.method === "GET")
+        return json(await listReminders(pool, user, url.searchParams));
+      const reminder = /^\/api\/inbox\/reminders\/([a-f0-9-]+)(?:\/(complete|cancel))?$/.exec(url.pathname);
+      if (
+        reminder &&
+        ((!reminder[2] && request.method === "PATCH") || (reminder[2] !== undefined && request.method === "POST"))
+      ) {
+        const input = await readJson(request);
+        const saved = reminder[2]
+          ? await closeReminder(pool, user, reminder[1]!, reminder[2] as "complete" | "cancel", url.searchParams, input)
+          : await changeReminder(pool, user, reminder[1]!, url.searchParams, input);
+        // A stale expected_version answers with the current reminder, like the conversation state.
+        return saved.conflict
+          ? json({ error: "reminder_conflict", reminder: saved.reminder }, 409)
+          : json(saved.reminder);
+      }
       const conversationRead = /^\/api\/inbox\/conversations\/([a-f0-9-]+)\/(\d+)\/read$/.exec(url.pathname);
       if (conversationRead && request.method === "POST")
         return json(
