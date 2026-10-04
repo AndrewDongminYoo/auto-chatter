@@ -939,10 +939,22 @@ test("administrator ownership assignment refuses to leave a workspace holding in
       [own, mover],
     );
     await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
-    await client.query("TRUNCATE instagram_inbox_labels");
+    // A keyword label rule is workspace data on its own too; its label is skipped here (replica mode skips foreign
+    // key checks) so that the rule alone is left.
+    await client.query("TRUNCATE instagram_inbox_labels CASCADE");
+    await client.query("SET session_replication_role=replica");
+    await client.query(
+      `INSERT INTO instagram_inbox_label_rules(workspace_id,label_id,match_mode,keywords,created_by,updated_by)
+       VALUES($1,gen_random_uuid(),'contains','{kept}',$2,$2)`,
+      [own, mover],
+    );
+    await client.query("RESET session_replication_role");
+    await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
+    await client.query("TRUNCATE instagram_inbox_label_rules CASCADE");
     await client.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'kept','{}')", [own]);
     await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
   } finally {
+    await client.query("RESET session_replication_role");
     await client.query("DROP TABLE IF EXISTS pg_temp.verified_users");
     client.release();
   }

@@ -809,7 +809,7 @@ test("a reminder write and workspace deletion queue on the workspace row instead
   assert.deepEqual(await reminderRows(), []);
 });
 
-test("migration 034 replays, every deletion function removes reminders, and the export leaves the tables out", async () => {
+test("migration 034 replays (with 035 after it), every deletion function removes reminders, and the export leaves the tables out", async () => {
   const functions = async () =>
     (
       await pool.query(
@@ -827,8 +827,12 @@ test("migration 034 replays, every deletion function removes reminders, and the 
     assert.match(text, /DELETE FROM public\.instagram_inbox_reminders\b/, proname);
   }
   const migration = await readFile(new URL("../../db/migrations/034_inbox_reminders.sql", import.meta.url), "utf8");
-  await pool.query(migration);
-  await pool.query(migration);
+  // Migration 035 redefines delete_workspace_data after 034, in the order deploy/migrate-multi-user.sql runs them.
+  const later = await readFile(new URL("../../db/migrations/035_inbox_label_rules.sql", import.meta.url), "utf8");
+  for (let run = 0; run < 2; run++) {
+    await pool.query(migration);
+    await pool.query(later);
+  }
   assert.deepEqual(await functions(), current);
   // Reminders are private to their creator, so the admin export leaves both tables out.
   for (const table of ["instagram_inbox_reminders", "instagram_inbox_reminder_events"]) {
