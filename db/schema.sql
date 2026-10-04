@@ -563,6 +563,51 @@ CREATE TABLE IF NOT EXISTS instagram_inbox_notes (
 );
 CREATE INDEX IF NOT EXISTS instagram_inbox_notes_conversation_idx
   ON instagram_inbox_notes(workspace_id,connection_id,recipient_id,id);
+-- Inbox reminders (#23-C): a member's private reminder on an inbox conversation, shown only in the app (nothing is
+-- sent). A reminder is due while pending and due_at has passed, computed when read. Status changes are UPDATEs,
+-- because server roles have no DELETE; each change writes one append-only event. Closing the conversation and
+-- removing the member cancel pending reminders without an actor. Only the deletion functions remove these rows.
+CREATE TABLE IF NOT EXISTS instagram_inbox_reminders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  recipient_id text NOT NULL CHECK(recipient_id ~ '^[0-9]{1,40}$'),
+  creator_id uuid NOT NULL,
+  due_at timestamptz NOT NULL,
+  note text CHECK(note IS NULL OR length(btrim(note)) BETWEEN 1 AND 200),
+  status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','done','cancelled')),
+  cancel_reason text CHECK(cancel_reason IN ('manual','conversation_closed','member_removed')),
+  version integer NOT NULL DEFAULT 1 CHECK(version>0),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id),
+  CHECK((status='cancelled')=(cancel_reason IS NOT NULL))
+);
+-- At most one pending reminder per member and conversation; the inbox list joins on it for one row per conversation.
+CREATE UNIQUE INDEX IF NOT EXISTS instagram_inbox_reminders_pending_idx
+  ON instagram_inbox_reminders(workspace_id,connection_id,recipient_id,creator_id) WHERE status='pending';
+CREATE INDEX IF NOT EXISTS instagram_inbox_reminders_creator_due_idx
+  ON instagram_inbox_reminders(workspace_id,creator_id,due_at) WHERE status='pending';
+-- Append-only audit: one row per version with the resulting due time and note. A cancellation by closing the
+-- conversation or removing the member has no actor; every other change names the member.
+CREATE TABLE IF NOT EXISTS instagram_inbox_reminder_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  reminder_id uuid NOT NULL REFERENCES instagram_inbox_reminders(id),
+  workspace_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  recipient_id text NOT NULL,
+  version integer NOT NULL CHECK(version>0),
+  kind text NOT NULL CHECK(kind IN ('created','changed','completed','cancelled')),
+  reason text CHECK(reason IN ('manual','conversation_closed','member_removed')),
+  due_at timestamptz NOT NULL,
+  note text,
+  actor_id uuid,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE(reminder_id,version),
+  FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id),
+  CHECK((kind='cancelled')=(reason IS NOT NULL)),
+  CHECK((actor_id IS NULL)=(reason IS NOT NULL AND reason<>'manual'))
+);
 CREATE TABLE IF NOT EXISTS flows (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id),
@@ -917,6 +962,13 @@ BEGIN
   DELETE FROM public.instagram_inbox_notes WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_inbox_notes', affected);
+  -- Every member's reminders on the connection's conversations and their audit.
+  DELETE FROM public.instagram_inbox_reminder_events WHERE workspace_id=p_workspace AND connection_id=p_connection;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_inbox_reminder_events', affected);
+  DELETE FROM public.instagram_inbox_reminders WHERE workspace_id=p_workspace AND connection_id=p_connection;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_inbox_reminders', affected);
   DELETE FROM public.instagram_inbox_handoff_events WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_inbox_handoff_events', affected);
@@ -1171,6 +1223,15 @@ BEGIN
   WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients);
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_inbox_notes', affected);
+  -- Every member's reminders on the person's conversations and their audit, keyed by the DM recipient.
+  DELETE FROM public.instagram_inbox_reminder_events
+  WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients);
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_inbox_reminder_events', affected);
+  DELETE FROM public.instagram_inbox_reminders
+  WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients);
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_inbox_reminders', affected);
   DELETE FROM public.instagram_inbox_handoff_events
   WHERE workspace_id=p_workspace AND connection_id=p_connection
     AND (recipient_id=ANY(recipients) OR sender_id=ANY(senders));
@@ -1365,6 +1426,12 @@ BEGIN
   DELETE FROM public.instagram_inbox_notes WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_inbox_notes', affected);
+  DELETE FROM public.instagram_inbox_reminder_events WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_inbox_reminder_events', affected);
+  DELETE FROM public.instagram_inbox_reminders WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_inbox_reminders', affected);
   DELETE FROM public.instagram_inbox_labels WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_inbox_labels', affected);

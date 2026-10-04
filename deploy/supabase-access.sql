@@ -38,7 +38,7 @@ BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'automations_app') THEN
     server_roles := server_roles || ', automations_app';
   END IF;
-  FOREACH product_table IN ARRAY ARRAY['webhook_endpoints', 'webhook_signing_keys', 'webhook_deliveries', 'webhook_redelivery_events', 'scheduled_steps', 'workspace_invites', 'data_deletion_records', 'instagram_inbox_conversations', 'instagram_inbox_conversation_events', 'instagram_inbox_read_state', 'instagram_inbox_labels', 'instagram_inbox_conversation_labels', 'instagram_inbox_label_events', 'instagram_inbox_notes', 'flows', 'flow_versions', 'flow_runs', 'flow_step_runs', 'channel_consent_state', 'channel_consent_events', 'instagram_manual_replies', 'instagram_manual_reply_events', 'instagram_inbox_handoffs', 'instagram_inbox_handoff_events', 'instagram_inbox_messages', 'instagram_unmatched_replies', 'instagram_contact_automation', 'instagram_contact_fields', 'instagram_contact_field_values', 'instagram_contact_segments', 'instagram_contact_tags', 'workspaces', 'workspace_members', 'instagram_follow_conversations', 'instagram_message_receipts', 'instagram_oauth_states', 'instagram_connections', 'instagram_comment_rules', 'instagram_comment_events', 'private_reply_outbox'] LOOP
+  FOREACH product_table IN ARRAY ARRAY['webhook_endpoints', 'webhook_signing_keys', 'webhook_deliveries', 'webhook_redelivery_events', 'scheduled_steps', 'workspace_invites', 'data_deletion_records', 'instagram_inbox_conversations', 'instagram_inbox_conversation_events', 'instagram_inbox_read_state', 'instagram_inbox_labels', 'instagram_inbox_conversation_labels', 'instagram_inbox_label_events', 'instagram_inbox_notes', 'instagram_inbox_reminders', 'instagram_inbox_reminder_events', 'flows', 'flow_versions', 'flow_runs', 'flow_step_runs', 'channel_consent_state', 'channel_consent_events', 'instagram_manual_replies', 'instagram_manual_reply_events', 'instagram_inbox_handoffs', 'instagram_inbox_handoff_events', 'instagram_inbox_messages', 'instagram_unmatched_replies', 'instagram_contact_automation', 'instagram_contact_fields', 'instagram_contact_field_values', 'instagram_contact_segments', 'instagram_contact_tags', 'workspaces', 'workspace_members', 'instagram_follow_conversations', 'instagram_message_receipts', 'instagram_oauth_states', 'instagram_connections', 'instagram_comment_rules', 'instagram_comment_events', 'private_reply_outbox'] LOOP
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', product_table);
     EXECUTE format('REVOKE ALL ON public.%I FROM PUBLIC, %s', product_table, server_roles);
     FOREACH api_role IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
@@ -104,6 +104,18 @@ BEGIN
 END $$;
 DROP POLICY IF EXISTS server_update ON public.instagram_inbox_label_events;
 DROP POLICY IF EXISTS server_update ON public.instagram_inbox_notes;
+
+-- Reminder audit is append-only; only the reminder row itself is updated.
+DO $$
+DECLARE server_role text;
+BEGIN
+  FOREACH server_role IN ARRAY ARRAY['auto_chatter_server','automations_app'] LOOP
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname=server_role) THEN
+      EXECUTE format('REVOKE UPDATE ON public.instagram_inbox_reminder_events FROM %I',server_role);
+    END IF;
+  END LOOP;
+END $$;
+DROP POLICY IF EXISTS server_update ON public.instagram_inbox_reminder_events;
 
 -- The audit of manual webhook redelivery is append-only for both runtime roles.
 DO $$
