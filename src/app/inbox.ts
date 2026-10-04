@@ -1,3 +1,4 @@
+import { inboxIdentityCandidatesSql } from "./inbox-identity.ts";
 import type { Pool } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { workspaceFor } from "./settings.ts";
@@ -249,12 +250,7 @@ export async function readInboxContext(
        SELECT max(message_at) AS last_message_at FROM instagram_inbox_messages
        WHERE connection_id=$1 AND workspace_id=$2 AND recipient_id=$3
      ), candidates AS (
-       SELECT reply.id,reply.sender_id,reply.sent_at,reply.sent_at>=owned.inbox_enabled_at AS fresh
-       FROM private_reply_outbox reply JOIN owned ON reply.connection_id=owned.id AND reply.workspace_id=owned.workspace_id
-       JOIN instagram_comment_events event ON event.id=reply.event_id AND event.connection_id=reply.connection_id
-         AND event.workspace_id=reply.workspace_id AND event.sender_id=reply.sender_id
-       WHERE reply.recipient_id=$3 AND reply.status='sent' AND length(btrim(reply.provider_message_id))>0
-         AND reply.sent_at<=now()
+       ${inboxIdentityCandidatesSql} AND reply.recipient_id=$3
      ), identity AS (
        SELECT count(DISTINCT sender_id)::integer AS sender_count,min(sender_id) AS sender_id,bool_or(fresh) AS fresh
        FROM candidates

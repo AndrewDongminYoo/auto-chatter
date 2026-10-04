@@ -1,3 +1,4 @@
+import { contactDetails } from "./contact-details.ts";
 import { queueManualReply, listManualReplies, resolveManualReply, readManualReplyStatus } from "./manual-replies.ts";
 import { inboxHandoff, saveInboxHandoff } from "./inbox-handoff.ts";
 import { listAssignees, saveConversationState } from "./inbox-conversations.ts";
@@ -409,13 +410,15 @@ export async function appApi(
         return json(await saveContactAutomation(pool, user, automation[1]!, senderId, await readJson(request)));
       }
       const contact = /^\/api\/connections\/([a-f0-9-]+)\/contacts\/([^/]+)$/.exec(url.pathname);
-      if (contact && request.method === "PATCH") {
+      if (contact && ["GET", "PATCH"].includes(request.method)) {
         let senderId: string;
         try {
           senderId = decodeURIComponent(contact[2]!);
         } catch {
           throw new ApiError(400, "invalid_contact_request");
         }
+        if (request.method === "GET")
+          return json(await contactDetails(pool, user, contact[1]!, senderId, url.searchParams));
         return json(await saveContactTags(pool, user, contact[1]!, senderId, await readJson(request)));
       }
       if (url.pathname === "/api/flows" && request.method === "GET")

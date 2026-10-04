@@ -1404,6 +1404,34 @@ section {
   padding: 20px 0;
   border-top: 1px solid var(--color-border);
 }
+.contact-detail {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.contact-detail-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.contact-detail-content h4,
+.contact-detail-content h5 {
+  font-size: 1rem;
+  margin: 20px 0 8px;
+}
+.contact-detail-content p {
+  margin: 8px 0;
+}
+.contact-detail-conversation {
+  border-top: 1px solid var(--color-border);
+  margin-top: 16px;
+}
+.contact-consent {
+  padding-left: 20px;
+}
+.contact-consent li {
+  margin: 12px 0;
+}
 .contact-summary h3 {
   margin: 0;
   overflow-wrap: anywhere;
