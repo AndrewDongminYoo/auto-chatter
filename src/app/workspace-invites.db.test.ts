@@ -347,6 +347,11 @@ test("creations that resolved the old workspace before an acceptance moved the u
     ["/api/contact-fields", { name: "late field", type: "text" }],
     ["/api/contact-segments", { name: "late segment" }],
     ["/api/inbox/labels", { name: "late label" }],
+    // The membership recheck comes before the label lookup, so a rule is refused before its (absent) label is read.
+    [
+      "/api/inbox/label-rules",
+      { label_id: "abababab-abab-4bab-8bab-abababababab", match_mode: "contains", keywords: ["late"] },
+    ],
     ["/api/workspace/invites", { email: "late@example.test", role: "agent" }],
   ];
   const { token } = await invite(stranger.email, "admin");
@@ -371,6 +376,7 @@ test("creations that resolved the old workspace before an acceptance moved the u
       + (SELECT count(*) FROM instagram_contact_fields WHERE workspace_id=$1)
       + (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1)
       + (SELECT count(*) FROM instagram_inbox_labels WHERE workspace_id=$1)
+      + (SELECT count(*) FROM instagram_inbox_label_rules WHERE workspace_id=$1)
       + (SELECT count(*) FROM workspace_invites WHERE workspace_id=$1) AS n`,
     [ownWorkspace],
   );
