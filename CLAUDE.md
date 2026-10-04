@@ -60,6 +60,8 @@ Deduplication is enforced by unique constraints, not application logic: one even
 A rule matches normalized keywords with `contains`, `exact`, or `all` mode; excluded substrings take precedence.
 One rule exists per `(connection_id, media_id)`; empty `keywords` falls back to the legacy `keyword`.
 
+**Channel contract** ([spec](docs/specs/2026-10-04-channel-contract.md)): `src/channels/` contains advisory capabilities, scoped identity, receipt keys and the existing pure consent/window policy. Instagram ingress uses `channel-adapter.ts` after signature verification and keeps the original storage inputs and ordering. Only the manual worker uses its outcome classification, inside the existing send catch; persistence remains outside. Capability support never replaces eligibility or final guards. The fake second adapter exists only in unit tests.
+
 **Worker** (`worker-main.ts` → `reply-worker.ts` → a `PrivateReplyTransport`):
 The Node worker serves one active, send-enabled, environment-managed connection (`META_INSTAGRAM_CONNECTION_ID`, with no encrypted OAuth credential); the Cloudflare adapter reads encrypted credentials and send switches per queued connection from the database.
 `processNextPrivateReply` claims a `pending` outbox row with `FOR UPDATE SKIP LOCKED` and a fresh `attempt_id`; every later state change is conditional on `status = 'sending' AND attempt_id = $n` and throws if the claim was lost.

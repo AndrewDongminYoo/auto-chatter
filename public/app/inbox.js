@@ -34,7 +34,24 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     // Counts workspace time zone changes saved in this tab. A reminder returned by a write that started before a
     // change holds due_local in the old zone, so the write's response is replaced by a conversation read.
     zoneChanges = 0;
+  const textOnly = "텍스트 답장만 지원합니다. 첨부 파일과 승인 템플릿은 아직 지원하지 않습니다.";
+  // Implementation support is advisory; status.allowed and all server send guards remain authoritative.
+  function textSupport(status) {
+    const capabilities = status?.capabilities,
+      operation = capabilities?.operations?.manual_reply;
+    if (
+      status?.channel !== "instagram" ||
+      capabilities?.schema_version !== 1 ||
+      capabilities.channel !== status.channel ||
+      typeof operation?.supported !== "boolean" ||
+      !Array.isArray(operation.content_types) ||
+      !operation.content_types.every((type) => ["text", "attachment", "provider_template"].includes(type))
+    )
+      return null;
+    return operation.supported && operation.content_types.includes("text");
+  }
   const reasons = {
+    channel_capability_unsupported: textOnly,
     global_send_disabled: "전체 발송이 중지되어 있습니다.",
     connection_disabled: "이 계정의 수신·DM 보관·발송 설정을 확인해 주세요.",
     token_unavailable: "Instagram 계정을 다시 연결해 주세요.",
@@ -1040,7 +1057,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     byId("inbox-handoff-controls").hidden = !state;
     if (!state) return;
     const status = state.status,
-      blocked = !status?.allowed || expired(state) || status.blocked_by_unknown;
+      support = textSupport(status),
+      blocked = support !== true || !status?.allowed || expired(state) || status.blocked_by_unknown;
     const textarea = byId("inbox-reply-text");
     if (textarea.value !== state.draft) textarea.value = state.draft;
     textarea.disabled = state.busy || Boolean(state.operation);
@@ -1059,11 +1077,15 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       ? "답장 가능 상태를 확인해 주세요."
       : status.blocked_by_unknown
         ? "확인 필요 메시지가 있습니다. Instagram에서 결과를 확인하고 해결 기록을 남겨 주세요."
-        : !status.allowed
-          ? failure(status.failure_code)
-          : expired(state)
-            ? "답장 가능 시간이 끝났습니다. 새 DM을 받았다면 새로고침해 주세요."
-            : `답장 가능 · ${date(status.window_expires_at)}까지 (서버 확인 기준)`;
+        : support === null
+          ? "지원하는 답장 형식을 확인할 수 없습니다. 대화를 새로고침해 주세요."
+          : !support
+            ? textOnly
+            : !status.allowed
+              ? failure(status.failure_code)
+              : expired(state)
+                ? "답장 가능 시간이 끝났습니다. 새 DM을 받았다면 새로고침해 주세요."
+                : `답장 가능 · ${date(status.window_expires_at)}까지 (서버 확인 기준)`;
     const handoff = byId("inbox-handoff");
     handoff.textContent = status?.handoff_active ? "자동화 재개" : "상담 시작";
     handoff.disabled =
@@ -1146,7 +1168,14 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         event.preventDefault();
         if (selected !== state || state.busy || state.operation || !action.reportValidity() || !input.value.trim())
           return;
-        if (retryable && (!state.status?.allowed || expired(state) || state.status.blocked_by_unknown)) return;
+        if (
+          retryable &&
+          (textSupport(state.status) !== true ||
+            !state.status?.allowed ||
+            expired(state) ||
+            state.status.blocked_by_unknown)
+        )
+          return;
         const body = {
           request_key: crypto.randomUUID(),
           reason: input.value.trim(),
@@ -1648,11 +1677,36 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       if (!byId("inbox-send").disabled) byId("inbox-composer").requestSubmit();
     }
   });
+  for (const kind of ["paste", "drop", "dragover"])
+    byId("inbox-composer").addEventListener(kind, (event) => {
+      const transfer = event.clipboardData || event.dataTransfer;
+      if (
+        !transfer ||
+        !(
+          transfer.files?.length ||
+          Array.from(transfer.items || []).some((item) => item.kind === "file") ||
+          Array.from(transfer.types || []).includes("Files")
+        )
+      )
+        return;
+      event.preventDefault();
+      // Do not replace the uncertain-receipt instructions while that original request is locked.
+      if (kind !== "dragover" && selected && !selected.operation && !selected.busy) {
+        selected.notice = textOnly;
+        controls();
+      }
+    });
   byId("inbox-composer").addEventListener("submit", (event) => {
     event.preventDefault();
     if (!selected || byId("inbox-send").disabled || !event.currentTarget.reportValidity()) return;
     const state = selected;
-    if (!state.status?.allowed || expired(state) || state.status.blocked_by_unknown) return;
+    if (
+      textSupport(state.status) !== true ||
+      !state.status?.allowed ||
+      expired(state) ||
+      state.status.blocked_by_unknown
+    )
+      return;
     void submitOperation(state, {
       kind: "create",
       path: `${base(state)}/replies`,
@@ -1661,6 +1715,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         request_key: crypto.randomUUID(),
         expected_handoff_version: state.status.handoff_version,
         text: state.draft,
+        content_type: "text",
       },
     });
   });

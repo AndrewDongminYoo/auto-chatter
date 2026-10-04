@@ -303,6 +303,7 @@ const errors = {
   field_limit_reached: "활성 필드는 최대 50개입니다. 사용하지 않는 필드를 보관해 주세요.",
   invalid_keywords: "키워드는 최대 20개, 각각 100자까지 입력할 수 있습니다.",
   invalid_confirmation_button: "버튼 이름은 20자, 버튼 메시지는 640자 이내로 작성하고 팔로우 확인을 켜주세요.",
+  channel_capability_unsupported: "이 채널은 요청한 답장 형식을 지원하지 않습니다.",
   invalid_rule: "게시물 선택, 답장 문구와 팔로우 조건을 확인해 주세요.",
   invalid_media_request: "게시물 목록을 새로고침한 뒤 다시 선택해 주세요.",
   media_reconnect_required: "계정을 다시 연결한 뒤 게시물을 불러와 주세요.",

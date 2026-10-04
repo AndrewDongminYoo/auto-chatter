@@ -1,4 +1,6 @@
-import { PreSendVerificationError, ProviderRateLimitedError, ProviderRejectedError } from "./reply-worker.ts";
+import { instagramAdapter } from "./channel-adapter.ts";
+import { evaluateWindow } from "../channels/policy.ts";
+import { PreSendVerificationError } from "./reply-worker.ts";
 import { randomUUID } from "node:crypto";
 import type { FollowSendContext } from "./follow-transport.ts";
 import type { Pool } from "pg";
@@ -71,8 +73,8 @@ export async function manualReplyStatus(
   )
     return result("handoff_changed");
   if (current.account_id === row.recipient_id) return result("invalid_recipient");
-  const now = current.checked_at.getTime();
-  if (!Number.isFinite(last) || last > now || now - last >= 24 * 60 * 60_000) return result("reply_window_closed");
+  if (evaluateWindow(current.checked_at, new Date(last), 24 * 60 * 60_000) !== "open")
+    return result("reply_window_closed");
   if (!current.identity_verified) return result("handoff_identity_unverified");
   try {
     if (
@@ -247,26 +249,19 @@ export async function processNextManualReply(
     cooldown: number | null = null;
   try {
     const result = await transport.send(row.recipient_id, row.text, { replyId: row.id, attemptId: attempt });
-    if (typeof result.messageId !== "string" || !result.messageId.trim())
-      throw new Error("Invalid send acknowledgement");
-    messageId = result.messageId;
+    messageId = instagramAdapter.acceptSendResult(result).messageId;
   } catch (error) {
-    if (error instanceof PreSendVerificationError) {
-      status = error.disposition === "retry" ? "pending" : "failed";
-      code = error.failureCode;
-      safe = error.failureCode === "recipient_opted_out" ? false : error.disposition !== "retry";
-    } else if (error instanceof ProviderRateLimitedError) {
+    const outcome = instagramAdapter.classifySendError(error);
+    code = outcome.code;
+    if (outcome.kind === "not_attempted") {
+      status = outcome.disposition === "retry" ? "pending" : "failed";
+      safe = outcome.code === "recipient_opted_out" ? false : outcome.disposition !== "retry";
+    } else if (outcome.kind === "refused") {
       status = "failed";
-      code = error.failureCode;
       safe = true;
-      cooldown = Math.max(900, error.retryAfterSeconds ?? 0);
-    } else if (error instanceof ProviderRejectedError) {
-      status = "failed";
-      code = error.failureCode;
-      safe = true;
+      if (outcome.refusal === "rate_limited") cooldown = Math.max(900, outcome.retryAfterSeconds ?? 0);
     } else {
       status = "unknown";
-      code = "send_outcome_unknown";
     }
   }
   await finish(status, code, safe, messageId, cooldown);
