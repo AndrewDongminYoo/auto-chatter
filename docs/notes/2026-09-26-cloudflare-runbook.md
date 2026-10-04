@@ -337,6 +337,24 @@ public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-10-0
 공개 점검에 리마인더 경로 4개(로그인 없는 `GET /api/inbox?reminder=due`와 `GET /api/inbox/reminders`의 401, 다른 출처의 리마인더 만들기·완료 요청의 403)를 더한 28개 항목이 모두 통과했고, 배포 전에 실행했을 때는 바뀐 정적 파일 4개(`app.js`, `inbox.js`, `styles.css`, `index.html`)의 해시가 일치하지 않아 점검이 배포 전후를 구별하는 것을 확인했습니다. 리마인더 경로 4개는 이전 Worker에서도 같은 코드를 돌려주므로 배포를 구별하지 않습니다.
 배포 후 cron 3회(06:20, 06:21, 06:22 UTC)에서 `scheduled_steps`의 6개 단계가 모두 성공으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 운영에는 여러 멤버와 리마인더가 없으므로 리마인더 배지, 필터, 편집 칸은 운영 화면에서 조작하지 않았습니다.
+같은 날 이어서 운영자 승인에 따라 PR #137(#132 키워드 자동 라벨 규칙, migration 035)과 그 뒤에 병합된 PR #138~#141을 포함한 `main` 커밋 `4f79511`의 마이그레이션을 운영 DB에 적용하고 Worker를 배포했습니다. #138~#141에는 마이그레이션이 없습니다.
+적용 전 운영 DB는 034까지 적용된 상태였고(035의 테이블 없음, 라벨 변경 이력의 `rule_id` 열 없음, public 테이블 43개), 연결 1개(수신 켜짐·발송 꺼짐)·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
+public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-10-04-pr137/public-before-035.dump`에 백업했으며 데이터 테이블 43개가 들어 있습니다.
+관리자 연결은 앞과 같은 Session pooler를 TLS `verify-full`로 사용했고, 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 실행 로그에 오류나 경고는 없었습니다.
+적용 후 public 테이블은 44개가 됐고, 새 테이블 `instagram_inbox_label_rules`는 RLS가 켜져 있었습니다. 서버 역할의 권한은 규칙이 SELECT·INSERT·UPDATE, 라벨 변경 이력은 그대로 SELECT·INSERT뿐이었고, 제품 테이블 DELETE 권한은 0개, `anon`과 `authenticated`의 public 테이블 권한도 0개였습니다.
+라벨 변경 이력의 `actor_id`와 `rule_id`는 둘 다 NULL을 허용하고 그중 정확히 하나만 채우는 CHECK가 들어갔으며, 규칙을 지우는 삭제 함수는 작업 공간 삭제 함수뿐이었습니다. 세 삭제 함수의 소유자, `SECURITY DEFINER` 여부와 서버 역할의 실행 권한은 그대로였습니다.
+기존 행 수(작업 공간 2, 멤버 1, 연결 1, 댓글 9, outbox 3, 인박스 메시지 3, 그 밖의 인박스 테이블 0, 플로 0)와 발송 꺼짐 상태는 유지됐습니다.
+이어서 이번에는 운영자의 배포 요청에 따라 같은 커밋의 Worker를 직접 버전 `90bb728b-4f11-42bc-b663-762dc3d4113a`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `e74b1633-d268-4911-b7f3-74d54dc7425a`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+공개 점검에 라벨 규칙 경로 3개(로그인 없는 `GET /api/inbox/label-rules`의 401, 다른 출처의 규칙 만들기·보관 요청의 403)를 더한 31개 항목이 모두 통과했고, 배포 전에는 바뀐 정적 파일 4개의 해시만 일치하지 않았습니다.
+배포 후 cron 3회(14:10, 14:11, 14:12 UTC)에서 `scheduled_steps`의 6개 단계가 모두 성공으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
+운영에는 라벨과 규칙이 없으므로 규칙 관리 칸과 자동 라벨은 운영 화면에서 조작하지 않았습니다.
+2026-10-04 Cloudflare가 무료 플랜의 Worker CPU 한도(호출당 10ms)를 24시간 동안 100번 넘게 초과했다는 메일을 보냈습니다.
+Cloudflare GraphQL 분석 API(`workersInvocationsAdaptive`)로 확인한 결과, 2026-10-03 14:30Z부터 24시간 동안 호출 1,585번 가운데 837번이 `exceededResources`로 끝났고, 정상 종료된 748번의 CPU 중앙값도 17ms였습니다. 호출의 대부분은 매분 실행하는 cron입니다.
+시간대별 CPU 중앙값은 2026-10-02 09:57Z 배포(`3174fdde`, `main` `2e45865`) 직후 3.2ms에서 21.7ms로 올랐습니다. 그 배포에 들어간 PR #114·#116으로 cron 단계와 단계별 기록이 늘어, 빈 로컬 DB에서 발송을 끈 cron 한 번의 쿼리가 직전 배포 커밋 `d23cef2`의 2개에서 18개가 됐습니다.
+발송이 꺼져 있어 잘못 보낸 것은 없었고, 끊긴 회차의 남은 단계는 다음 분의 실행이 이어서 처리했습니다.
+운영자가 계정을 Workers Paid로 전환했습니다. HTTP 요청의 CPU 한도는 기본 30초(최대 5분)이고, cron은 주기가 1시간 미만이면 30초, 1시간 이상이면 15분이므로 매분 실행하는 이 cron의 한도는 30초입니다([한도 문서](https://developers.cloudflare.com/workers/platform/limits/#cpu-time)와 [가격 문서](https://developers.cloudflare.com/workers/platform/pricing/), 2026-10-05 확인). 결제 시각은 이 문서에 기록하지 않았습니다.
+분석 API에서 마지막 `exceededResources`는 2026-10-04 14:07Z였고, 14:10Z부터 확인한 15:30Z까지 강제 종료는 0번, CPU가 10ms를 넘는 정상 종료는 66번이었습니다.
+cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongminYoo/auto-chatter/issues/142)에서 다룹니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
