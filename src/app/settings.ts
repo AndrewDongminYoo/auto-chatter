@@ -118,9 +118,12 @@ function text(value: unknown, max: number, required = true): string {
     throw new ApiError(400, "invalid_rule");
   return value.trim().normalize("NFC");
 }
+// The editor shows one keyword per line, so a keyword with a line break would come back as two (#144).
 function keywords(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > 20) throw new ApiError(400, "invalid_keywords");
-  return [...new Set(value.map((x) => text(x, 100).toLowerCase()))];
+  const list = value.map((x) => text(x, 100).toLowerCase());
+  if (list.some((keyword) => /[\r\n]/.test(keyword))) throw new ApiError(400, "invalid_keywords");
+  return [...new Set(list)];
 }
 export function parseRule(input: unknown) {
   if (
