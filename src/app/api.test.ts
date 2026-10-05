@@ -641,6 +641,45 @@ test("fixed-target rule edits remain available without a working provider creden
   assert.deepEqual(await response.json(), { id: existingId });
 });
 
+test("rule saves refuse a keyword with a line break, which the editor would split into two (#144)", async () => {
+  for (const [keywords, excluded] of [
+    [["a\nb"], []],
+    [["link"], ["x\ry"]],
+  ]) {
+    const pool = {
+      query: async (sql: string) => {
+        assert.equal(sql.includes("instagram_comment_rules"), false);
+        return { rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : [] };
+      },
+      end: async () => {},
+    } as unknown as Pool;
+    const request = new Request("https://app.test/api/rules", {
+      method: "PUT",
+      headers: {
+        cookie: "__Host-ac-access=test-session",
+        origin: "https://app.test",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        id: "44444444-4444-4444-8444-444444444444",
+        connection_id: connectionId,
+        media_id: "456",
+        keywords,
+        excluded_keywords: excluded,
+        match_mode: "contains",
+        private_reply_text: "A reply",
+        enabled: false,
+        follow_gate_enabled: false,
+      }),
+    });
+    const fetchImpl = (async () =>
+      Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
+    const response = await appApi(request, config, () => pool, fetchImpl);
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { error: "invalid_keywords" });
+  }
+});
+
 test("API rejects unauthenticated and cross-origin requests before opening a database", async () => {
   const open = () => {
     throw new Error("DB must not be opened");
