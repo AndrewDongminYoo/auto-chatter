@@ -355,6 +355,10 @@ Cloudflare GraphQL 분석 API(`workersInvocationsAdaptive`)로 확인한 결과,
 운영자가 계정을 Workers Paid로 전환했습니다. HTTP 요청의 CPU 한도는 기본 30초(최대 5분)이고, cron은 주기가 1시간 미만이면 30초, 1시간 이상이면 15분이므로 매분 실행하는 이 cron의 한도는 30초입니다([한도 문서](https://developers.cloudflare.com/workers/platform/limits/#cpu-time)와 [가격 문서](https://developers.cloudflare.com/workers/platform/pricing/), 2026-10-05 확인). 결제 시각은 이 문서에 기록하지 않았습니다.
 분석 API에서 마지막 `exceededResources`는 2026-10-04 14:07Z였고, 14:10Z부터 확인한 15:30Z까지 강제 종료는 0번, CPU가 10ms를 넘는 정상 종료는 66번이었습니다.
 cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongminYoo/auto-chatter/issues/142)에서 다룹니다.
+2026-10-05에는 운영자 요청에 따라 PR #145(#142의 일부: 단계 기록 묶어 쓰기, 경보 평가 한 번에 읽기)를 포함한 `main` 커밋 `a19de4b`의 Worker를 버전 `fb5544e0-18c9-4d38-b1cb-76f758e9f9ca`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `90bb728b-4f11-42bc-b663-762dc3d4113a`였습니다.
+`4f79511` 이후 `db/`, `deploy/`, `public/`, `wrangler.json`과 패키지 파일이 바뀌지 않아 마이그레이션은 없었고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. 배포 전 원래 체크아웃에 `node_modules`가 없어 lockfile로 다시 설치했습니다.
+같은 공개 점검 31개 항목이 모두 통과했지만, 정적 파일이 바뀌지 않아 이 점검은 배포 전후를 구별하지 못합니다. 배포 후 cron 3회(00:14, 00:15, 00:16 UTC)에서 `scheduled_steps`의 6개 단계가 모두 성공으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
+빈 로컬 DB에서 발송을 끈 cron 한 번의 쿼리는 18개에서 7개가 됐습니다. 분석 API의 CPU는 배포 전 3시간(2026-10-04 21:00Z~10-05 00:13Z, 호출 210번) 중앙값 16.1ms·P90 18.5ms·P99 21.3ms에서, 배포 후 2시간 20분(00:15Z~02:35Z, 143번) 9.2ms·11.7ms·13.7ms로 줄었고, 두 구간 모두 `exceededResources`는 없었습니다. P90이 아직 무료 플랜 한도(10ms)를 넘으므로 유료 플랜은 유지합니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
