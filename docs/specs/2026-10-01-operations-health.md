@@ -46,6 +46,14 @@ Cron 단계 `kept_reply_cleanup`, `token_refresh`, `early_reply_reconcile`, `flo
 `token_refresh`는 갱신 대상 연결을 모두 시도한 뒤, 토큰 복호화 실패, Meta 호출 실패·시간 초과, 잘못된 갱신 응답, 계정이 다른 프로필이 하나라도 있으면 `token_refresh_failed`로 실패합니다. 더 새 토큰이나 수신 중지에 밀린 갱신은 실패가 아닙니다. 한 연결은 하루에 한 번만 갱신을 시도하므로 계속 실패해도 실패는 시도한 실행에만 남고 다음 실행은 성공으로 기록됩니다. 지속 실패의 신호는 연결마다 하루 한 번 남는 `cron_step_failed`(`step = token_refresh`) 줄이고, 만료 7일 전부터는 `token_expiring` 경보입니다.
 한 단계가 실패해도 다음 단계는 계속 실행하고, 실행 끝에 고정 메시지 `Cloudflare scheduled recovery failed`의 오류를 던져 Cloudflare가 실패로 기록하게 합니다. DB 연결 풀을 열거나 닫다 실패해도 원래 오류 메시지는 던지지 않고 `cron_run_failed` 줄과 같은 고정 메시지만 남깁니다. 이전에는 토큰 갱신 실패나 `TOKEN_ENCRYPTION_KEY` 누락이 이후 단계를 모두 멈췄습니다.
 기록 쓰기 자체가 실패하면 단계가 성공했어도 `cron_step_record_failed`(`cron` 행이면 `cron_record_failed`) 줄을 남기고 그 실행을 실패로 봅니다. 저장된 결과가 낡았으므로 `cron` 행에도 `step_failed`를 남기며, DB가 중단되면 단계마다 단계 실패 줄과 기록 실패 줄이 함께 남습니다.
+단계 결과는 실행 중 메모리에 모았다가 두 문장으로 씁니다.
+`alerts` 앞 단계들의 결과를 한 문장으로 쓴 뒤 `alerts` 단계를 실행하므로 이 쓰기의 실패도 `alerts` 단계가 봅니다.
+그다음 `alerts`·`cron` 행을 한 문장으로 씁니다([#142](https://github.com/AndrewDongminYoo/auto-chatter/issues/142)).
+한 문장이 실패하면 그 실행을 실패로 보고, 저장된 결과가 최신이 되도록 그 행들을 하나씩 다시 씁니다.
+실패 뒤에 쓰는 `cron` 행에는 `step_failed`가 남습니다.
+하나씩 다시 쓰기도 실패한 행은 그 행의 기록 실패 줄을 남깁니다.
+다시 쓰기에서 모든 행이 저장되면, 실패한 문장의 행마다 그 문장의 실패 코드로 기록 실패 줄을 남깁니다.
+따라서 기록 쓰기로 실패한 실행에는 기록 실패 줄이 하나 이상 남습니다.
 이 테이블에는 작업 공간 데이터가 없으므로 [작업 공간 내보내기](2026-09-30-workspace-export.md)에서 제외하고, 삭제 함수의 대상도 아닙니다.
 서버 역할은 SELECT·INSERT·UPDATE만 가지며 DELETE는 없습니다.
 
@@ -77,6 +85,8 @@ Cron 단계 `kept_reply_cleanup`, `token_refresh`, `early_reply_reconcile`, `flo
 
 화면은 같은 계산으로 연결별 경보와 서비스 경보를 보여 줍니다.
 Cron은 매 실행 끝에 모든 연결의 경보를 합친 서비스 전체 상태를 `scheduled_steps`와 비교하고, 바뀐 경보만 `alert_started`(warn) 또는 `alert_cleared`(info)로 한 번 남깁니다.
+경보 평가는 모든 연결의 지표, `cron` 행, `unknown` 전체 수와 저장된 수, 켜진 경보 행을 한 문장으로 읽고, 저장된 상태와 다른 경보만 씁니다.
+바뀐 경보가 없는 실행은 이 읽기 하나만 실행합니다.
 상태 전환은 조건부 쓰기이므로 겹쳐 실행된 두 Cron 가운데 하나만 기록합니다.
 시작과 해제는 그 실행이 지표를 읽기 전(DB 시각)에 바뀐 상태에만 적용되므로, 더 오래된 지표를 읽은 실행이 더 새 실행의 시작이나 해제를 되돌리지 못하고 그 경보는 다음 실행이 판단합니다.
 `alert_seen_count`도 `unknown` 전체 수와 같은 문장에서 읽은 값일 때만 바꾸므로, 오래된 수를 읽은 실행이 더 새 수를 낮춰 같은 발생을 두 번 기록하게 하지 못합니다.

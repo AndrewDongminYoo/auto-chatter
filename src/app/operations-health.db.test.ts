@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, mock, test } from "node:test";
 import { Pool } from "pg";
 import { appApi } from "./api.ts";
-import { evaluateAlerts, recordStep } from "./operations-health.ts";
+import { evaluateAlerts, recordStep, recordSteps } from "./operations-health.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
@@ -288,6 +288,55 @@ test("an overlapping cron run that read older metrics cannot undo a newer run's 
   );
 });
 
+test("a run that read older state cannot undo a transition made after its read, even when it matches its read", async () => {
+  const lines: unknown[] = [];
+  for (const method of ["log", "warn", "error"] as const)
+    mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
+  const active = async () =>
+    (await pool.query("SELECT alert_active FROM scheduled_steps WHERE name='alert_unknown_outcome'")).rows[0]
+      .alert_active;
+  try {
+    // The alert is on and its unknown has aged out, so run A reads it on and wants to clear it. While A stalls,
+    // run B clears it and run C starts it again for a new unknown; A must not clear C's start.
+    await reply(connectionId, "104", "unknown", { claimedMinutesAgo: 1 });
+    await evaluateAlerts(pool, true, "corr-0", true);
+    await pool.query("UPDATE private_reply_outbox SET attempt_started_at=now()-interval '25 hours'");
+    lines.length = 0;
+    const clear = stalledAfterMetrics(async () => {
+      await evaluateAlerts(pool, true, "corr-b", true);
+      await reply(connectionId, "105", "unknown", { claimedMinutesAgo: 1 });
+      await evaluateAlerts(pool, true, "corr-c", true);
+    });
+    await evaluateAlerts(clear.stalled, true, "corr-a", true);
+    assert.equal(clear.state.overlapped, true);
+    assert.deepEqual(lines, [
+      { event: "alert_cleared", code: "alert_unknown_outcome", correlation_id: "corr-b" },
+      { event: "alert_started", code: "alert_unknown_outcome", correlation_id: "corr-c" },
+    ]);
+    assert.equal(await active(), true);
+    // The alert is off again and a new unknown appears, so run D reads it off and wants to start it. While D
+    // stalls, run E starts it and run F clears it after the unknowns age out; D must not start it again.
+    await pool.query("UPDATE private_reply_outbox SET attempt_started_at=now()-interval '25 hours'");
+    await evaluateAlerts(pool, true, "corr-1", true);
+    await reply(connectionId, "106", "unknown", { claimedMinutesAgo: 1 });
+    lines.length = 0;
+    const start = stalledAfterMetrics(async () => {
+      await evaluateAlerts(pool, true, "corr-e", true);
+      await pool.query("UPDATE private_reply_outbox SET attempt_started_at=now()-interval '25 hours'");
+      await evaluateAlerts(pool, true, "corr-f", true);
+    });
+    await evaluateAlerts(start.stalled, true, "corr-d", true);
+    assert.equal(start.state.overlapped, true);
+    assert.deepEqual(lines, [
+      { event: "alert_started", code: "alert_unknown_outcome", correlation_id: "corr-e" },
+      { event: "alert_cleared", code: "alert_unknown_outcome", correlation_id: "corr-f" },
+    ]);
+    assert.equal(await active(), false);
+  } finally {
+    mock.restoreAll();
+  }
+});
+
 test("alert starts and clears are each logged once, with only allowed fields", async () => {
   const lines: unknown[] = [];
   for (const method of ["log", "warn", "error"] as const)
@@ -336,6 +385,145 @@ test("alert starts and clears are each logged once, with only allowed fields", a
     [
       { name: "alert_cron_stale", alert_active: true },
       { name: "alert_unknown_outcome", alert_active: false },
+    ],
+  );
+});
+
+test("an alert evaluation with nothing to change issues only its single read", async () => {
+  const lines: unknown[] = [];
+  for (const method of ["log", "warn", "error"] as const)
+    mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
+  const statements: string[] = [];
+  const counted = {
+    async query(sql: string, values?: unknown[]) {
+      statements.push(sql);
+      return pool.query(sql, values);
+    },
+  } as unknown as Pool;
+  try {
+    await reply(connectionId, "104", "unknown", { claimedMinutesAgo: 5 });
+    await evaluateAlerts(counted, true, "corr-1", true);
+    assert.equal(statements.length, 2);
+    // unknown_outcome is already on with the same count, and every other alert is already off.
+    statements.length = 0;
+    await evaluateAlerts(counted, true, "corr-2", true);
+    assert.equal(statements.length, 1);
+    // A changed count is still written, and an alert that turns off is still cleared.
+    await reply(connectionId, "105", "unknown", { claimedMinutesAgo: 1 });
+    await evaluateAlerts(counted, true, "corr-3", true);
+    await pool.query("UPDATE private_reply_outbox SET attempt_started_at=now()-interval '25 hours'");
+    await evaluateAlerts(counted, true, "corr-4", true);
+    statements.length = 0;
+    await evaluateAlerts(counted, true, "corr-5", true);
+    assert.equal(statements.length, 1);
+  } finally {
+    mock.restoreAll();
+  }
+  assert.deepEqual(lines, [
+    { event: "alert_started", code: "alert_unknown_outcome", correlation_id: "corr-1" },
+    { event: "alert_new_occurrence", code: "alert_unknown_outcome", correlation_id: "corr-3" },
+    { event: "alert_cleared", code: "alert_unknown_outcome", correlation_id: "corr-4" },
+  ]);
+});
+
+test("a run without connections still evaluates the service alerts", async () => {
+  await pool.query("TRUNCATE workspaces, scheduled_steps CASCADE");
+  const lines: unknown[] = [];
+  for (const method of ["log", "warn", "error"] as const)
+    mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
+  try {
+    await evaluateAlerts(pool, true, "corr-stale");
+    await evaluateAlerts(pool, true, "corr-ok", true);
+  } finally {
+    mock.restoreAll();
+  }
+  assert.deepEqual(lines, [
+    { event: "alert_started", code: "alert_cron_stale", correlation_id: "corr-stale" },
+    { event: "alert_cleared", code: "alert_cron_stale", correlation_id: "corr-ok" },
+  ]);
+});
+
+test("a batched record changes each row as a single-row record would", async () => {
+  await recordStep(pool, "wake", "database_error");
+  await recordStep(pool, "flow_resume", null);
+  const read = async () =>
+    (
+      await pool.query(
+        `SELECT name,last_success_at,last_failure_at,failure_code FROM scheduled_steps
+         WHERE name IN ('alerts','cron','flow_resume','wake') ORDER BY name`,
+      )
+    ).rows;
+  const [flowBefore, wakeBefore] = await read();
+  const at = new Date();
+  await recordSteps(pool, [
+    { name: "wake", failure: null, at },
+    { name: "flow_resume", failure: "database_unavailable", at },
+    { name: "alerts", failure: null, at },
+    { name: "cron", failure: "step_failed", at },
+  ]);
+  const [alerts, cron, flow, wake] = await read();
+  // A success sets only last_success_at and keeps the last failure; a failure keeps the last success.
+  assert.ok(wake.last_success_at instanceof Date);
+  assert.deepEqual([wake.last_failure_at, wake.failure_code], [wakeBefore.last_failure_at, "database_error"]);
+  assert.deepEqual(flow.last_success_at, flowBefore.last_success_at);
+  assert.ok(flow.last_failure_at instanceof Date);
+  assert.equal(flow.failure_code, "database_unavailable");
+  assert.ok(alerts.last_success_at instanceof Date);
+  assert.deepEqual([alerts.last_failure_at, alerts.failure_code], [null, null]);
+  assert.equal(cron.last_success_at, null);
+  assert.ok(cron.last_failure_at instanceof Date);
+  assert.equal(cron.failure_code, "step_failed");
+});
+
+test("a record keeps each outcome's own time, so a stalled run's older failure stays older", async () => {
+  // Run B finished token_refresh successfully at t2 and recorded first; run A failed it at t1 < t2 and
+  // recorded later. The step has recovered, whichever run wrote last.
+  const t2 = new Date(Date.now() - 1_000);
+  const t1 = new Date(t2.getTime() - 30_000);
+  await recordSteps(pool, [{ name: "token_refresh", failure: null, at: t2 }]);
+  await recordSteps(pool, [{ name: "token_refresh", failure: "token_refresh_failed", at: t1 }]);
+  await recordStep(pool, "wake", null, t2);
+  await recordStep(pool, "wake", "database_error", t1);
+  const rows = (
+    await pool.query(
+      `SELECT name,last_success_at,last_failure_at,last_success_at>last_failure_at AS recovered
+       FROM scheduled_steps WHERE name IN ('token_refresh','wake') ORDER BY name`,
+    )
+  ).rows;
+  assert.deepEqual(
+    rows.map((row) => [row.name, row.last_success_at, row.last_failure_at, row.recovered]),
+    [
+      ["token_refresh", t2, t1, true],
+      ["wake", t2, t1, true],
+    ],
+  );
+});
+
+test("an older outcome recorded later never moves a stored time back or replaces a newer failure", async () => {
+  // C succeeded at t15 and B failed at t2, both recorded; stalled A failed at t1 < t15 and records last. The
+  // newest outcome is B's failure, so the step has not recovered.
+  const t2 = new Date(Date.now() - 1_000);
+  const t15 = new Date(t2.getTime() - 15_000);
+  const t1 = new Date(t2.getTime() - 30_000);
+  await recordSteps(pool, [{ name: "token_refresh", failure: null, at: t15 }]);
+  await recordSteps(pool, [{ name: "token_refresh", failure: "b", at: t2 }]);
+  await recordSteps(pool, [{ name: "token_refresh", failure: "a", at: t1 }]);
+  await recordSteps(pool, [{ name: "token_refresh", failure: null, at: t1 }]);
+  await recordStep(pool, "wake", null, t15);
+  await recordStep(pool, "wake", "b", t2);
+  await recordStep(pool, "wake", "a", t1);
+  await recordStep(pool, "wake", null, t1);
+  const rows = (
+    await pool.query(
+      `SELECT name,last_success_at,last_failure_at,failure_code,last_success_at>last_failure_at AS recovered
+       FROM scheduled_steps WHERE name IN ('token_refresh','wake') ORDER BY name`,
+    )
+  ).rows;
+  assert.deepEqual(
+    rows.map((row) => [row.name, row.last_success_at, row.last_failure_at, row.failure_code, row.recovered]),
+    [
+      ["token_refresh", t15, t2, "b", false],
+      ["wake", t15, t2, "b", false],
     ],
   );
 });

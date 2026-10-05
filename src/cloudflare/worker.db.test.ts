@@ -473,8 +473,14 @@ test("a failed step record write is logged and fails the run, also for the final
   let failingName = "wake";
   // A recent successful run keeps cron_stale off, so only the record failure is logged.
   await pool.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now())");
+  // Fails every record write that carries the name: the run's batched write and the single-row retry.
   mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
-    if (typeof sql === "string" && sql.includes("INTO scheduled_steps(name,last_") && values?.[0] === failingName)
+    const names = values?.[0];
+    if (
+      typeof sql === "string" &&
+      sql.includes("INTO scheduled_steps(name,last_") &&
+      (Array.isArray(names) ? names.includes(failingName) : names === failingName)
+    )
       throw Object.assign(new Error("record for owner@example.test"), { code: "08006" });
     return Reflect.apply(originalQuery, this, [sql, values]);
   });
@@ -494,6 +500,50 @@ test("a failed step record write is logged and fails the run, also for the final
   assert.deepEqual(
     logLines.map(({ correlation_id, ...line }) => line),
     [{ event: "cron_record_failed", code: "database_unavailable" }],
+  );
+});
+
+test("a batched record write that fails once fails the run even when every row is then stored", async () => {
+  await longLivedToken();
+  const originalQuery = Pool.prototype.query;
+  // A recent successful run keeps cron_stale off, so only the record failure is logged.
+  await pool.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now())");
+  let batches = 0;
+  mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    if (typeof sql === "string" && sql.includes("INTO scheduled_steps(name,last_") && Array.isArray(values?.[0])) {
+      batches++;
+      if (batches === 1) throw Object.assign(new Error("record for owner@example.test"), { code: "08006" });
+    }
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  await assert.rejects(worker.scheduled({}, env), /^Error: Cloudflare scheduled recovery failed$/);
+  assert.equal(batches, 2);
+  // Every row of the failed statement is logged once, in step order, because no row's own retry failed.
+  const steps = [
+    "kept_reply_cleanup",
+    "token_refresh",
+    "early_reply_reconcile",
+    "flow_resume",
+    "stale_recovery",
+    "wake",
+    "webhook_delivery",
+  ];
+  assert.deepEqual(
+    logLines.map(({ correlation_id, ...line }) => line),
+    steps.map((step) => ({ event: "cron_step_record_failed", code: "database_unavailable", step })),
+  );
+  // The retry stored every step's success, but the run counts the failed write.
+  const rows = (
+    await pool.query<{ name: string; failure_code: string | null; succeeded: boolean }>(
+      "SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name=ANY($1)",
+      [[...steps, "alerts"]],
+    )
+  ).rows;
+  assert.deepEqual(rows.map((row) => row.name).sort(), [...steps, "alerts"].sort());
+  assert.ok(rows.every((row) => row.failure_code === null && row.succeeded));
+  assert.equal(
+    (await pool.query("SELECT failure_code FROM scheduled_steps WHERE name='cron'")).rows[0].failure_code,
+    "step_failed",
   );
 });
 

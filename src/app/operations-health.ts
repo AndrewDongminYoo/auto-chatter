@@ -116,30 +116,78 @@ export function connectionAlerts(metrics: ConnectionMetrics, globalSendEnabled: 
   return alerts;
 }
 
+const CRON_STATUS_SQL = `SELECT step.last_success_at,
+    step.last_success_at IS NULL OR step.last_success_at<now()-make_interval(mins=>${ALERT_THRESHOLDS.cron_stale_minutes}) AS stale
+  FROM (SELECT NULL::int AS anchor) anchor LEFT JOIN scheduled_steps step ON step.name='cron'`;
+
 async function cronStatus(pool: Pool): Promise<{ last_success_at: Date | null; stale: boolean }> {
-  const result = await pool.query<{ last_success_at: Date | null; stale: boolean }>(
-    `SELECT step.last_success_at,
-       step.last_success_at IS NULL OR step.last_success_at<now()-make_interval(mins=>$1) AS stale
-     FROM (SELECT NULL::int AS anchor) anchor LEFT JOIN scheduled_steps step ON step.name='cron'`,
-    [ALERT_THRESHOLDS.cron_stale_minutes],
-  );
-  return result.rows[0]!;
+  return (await pool.query<{ last_success_at: Date | null; stale: boolean }>(CRON_STATUS_SQL)).rows[0]!;
 }
 
 // Records one cron step outcome; name 'cron' is a run in which every step that ran succeeded, alerts included.
-export async function recordStep(pool: Pool, name: OperationStep | "cron", failure: string | null): Promise<void> {
+// at is when the step finished, defaulting to now(); a run that records later passes the time it captured.
+// A stored time never moves back, and failure_code changes only with a failure that is not older than the
+// stored one, so an overlapping run that records an older outcome later leaves the newer one in place.
+export async function recordStep(
+  pool: Pool,
+  name: OperationStep | "cron",
+  failure: string | null,
+  at: Date | null = null,
+): Promise<void> {
+  const time = at?.toISOString() ?? null;
   if (failure === null)
     await pool.query(
-      `INSERT INTO scheduled_steps(name,last_success_at) VALUES($1,now())
-       ON CONFLICT(name) DO UPDATE SET last_success_at=now()`,
-      [name],
+      `INSERT INTO scheduled_steps(name,last_success_at) VALUES($1,coalesce($2::timestamptz,now()))
+       ON CONFLICT(name) DO UPDATE SET
+         last_success_at=greatest(scheduled_steps.last_success_at,excluded.last_success_at)`,
+      [name, time],
     );
   else
     await pool.query(
-      `INSERT INTO scheduled_steps(name,last_failure_at,failure_code) VALUES($1,now(),$2)
-       ON CONFLICT(name) DO UPDATE SET last_failure_at=now(),failure_code=$2`,
-      [name, failure],
+      `INSERT INTO scheduled_steps(name,last_failure_at,failure_code) VALUES($1,coalesce($3::timestamptz,now()),$2)
+       ON CONFLICT(name) DO UPDATE SET
+         last_failure_at=greatest(scheduled_steps.last_failure_at,excluded.last_failure_at),
+         failure_code=CASE WHEN scheduled_steps.last_failure_at IS NULL
+           OR excluded.last_failure_at>=scheduled_steps.last_failure_at THEN excluded.failure_code
+           ELSE scheduled_steps.failure_code END`,
+      [name, failure, time],
     );
+}
+
+// at is when the step finished, so an outcome written later by a stalled run keeps its own time and does not
+// read as newer than an outcome another run recorded meanwhile.
+export interface StepOutcome {
+  name: OperationStep | "cron";
+  failure: string | null;
+  at: Date;
+}
+
+// Records several outcomes in one statement, each with recordStep's effect on its own row: a success sets only
+// last_success_at, a failure only last_failure_at and failure_code, each to the outcome's at, and no stored time
+// moves back. A name may appear only once. The rows are written in name order, so two overlapping runs lock them
+// in the same order.
+export async function recordSteps(pool: Pool, outcomes: readonly StepOutcome[]): Promise<void> {
+  if (outcomes.length === 0) return;
+  await pool.query(
+    `INSERT INTO scheduled_steps(name,last_success_at,last_failure_at,failure_code)
+     SELECT outcome.name,CASE WHEN outcome.failure IS NULL THEN outcome.at END,
+       CASE WHEN outcome.failure IS NOT NULL THEN outcome.at END,outcome.failure
+     FROM unnest($1::text[],$2::text[],$3::timestamptz[]) AS outcome(name,failure,at) ORDER BY outcome.name
+     ON CONFLICT(name) DO UPDATE SET
+       last_success_at=CASE WHEN excluded.failure_code IS NULL
+         THEN greatest(scheduled_steps.last_success_at,excluded.last_success_at)
+         ELSE scheduled_steps.last_success_at END,
+       last_failure_at=CASE WHEN excluded.failure_code IS NULL THEN scheduled_steps.last_failure_at
+         ELSE greatest(scheduled_steps.last_failure_at,excluded.last_failure_at) END,
+       failure_code=CASE WHEN excluded.failure_code IS NOT NULL AND (scheduled_steps.last_failure_at IS NULL
+           OR excluded.last_failure_at>=scheduled_steps.last_failure_at) THEN excluded.failure_code
+         ELSE scheduled_steps.failure_code END`,
+    [
+      outcomes.map((outcome) => outcome.name),
+      outcomes.map((outcome) => outcome.failure),
+      outcomes.map((outcome) => outcome.at.toISOString()),
+    ],
+  );
 }
 
 // Every unknown outcome ever stored, resolved manual replies included, so a resolution cannot hide a new
@@ -150,8 +198,31 @@ const UNKNOWN_TOTAL_SQL = `SELECT (SELECT count(*) FROM private_reply_outbox WHE
   +(SELECT count(*) FROM instagram_manual_replies WHERE status='unknown') AS total,
   (SELECT alert_seen_count FROM scheduled_steps WHERE name='alert_unknown_outcome') AS seen`;
 
+// Everything one alert evaluation reads, in one statement and so from one snapshot: every connection's metrics
+// (as JSON, so a database without connections still returns the row), whether the 'cron' row is stale, the
+// unknown total with its stored count, and which alert rows are on. read_at is now(), the start of this
+// statement's own transaction, which comes before the statement takes its snapshot; clock_timestamp() would
+// be read after it. It stays text because a JavaScript Date would drop the microseconds and could precede a
+// transition made after it.
+const ALERT_INPUTS_SQL = `SELECT now()::text AS read_at,
+  (SELECT coalesce(json_agg(metric_row),'[]'::json) FROM (${METRICS_SQL}) metric_row) AS metrics,
+  (SELECT cron_row.stale FROM (${CRON_STATUS_SQL}) cron_row) AS cron_stale,
+  unknown_row.total,unknown_row.seen,
+  ARRAY(SELECT name FROM scheduled_steps WHERE name=ANY($2::text[]) AND alert_active) AS active_alerts
+FROM (${UNKNOWN_TOTAL_SQL}) unknown_row`;
+
+interface AlertInputs {
+  read_at: string;
+  metrics: ConnectionMetrics[];
+  cron_stale: boolean;
+  total: string;
+  seen: string | null;
+  active_alerts: string[];
+}
+
 // Compares the service-wide alerts with the stored state and logs each start or clear once, and each new
-// unknown outcome while alert_unknown_outcome is already on. The conditional writes make a transition visible
+// unknown outcome while alert_unknown_outcome is already on. An alert whose stored state already matches is
+// not written, so a run with no change issues only the read. The conditional writes make a transition visible
 // to exactly one of two overlapping cron runs. A start or clear also applies only to state that changed before
 // this run began reading, so a run that read older metrics cannot undo a transition a newer run made; it leaves
 // that alert to the next run. The seen count changes only from the value read with the total, so a run that
@@ -163,27 +234,30 @@ export async function evaluateAlerts(
   correlationId: string,
   runSucceeded = false,
 ): Promise<void> {
-  // The database clock, read before any metric, so it is comparable with alert_changed_at. It stays text
-  // because a JavaScript Date would drop the microseconds and could precede a transition made after it.
-  const readAt = (await pool.query<{ read_at: string }>("SELECT clock_timestamp()::text AS read_at")).rows[0]!.read_at;
+  const inputs = (await pool.query<AlertInputs>(ALERT_INPUTS_SQL, [null, ALERTS.map((alert) => `alert_${alert}`)]))
+    .rows[0]!;
+  const readAt = inputs.read_at;
   const active = new Set<AlertName>();
-  for (const metrics of await connectionMetrics(pool, null))
+  for (const metrics of inputs.metrics)
     for (const alert of connectionAlerts(metrics, globalSendEnabled)) active.add(alert);
-  if (!runSucceeded && (await cronStatus(pool)).stale) active.add("cron_stale");
-  const unknown = (await pool.query<{ total: string; seen: string | null }>(UNKNOWN_TOTAL_SQL)).rows[0]!;
+  if (!runSucceeded && inputs.cron_stale) active.add("cron_stale");
+  const unknown = { total: inputs.total, seen: inputs.seen };
+  const storedActive = new Set(inputs.active_alerts);
   for (const alert of ALERTS) {
     const name = `alert_${alert}`;
     const seenCount = alert === "unknown_outcome" ? unknown.total : null;
     if (active.has(alert)) {
-      const started = await pool.query(
-        `INSERT INTO scheduled_steps(name,alert_active,alert_changed_at,alert_seen_count) VALUES($1,true,now(),$2)
-         ON CONFLICT(name) DO UPDATE SET alert_active=true,alert_changed_at=now(),alert_seen_count=$2
-         WHERE NOT scheduled_steps.alert_active
-           AND (scheduled_steps.alert_changed_at IS NULL OR scheduled_steps.alert_changed_at<$3::timestamptz)
-         RETURNING 1`,
-        [name, seenCount, readAt],
-      );
-      if (started.rowCount === 1)
+      const started = storedActive.has(name)
+        ? null
+        : await pool.query(
+            `INSERT INTO scheduled_steps(name,alert_active,alert_changed_at,alert_seen_count) VALUES($1,true,now(),$2)
+             ON CONFLICT(name) DO UPDATE SET alert_active=true,alert_changed_at=now(),alert_seen_count=$2
+             WHERE NOT scheduled_steps.alert_active
+               AND (scheduled_steps.alert_changed_at IS NULL OR scheduled_steps.alert_changed_at<$3::timestamptz)
+             RETURNING 1`,
+            [name, seenCount, readAt],
+          );
+      if (started?.rowCount === 1)
         logOperation({ event: "alert_started", code: name, correlation_id: correlationId }, "warn");
       else if (seenCount !== null && seenCount !== unknown.seen) {
         // Raised or lowered (data deletion) only if no other run changed it since the read.
@@ -194,7 +268,7 @@ export async function evaluateAlerts(
         if (changed.rowCount === 1 && unknown.seen !== null && BigInt(seenCount) > BigInt(unknown.seen))
           logOperation({ event: "alert_new_occurrence", code: name, correlation_id: correlationId }, "warn");
       }
-    } else {
+    } else if (storedActive.has(name)) {
       const cleared = await pool.query(
         "UPDATE scheduled_steps SET alert_active=false,alert_changed_at=now() WHERE name=$1 AND alert_active AND alert_changed_at<$2::timestamptz RETURNING 1",
         [name, readAt],

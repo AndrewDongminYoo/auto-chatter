@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { Pool } from "pg";
+import { recordSteps } from "../app/operations-health.ts";
 
 test("Supabase roles cannot read product data; the server role has DML without DELETE or DDL", async () => {
   const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -289,6 +290,23 @@ test("Supabase roles cannot read product data; the server role has DML without D
       await client.query(
         "INSERT INTO scheduled_steps(name,last_failure_at,failure_code) VALUES('wake',now(),'database_error') ON CONFLICT(name) DO UPDATE SET last_failure_at=now(),failure_code='database_error'",
       );
+    // The cron's batched record write runs as this role; the second run takes the conflict path.
+    for (let run = 0; run < 2; run++)
+      await recordSteps(client as unknown as Pool, [
+        { name: "wake", failure: null, at: new Date() },
+        { name: "token_refresh", failure: "token_refresh_failed", at: new Date() },
+      ]);
+    assert.deepEqual(
+      (
+        await client.query(
+          "SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded,last_failure_at IS NOT NULL AS failed FROM scheduled_steps WHERE name IN ('token_refresh','wake') ORDER BY name",
+        )
+      ).rows,
+      [
+        { name: "token_refresh", failure_code: "token_refresh_failed", succeeded: false, failed: true },
+        { name: "wake", failure_code: "database_error", succeeded: true, failed: true },
+      ],
+    );
     await assert.rejects(client.query("DELETE FROM scheduled_steps"), { code: "42501" });
     await assert.rejects(client.query("CREATE TABLE public.forbidden(id int)"), { code: "42501" });
     const deletion = await client.query(

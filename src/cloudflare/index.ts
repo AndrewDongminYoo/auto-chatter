@@ -382,7 +382,9 @@ export default {
 
 // Each step records its outcome in scheduled_steps and a failure never stops the later steps; the run still
 // fails at the end so Cloudflare reports it. A failed record write is logged and fails the run too, because the
-// stored outcome is then stale. Returns whether any step or record write failed.
+// stored outcome is then stale. The outcomes are written in two statements: those of the steps before alerts,
+// so the alerts step sees a failed write, and then the alerts and cron rows. Returns whether any step or record
+// write failed.
 async function runScheduledSteps(env: Env, correlationId: string): Promise<boolean> {
   const pool = openPool(env, correlationId);
   let failed = false;
@@ -393,6 +395,7 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
     subrequests++;
     return fetch(input, init);
   };
+  let outcomes: StepOutcome[] = [];
   const step = async (name: OperationStep, run: () => Promise<unknown>): Promise<void> => {
     let failure: string | null = null;
     try {
@@ -402,17 +405,47 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
       failure = failureCode(error);
       logOperation({ event: "cron_step_failed", code: failure, correlation_id: correlationId, step: name });
     }
+    // The time after the step's last query, which is when it finished.
+    outcomes.push({ name, failure, at: new Date() });
+  };
+  const logRecordFailure = (name: OperationStep | "cron", code: string): void => {
+    if (name === "cron") logOperation({ event: "cron_record_failed", code, correlation_id: correlationId });
+    else logOperation({ event: "cron_step_record_failed", code, correlation_id: correlationId, step: name });
+  };
+  // Returns whether the row was stored.
+  const recordOne = async ({ name, failure, at }: StepOutcome): Promise<boolean> => {
     try {
-      await recordStep(pool, name, failure);
+      await recordStep(pool, name, failure, at);
+      return true;
     } catch (error) {
       failed = true;
-      logOperation({
-        event: "cron_step_record_failed",
-        code: failureCode(error),
-        correlation_id: correlationId,
-        step: name,
-      });
+      logRecordFailure(name, failureCode(error));
+      return false;
     }
+  };
+  // Writes the outcomes collected so far, then the 'cron' row when withCron is set: a run in which every step
+  // and every record write succeeded. A failed statement fails the run, and its rows are then written one at a
+  // time so the stored outcomes stay current; the 'cron' row, written after the failure, records step_failed.
+  // Each row whose own write fails again is logged as when each step wrote its own row. If every row is
+  // stored on that retry, every row of the failed statement is logged with the statement's failure code, so a
+  // failed run always has a record failure line.
+  const flush = async (withCron: boolean): Promise<void> => {
+    const pending = outcomes;
+    outcomes = [];
+    const rows = (): StepOutcome[] =>
+      withCron ? [...pending, { name: "cron", failure: failed ? "step_failed" : null, at: new Date() }] : pending;
+    let statementFailure: string;
+    try {
+      await recordSteps(pool, rows());
+      return;
+    } catch (error) {
+      failed = true;
+      statementFailure = failureCode(error);
+    }
+    const retried = rows();
+    let stored = true;
+    for (const outcome of retried) if (!(await recordOne(outcome))) stored = false;
+    if (stored) for (const { name } of retried) logRecordFailure(name, statementFailure);
   };
   try {
     // The text of a DM kept while its reply was being sent (#108) is removed after 15 minutes. This
@@ -457,16 +490,12 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
         });
       });
     }
+    await flush(false);
     // The alerts step runs before the 'cron' row is written, so that row counts its failure too; a run whose
-    // earlier steps all succeeded clears cron_stale in the same run.
+    // earlier steps and their record writes all succeeded clears cron_stale in the same run.
     const succeeded = !failed;
     await step("alerts", () => evaluateAlerts(pool, env.SEND_ENABLED === "true", correlationId, succeeded));
-    try {
-      await recordStep(pool, "cron", failed ? "step_failed" : null);
-    } catch (error) {
-      failed = true;
-      logOperation({ event: "cron_record_failed", code: failureCode(error), correlation_id: correlationId });
-    }
+    await flush(true);
   } finally {
     await pool.end();
   }
@@ -492,5 +521,5 @@ import {
   TokenRefreshFailedError,
   type OperationStep,
 } from "../app/operations-log.ts";
-import { evaluateAlerts, recordStep } from "../app/operations-health.ts";
+import { evaluateAlerts, recordStep, recordSteps, type StepOutcome } from "../app/operations-health.ts";
 import { CRON_SUBREQUEST_BUDGET, deliverDueWebhooks } from "../app/webhook-delivery.ts";
