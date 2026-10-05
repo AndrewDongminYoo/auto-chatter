@@ -14,9 +14,11 @@ import {
 import { readMetaGraphError } from "../instagram/meta-graph-error.ts";
 import { refreshDueInstagramTokensWithFailures } from "../app/instagram-token-refresh.ts";
 import { deliveryRecipientOptedOut } from "../instagram/channel-consent.ts";
+import { durableLimits, type LimiterNamespace } from "./auth-limiter.ts";
+// The Durable Object class behind AUTH_LIMITER must be exported from the Worker's main module.
+export { AuthLimiter } from "./auth-limiter.ts";
 export interface Env extends AuthEnv, InstagramOAuthEnv {
-  AUTH_IP_LIMIT: { limit(input: { key: string }): Promise<{ success: boolean }> };
-  AUTH_EMAIL_LIMIT: { limit(input: { key: string }): Promise<{ success: boolean }> };
+  AUTH_LIMITER: LimiterNamespace;
   HYPERDRIVE: { connectionString: string };
   REPLY_QUEUE: { send(body: { connectionId: string }): Promise<void> };
   INSTAGRAM_APP_SECRET: string;
@@ -115,7 +117,7 @@ async function receive(request: Request, env: Env, correlationId: string): Promi
   if (url.pathname.startsWith("/api/"))
     return appApi(
       request,
-      env,
+      { ...env, ...durableLimits(env.AUTH_LIMITER) },
       (poolCorrelationId) => openPool(env, poolCorrelationId),
       fetch,
       async (connectionId) => {

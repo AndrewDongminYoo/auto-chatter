@@ -109,9 +109,9 @@ Facebook Login은 기존 Node 워커 경로에서만 지원합니다.
 
 ## 1. Supabase 준비
 
-인증 요청의 Worker 제한은 `wrangler.json`의 `AUTH_IP_LIMIT`(IP·경로별 분당 30회)와 `AUTH_EMAIL_LIMIT`(이메일 해시별 분당 5회)를 사용합니다.
+인증 요청의 Worker 제한(IP·경로별 분당 30회, 이메일 해시별 분당 5회)은 `wrangler.json`의 Durable Object 바인딩 `AUTH_LIMITER`(클래스 `AuthLimiter`, 마이그레이션 태그 `v1`)가 키마다 셉니다. 2026-10-06까지 쓰던 rate limit 바인딩 `AUTH_IP_LIMIT`·`AUTH_EMAIL_LIMIT`은 기계별로 세어 새 연결에서 한도가 걸리지 않아 바꿨습니다([#148](https://github.com/AndrewDongminYoo/auto-chatter/issues/148)).
 가입·복구·인증 메일 재전송은 이메일 제한을 공유하고 로그인은 별도로 집계합니다.
-이 제한은 Cloudflare 접속 위치별로 집계되며 공유 IP 사용자에게 함께 적용될 수 있습니다.
+같은 키의 요청은 어느 접속 위치로 들어와도 이름으로 정한 하나의 Durable Object가 세므로 전역으로 집계되며, IP 제한은 공유 IP 사용자에게 함께 적용될 수 있습니다.
 Supabase Auth의 자체 이메일·IP 제한은 별도로 적용됩니다.
 운영 브라우저에서 가입 메일, 인증 링크, 만료 링크, 복구 메일, 이전 세션 폐기를 확인하고 결과를 이 문서에 기록해야 합니다.
 
