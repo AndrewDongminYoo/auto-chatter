@@ -174,8 +174,10 @@ beforeEach(async () => {
   published = [];
   sends = 0;
   env = {
-    AUTH_IP_LIMIT: { limit: async () => ({ success: true }) },
-    AUTH_EMAIL_LIMIT: { limit: async () => ({ success: true }) },
+    AUTH_LIMITER: {
+      idFromName: (name: string) => name,
+      get: () => ({ fetch: async () => Response.json({ success: true }) }),
+    },
     HYPERDRIVE: { connectionString: databaseUrl! },
     REPLY_QUEUE: {
       async send(body) {

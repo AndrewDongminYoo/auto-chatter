@@ -54,14 +54,8 @@ test("workerd auth routes call the provider with the native fetch receiver", asy
     scriptPath: ".wrangler/build/index.js",
     compatibilityDate: config.compatibility_date,
     compatibilityFlags: config.compatibility_flags,
-    ratelimits: Object.fromEntries(
-      config.ratelimits.map(({ name, namespace_id, simple }) => [
-        name,
-        {
-          namespace_id,
-          simple: { ...simple, limit: name === "AUTH_EMAIL_LIMIT" ? 2 : simple.limit },
-        },
-      ]),
+    durableObjects: Object.fromEntries(
+      config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }]),
     ),
     bindings: {
       SUPABASE_URL: "https://auth-test.supabase.co",
@@ -99,8 +93,9 @@ test("workerd auth routes call the provider with the native fetch receiver", asy
       assert.equal(response.status, status, `${route}: ${await response.clone().text()}`);
       assert.deepEqual(await response.json(), body);
     }
+    // Signup was the first mail request for this email; four recoveries reach the limit of five (#148).
     for (const [route, status, body] of [
-      ["recover", 200, { recovery_requested: true }],
+      ...Array.from({ length: 4 }, () => ["recover", 200, { recovery_requested: true }]),
       ["resend-confirmation", 429, { error: "auth_rate_limited" }],
     ]) {
       const response = await runtime.dispatchFetch(`https://app.test/api/auth/${route}`, {
