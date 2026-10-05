@@ -69,8 +69,25 @@ test("a new window starts once the period has passed, and the alarm removes the 
   t.mock.timers.tick(60_000);
   assert.equal(await hit(limiter, 2, 60_000), true);
   assert.equal(state.alarm, 2_120_000);
+  t.mock.timers.tick(60_000);
   await limiter.alarm();
   assert.equal(values.size, 0);
+});
+
+test("an alarm delivered again after the next window opened keeps that window and its alarm", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 3_000_000 });
+  const { state, values } = fakeState();
+  const limiter = new AuthLimiter(state);
+  await hit(limiter, 2, 60_000);
+  t.mock.timers.tick(60_000);
+  await limiter.alarm();
+  assert.equal(values.size, 0);
+  // The next window opens, then the first window's alarm arrives a second time.
+  await hit(limiter, 2, 60_000);
+  await hit(limiter, 2, 60_000);
+  await limiter.alarm();
+  assert.equal(await hit(limiter, 2, 60_000), false);
+  assert.equal(state.alarm, 3_120_000);
 });
 
 test("the limiter refuses a malformed request instead of counting it", async () => {

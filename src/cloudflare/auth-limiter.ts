@@ -18,7 +18,7 @@ export interface LimiterNamespace {
   get(id: unknown): { fetch(input: string, init?: RequestInit): Promise<Response> };
 }
 
-type Window = { start: number; count: number };
+type Window = { end: number; count: number };
 
 // A fixed window per key: the first request opens it and sets an alarm at its end, every request is counted,
 // refused ones included, and the alarm removes the stored window so keys that are never seen again keep no data.
@@ -41,16 +41,20 @@ export class AuthLimiter {
       return new Response(null, { status: 400 });
     const now = Date.now();
     let window = await this.state.storage.get<Window>("window");
-    if (!window || now - window.start >= Number(period)) {
-      window = { start: now, count: 0 };
-      await this.state.storage.setAlarm(now + Number(period));
+    if (!window || now >= window.end) {
+      window = { end: now + Number(period), count: 0 };
+      await this.state.storage.setAlarm(window.end);
     }
     window.count++;
     await this.state.storage.put("window", window);
     return Response.json({ success: window.count <= Number(limit) });
   }
 
+  // Alarms can be delivered more than once, so a delivery that arrives after the next window opened keeps that
+  // window and its alarm; only an ended window is removed.
   async alarm(): Promise<void> {
+    const window = await this.state.storage.get<Window>("window");
+    if (window && Date.now() < window.end) return this.state.storage.setAlarm(window.end);
     await this.state.storage.deleteAll();
   }
 }
