@@ -147,3 +147,8 @@ TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:5433/automations_test 
 
 `test:cloudflare`는 배포하지 않고 번들을 만든 뒤 로컬 workerd·PostgreSQL·가짜 Graph 응답으로 검증합니다.
 Supabase 권한 SQL 테스트는 격리된 테스트 DB 서버에서만 실행합니다.
+
+## 라이선스
+
+[PolyForm Noncommercial License 1.0.0](LICENSE)을 따릅니다.
+비상업적 목적의 사용, 수정, 재배포는 허용되며, 상업적으로 사용하려면 저작권자와 별도로 계약해야 합니다.
