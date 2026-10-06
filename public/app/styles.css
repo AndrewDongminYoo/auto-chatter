@@ -315,6 +315,83 @@ body:has(#workspace:not([hidden]))::before {
   background: var(--color-accent);
   color: var(--color-success);
 }
+/* A view receives focus only so screen readers announce the menu switch; it is not a control. */
+.view:focus,
+.view:focus-visible {
+  outline: none;
+}
+.getting-started {
+  margin-bottom: 28px;
+}
+.checklist {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+.checklist li {
+  counter-increment: step;
+  display: grid;
+  grid-template-columns: 28px 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+}
+.checklist li::before {
+  content: counter(step);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--color-soft);
+  color: var(--color-brand);
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.checklist li.done::before {
+  content: "✓" / "";
+  background: var(--color-accent);
+  color: var(--color-success);
+}
+.checklist strong {
+  display: block;
+}
+.checklist .hint {
+  margin: 2px 0 0;
+}
+.step-state:empty {
+  display: none;
+}
+.step-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 9px 16px;
+  border-radius: var(--radius-control);
+  background: var(--color-brand);
+  color: var(--color-on-brand);
+  font-weight: 700;
+  text-decoration: none;
+}
+.step-action:hover {
+  box-shadow: inset 0 0 0 100px #7d97b51a;
+}
+@media (max-width: 600px) {
+  .checklist li {
+    grid-template-columns: 28px 1fr;
+  }
+  .checklist .step-state,
+  .checklist .step-action {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
 #accounts-section,
 #workspace-settings-section,
 #webhooks-section,
@@ -1264,8 +1341,10 @@ section {
     gap: 4px;
     margin: 0 0 20px;
     border-bottom: 1px solid var(--color-border);
+    overflow-x: auto;
   }
   .workspace-nav a {
+    flex-shrink: 0;
     padding: 10px;
     font-size: 13px;
   }
