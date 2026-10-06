@@ -25,6 +25,7 @@ let fieldNameDirty = false;
 let refreshPromise;
 let currentUserId;
 let currentRole;
+let currentView;
 // The workspace time zone, which the inbox reminder editor shows its date and time in.
 let workspaceTimeZone;
 let pendingInvite = null;
@@ -157,8 +158,10 @@ function resetSession() {
   connections = [];
   currentUserId = undefined;
   currentRole = undefined;
+  currentView = undefined;
   workspaceTimeZone = undefined;
   byId("members-section").hidden = true;
+  byId("getting-started").hidden = true;
   byId("time-zone-form").reset();
   timeZoneControls();
   byId("members").replaceChildren();
@@ -1006,6 +1009,73 @@ async function loadWebhooks() {
   }
 }
 
+// Menu views: each one shows a group of sections. Switching only hides the others, so drafts and inputs stay.
+const views = ["home", "accounts", "automation", "inbox", "contacts", "settings"];
+function viewFromHash() {
+  const name = location.hash.slice(1);
+  if (views.includes(name)) return name;
+  // An older section link such as #inbox-section opens the view that holds it. Anything else (#main, auth and invite
+  // fragments) leaves the view as it is.
+  if (!/^[a-z][a-z-]*$/.test(name)) return null;
+  return byId(name)?.closest(".view")?.dataset.view ?? null;
+}
+function showView(name, focus) {
+  currentView = name;
+  for (const view of document.querySelectorAll("#workspace .view")) view.hidden = view.dataset.view !== name;
+  for (const link of document.querySelectorAll(".workspace-nav a")) {
+    if (link.hash === `#${name}`) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  }
+  if (!focus) return;
+  scrollTo({ top: 0 });
+  byId(`view-${name}`).focus({ preventScroll: true });
+}
+// After the view is shown, an older section link scrolls to its section; the browser could not while it was hidden.
+function scrollToSectionHash() {
+  const target = location.hash.slice(1);
+  if (!views.includes(target) && viewFromHash()) byId(target).scrollIntoView({ block: "start" });
+}
+addEventListener("hashchange", () => {
+  if (byId("workspace").hidden) return;
+  const name = viewFromHash();
+  if (!name) return;
+  showView(name, true);
+  scrollToSectionHash();
+});
+// Clicking the menu that is already in the address changes no fragment, so no hashchange follows.
+document.querySelector(".workspace-nav").addEventListener("click", (event) => {
+  const link = event.target.closest("a");
+  if (link && link.hash === location.hash) showView(link.hash.slice(1), true);
+});
+
+// The getting-started steps on the home view, for owners and admins until every step is done.
+function renderGettingStarted(rules, globalSendEnabled, connectAvailable) {
+  const connected = connections.length > 0;
+  const sendSet = connections.some((account) => account.send_enabled);
+  // [id, done, available, waiting]: a waiting step is blocked by a service setting the owner cannot change.
+  const steps = [
+    ["step-connect", connected, true, connectAvailable ? "" : "연결 제한 중"],
+    ["step-rule", rules.length > 0, connected, ""],
+    ["step-send", sendSet && globalSendEnabled, connected, sendSet && !globalSendEnabled ? "전체 발송 재개 대기" : ""],
+  ];
+  byId("getting-started").hidden =
+    (currentRole !== "owner" && currentRole !== "admin") || steps.every(([, done]) => done);
+  for (const [id, done, available, waiting] of steps) {
+    const step = byId(id);
+    step.classList.toggle("done", done);
+    const state = step.querySelector(".step-state");
+    state.textContent = done ? "완료" : !available ? "계정을 먼저 연결하세요" : waiting;
+    state.className = `step-state${done ? " badge success" : !available || waiting ? " badge" : ""}`;
+    step.querySelector(".step-action").hidden = done || !available || waiting !== "";
+  }
+  byId("step-connect-help").textContent = connectAvailable
+    ? "관리하는 전문 계정을 연결합니다."
+    : "새 Instagram 계정 연결이 현재 제한되어 있습니다. 연결이 열리면 이 단계부터 시작할 수 있습니다.";
+  byId("step-send-help").textContent = globalSendEnabled
+    ? "계정의 발송 설정을 켜면 규칙에 맞는 댓글에 DM을 보냅니다."
+    : "전체 발송이 중지되어 있어, 계정의 발송 설정을 켜도 재개되기 전에는 메시지가 전송되지 않습니다.";
+}
+
 async function loadWorkspace() {
   invalidateContactExport();
   const generation = segmentsGeneration;
@@ -1048,10 +1118,13 @@ async function loadWorkspace() {
     ? "자동 발송을 시작할 수 있습니다"
     : "전체 발송이 중지되어 있습니다";
   byId("delivery-banner").classList.toggle("enabled", me.global_send_enabled);
+  renderGettingStarted(settings.rules, me.global_send_enabled, me.instagram_connect_available === true);
 
   byId("auth").hidden = true;
   byId("workspace").hidden = false;
   byId("logout").hidden = false;
+  const firstDisplay = currentView === undefined;
+  showView(viewFromHash() ?? currentView ?? "home", false);
   const connectAvailable = me.instagram_connect_available === true;
   byId("delivery-status").textContent = me.global_send_enabled
     ? "계정별로 발송을 켜고 규칙을 활성화하면 자동화를 시작합니다."
@@ -1279,6 +1352,7 @@ async function loadWorkspace() {
       ),
     );
   }
+  if (firstDisplay) scrollToSectionHash();
 }
 
 function mediaKey(connectionId, mediaId) {
