@@ -25,6 +25,12 @@ function tag(value: unknown): string {
   if (!result || result.length > 40 || /[\p{Cc}\p{Cf}]/u.test(result)) throw new ApiError(400, "invalid_contact_tags");
   return result;
 }
+function parseConditionOperator(value: unknown, filterTag: string | null, hasField: boolean): "and" | "or" {
+  if (value === undefined) return "and";
+  if ((value !== "and" && value !== "or") || (value === "or" && (!filterTag || !hasField)))
+    throw new ApiError(400, "invalid_contact_condition");
+  return value;
+}
 // Contact writes share the connection row lock with delete_connection_data (FOR NO KEY UPDATE),
 // so a write either finishes before a deletion or re-checks the contact after it.
 export async function lockContactConnection(client: PoolClient, workspace: string, connectionId: string) {
@@ -50,7 +56,16 @@ function cursor(value: string | null): { connection_id: string; sender_id: strin
 export async function listContacts(pool: Pool, user: User, options: URLSearchParams = new URLSearchParams()) {
   for (const key of options.keys())
     if (
-      !["connection_id", "tag", "after", "segment_id", "field_id", "field_operator", "field_value"].includes(key) ||
+      ![
+        "connection_id",
+        "tag",
+        "after",
+        "segment_id",
+        "field_id",
+        "field_operator",
+        "field_value",
+        "condition_operator",
+      ].includes(key) ||
       options.getAll(key).length !== 1
     )
       throw new ApiError(400, "invalid_contact_request");
@@ -61,7 +76,9 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   if (
     segmentId !== null &&
     (!isUuid(segmentId) ||
-      ["connection_id", "tag", "field_id", "field_operator", "field_value"].some((key) => options.has(key)))
+      ["connection_id", "tag", "field_id", "field_operator", "field_value", "condition_operator"].some((key) =>
+        options.has(key),
+      ))
   )
     throw new ApiError(400, "invalid_contact_request");
   const fieldInput: Record<string, unknown> = {};
@@ -75,6 +92,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
     }
   }
   let condition = parseFieldCondition(fieldInput);
+  let operator = parseConditionOperator(options.get("condition_operator") ?? undefined, filterTag, Boolean(condition));
   const after = cursor(options.get("after"));
   const workspaceId = await workspaceFor(pool, user, "agent");
   if (segmentId !== null) {
@@ -84,8 +102,9 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       field_id: string | null;
       field_operator: string;
       field_value: unknown;
+      condition_operator: string;
     }>(
-      "SELECT connection_id,tag,field_id,field_operator,field_value FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
+      "SELECT connection_id,tag,field_id,field_operator,field_value,condition_operator FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
       [workspaceId, segmentId],
     );
     if (!segment.rows[0]) throw new ApiError(404, "segment_not_found");
@@ -99,6 +118,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
           ...(fieldConditionNeedsValue(saved.field_operator) ? { field_value: saved.field_value } : {}),
         }
       : null;
+    operator = parseConditionOperator(saved.condition_operator, filterTag, Boolean(condition));
   }
   await validateFieldCondition(pool, workspaceId, condition);
   const result = await pool.query<Contact>(
@@ -111,14 +131,14 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
  LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=e.workspace_id AND automation.connection_id=e.connection_id AND automation.sender_id=e.sender_id
  LEFT JOIN instagram_contact_tags t ON t.workspace_id=e.workspace_id AND t.connection_id=e.connection_id AND t.sender_id=e.sender_id
  WHERE e.workspace_id=$1 AND ($2::uuid IS NULL OR e.connection_id=$2)
- AND ($3::text IS NULL OR $3=ANY(t.tags))
+ AND ($9::text='or' OR $3::text IS NULL OR $3=ANY(t.tags))
  AND ($4::uuid IS NULL OR (e.connection_id,e.sender_id)>($4::uuid,$5::text))
- AND ($6::uuid IS NULL OR CASE WHEN $7::text='is_unset' THEN NOT EXISTS(
+ AND (($9::text='or' AND $3=ANY(t.tags)) OR ($6::uuid IS NULL OR CASE WHEN $7::text='is_unset' THEN NOT EXISTS(
    SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=$6 AND v.value IS NOT NULL)
  ELSE EXISTS(SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=$6 AND v.value IS NOT NULL
    AND ($7='is_set' OR (jsonb_typeof(v.value)=jsonb_typeof($8::jsonb) AND CASE $7
      WHEN 'eq' THEN v.value=$8::jsonb WHEN 'gt' THEN v.value>$8::jsonb WHEN 'gte' THEN v.value>=$8::jsonb
-     WHEN 'lt' THEN v.value<$8::jsonb WHEN 'lte' THEN v.value<=$8::jsonb ELSE false END))) END)
+     WHEN 'lt' THEN v.value<$8::jsonb WHEN 'lte' THEN v.value<=$8::jsonb ELSE false END))) END))
  GROUP BY e.workspace_id,e.connection_id,e.sender_id,c.username,t.tags,(automation.paused OR automation.handoff_paused) ORDER BY e.connection_id,e.sender_id LIMIT 51`,
     [
       workspaceId,
@@ -129,6 +149,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       condition?.field_id ?? null,
       condition?.field_operator ?? null,
       condition && fieldConditionNeedsValue(condition.field_operator) ? JSON.stringify(condition.field_value) : null,
+      operator,
     ],
   );
   const contacts = result.rows.slice(0, 50);
@@ -180,7 +201,7 @@ export async function listContactSegments(pool: Pool, user: User) {
   const workspace = await workspaceFor(pool, user, "agent");
   return (
     await pool.query(
-      "SELECT id,name,connection_id,tag,field_id,field_operator,field_value FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived ORDER BY name,id",
+      "SELECT id,name,connection_id,tag,field_id,field_operator,field_value,condition_operator FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived ORDER BY name,id",
       [workspace],
     )
   ).rows.map(segmentResult);
@@ -194,10 +215,12 @@ function segmentResult(row: {
   field_id?: string | null;
   field_operator?: string | null;
   field_value?: unknown;
+  condition_operator?: string;
 }) {
-  const { field_id, field_operator, field_value, ...base } = row;
+  const { field_id, field_operator, field_value, condition_operator, ...base } = row;
   return {
     ...base,
+    ...(condition_operator === "or" ? { condition_operator } : {}),
     ...(field_id
       ? { field_id, field_operator, ...(fieldConditionNeedsValue(field_operator ?? "") ? { field_value } : {}) }
       : {}),
@@ -208,7 +231,10 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
   if (
     !isRecord(input) ||
     Object.keys(input).some(
-      (key) => !["name", "connection_id", "tag", "field_id", "field_operator", "field_value"].includes(key),
+      (key) =>
+        !["name", "connection_id", "tag", "field_id", "field_operator", "field_value", "condition_operator"].includes(
+          key,
+        ),
     ) ||
     typeof input.name !== "string" ||
     input.name.length > 300
@@ -220,6 +246,7 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
   if (connectionId !== null && !isUuid(connectionId)) throw new ApiError(400, "invalid_segment");
   const filterTag = input.tag === undefined || input.tag === null || input.tag === "" ? null : tag(input.tag);
   const condition = parseFieldCondition(input);
+  const operator = parseConditionOperator(input.condition_operator, filterTag, Boolean(condition));
   const workspace = await workspaceFor(pool, user, "admin");
   const client = await pool.connect();
   try {
@@ -238,9 +265,9 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
     )
       throw new ApiError(404, "connection_not_found");
     const result = await client.query(
-      `INSERT INTO instagram_contact_segments(workspace_id,name,connection_id,tag,field_id,field_operator,field_value)
- SELECT $1,$2,$3,$4,$5,$6,$7::jsonb WHERE (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived)<50
- RETURNING id,name,connection_id,tag,field_id,field_operator,field_value`,
+      `INSERT INTO instagram_contact_segments(workspace_id,name,connection_id,tag,field_id,field_operator,field_value,condition_operator)
+ SELECT $1,$2,$3,$4,$5,$6,$7::jsonb,$8 WHERE (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived)<50
+ RETURNING id,name,connection_id,tag,field_id,field_operator,field_value,condition_operator`,
       [
         workspace,
         name,
@@ -249,6 +276,7 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
         condition?.field_id ?? null,
         condition?.field_operator ?? null,
         condition && fieldConditionNeedsValue(condition.field_operator) ? JSON.stringify(condition.field_value) : null,
+        operator,
       ],
     );
     if (!result.rows[0]) throw new ApiError(409, "segment_limit_reached");

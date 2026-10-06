@@ -728,6 +728,193 @@ test("field filters reject malformed mixed and foreign conditions", async () => 
   );
 });
 
+test("combined tag and field filters honor AND OR truth tables without widening account scope", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const field = await createField("Combined score", "number");
+  for (const [sender, value, tags] of [
+    ["both", 0, ["lead"]],
+    ["field-only", 10, []],
+    ["neither", -1, []],
+    ["tag-only", -1, ["lead"]],
+    ["unset-bare", null, []],
+    ["unset-tagged", null, ["lead"]],
+  ] as const) {
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,$3,'media',$3,'private')",
+      [workspace, connectionId, sender],
+    );
+    await fieldRequest("PUT", fieldValuePath(field.id, sender), { value });
+    await saveContactTags(pool, a, connectionId, sender, { tags });
+  }
+  const other = "77777777-7777-4777-8777-777777777777";
+  const foreign = "88888888-8888-4888-8888-888888888888";
+  for (const [id, owner] of [
+    [other, workspace],
+    [foreign, await ensureWorkspace(pool, b)],
+  ]) {
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,$1::uuid::text)", [
+      id,
+      owner,
+    ]);
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'scope','media','both','private')",
+      [owner, id],
+    );
+    await pool.query(
+      "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'both','{lead}')",
+      [owner, id],
+    );
+  }
+  const query = new URLSearchParams({
+    connection_id: connectionId,
+    tag: " Lead ",
+    field_id: field.id,
+    field_operator: "gte",
+    field_value: "0",
+  });
+  assert.deepEqual(
+    (await listContacts(pool, a, query)).contacts.map((c) => c.sender_id),
+    ["both"],
+  );
+  query.set("condition_operator", "and");
+  assert.deepEqual(
+    (await listContacts(pool, a, query)).contacts.map((c) => c.sender_id),
+    ["both"],
+  );
+  query.set("condition_operator", "or");
+  assert.deepEqual(
+    (await listContacts(pool, a, query)).contacts.map((c) => c.sender_id),
+    ["both", "field-only", "tag-only", "unset-tagged"],
+  );
+  query.set("field_operator", "is_unset");
+  query.delete("field_value");
+  assert.deepEqual(
+    (await listContacts(pool, a, query)).contacts.map((c) => c.sender_id),
+    ["both", "tag-only", "unset-bare", "unset-tagged"],
+  );
+  query.set("condition_operator", "and");
+  assert.deepEqual(
+    (await listContacts(pool, a, query)).contacts.map((c) => c.sender_id),
+    ["unset-tagged"],
+  );
+  query.set("condition_operator", "or");
+  query.delete("connection_id");
+  assert.equal((await listContacts(pool, a, query)).contacts.filter((c) => c.connection_id === other).length, 1);
+  assert.equal(
+    (await listContacts(pool, a, query)).contacts.some((c) => c.connection_id === foreign),
+    false,
+  );
+});
+
+test("combined saved filters preserve OR and re-evaluate either current condition", async () => {
+  await fieldContact();
+  const field = await createField("Combined boolean", "boolean");
+  await fieldRequest("PUT", fieldValuePath(field.id), { value: true });
+  await saveContactTags(pool, a, connectionId, "sender", { tags: ["lead"] });
+  const response = await fieldRequest("POST", "/api/contact-segments", {
+    name: "Tag or false",
+    connection_id: connectionId,
+    tag: "lead",
+    field_id: field.id,
+    field_operator: "eq",
+    field_value: false,
+    condition_operator: "or",
+  });
+  assert.equal(response.status, 201);
+  const segment = await response.json();
+  assert.equal(segment.condition_operator, "or");
+  assert.equal(segment.field_value, false);
+  assert.deepEqual((await listContactSegments(pool, a))[0], segment);
+  const query = new URLSearchParams({ segment_id: segment.id });
+  assert.equal((await listContacts(pool, a, query)).contacts.length, 1);
+  await saveContactTags(pool, a, connectionId, "sender", { tags: [] });
+  assert.equal((await listContacts(pool, a, query)).contacts.length, 0);
+  await fieldRequest("PUT", fieldValuePath(field.id), { value: false });
+  assert.equal((await listContacts(pool, a, query)).contacts.length, 1);
+  assert.equal((await fieldRequest("GET", `/api/contacts?${query}`, undefined, b)).status, 404);
+  assert.equal((await fieldRequest("DELETE", `/api/contact-fields/${field.id}`)).status, 409);
+  assert.equal((await fieldRequest("GET", `/api/contacts?${query}&condition_operator=or`)).status, 400);
+  await archiveContactSegment(pool, a, segment.id);
+  assert.equal((await fieldRequest("GET", `/api/contacts?${query}`)).status, 404);
+});
+
+test("combined filters reject meaningless or malformed OR even when the tag matches", async () => {
+  await fieldContact();
+  await saveContactTags(pool, a, connectionId, "sender", { tags: ["lead"] });
+  const field = await createField("Validated combination", "number");
+  const base = { name: "Invalid combination", tag: "lead", field_id: field.id, field_operator: "gte", field_value: 0 };
+  for (const condition_operator of ["and", "or"]) {
+    const query = new URLSearchParams({
+      tag: "lead",
+      field_id: field.id,
+      field_operator: "gte",
+      field_value: "0",
+      condition_operator,
+    });
+    assert.equal((await fieldRequest("GET", `/api/contacts?${query}`, undefined, b)).status, 404);
+  }
+  for (const condition_operator of [null, true, ["or"], "OR", "xor", "or OR true"]) {
+    assert.equal((await fieldRequest("POST", "/api/contact-segments", { ...base, condition_operator })).status, 400);
+  }
+  for (const input of [
+    { name: "Missing field", tag: "lead", condition_operator: "or" },
+    { name: "Missing tag", field_id: field.id, field_operator: "is_set", condition_operator: "or" },
+    { ...base, condition_operator: "or", field_value: "0" },
+  ])
+    assert.equal((await fieldRequest("POST", "/api/contact-segments", input)).status, 400);
+  for (const query of [
+    "tag=lead&condition_operator=or",
+    `field_id=${field.id}&field_operator=is_set&condition_operator=or`,
+    `tag=lead&field_id=${field.id}&field_operator=gte&field_value=%220%22&condition_operator=or`,
+    `tag=lead&field_id=${field.id}&field_operator=is_set&condition_operator=or&condition_operator=and`,
+  ])
+    assert.equal((await fieldRequest("GET", `/api/contacts?${query}`)).status, 400);
+  assert.equal((await fieldRequest("DELETE", `/api/contact-fields/${field.id}`)).status, 200);
+  assert.equal(
+    (
+      await fieldRequest(
+        "GET",
+        `/api/contacts?tag=lead&field_id=${field.id}&field_operator=is_set&condition_operator=or`,
+      )
+    ).status,
+    404,
+  );
+});
+
+test("combined OR contacts retain the stable cursor and never duplicate dual matches", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const field = await createField("Combined page", "number");
+  await pool.query(
+    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,'combined-'||n,'media',lpad(n::text,3,'0'),'private' FROM generate_series(1,55) n",
+    [workspace, connectionId],
+  );
+  await pool.query(
+    "INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) SELECT $1,$2,lpad(n::text,3,'0'),$3,to_jsonb(CASE WHEN n%2=0 THEN -1 ELSE 0 END) FROM generate_series(1,55) n",
+    [workspace, connectionId, field.id],
+  );
+  await pool.query(
+    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) SELECT $1,$2,lpad(n::text,3,'0'),'{lead}' FROM generate_series(1,55) n WHERE n%2=0 OR n=1",
+    [workspace, connectionId],
+  );
+  const query = new URLSearchParams({
+    tag: "lead",
+    field_id: field.id,
+    field_operator: "gte",
+    field_value: "0",
+    condition_operator: "or",
+  });
+  const first = await listContacts(pool, a, query);
+  assert.equal(first.contacts.length, 50);
+  assert.ok(first.after);
+  query.set("after", first.after);
+  const second = await listContacts(pool, a, query);
+  assert.equal(second.after, null);
+  assert.deepEqual(
+    [...first.contacts, ...second.contacts].map((c) => c.sender_id),
+    Array.from({ length: 55 }, (_, n) => String(n + 1).padStart(3, "0")),
+  );
+});
+
 test("ordered field filters compare numbers numerically and dates at each boundary", async () => {
   await fieldContact();
   for (const [type, low, equal, high] of [
@@ -1424,6 +1611,51 @@ test("concurrent segment creations cannot exceed fifty active records", async ()
   await archiveContactSegment(pool, a, first.id);
   assert.ok((await createContactSegment(pool, a, { name: "replacement" })).id);
   assert.equal((await listContactSegments(pool, a)).length, 50);
+});
+
+test("tag field operator migration defaults existing filters to AND and preserves OR on replay", async () => {
+  const field = await createField("Migration score", "number");
+  const workspace = await ensureWorkspace(pool, a);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN condition_operator");
+    await client.query(
+      "INSERT INTO instagram_contact_segments(workspace_id,name,tag,field_id,field_operator,field_value) VALUES($1,'Legacy','lead',$2,'gte','0'::jsonb)",
+      [workspace, field.id],
+    );
+    const migration = await readFile(
+      new URL("../../db/migrations/037_tag_field_condition_operator.sql", import.meta.url),
+      "utf8",
+    );
+    await client.query(migration);
+    await client.query(migration);
+    assert.deepEqual(
+      (await client.query("SELECT name,tag,field_value,condition_operator FROM instagram_contact_segments")).rows,
+      [{ name: "Legacy", tag: "lead", field_value: 0, condition_operator: "and" }],
+    );
+    await client.query("UPDATE instagram_contact_segments SET condition_operator='or'");
+    await client.query(migration);
+    assert.equal(
+      (await client.query("SELECT condition_operator FROM instagram_contact_segments")).rows[0].condition_operator,
+      "or",
+    );
+    for (const change of [
+      "condition_operator='xor'",
+      "tag=NULL",
+      "field_id=NULL,field_operator=NULL,field_value=NULL",
+    ]) {
+      await client.query("SAVEPOINT invalid_operator");
+      await assert.rejects(
+        client.query(`UPDATE instagram_contact_segments SET ${change}`),
+        (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "23514",
+      );
+      await client.query("ROLLBACK TO SAVEPOINT invalid_operator");
+    }
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
 });
 
 test("segment migration upgrades and replays while retaining saved filters", async () => {

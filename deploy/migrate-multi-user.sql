@@ -36,5 +36,6 @@ BEGIN;
 \ir ../db/migrations/034_inbox_reminders.sql
 \ir ../db/migrations/035_inbox_label_rules.sql
 \ir ../db/migrations/036_ordered_field_conditions.sql
+\ir ../db/migrations/037_tag_field_condition_operator.sql
 \ir supabase-access.sql
 COMMIT;
