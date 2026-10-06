@@ -113,7 +113,9 @@ Facebook Login은 기존 Node 워커 경로에서만 지원합니다.
 가입·복구·인증 메일 재전송은 이메일 제한을 공유하고 로그인은 별도로 집계합니다.
 같은 키의 요청은 어느 접속 위치로 들어와도 이름으로 정한 하나의 Durable Object가 세므로 전역으로 집계되며, IP 제한은 공유 IP 사용자에게 함께 적용될 수 있습니다.
 Supabase Auth의 자체 이메일·IP 제한은 별도로 적용됩니다.
-운영 브라우저에서 가입 메일, 인증 링크, 만료 링크, 복구 메일, 이전 세션 폐기를 확인하고 결과를 이 문서에 기록해야 합니다.
+2026-10-06 운영자가 사생활 보호 창에서 테스트 계정으로 가입 메일, 인증 링크, 만료 링크, 복구 메일, 이전 세션 폐기, 새 비밀번호 로그인과 이전 비밀번호 거부를 확인했습니다. 메일 도착은 Gmail에서, 사용자 생성·이메일 인증·비밀번호 변경 시각과 세션 0개는 운영 DB에서 확인했으며, 세부 결과와 자료 충돌은 [#15 기록](https://github.com/AndrewDongminYoo/auto-chatter/issues/15#issuecomment-6008039226)에 있습니다.
+테스트 작업 공간은 public 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-06-issue15/`에 백업한 뒤 `delete_workspace_data`로 삭제했습니다.
+인증 메일은 Supabase 기본 메일 서비스(`noreply@mail.app.supabase.io`)로 발송되며, 이 서비스는 팀원 주소에만 시간당 2통까지 보내므로 일반 사용자에게는 메일이 가지 않습니다. 사용자 지정 SMTP 연결은 [#151](https://github.com/AndrewDongminYoo/auto-chatter/issues/151)에서 다룹니다.
 
 이 서비스 전용 프로젝트를 사용합니다.
 관리자 psql 연결은 비밀 관리 도구나 로컬 `PGSERVICE` 설정으로 제공하고 비밀번호를 명령 이력에 쓰지 않습니다.
