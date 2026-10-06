@@ -343,15 +343,15 @@ DO $$ BEGIN
   IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname='contact_segment_field_owner') THEN
     ALTER TABLE instagram_contact_segments ADD CONSTRAINT contact_segment_field_owner FOREIGN KEY(field_id,workspace_id) REFERENCES instagram_contact_fields(id,workspace_id);
   END IF;
-  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname='contact_segment_field_condition') THEN
-    ALTER TABLE instagram_contact_segments ADD CONSTRAINT contact_segment_field_condition CHECK(
-      (field_id IS NULL AND field_operator IS NULL AND field_value IS NULL) OR
-      (field_id IS NOT NULL AND field_operator IS NOT NULL AND (
-        (field_operator IN ('is_set','is_unset') AND field_value IS NULL) OR
-        (field_operator='eq' AND field_value IS NOT NULL AND jsonb_typeof(field_value) IN ('string','number','boolean'))
-      ))
-    );
-  END IF;
+  ALTER TABLE instagram_contact_segments DROP CONSTRAINT IF EXISTS contact_segment_field_condition;
+  ALTER TABLE instagram_contact_segments ADD CONSTRAINT contact_segment_field_condition CHECK(
+    (field_id IS NULL AND field_operator IS NULL AND field_value IS NULL) OR
+    (field_id IS NOT NULL AND field_operator IS NOT NULL AND (
+      (field_operator IN ('is_set','is_unset') AND field_value IS NULL) OR
+      (field_operator='eq' AND field_value IS NOT NULL AND jsonb_typeof(field_value) IN ('string','number','boolean')) OR
+      (field_operator IN ('gt','gte','lt','lte') AND field_value IS NOT NULL AND jsonb_typeof(field_value) IN ('string','number'))
+    ))
+  );
 END $$;
 
 ALTER TABLE instagram_contact_automation ADD COLUMN IF NOT EXISTS handoff_paused boolean NOT NULL DEFAULT false;

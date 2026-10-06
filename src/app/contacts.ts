@@ -1,7 +1,12 @@
 import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { lockWorkspaceForMember, workspaceFor } from "./settings.ts";
-import { lockContact, parseFieldCondition, validateFieldCondition } from "./contact-fields.ts";
+import {
+  fieldConditionNeedsValue,
+  lockContact,
+  parseFieldCondition,
+  validateFieldCondition,
+} from "./contact-fields.ts";
 
 type Contact = {
   connection_id: string;
@@ -91,7 +96,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       ? {
           field_id: saved.field_id,
           field_operator: saved.field_operator,
-          ...(saved.field_operator === "eq" ? { field_value: saved.field_value } : {}),
+          ...(fieldConditionNeedsValue(saved.field_operator) ? { field_value: saved.field_value } : {}),
         }
       : null;
   }
@@ -110,7 +115,10 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
  AND ($4::uuid IS NULL OR (e.connection_id,e.sender_id)>($4::uuid,$5::text))
  AND ($6::uuid IS NULL OR CASE WHEN $7::text='is_unset' THEN NOT EXISTS(
    SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=$6 AND v.value IS NOT NULL)
- ELSE EXISTS(SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=$6 AND v.value IS NOT NULL AND ($7='is_set' OR v.value=$8::jsonb)) END)
+ ELSE EXISTS(SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=$6 AND v.value IS NOT NULL
+   AND ($7='is_set' OR (jsonb_typeof(v.value)=jsonb_typeof($8::jsonb) AND CASE $7
+     WHEN 'eq' THEN v.value=$8::jsonb WHEN 'gt' THEN v.value>$8::jsonb WHEN 'gte' THEN v.value>=$8::jsonb
+     WHEN 'lt' THEN v.value<$8::jsonb WHEN 'lte' THEN v.value<=$8::jsonb ELSE false END))) END)
  GROUP BY e.workspace_id,e.connection_id,e.sender_id,c.username,t.tags,(automation.paused OR automation.handoff_paused) ORDER BY e.connection_id,e.sender_id LIMIT 51`,
     [
       workspaceId,
@@ -120,7 +128,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       after?.sender_id ?? null,
       condition?.field_id ?? null,
       condition?.field_operator ?? null,
-      condition?.field_operator === "eq" ? JSON.stringify(condition.field_value) : null,
+      condition && fieldConditionNeedsValue(condition.field_operator) ? JSON.stringify(condition.field_value) : null,
     ],
   );
   const contacts = result.rows.slice(0, 50);
@@ -190,7 +198,9 @@ function segmentResult(row: {
   const { field_id, field_operator, field_value, ...base } = row;
   return {
     ...base,
-    ...(field_id ? { field_id, field_operator, ...(field_operator === "eq" ? { field_value } : {}) } : {}),
+    ...(field_id
+      ? { field_id, field_operator, ...(fieldConditionNeedsValue(field_operator ?? "") ? { field_value } : {}) }
+      : {}),
   };
 }
 
@@ -238,7 +248,7 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
         filterTag,
         condition?.field_id ?? null,
         condition?.field_operator ?? null,
-        condition?.field_operator === "eq" ? JSON.stringify(condition.field_value) : null,
+        condition && fieldConditionNeedsValue(condition.field_operator) ? JSON.stringify(condition.field_value) : null,
       ],
     );
     if (!result.rows[0]) throw new ApiError(409, "segment_limit_reached");
