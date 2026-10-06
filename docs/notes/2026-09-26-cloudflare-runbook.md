@@ -115,7 +115,12 @@ Facebook Login은 기존 Node 워커 경로에서만 지원합니다.
 Supabase Auth의 자체 이메일·IP 제한은 별도로 적용됩니다.
 2026-10-06 운영자가 사생활 보호 창에서 테스트 계정으로 가입 메일, 인증 링크, 만료 링크, 복구 메일, 이전 세션 폐기, 새 비밀번호 로그인과 이전 비밀번호 거부를 확인했습니다. 메일 도착은 Gmail에서, 사용자 생성·이메일 인증·비밀번호 변경 시각과 세션 0개는 운영 DB에서 확인했으며, 세부 결과와 자료 충돌은 [#15 기록](https://github.com/AndrewDongminYoo/auto-chatter/issues/15#issuecomment-6008039226)에 있습니다.
 테스트 작업 공간은 public 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-06-issue15/`에 백업한 뒤 `delete_workspace_data`로 삭제했습니다.
-인증 메일은 Supabase 기본 메일 서비스(`noreply@mail.app.supabase.io`)로 발송되며, 이 서비스는 팀원 주소에만 시간당 2통까지 보내므로 일반 사용자에게는 메일이 가지 않습니다. 사용자 지정 SMTP 연결은 [#151](https://github.com/AndrewDongminYoo/auto-chatter/issues/151)에서 다룹니다.
+위 확인 때까지 인증 메일은 Supabase 기본 메일 서비스(`noreply@mail.app.supabase.io`)로 발송됐습니다. 이 서비스는 팀원 주소에만 시간당 2통까지 보내므로 일반 사용자에게는 메일이 가지 않습니다.
+2026-10-06 운영자가 사용자 지정 SMTP를 켰습니다([#151](https://github.com/AndrewDongminYoo/auto-chatter/issues/151)). 발신자는 `auto-chatter <no-reply@auth.donminzzi.kr>`이고, 경로는 Resend SMTP(`smtp.resend.com`, 포트 465, 사용자 `resend`)입니다. Resend 계정은 party-os 알림 메일과 같은 계정이며, 인증 메일만 하위 도메인 `auth.donminzzi.kr`로 분리했습니다.
+설정 위치는 세 곳입니다. Resend에는 도메인 `auth.donminzzi.kr`(도쿄 리전)과 이 도메인으로 제한한 API 키가 있습니다. Cloudflare의 `donminzzi.kr` zone에는 Resend가 안내한 DKIM(`resend._domainkey.auth`)과 `send.auth`·`rsend.auth` 레코드가 있습니다. Supabase에는 Authentication의 SMTP 설정이 있고, SMTP 비밀번호가 곧 그 API 키입니다. 키는 Supabase 화면에만 입력했고 저장소와 이 문서에는 기록하지 않습니다.
+Supabase Auth의 메일 발송 한도는 사용자 지정 SMTP의 기본값인 시간당 30통으로 유지했습니다. 이 한도는 Worker의 이메일별 분당 5회 제한과 별개입니다. 같은 Resend 계정의 일·월 발송량은 party-os와 함께 집계됩니다.
+같은 날 09:44:58Z에 운영자가 `ydm2790+ac-smtp-test@gmail.com`으로 가입하자 가입 인증 메일이 이 발신자로 도착했습니다. 도쿄 리전 SES(`e234-52.smtp-out.ap-northeast-1.amazonses.com`)를 거쳤고, Gmail 검사 결과는 SPF pass(반송 경로 `rsend.auth.donminzzi.kr`), DKIM pass(`d=auth.donminzzi.kr`, `s=resend`), DMARC pass(루트 정책 `p=none`)였습니다. 테스트 사용자는 운영자가 삭제했습니다.
+팀원 주소 제한은 기본 서비스에만 있으므로, 이 발신자로 도착한 것은 사용자 지정 SMTP 경로를 탔다는 근거입니다. 다만 Gmail의 `+` 주소는 기본 서비스에서도 메일을 받았으므로, 팀원이 아닌 별도 주소로 받은 확인은 아닙니다.
 
 이 서비스 전용 프로젝트를 사용합니다.
 관리자 psql 연결은 비밀 관리 도구나 로컬 `PGSERVICE` 설정으로 제공하고 비밀번호를 명령 이력에 쓰지 않습니다.
