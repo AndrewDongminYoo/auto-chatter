@@ -1040,25 +1040,28 @@ addEventListener("hashchange", () => {
 });
 
 // The getting-started steps on the home view, for owners and admins until every step is done.
-function renderGettingStarted(rules, globalSendEnabled) {
+function renderGettingStarted(rules, globalSendEnabled, connectAvailable) {
   const connected = connections.length > 0;
   const sendSet = connections.some((account) => account.send_enabled);
+  // [id, done, available, waiting]: a waiting step is blocked by a service setting the owner cannot change.
   const steps = [
-    ["step-connect", connected, true],
-    ["step-rule", rules.length > 0, connected],
-    ["step-send", sendSet && globalSendEnabled, connected],
+    ["step-connect", connected, true, connectAvailable ? "" : "연결 제한 중"],
+    ["step-rule", rules.length > 0, connected, ""],
+    ["step-send", sendSet && globalSendEnabled, connected, sendSet && !globalSendEnabled ? "전체 발송 재개 대기" : ""],
   ];
   byId("getting-started").hidden =
     (currentRole !== "owner" && currentRole !== "admin") || steps.every(([, done]) => done);
-  for (const [id, done, available] of steps) {
+  for (const [id, done, available, waiting] of steps) {
     const step = byId(id);
-    const waiting = id === "step-send" && sendSet && !globalSendEnabled;
     step.classList.toggle("done", done);
     const state = step.querySelector(".step-state");
-    state.textContent = done ? "완료" : !available ? "계정을 먼저 연결하세요" : waiting ? "전체 발송 재개 대기" : "";
+    state.textContent = done ? "완료" : !available ? "계정을 먼저 연결하세요" : waiting;
     state.className = `step-state${done ? " badge success" : !available || waiting ? " badge" : ""}`;
-    step.querySelector(".step-action").hidden = done || !available || waiting;
+    step.querySelector(".step-action").hidden = done || !available || waiting !== "";
   }
+  byId("step-connect-help").textContent = connectAvailable
+    ? "관리하는 전문 계정을 연결합니다."
+    : "새 Instagram 계정 연결이 현재 제한되어 있습니다. 연결이 열리면 이 단계부터 시작할 수 있습니다.";
   byId("step-send-help").textContent = globalSendEnabled
     ? "계정의 발송 설정을 켜면 규칙에 맞는 댓글에 DM을 보냅니다."
     : "전체 발송이 중지되어 있어, 계정의 발송 설정을 켜도 재개되기 전에는 메시지가 전송되지 않습니다.";
@@ -1106,7 +1109,7 @@ async function loadWorkspace() {
     ? "자동 발송을 시작할 수 있습니다"
     : "전체 발송이 중지되어 있습니다";
   byId("delivery-banner").classList.toggle("enabled", me.global_send_enabled);
-  renderGettingStarted(settings.rules, me.global_send_enabled);
+  renderGettingStarted(settings.rules, me.global_send_enabled, me.instagram_connect_available === true);
 
   byId("auth").hidden = true;
   byId("workspace").hidden = false;
