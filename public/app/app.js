@@ -1030,13 +1030,22 @@ function showView(name, focus) {
   scrollTo({ top: 0 });
   byId(`view-${name}`).focus({ preventScroll: true });
 }
+// After the view is shown, an older section link scrolls to its section; the browser could not while it was hidden.
+function scrollToSectionHash() {
+  const target = location.hash.slice(1);
+  if (!views.includes(target) && viewFromHash()) byId(target).scrollIntoView({ block: "start" });
+}
 addEventListener("hashchange", () => {
   if (byId("workspace").hidden) return;
   const name = viewFromHash();
   if (!name) return;
   showView(name, true);
-  const target = location.hash.slice(1);
-  if (target !== name) byId(target).scrollIntoView({ block: "start" });
+  scrollToSectionHash();
+});
+// Clicking the menu that is already in the address changes no fragment, so no hashchange follows.
+document.querySelector(".workspace-nav").addEventListener("click", (event) => {
+  const link = event.target.closest("a");
+  if (link && link.hash === location.hash) showView(link.hash.slice(1), true);
 });
 
 // The getting-started steps on the home view, for owners and admins until every step is done.
@@ -1114,6 +1123,7 @@ async function loadWorkspace() {
   byId("auth").hidden = true;
   byId("workspace").hidden = false;
   byId("logout").hidden = false;
+  const firstDisplay = currentView === undefined;
   showView(viewFromHash() ?? currentView ?? "home", false);
   const connectAvailable = me.instagram_connect_available === true;
   byId("delivery-status").textContent = me.global_send_enabled
@@ -1342,6 +1352,7 @@ async function loadWorkspace() {
       ),
     );
   }
+  if (firstDisplay) scrollToSectionHash();
 }
 
 function mediaKey(connectionId, mediaId) {
