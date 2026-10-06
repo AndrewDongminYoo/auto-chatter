@@ -109,7 +109,7 @@ Facebook Login은 기존 Node 워커 경로에서만 지원합니다.
 
 ## 1. Supabase 준비
 
-인증 요청의 Worker 제한(IP·경로별 분당 30회, 이메일 해시별 분당 5회)은 `wrangler.json`의 Durable Object 바인딩 `AUTH_LIMITER`(클래스 `AuthLimiter`, 마이그레이션 태그 `v1`)가 키마다 셉니다. 2026-10-06까지 쓰던 rate limit 바인딩 `AUTH_IP_LIMIT`·`AUTH_EMAIL_LIMIT`은 기계별로 세어 새 연결에서 한도가 걸리지 않아 바꿨습니다([#148](https://github.com/AndrewDongminYoo/auto-chatter/issues/148)).
+인증 요청의 Worker 제한(IP·경로별 분당 30회, 이메일 해시별 분당 5회)은 `wrangler.json`의 Durable Object 바인딩 `AUTH_LIMITER`(클래스 `AuthLimiter`, 마이그레이션 태그 `v1`)가 키마다 셉니다. 2026-10-05 16:27Z 배포 전까지 쓰던 rate limit 바인딩 `AUTH_IP_LIMIT`·`AUTH_EMAIL_LIMIT`은 기계별로 세어 새 연결에서 한도가 걸리지 않아 바꿨습니다([#148](https://github.com/AndrewDongminYoo/auto-chatter/issues/148)).
 가입·복구·인증 메일 재전송은 이메일 제한을 공유하고 로그인은 별도로 집계합니다.
 같은 키의 요청은 어느 접속 위치로 들어와도 이름으로 정한 하나의 Durable Object가 세므로 전역으로 집계되며, IP 제한은 공유 IP 사용자에게 함께 적용될 수 있습니다.
 Supabase Auth의 자체 이메일·IP 제한은 별도로 적용됩니다.
@@ -359,6 +359,15 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 `4f79511` 이후 `db/`, `deploy/`, `public/`, `wrangler.json`과 패키지 파일이 바뀌지 않아 마이그레이션은 없었고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. 배포 전 원래 체크아웃에 `node_modules`가 없어 lockfile로 다시 설치했습니다.
 같은 공개 점검 31개 항목이 모두 통과했지만, 정적 파일이 바뀌지 않아 이 점검은 배포 전후를 구별하지 못합니다. 배포 후 cron 3회(00:14, 00:15, 00:16 UTC)에서 `scheduled_steps`의 6개 단계가 모두 성공으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 빈 로컬 DB에서 발송을 끈 cron 한 번의 쿼리는 18개에서 7개가 됐습니다. 분석 API의 CPU는 배포 전 3시간(2026-10-04 21:00Z~10-05 00:13Z, 호출 210번) 중앙값 16.1ms·P90 18.5ms·P99 21.3ms에서, 배포 후 2시간 20분(00:15Z~02:35Z, 143번) 9.2ms·11.7ms·13.7ms로 줄었고, 두 구간 모두 `exceededResources`는 없었습니다. P90이 아직 무료 플랜 한도(10ms)를 넘으므로 유료 플랜은 유지합니다.
+2026-10-05 14:15Z에는 운영자 요청에 따라 PR #147(#144: 줄바꿈이 든 댓글 규칙 키워드 거부)을 포함한 `main` 커밋 `0bb3715`의 Worker를 버전 `5baa0a01-038a-4948-8b87-fadbe6e81857`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `fb5544e0-18c9-4d38-b1cb-76f758e9f9ca`였습니다.
+`a19de4b` 이후 `db/`, `deploy/`, `public/`, `wrangler.json`과 lockfile이 바뀌지 않아(`package.json`에는 라이선스 필드만 추가됐습니다) 마이그레이션은 없었고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+공개 점검 31개 항목이 모두 통과했지만, 정적 파일이 바뀌지 않아 이 점검은 배포 전후를 구별하지 못합니다. 배포 후 cron 3회(14:17, 14:18, 14:19 UTC)에서 `scheduled_steps`의 6개 단계가 모두 성공으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
+같은 날 16:27Z에는 운영자 요청에 따라 PR #149(#148: 인증 요청 제한을 Durable Object로 집계)를 포함한 `main` 커밋 `77db96e`의 Worker를 버전 `d6c2b64c-aa0b-467f-afed-45a1e1ee6802`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `5baa0a01-038a-4948-8b87-fadbe6e81857`였습니다.
+이 배포는 `wrangler.json`의 Durable Object 마이그레이션 `v1`로 `AuthLimiter` 네임스페이스를 만들고 rate limit 바인딩 `AUTH_IP_LIMIT`·`AUTH_EMAIL_LIMIT`을 없앴습니다. DB 마이그레이션은 없으며 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+[롤백 문서](https://developers.cloudflare.com/workers/configuration/versions-and-deployments/rollbacks/)(2026-10-05 확인)는 두 버전 사이에 Durable Object 클래스 수명 주기 변경이 있으면 롤백을 허용하지 않으므로, 이 버전보다 앞선 버전으로는 `wrangler rollback`할 수 없습니다. 문제가 생기면 `AuthLimiter`와 `v1`을 남긴 채 고친 코드를 배포하는 것을 우선 복구 방법으로 정했습니다. 클래스를 없애야 한다면 이 저장소가 쓰는 `migrations` 배열 방식의 [삭제 마이그레이션](https://developers.cloudflare.com/durable-objects/reference/durable-object-class-migrations-legacy/#delete-migration)(2026-10-05 확인)을 따라 바인딩과 코드에서 클래스를 지우고 `deleted_classes: ["AuthLimiter"]` 마이그레이션을 새 태그로 추가해 배포하며, 이때 저장된 창은 모두 지워집니다. `limitAuthRequest`는 제한 바인딩이 없으면 인증 요청을 `503 auth_unavailable`로 거절하므로, 같은 배포에서 다른 제한 바인딩을 연결해야 합니다.
+배포 전 16:22Z에 존재하지 않는 주소 하나로 `POST /api/auth/recover`를 요청마다 새 연결로 8번 보냈을 때는 모두 200이었습니다. 배포 후 16:28Z에 같은 방식으로 8번 보내자 5번은 200, 이어서 3번은 `429 auth_rate_limited`였습니다.
+이어서 새 창이 열리도록 65초를 기다린 뒤 서로 다른 존재하지 않는 주소 35개로 보내자 처음 30번은 200, 다음 3번은 429였습니다. 이 35번에 63초가 걸려 마지막 2번은 첫 요청이 연 60초 창이 끝난 뒤에 도착했고 200이었습니다. 503 `auth_unavailable`은 없었습니다.
+공개 점검 31개 항목도 모두 통과했지만 정적 파일이 바뀌지 않아 배포 전후를 구별하지 못합니다. 배포 후 `scheduled_steps`를 16:29:52Z, 16:30:57Z, 16:32:02Z, 16:44:14Z에 조회했을 때 6개 단계의 마지막 성공 시각은 16:29:50, 16:29:50(아직 갱신 전), 16:31:51, 16:43:50이었고, 배포 이후의 실패 기록과 경보는 없었습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
