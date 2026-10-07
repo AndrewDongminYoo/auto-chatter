@@ -6,6 +6,44 @@ import { test } from "node:test";
 
 const publicDir = new URL("../../public/", import.meta.url);
 const appDir = new URL("app/", publicDir);
+const repoDir = new URL("../../", import.meta.url);
+
+test("only the operation log and the Node command entry points write to the console or standard streams", async () => {
+  // Runtime logs must go through logOperation, which keeps an allow-listed shape; the two Node entry points print
+  // fixed CLI messages. This is a text guard over src/ (an alias of console is left to review); the shape itself
+  // is enforced by operations-log.ts and its tests.
+  const allowed = ["app/operations-log.ts", "instagram/main.ts", "instagram/worker-main.ts"];
+  const srcDir = fileURLToPath(new URL("src/", repoDir));
+  const entries = await readdir(srcDir, { recursive: true, withFileTypes: true });
+  const sources = entries
+    .filter((entry) => entry.isFile() && /\.(?:ts|mjs|js)$/.test(entry.name) && !/\.test\.(?:ts|mjs)$/.test(entry.name))
+    .map((entry) => relative(srcDir, join(entry.parentPath, entry.name)).split(sep).join("/"));
+  assert.ok(sources.length > 0);
+  const writers = [];
+  for (const path of sources)
+    if (/\bconsole\b|\bprocess\s*\.\s*std(?:out|err)\b/.test(await readFile(join(srcDir, path), "utf8")))
+      writers.push(path);
+  assert.deepEqual(writers.sort(), allowed);
+});
+
+test("the committed Worker configuration keeps sending and public connection off and holds no secret", async () => {
+  // Secrets are Worker secrets, never vars; an exact key set means a new var is reviewed on purpose.
+  const config = JSON.parse(await readFile(new URL("wrangler.json", repoDir), "utf8")) as {
+    vars: Record<string, string>;
+    env?: unknown;
+  };
+  assert.deepEqual(Object.keys(config.vars).sort(), [
+    "APP_ORIGIN",
+    "INSTAGRAM_OAUTH_APP_ID",
+    "INSTAGRAM_PUBLIC_CONNECT_ENABLED",
+    "META_GRAPH_VERSION",
+    "SEND_ENABLED",
+    "SUPABASE_URL",
+  ]);
+  assert.equal(config.vars.SEND_ENABLED, "false");
+  assert.equal(config.vars.INSTAGRAM_PUBLIC_CONNECT_ENABLED, "false");
+  assert.equal(config.env, undefined, "no environment may override the committed vars");
+});
 
 // Headers of one path block in Cloudflare's _headers format: a path line followed by indented "Name: value" lines.
 function blockHeaders(file: string, path: string): string[] {

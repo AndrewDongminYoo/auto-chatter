@@ -478,6 +478,27 @@ test("Supabase roles cannot read product data; the server role has DML without D
       "SELECT relname FROM pg_class WHERE relnamespace='public'::regnamespace AND relrowsecurity AND relname IN ('webhook_endpoints','webhook_signing_keys','webhook_deliveries','webhook_redelivery_events','scheduled_steps','workspace_invites','data_deletion_records','flows','flow_versions','flow_runs','flow_step_runs','channel_consent_state','channel_consent_events','instagram_manual_replies','instagram_manual_reply_events','instagram_inbox_handoffs','instagram_inbox_handoff_events','instagram_inbox_conversations','instagram_inbox_conversation_events','instagram_inbox_read_state','instagram_inbox_labels','instagram_inbox_label_rules','instagram_inbox_conversation_labels','instagram_inbox_label_events','instagram_inbox_notes','instagram_inbox_reminders','instagram_inbox_reminder_events','instagram_inbox_messages','instagram_unmatched_replies','instagram_contact_automation','instagram_contact_fields','instagram_contact_field_values','workspaces','workspace_members','instagram_oauth_states','instagram_follow_conversations','instagram_message_receipts','instagram_connections','instagram_comment_rules','instagram_comment_events','private_reply_outbox')",
     );
     assert.equal(protectedTables.rowCount, 41);
+    // The lists above are written by hand; this reads every public table from the catalog, so a table added to
+    // the schema but left out of deploy/supabase-access.sql fails here even if no list above names it.
+    const catalog = await client.query<{
+      table: string;
+      rls: boolean;
+      api_access: string[];
+      server_delete: string[];
+    }>(
+      `SELECT c.relname AS table, c.relrowsecurity AS rls,
+         ARRAY(SELECT r FROM unnest(ARRAY['anon','authenticated','service_role']) r
+               WHERE has_table_privilege(r, c.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')) AS api_access,
+         ARRAY(SELECT r FROM unnest(ARRAY['auto_chatter_server','automations_app']) r
+               WHERE has_table_privilege(r, c.oid, 'DELETE,TRUNCATE,REFERENCES,TRIGGER')) AS server_delete
+       FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relkind IN ('r','p') ORDER BY 1`,
+    );
+    assert.ok(catalog.rowCount! >= 43, `expected every product table, found ${catalog.rowCount}`);
+    for (const row of catalog.rows) {
+      assert.ok(row.rls, `${row.table} must enable row level security`);
+      assert.deepEqual(row.api_access, [], `${row.table} must grant nothing to the API roles`);
+      assert.deepEqual(row.server_delete, [], `${row.table} must not let a server role delete or truncate`);
+    }
     // Exercise RLS independently of table grants: an accidental future grant must not expose rows.
     await client.query("GRANT SELECT ON workspaces TO anon");
     await client.query("SET ROLE anon");

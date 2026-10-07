@@ -1,7 +1,34 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AuthClient, ApiError, requireSameOrigin } from "./auth.ts";
+import { AuthClient, ApiError, readJson, requireSameOrigin } from "./auth.ts";
 import { limitAuthRequest } from "./auth-rate-limit.ts";
+
+test("request bodies are refused above the size limit and when not declared as JSON", async () => {
+  const body = (bytes: number) => JSON.stringify({ text: "x".repeat(bytes - 11) });
+  assert.equal(body(16_384).length, 16_384);
+  const json = (text: string) =>
+    new Request("https://app.test/api/x", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: text,
+    });
+  assert.deepEqual(await readJson(json(body(16_384))), { text: "x".repeat(16_373) });
+  await assert.rejects(
+    readJson(json(body(16_385))),
+    (e: unknown) => e instanceof ApiError && e.status === 413 && e.message === "request_too_large",
+  );
+  // A route with a larger allowance (flow documents) still stops one byte above it.
+  assert.ok(await readJson(json(body(69_632)), 69_632));
+  await assert.rejects(readJson(json(body(69_633)), 69_632), (e: unknown) => e instanceof ApiError && e.status === 413);
+  for (const type of ["text/plain", "application/x-www-form-urlencoded", ""])
+    await assert.rejects(
+      readJson(
+        new Request("https://app.test/api/x", { method: "POST", headers: { "content-type": type }, body: "{}" }),
+      ),
+      (e: unknown) => e instanceof ApiError && e.status === 415 && e.message === "json_required",
+      type,
+    );
+});
 
 const config = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "public-test-key" };
 const userId = "11111111-1111-4111-8111-111111111111";

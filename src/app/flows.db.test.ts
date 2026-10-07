@@ -267,6 +267,17 @@ test("publish checks connection ownership, activity and login mode", async () =>
   );
 });
 
+test("a workspace holds at most 50 active flows; archived flows do not count", async () => {
+  const ids = [];
+  for (let index = 0; index < 50; index++) ids.push((await createdFlow(undefined, `flow ${index}`)).id);
+  const over = await request("POST", "/api/flows", { name: "flow 50" });
+  assert.equal(over.status, 409);
+  assert.equal(((await over.json()) as { error: string }).error, "flow_limit_reached");
+  await pool.query("UPDATE flows SET archived=true WHERE id=$1", [ids[0]]);
+  assert.equal((await request("POST", "/api/flows", { name: "flow 50" })).status, 201);
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM flows WHERE NOT archived")).rows[0].count, 50);
+});
+
 test("flows are invisible across workspaces", async () => {
   const flow = await createdFlow();
   assert.equal((await request("GET", `/api/flows/${flow.id}`, undefined, otherUserId)).status, 404);
