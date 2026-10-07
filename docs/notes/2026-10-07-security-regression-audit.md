@@ -72,9 +72,40 @@ CSP 출처 값은 대소문자를 구분하지 않고 비교하며, sink 이름�
 - Meta 쪽에서 토큰이 취소된 경우: 신원 조회 GET이 일시적이지 않은 4xx(코드 190 포함)를 받으면 `classifyMetaGraphFailure`가 `null`을 반환하고, `verify()`가 `authorizationVerified: false`를 돌려줘 정책이 `authorization_unverified`로 막습니다. 따라서 발송 행은 매분 재시도되지 않고 `blocked`로 끝납니다. 다만 연결은 `active`로 남고 Meta의 권한 해제 웹후크도 받지 않으므로, 연결 상태와 재인증 안내는 [#16](https://github.com/AndrewDongminYoo/auto-chatter/issues/16)에서 다룹니다.
 - 다른 작업 공간의 연결 ID로 연결 해제를 요청하면 `disconnectConnection`(`src/app/settings.ts`)이 아무것도 바꾸지 않고 200 `{disconnected:true}`를 반환합니다. 정보가 새지는 않지만 다른 라우트의 404와 다릅니다. 멱등한 200을 유지할지 404로 바꿀지는 공개 API 동작의 결정이므로, PR #162는 어느 쪽도 테스트로 고정하지 않았습니다. 2026-10-07 운영자가 404로 정했고, 이후 PR에서 다른 작업 공간이나 없는 연결 ID는 잠금을 잡기 전에 `404 connection_not_found`를 반환하도록 바꿨습니다(`settings.db.test.ts` "disconnect clears only owned credentials and disables its rules").
 
+## 2차 점검: 남용 제한·권한·비밀 노출
+
+#62의 두 번째 완료 조건을 같은 날 `main` `d01fae6` 기준으로 점검했습니다. AI 자원(#55~#57)은 아직 구현되지 않아 제외했습니다.
+
+### 발견 사항과 이슈
+
+| 이슈                                                                | 내용                                                                                                                                                           | 출시 판단(운영자, 2026-10-07) |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| [#164](https://github.com/AndrewDongminYoo/auto-chatter/issues/164) | Worker가 Supabase에 사용자 IP(`Sb-Forwarded-For`)를 넘기지 않아, Supabase의 IP별 제한(`/user`·가입·복구 등 5분에 30회)이 Cloudflare 출구 IP 기준으로 걸립니다. | 출시 차단                     |
+| [#165](https://github.com/AndrewDongminYoo/auto-chatter/issues/165) | 한 IP가 주소를 바꿔 가며 프로젝트 전체의 인증 메일 한도(시간당 30통)를 1분 안에 소진할 수 있고, 화면은 성공으로 안내합니다.                                    | 출시 차단                     |
+| [#166](https://github.com/AndrewDongminYoo/auto-chatter/issues/166) | 게시물 목록 조회, 작업 공간 내보내기, OAuth 시작에 상한이 없습니다.                                                                                            | 차단 아님                     |
+| [#167](https://github.com/AndrewDongminYoo/auto-chatter/issues/167) | 사용자·작업 공간별 API 제한과 웹훅 전달의 작업 공간 간 공정성(설계 결정)입니다.                                                                                | 차단 아님                     |
+
+[Meta 요청 제한 문서](https://developers.facebook.com/docs/graph-api/overview/rate-limiting/)(2026-10-07 확인)는 Instagram 한도를 앱과 사용자 쌍마다 세므로, 게시물 조회 남용은 그 작업 공간 계정의 한도만 씁니다. 앱 전체 발송 한도는 [#60](https://github.com/AndrewDongminYoo/auto-chatter/issues/60)이 다룹니다.
+
+### 추가한 회귀 테스트
+
+각 테스트는 방어를 빼거나 결함을 심어 한 번 실패하는 것을 확인했고, 제품 코드는 바꾸지 않았습니다.
+
+- `access.db.test.ts`: 기존 손 목록과 별도로 `pg_class`에서 public 테이블 전체를 읽어, 모든 테이블이 RLS를 켜고 API 역할(`anon`, `authenticated`, `service_role`)에 권한이 없으며 서버 역할에 DELETE·TRUNCATE가 없는지 확인합니다. `deploy/supabase-access.sql`의 RLS 목록에서 `instagram_contact_tags`를 빼거나 DELETE 권한을 주면 실패합니다. 이 테이블과 `instagram_contact_segments`는 기존 손 목록에 없던 테이블입니다.
+- `auth.test.ts`: `readJson`이 16,384바이트까지 받고 16,385바이트에서 `413 request_too_large`, 플로 라우트의 허용치(69,632바이트)에서도 1바이트 초과를 거부하며, JSON이 아닌 형식은 `415 json_required`로 거부하는지 확인합니다.
+- `workspace-invites.db.test.ts`: 역할 변경과 초대로 `owner`(대소문자 변형 포함)를 줄 수 없고(`400 invalid_role`), 열린 초대 21번째가 `409 invite_limit_reached`인지 확인합니다.
+- `flows.db.test.ts`: 51번째 활성 플로가 `409 flow_limit_reached`이고, 보관한 플로는 세지 않는지 확인합니다.
+- `static-security.test.ts`: `src/`에서 `console`이나 표준 출력에 쓰는 파일이 `operations-log.ts`와 Node 진입점 두 파일뿐인지, `wrangler.json`의 `vars` 키 집합이 정확히 정해진 6개이고 `SEND_ENABLED`와 `INSTAGRAM_PUBLIC_CONNECT_ENABLED`가 `"false"`이며 환경별 덮어쓰기가 없는지 확인합니다.
+
+### 테스트하지 않은 항목
+
+- 플로 테스트 실행의 단계·재개 상한은 발행 검증이 순환과 100개 초과 노드를 거부하므로 API로 도달할 수 없는 안전장치라 테스트하지 않았습니다.
+- `delete_connection_data`는 전달받은 작업 공간과 실행자를 그대로 신뢰합니다. 호출 전에 앱이 소유와 역할을 확인하며(`src/app/data-deletion.ts`), 이 함수를 실행할 수 있는 것은 신뢰된 서버 역할뿐입니다.
+- trufflehog와 osv-scanner는 CI에서 작업 트리를 검사하며 git 기록은 검사하지 않습니다.
+
 ## 남은 항목
 
 - 저장된 악성 텍스트의 실제 브라우저 렌더링 확인
 - 실제 Meta 웹후크 재전송 관찰
 - 두 실제 사용자 사이의 운영 작업 공간 격리 확인([#13](https://github.com/AndrewDongminYoo/auto-chatter/issues/13))
-- 남용 제한, 관리자·서버 권한, 비밀 노출 점검(#62 두 번째 PR)
+- 출시 차단 이슈 #164, #165의 수정
