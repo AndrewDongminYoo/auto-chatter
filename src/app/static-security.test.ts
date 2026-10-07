@@ -33,7 +33,10 @@ function directives(policy: string): Map<string, string[]> {
 }
 
 test("the dashboard CSP allows only same-origin scripts, with no inline or eval escape", async () => {
-  const headers = blockHeaders(await readFile(new URL("_headers", publicDir), "utf8"), "/app/*");
+  const file = await readFile(new URL("_headers", publicDir), "utf8");
+  // A "! Name" line in any block removes a header that a more general rule added, so no rule may detach the CSP.
+  assert.doesNotMatch(file, /^\s*!\s*content-security-policy\b/im, "no rule may detach the CSP");
+  const headers = blockHeaders(file, "/app/*");
   const csp = headers.filter((header) => /^content-security-policy\s*:/i.test(header));
   assert.equal(csp.length, 1, "the /app/* block must set exactly one Content-Security-Policy");
   const policy = directives(csp[0]!.slice(csp[0]!.indexOf(":") + 1));
@@ -69,7 +72,7 @@ test("dashboard scripts write user data as text, never through an HTML or code s
   // document.write in any of those forms. This is a text guard, not a parser: an alias such as
   // `const d = document; d.write(x)` is outside it and is left to code review.
   const sinks =
-    /\b(?:innerHTML|outerHTML|insertAdjacentHTML|srcdoc|writeln|eval|Function)\b|\bdocument\s*(?:\?\.|\.)?\s*(?:\[\s*["'`]\s*)?write\b/;
+    /\b(?:innerHTML|outerHTML|insertAdjacentHTML|srcdoc|writeln|eval|Function|createContextualFragment|parseFromString|setHTMLUnsafe|parseHTMLUnsafe)\b|\bdocument\s*(?:\?\.|\.)?\s*(?:\[\s*["'`]\s*)?write\b/;
   for (const name of files) {
     const source = await readFile(new URL(name, appDir), "utf8");
     assert.doesNotMatch(source, sinks, `${name} must not use an HTML or code sink`);
@@ -79,8 +82,9 @@ test("dashboard scripts write user data as text, never through an HTML or code s
 test("the dashboard page carries no inline script or inline event handler", async () => {
   const html = await readFile(new URL("index.html", appDir), "utf8");
   for (const tag of html.match(/<script\b[^>]*>/gi) ?? [])
-    // A same-origin path only: no inline body, no scheme and no protocol-relative host.
-    assert.match(tag, /\ssrc="(?![a-z][a-z0-9+.-]*:|\/\/)[^"]+"/i, `only same-origin script files are allowed: ${tag}`);
+    // Only a top-level public/app/*.js file, which the sink scan above reads: no inline body, no other host and no
+    // file outside that scan.
+    assert.match(tag, /\ssrc="\.\/[a-z0-9-]+\.js"/i, `only scanned dashboard script files are allowed: ${tag}`);
   assert.doesNotMatch(html, /<[^>]+\son[a-z]+\s*=/i, "inline event handlers are not allowed");
   assert.doesNotMatch(html, /\bjavascript:/i);
 });
