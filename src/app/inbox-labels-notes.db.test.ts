@@ -536,6 +536,21 @@ test("notes are append-only text listed newest first, never as messages and neve
   assert.equal(await noteCount(), 51);
 });
 
+test("notes of another workspace's conversation are neither listed nor written", async () => {
+  await seed("456", "hello", "2026-10-01T00:00:01Z");
+  await seed("700", "foreign", "2026-10-01T00:00:01Z", foreignConnectionId);
+  await body(await addNote(agent, "internal memo"), 201);
+  await body(await addNote(outsider, "their memo", "700", foreignConnectionId), 201);
+  assert.equal(
+    await errorCode(await request(agent, "GET", notesPath("700", foreignConnectionId)), 404),
+    "connection_not_found",
+  );
+  assert.equal(await errorCode(await request(outsider, "GET", notesPath()), 404), "connection_not_found");
+  assert.equal(await errorCode(await addNote(outsider, "planted"), 404), "connection_not_found");
+  assert.equal(await errorCode(await request(stranger, "GET", notesPath()), 403), "workspace_required");
+  assert.equal(await noteCount(), 2);
+});
+
 test("the label filter combines with the other filters and pages with the cursor", async () => {
   const vip = await label("vip");
   const other = await label("other");

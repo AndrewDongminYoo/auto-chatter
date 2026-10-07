@@ -1986,6 +1986,35 @@ test("manual reply retry is explicit audited idempotent and forbids unknown outc
   );
 });
 
+test("another workspace cannot retry, resolve or read the delivery state of a manual reply", async () => {
+  await readyManual();
+  const reply = await (await manualRequest("POST", "", manualBody)).json();
+  const retry = {
+    request_key: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    expected_handoff_version: 1,
+    reason: "Foreign retry",
+  };
+  const decision = {
+    request_key: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    decision: "no_retry",
+    reason: "Foreign resolution",
+  };
+  await pool.query(
+    "UPDATE instagram_manual_replies SET status='failed',safe_to_retry=true,failure_code='meta_error_10' WHERE id=$1",
+    [reply.id],
+  );
+  assert.equal((await manualRequest("POST", `/${reply.id}/retry`, retry, b)).status, 404);
+  await pool.query("UPDATE instagram_manual_replies SET status='unknown',safe_to_retry=false WHERE id=$1", [reply.id]);
+  assert.equal((await manualRequest("POST", `/${reply.id}/resolution`, decision, b)).status, 404);
+  assert.equal(
+    (await fieldRequest("GET", `/api/connections/${connectionId}/inbox/456/reply-status`, undefined, b)).status,
+    404,
+  );
+  const rows = await pool.query("SELECT status, resolved_at FROM instagram_manual_replies ORDER BY created_at");
+  assert.deepEqual(rows.rows, [{ status: "unknown", resolved_at: null }]);
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_reply_events")).rows[0].count, "1");
+});
+
 test("manual reply worker serializes a conversation and preserves ambiguous outcomes until resolution", async () => {
   const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
   await readyManual();

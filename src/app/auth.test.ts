@@ -25,6 +25,28 @@ test("protected requests require a session and a remotely verified confirmed use
   assert.equal(calls, 1);
 });
 
+test("an expired, revoked or unverifiable session is refused instead of trusted", async () => {
+  const request = new Request("https://app.test/api/me", { headers: { cookie: "__Host-ac-access=old-token" } });
+  for (const [status, expected] of [
+    [401, 401],
+    [403, 401],
+    [404, 401],
+    [500, 503],
+    [503, 503],
+  ] as const) {
+    const client = new AuthClient(config, async () => Response.json({ msg: "refused" }, { status }));
+    await assert.rejects(
+      client.user(request),
+      (e: unknown) => e instanceof ApiError && e.status === expected,
+      `provider ${status} must answer ${expected}`,
+    );
+  }
+  const offline = new AuthClient(config, async () => {
+    throw new TypeError("network down");
+  });
+  await assert.rejects(offline.user(request), (e: unknown) => e instanceof ApiError && e.status === 503);
+});
+
 test("invalid or unconfirmed remote users cannot authorize requests", async () => {
   for (const data of [
     { id: userId, email: "x@test" },
