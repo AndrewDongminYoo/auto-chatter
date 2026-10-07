@@ -72,7 +72,8 @@ test("workerd auth routes call the provider with the native fetch receiver", asy
         return Response.json({ user: { id: "synthetic-user" } });
       }
       if (url.pathname === "/auth/v1/recover") {
-        assert.deepEqual(body, { email: "owner@example.test" });
+        assert.deepEqual(Object.keys(body), ["email"]);
+        assert.match(body.email, /^[a-z0-9-]+@example\.test$/);
         return Response.json({});
       }
       assert.equal(url.pathname + url.search, "/auth/v1/token?grant_type=password");
@@ -105,6 +106,16 @@ test("workerd auth routes call the provider with the native fetch receiver", asy
       });
       assert.equal(response.status, status);
       assert.deepEqual(await response.json(), body);
+    }
+    // The client has spent 5 of its 10 hourly mail requests (the refused resend stopped at the email limit). Five
+    // more for other addresses pass and the next is refused, whatever the address (#165).
+    for (const [index, status] of [200, 200, 200, 200, 200, 429].entries()) {
+      const response = await runtime.dispatchFetch("https://app.test/api/auth/recover", {
+        method: "POST",
+        headers: { Origin: "https://app.test", "Content-Type": "application/json" },
+        body: JSON.stringify({ email: `other-${index}@example.test` }),
+      });
+      assert.equal(response.status, status, `mail request ${index}`);
     }
   } finally {
     await runtime.dispose();

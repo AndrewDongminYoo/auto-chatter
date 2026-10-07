@@ -110,6 +110,28 @@ test("durableLimits keeps IP and email keys in separate objects with their own l
   assert.deepEqual(namespace.names, ["ip:k", "email:k"]);
 });
 
+test("durableLimits gives the mail allowances an hourly window: 10 per IP and 15 for the project (#165)", async () => {
+  const calls: { name: string; limit: number; period: number }[] = [];
+  const limits = durableLimits({
+    idFromName: (name: string) => name,
+    get: (id: unknown) => ({
+      fetch: async (_input: string, init?: RequestInit) => {
+        calls.push({ name: String(id), ...(JSON.parse(String(init?.body)) as { limit: number; period: number }) });
+        return Response.json({ success: true });
+      },
+    }),
+  });
+  await limits.AUTH_MAIL_IP_LIMIT!.limit({ key: "k" });
+  await limits.AUTH_MAIL_LIMIT!.limit({ key: "project" });
+  assert.deepEqual(calls, [
+    { name: "mail-ip:k", limit: 10, period: 3_600_000 },
+    { name: "mail:project", limit: 15, period: 3_600_000 },
+  ]);
+  // Fixed windows let any 60 minutes span two of them, so twice the project allowance must stay within Supabase's
+  // custom-SMTP default of 30 mails per hour.
+  assert.ok(2 * calls[1]!.limit <= 30);
+});
+
 test("durableLimits fails closed when the limiter object does not answer", async () => {
   const limits = durableLimits({
     idFromName: (name: string) => name,

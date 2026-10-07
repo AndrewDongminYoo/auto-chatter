@@ -111,6 +111,7 @@ Facebook Login은 기존 Node 워커 경로에서만 지원합니다.
 
 인증 요청의 Worker 제한(IP·경로별 분당 30회, 이메일 해시별 분당 5회)은 `wrangler.json`의 Durable Object 바인딩 `AUTH_LIMITER`(클래스 `AuthLimiter`, 마이그레이션 태그 `v1`)가 키마다 셉니다. 2026-10-05 16:27Z 배포 전까지 쓰던 rate limit 바인딩 `AUTH_IP_LIMIT`·`AUTH_EMAIL_LIMIT`은 기계별로 세어 새 연결에서 한도가 걸리지 않아 바꿨습니다([#148](https://github.com/AndrewDongminYoo/auto-chatter/issues/148)).
 가입·복구·인증 메일 재전송은 이메일 제한을 공유하고 로그인은 별도로 집계합니다.
+이 세 메일 요청은 접속 IP별 시간당 10회와 프로젝트 전체 시간당 15회 제한도 통과해야 하며, 고정 창 경계에서 요청이 몰려도 Supabase 메일 한도(시간당 30통)를 넘지 않도록 프로젝트 전체 제한을 그 절반 이하로 유지합니다([#165](https://github.com/AndrewDongminYoo/auto-chatter/issues/165), [인증 명세](../specs/2026-09-28-auth-completion.md)).
 같은 키의 요청은 어느 접속 위치로 들어와도 이름으로 정한 하나의 Durable Object가 세므로 전역으로 집계되며, IP 제한은 공유 IP 사용자에게 함께 적용될 수 있습니다.
 Supabase Auth의 자체 이메일·IP 제한은 별도로 적용됩니다.
 2026-10-06 운영자가 사생활 보호 창에서 테스트 계정으로 가입 메일, 인증 링크, 만료 링크, 복구 메일, 이전 세션 폐기, 새 비밀번호 로그인과 이전 비밀번호 거부를 확인했습니다. 메일 도착은 Gmail에서, 사용자 생성·이메일 인증·비밀번호 변경 시각과 세션 0개는 운영 DB에서 확인했으며, 세부 결과와 자료 충돌은 [#15 기록](https://github.com/AndrewDongminYoo/auto-chatter/issues/15#issuecomment-6008039226)에 있습니다.

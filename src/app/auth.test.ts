@@ -244,6 +244,57 @@ test("authentication throttles use both trusted caller IP and normalized email w
   assert.notEqual(keys[0], keys[1]);
 });
 
+test("mail requests also spend an hourly per-IP and a project-wide mail allowance; login spends neither (#165)", async () => {
+  const seen: Record<string, string[]> = { ip: [], email: [], mailIp: [], mail: [] };
+  const recording = (name: string, success = true) => ({
+    limit: async ({ key }: { key: string }) => {
+      seen[name]!.push(key);
+      return { success };
+    },
+  });
+  const env = (mailIp = true, mail = true) => ({
+    AUTH_IP_LIMIT: recording("ip"),
+    AUTH_EMAIL_LIMIT: recording("email"),
+    AUTH_MAIL_IP_LIMIT: recording("mailIp", mailIp),
+    AUTH_MAIL_LIMIT: recording("mail", mail),
+  });
+  const from = (ip: string) =>
+    new Request("https://app.test/api/auth/recover", { method: "POST", headers: { "CF-Connecting-IP": ip } });
+  const mailPaths = ["/api/auth/signup", "/api/auth/recover", "/api/auth/resend-confirmation"];
+  for (const [index, pathname] of mailPaths.entries())
+    await limitAuthRequest(from("203.0.113.10"), pathname, { email: `user${index}@example.test` }, env());
+  await limitAuthRequest(from("198.51.100.7"), "/api/auth/recover", { email: "other@example.test" }, env());
+  await limitAuthRequest(from("203.0.113.10"), "/api/auth/login", { email: "user0@example.test" }, env());
+  // One per-IP mail key for every mail path from the same address, a different one for another address.
+  assert.equal(seen.mailIp!.length, 4);
+  assert.equal(new Set(seen.mailIp!.slice(0, 3)).size, 1);
+  assert.notEqual(seen.mailIp![0], seen.mailIp![3]);
+  assert.doesNotMatch(seen.mailIp!.join(" "), /203\.0\.113\.10|198\.51\.100\.7/);
+  // One project-wide key whatever the address, email or path.
+  assert.equal(seen.mail!.length, 4);
+  assert.equal(new Set(seen.mail).size, 1);
+
+  // A refusal at either mail allowance is a 429; a client over its own allowance spends nothing project-wide.
+  seen.mail = [];
+  await assert.rejects(
+    limitAuthRequest(from("203.0.113.10"), "/api/auth/recover", { email: "x@example.test" }, env(false)),
+    (e: unknown) => e instanceof ApiError && e.status === 429 && e.message === "auth_rate_limited",
+  );
+  assert.deepEqual(seen.mail, []);
+  await assert.rejects(
+    limitAuthRequest(from("203.0.113.10"), "/api/auth/signup", { email: "x@example.test" }, env(true, false)),
+    (e: unknown) => e instanceof ApiError && e.status === 429 && e.message === "auth_rate_limited",
+  );
+  // The mail allowances are required for mail paths only.
+  const withoutMail = { AUTH_IP_LIMIT: recording("ip"), AUTH_EMAIL_LIMIT: recording("email") };
+  for (const pathname of mailPaths)
+    await assert.rejects(
+      limitAuthRequest(from("203.0.113.10"), pathname, { email: "x@example.test" }, withoutMail),
+      (e: unknown) => e instanceof ApiError && e.status === 503,
+    );
+  await limitAuthRequest(from("203.0.113.10"), "/api/auth/login", { email: "x@example.test" }, withoutMail);
+});
+
 test("signup, recovery, and resend share one email allowance while login has a separate allowance", async () => {
   const emailKeys: string[] = [];
   const allow = { limit: async () => ({ success: true }) };
@@ -262,6 +313,8 @@ test("signup, recovery, and resend share one email allowance while login has a s
       {
         AUTH_IP_LIMIT: allow,
         AUTH_EMAIL_LIMIT: emailLimit,
+        AUTH_MAIL_IP_LIMIT: allow,
+        AUTH_MAIL_LIMIT: allow,
       },
     );
   assert.equal(new Set(emailKeys.slice(0, 3)).size, 1);
@@ -289,9 +342,12 @@ test("authentication throttle keys stay within the binding's 64-byte limit", asy
       {
         AUTH_IP_LIMIT: limiter,
         AUTH_EMAIL_LIMIT: limiter,
+        AUTH_MAIL_IP_LIMIT: limiter,
+        AUTH_MAIL_LIMIT: limiter,
       },
     );
-  assert.equal(keys.length, 8);
+  // Login spends the IP and email allowances; each of the three mail paths also spends both mail allowances.
+  assert.equal(keys.length, 14);
 });
 
 test("authentication throttles reject excess attempts and missing bindings before provider calls", async () => {
@@ -303,7 +359,7 @@ test("authentication throttles reject excess attempts and missing bindings befor
       request,
       "/api/auth/signup",
       { email: "x@example.test" },
-      { AUTH_IP_LIMIT: refuse, AUTH_EMAIL_LIMIT: allow },
+      { AUTH_IP_LIMIT: refuse, AUTH_EMAIL_LIMIT: allow, AUTH_MAIL_IP_LIMIT: allow, AUTH_MAIL_LIMIT: allow },
     ),
     (error: unknown) => error instanceof ApiError && error.status === 429,
   );
