@@ -70,7 +70,7 @@ CSP 출처 값은 대소문자를 구분하지 않고 비교하며, sink 이름�
 ## 확인한 의심 사항
 
 - Meta 쪽에서 토큰이 취소된 경우: 신원 조회 GET이 일시적이지 않은 4xx(코드 190 포함)를 받으면 `classifyMetaGraphFailure`가 `null`을 반환하고, `verify()`가 `authorizationVerified: false`를 돌려줘 정책이 `authorization_unverified`로 막습니다. 따라서 발송 행은 매분 재시도되지 않고 `blocked`로 끝납니다. 다만 연결은 `active`로 남고 Meta의 권한 해제 웹후크도 받지 않으므로, 연결 상태와 재인증 안내는 [#16](https://github.com/AndrewDongminYoo/auto-chatter/issues/16)에서 다룹니다.
-- 다른 작업 공간의 연결 ID로 연결 해제를 요청하면 `disconnectConnection`(`src/app/settings.ts`)이 아무것도 바꾸지 않고 200 `{disconnected:true}`를 반환합니다. 정보가 새지는 않지만 다른 라우트의 404와 다릅니다. 멱등한 200을 유지할지 404로 바꿀지는 공개 API 동작의 결정이므로, 이 PR은 어느 쪽도 테스트로 고정하지 않았습니다.
+- 다른 작업 공간의 연결 ID로 연결 해제를 요청하면 `disconnectConnection`(`src/app/settings.ts`)이 아무것도 바꾸지 않고 200 `{disconnected:true}`를 반환합니다. 정보가 새지는 않지만 다른 라우트의 404와 다릅니다. 멱등한 200을 유지할지 404로 바꿀지는 공개 API 동작의 결정이므로, PR #162는 어느 쪽도 테스트로 고정하지 않았습니다. 2026-10-07 운영자가 404로 정했고, 이후 PR에서 다른 작업 공간이나 없는 연결 ID는 잠금을 잡기 전에 `404 connection_not_found`를 반환하도록 바꿨습니다(`settings.db.test.ts` "disconnect clears only owned credentials and disables its rules").
 
 ## 남은 항목
 

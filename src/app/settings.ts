@@ -261,6 +261,12 @@ export async function updateConnection(pool: Pool, user: User, id: string, input
 export async function disconnectConnection(pool: Pool, user: User, id: string) {
   if (!isUuid(id)) throw new ApiError(400, "invalid_connection");
   const workspaceId = await workspaceFor(pool, user, "admin");
+  // Answer another workspace's or an unknown ID like every other connection route, before taking any lock.
+  if (
+    !(await pool.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [id, workspaceId]))
+      .rowCount
+  )
+    throw new ApiError(404, "connection_not_found");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -275,11 +281,14 @@ export async function disconnectConnection(pool: Pool, user: User, id: string) {
        WHERE v.id=f.published_version_id AND v.trigger_connection_id=$1 AND f.workspace_id=$2 AND f.enabled`,
       [id, workspaceId],
     );
-    await client.query(
+    const disconnected = await client.query(
       `WITH disconnected AS (UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL,token_expires_at=NULL
- WHERE id=$1 AND workspace_id=$2 RETURNING id) UPDATE instagram_comment_rules SET enabled=false WHERE connection_id IN(SELECT id FROM disconnected) AND workspace_id=$2`,
+ WHERE id=$1 AND workspace_id=$2 RETURNING id), rules AS (UPDATE instagram_comment_rules SET enabled=false WHERE connection_id IN(SELECT id FROM disconnected) AND workspace_id=$2)
+ SELECT id FROM disconnected`,
       [id, workspaceId],
     );
+    // The connection left the workspace after the check above (a workspace deletion); undo the flow changes.
+    if (!disconnected.rowCount) throw new ApiError(404, "connection_not_found");
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");

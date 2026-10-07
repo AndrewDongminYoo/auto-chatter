@@ -330,7 +330,7 @@ test("a run that read the flow before a disable committed keeps its actions, and
 
 test("disconnecting the trigger connection turns its flows off", async () => {
   const id = await enabledFlow();
-  assert.equal((await request("DELETE", `/api/connections/${connectionId}`, undefined, otherUserId)).status, 200);
+  assert.equal((await request("DELETE", `/api/connections/${connectionId}`, undefined, otherUserId)).status, 404);
   assert.equal((await pool.query("SELECT enabled FROM flows WHERE id=$1", [id])).rows[0].enabled, true);
   assert.equal((await request("DELETE", `/api/connections/${connectionId}`)).status, 200);
   assert.equal((await pool.query("SELECT enabled FROM flows WHERE id=$1", [id])).rows[0].enabled, false);

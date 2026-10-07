@@ -1181,8 +1181,17 @@ test("editing a rule cannot silently change its identity or create another rule"
 
 test("disconnect clears only owned credentials and disables its rules", async () => {
   await saveRule(pool, a, input);
-  await disconnectConnection(pool, b, connectionId);
+  // Another workspace's or an unknown connection answers 404 like every other connection route.
+  for (const [user, id] of [
+    [b, connectionId],
+    [a, "99999999-9999-4999-8999-999999999999"],
+  ] as const)
+    await assert.rejects(
+      disconnectConnection(pool, user, id),
+      (e: unknown) => e instanceof ApiError && e.status === 404 && e.message === "connection_not_found",
+    );
   assert.equal((await listConnections(pool, a))[0].token_registered, true);
+  assert.equal((await listRules(pool, a))[0].enabled, true);
   await disconnectConnection(pool, a, connectionId);
   const connection = (await listConnections(pool, a))[0];
   assert.equal(connection.active, false);
