@@ -44,7 +44,8 @@ GET은 설계상 검사하지 않습니다. 상태를 바꾸는 GET은 OAuth 콜
 - `public/app/*.js`에 `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `srcdoc`, `document.write`, `eval`, `Function(` 같은 sink 이름이 점·대괄호·문자열 어느 표기로도 나오지 않는지 확인합니다.
 - `index.html`에 인라인 스크립트, `on*=` 이벤트 속성, `javascript:` URL이 없는지 확인합니다.
 
-이 검사는 정적 패턴 검사이므로, 저장된 악성 텍스트를 실제 브라우저에서 렌더링하는 확인을 대신하지 않습니다.
+CSP 출처 값은 대소문자를 구분하지 않고 비교하며, sink 이름은 단어 자체를 거부하므로 옵셔널 체이닝(`document?.write`)이나 대괄호 표기도 잡습니다.
+이 검사는 구문을 해석하지 않는 문자열 검사이므로, `const d = document; d.write(x)` 같은 별칭은 잡지 못하고 코드 리뷰에 맡깁니다. 또한 저장된 악성 텍스트를 실제 브라우저에서 렌더링하는 확인을 대신하지 않습니다.
 
 ### 5. 웹후크 재전송
 

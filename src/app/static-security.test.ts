@@ -26,7 +26,10 @@ function directives(policy: string): Map<string, string[]> {
     .filter((tokens) => tokens[0]);
   const names = parsed.map((tokens) => tokens[0]!.toLowerCase());
   assert.equal(new Set(names).size, names.length, `duplicate CSP directive in: ${policy}`);
-  return new Map(parsed.map((tokens) => [tokens[0]!.toLowerCase(), tokens.slice(1)]));
+  // Keywords, schemes and hosts match ASCII case-insensitively, so 'UNSAFE-INLINE' and DATA: count as the lowercase forms.
+  return new Map(
+    parsed.map((tokens) => [tokens[0]!.toLowerCase(), tokens.slice(1).map((source) => source.toLowerCase())]),
+  );
 }
 
 test("the dashboard CSP allows only same-origin scripts, with no inline or eval escape", async () => {
@@ -50,9 +53,11 @@ test("the dashboard CSP allows only same-origin scripts, with no inline or eval 
 test("dashboard scripts write user data as text, never through an HTML or code sink", async () => {
   const files = (await readdir(appDir)).filter((name) => name.endsWith(".js"));
   assert.ok(files.length > 0);
-  // The sink names are refused in any notation (dot, bracket or string), not only as a dotted assignment.
+  // The sink names are refused as words in any notation (dot, optional chaining, bracket or string), and
+  // document.write in any of those forms. This is a text guard, not a parser: an alias such as
+  // `const d = document; d.write(x)` is outside it and is left to code review.
   const sinks =
-    /\b(?:innerHTML|outerHTML|insertAdjacentHTML|srcdoc|writeln)\b|\bdocument\s*(?:\.|\[\s*["'`])\s*write\b|\beval\b|\bFunction\s*\(/;
+    /\b(?:innerHTML|outerHTML|insertAdjacentHTML|srcdoc|writeln|eval|Function)\b|\bdocument\s*(?:\?\.|\.)?\s*(?:\[\s*["'`]\s*)?write\b/;
   for (const name of files) {
     const source = await readFile(new URL(name, appDir), "utf8");
     assert.doesNotMatch(source, sinks, `${name} must not use an HTML or code sink`);
