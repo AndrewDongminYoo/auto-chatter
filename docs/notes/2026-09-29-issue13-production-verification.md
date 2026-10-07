@@ -106,6 +106,46 @@ Meta 웹훅을 실제로 재전송했을 때의 중복 차단은 아직 확인�
 확인 버튼은 모바일 앱에서 표시되고 postback이 보관됐지만 Chrome 웹에서는 같은 버튼이 보이지 않았습니다.
 클라이언트별 표시 차이의 원인과 발송을 켠 상태의 팔로우 조회·후속 DM 결과는 아직 확인하지 않았습니다.
 이 검증이 끝나기 전에는 #13을 완료로 처리하지 않습니다.
+위 세 항목의 2026-10-07 결과는 아래 절에 있습니다.
+
+## 2026-10-07 후속 검증
+
+### 확인 버튼 실발송
+
+운영자가 운영 DB 조회·백업, `SEND_ENABLED=true` 임시 배포와 테스트 DM 발송(첫 DM·미팔로우·팔로워 각 1건), 종료 후 `SEND_ENABLED=false` 배포를 승인했습니다.
+사전 조회(2026-10-06 16:09Z)에서 `ai.you.wanted`는 수신과 DM 보관이 켜져 있고 계정 발송은 꺼져 있었으며, 활성 규칙·대기 발송·활성 플로는 0개였습니다. 미완료 상태는 09-29 테스트의 팔로우 대화(reply 3, 규칙 꺼짐) `waiting` 한 건뿐이었습니다.
+테스트 전에 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-07-issue13/public-pre-send-test.dump`(274,476바이트, SHA-256 `dea9215c27c0dc81a0c371cf62d16a7c77b3dec70a148b167efa9c7458bd905c`)에 저장했고, 목록과 데이터 추출이 성공했습니다.
+
+운영자가 새 게시물 `18128537095698548`을 올리고, 운영 대시보드의 자동화 메뉴에서 규칙 `b54d57e3-132b-4ea9-b77d-4dabac45186d`를 만들었습니다. 규칙은 exact 키워드 `auto-chatter 버튼 검증`, 팔로우 조건, 확인 버튼 `확인`으로 설정했습니다. 이어서 계정 메뉴에서 계정 발송을 켰습니다.
+`main` 커밋 `791267e`(그때 운영 중이던 `ededa5c9`의 `3745c82`와 코드가 같고 문서만 다릅니다)를 `--var SEND_ENABLED:true`로 배포해 버전 `d9d0fe42-0139-40aa-b78f-6ec18e58d22a`가 00:41:03Z부터 100% 활성화됐고, 버전 조회에서 `SEND_ENABLED`의 실제 값 `true`를 확인했습니다.
+
+| 시각(UTC) | 운영 DB 기록                                                                             |
+| --------- | ---------------------------------------------------------------------------------------- |
+| 00:42:19  | 테스트 계정의 댓글 이벤트 10 저장                                                        |
+| 00:42:28  | 첫 DM(outbox 4) `sent`, 공급자 메시지 ID 기록, 팔로우 대화 4 `waiting`                   |
+| 00:43:07  | 버튼 postback 수신(인박스 5, receipt 기록), 대화 4 `pending`                             |
+| 00:43:30  | 운영자가 팔로우한 뒤 다시 누른 버튼 postback 수신(인박스 6, receipt 기록)                |
+| 00:43:36  | 감시 조회에서 대화 4 `pending / not_following`, 미팔로우 안내 DM의 공급자 메시지 ID 기록 |
+| 00:43:38  | 팔로워 DM 발송 시도, 대화 4 `sent / following`, 공급자 메시지 ID 기록                    |
+
+00:43:36Z 감시 조회는 20초 간격이라, 00:43:30Z의 두 번째 postback이 대화를 다시 `pending`으로 바꾼 뒤의 상태를 읽었습니다.
+대화 행은 마지막 발송의 공급자 메시지 ID와 시도 시각만 보관하므로, 미팔로우 안내 DM의 근거는 그 감시 기록과 운영자의 휴대폰 화면입니다.
+운영자의 모바일 Instagram 화면(2026-10-07 09:42·09:43 KST)에는 버튼이 붙은 첫 DM, `확인` 응답, 버튼이 붙은 미팔로우 안내 DM, 다시 누른 `확인`, 팔로워 완료 DM이 순서대로 보입니다.
+
+테스트 직후 기본값으로 다시 배포해 버전 `c825eebe-e1f9-4950-8a95-a550e854f238`이 00:44:00Z부터 100% 활성화됐고, 버전 조회에서 `SEND_ENABLED=false`를 확인했습니다. 전역 발송이 켜져 있던 시간은 약 3분입니다.
+운영자가 대시보드에서 규칙과 계정 발송을 껐고, 종료 조회(00:47:58Z)에서 계정 발송 꺼짐, 활성 규칙 0개, 대기·발송 중·unknown 발송 0건, 웹훅 전송 0건을 확인했습니다. 남은 `waiting`은 09-29의 reply 3뿐입니다.
+이 결과로 버튼 postback에서 팔로우 조회, 미팔로우·팔로워 분기, 후속 DM 발송까지 운영에서 확인했습니다.
+
+### 웹에서 버튼이 보이지 않는 이유
+
+Meta의 [Instagram Messaging 버튼 템플릿 문서](https://developers.facebook.com/documentation/business-messaging/instagram-messaging/button-template)(2026-10-07 확인)는 "The button template is currently not available in the web version."이라고 밝힙니다.
+09-29에 Chrome 웹에서 버튼이 보이지 않은 것은 이 제한과 일치하며, 코드 결함으로 보지 않습니다. 웹 사용자는 확인 키워드를 직접 입력해 같은 흐름을 진행할 수 있습니다.
+
+### 웹훅 재전송 중복 차단
+
+Meta의 실제 재전송은 서비스가 일으킬 수 없어 관찰하지 않았습니다.
+대신 운영 DB에 재전송을 흡수하는 제약이 있는지 조회했습니다. 댓글 이벤트 `UNIQUE (connection_id, comment_id)`, 발송 `UNIQUE (connection_id, media_id, sender_id)`, 확인 receipt `PRIMARY KEY (connection_id, message_id)`, 인박스 DM `UNIQUE (connection_id, message_id)`가 모두 있습니다.
+CI 배포 검사(`.github/workflows/ci.yaml`의 `Verify signed event persistence and replay protection`)는 Node 수신 경로에 합성 자격 증명으로 서명한 같은 댓글 요청을 두 번 보내 발송 행이 한 건만 생기는지 확인합니다. 이 검사는 Cloudflare 수신 경로와 DM 재전송을 다루지 않으며, 실제 Meta 재전송의 관찰은 남은 한계로 둡니다.
 
 ## 근거
 
