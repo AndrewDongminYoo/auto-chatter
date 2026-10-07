@@ -42,7 +42,10 @@ GET은 설계상 검사하지 않습니다. 상태를 바꾸는 GET은 OAuth 콜
 
 - `_headers` 어디에도 `! Content-Security-Policy`로 CSP를 떼어내는 규칙이 없는지 확인합니다. `/app/*` 블록에서 CSP가 정확히 하나인지, 지시어 이름이 허용 목록과 정확히 같은지(`script-src-elem`처럼 `script-src`를 덮어쓰는 지시어가 생기면 실패) 확인하고, 지시어를 나눠 `script-src`가 정확히 `'self'`이며 어느 지시어에도 `'unsafe-inline'`, `'unsafe-eval'`, `'unsafe-hashes'`, `data:`, `*`가 없는지 확인합니다. 브라우저는 같은 지시어가 두 번 나오면 첫 번째만 적용하므로, 중복 지시어는 그 자체로 거부합니다.
 - `public/app/*.js`에 `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `srcdoc`, `document.write`, `eval`, `Function`과 HTML 파서(`createContextualFragment`, `parseFromString`, `setHTMLUnsafe`, `parseHTMLUnsafe`) 같은 sink 이름이 점·대괄호·문자열 어느 표기로도 나오지 않는지 확인합니다.
-- `index.html`의 스크립트가 모두 위 검사가 읽는 `./*.js` 파일인지, 인라인 스크립트, `on*=` 이벤트 속성, `javascript:` URL이 없는지 확인합니다.
+- `public/app`에는 페이지, 스타일시트, 검사 대상 스크립트(`.html`·`.css`·`.js`)만 있어야 하고, 대시보드 JS는 동적 `import()`를 쓰지 않아야 합니다.
+- `index.html`의 스크립트가 모두 위 검사가 읽는 파일인지, 인라인 스크립트, `on*=` 이벤트 속성(따옴표 안의 값을 지운 뒤 검사), `javascript:` URL이 없는지 확인합니다.
+
+스크립트 실행을 실제로 막는 것은 브라우저가 강제하는 CSP이고, 그 정책은 첫 번째 테스트가 정확한 값으로 고정합니다. sink와 HTML 문자열 검사는 그 위의 이중 방어이며 최선의 노력입니다. PR #162의 호스티드 리뷰는 다섯 라운드 동안 이 문자열 검사에서만 표기 우회 9건을 지적했고 모두 고쳤습니다. 이후에도 같은 종류의 표기 우회는 이 범위를 근거로 따로 다루지 않습니다.
 
 CSP 출처 값은 대소문자를 구분하지 않고 비교하며, sink 이름은 단어 자체를 거부하므로 옵셔널 체이닝(`document?.write`)이나 대괄호 표기도 잡습니다.
 이 검사는 구문을 해석하지 않는 문자열 검사이므로, `const d = document; d.write(x)` 같은 별칭은 잡지 못하고 코드 리뷰에 맡깁니다. 또한 저장된 악성 텍스트를 실제 브라우저에서 렌더링하는 확인을 대신하지 않습니다.

@@ -68,14 +68,21 @@ test("the dashboard CSP allows only same-origin scripts, with no inline or eval 
 // The dashboard scripts the sink scan reads; the page test refuses any script that is not one of them.
 const scannedScripts = async () => (await readdir(appDir)).filter((name) => name.endsWith(".js"));
 
+test("public/app holds only the page, the stylesheet and scanned scripts", async () => {
+  // Any other file, a subdirectory or a module such as payload.mjs could be loaded same-origin without being scanned.
+  for (const entry of await readdir(appDir, { withFileTypes: true }))
+    assert.ok(entry.isFile() && /^[a-z0-9-]+\.(?:js|html|css)$/.test(entry.name), `unexpected entry: ${entry.name}`);
+});
+
 test("dashboard scripts write user data as text, never through an HTML or code sink", async () => {
   const files = await scannedScripts();
   assert.ok(files.length > 0);
   // The sink names are refused as words in any notation (dot, optional chaining, bracket or string), and
-  // document.write in any of those forms. This is a text guard, not a parser: an alias such as
-  // `const d = document; d.write(x)` is outside it and is left to code review.
+  // document.write in any of those forms; dynamic import() is refused so no unscanned module is loaded.
+  // This is a best-effort text guard, not a parser: an alias such as `const d = document; d.write(x)` is outside it
+  // and is left to code review. Script execution itself is enforced by the CSP test above.
   const sinks =
-    /\b(?:innerHTML|outerHTML|insertAdjacentHTML|srcdoc|writeln|eval|Function|createContextualFragment|parseFromString|setHTMLUnsafe|parseHTMLUnsafe)\b|\bdocument\s*(?:\?\.|\.)?\s*(?:\[\s*["'`]\s*)?write\b/;
+    /\b(?:innerHTML|outerHTML|insertAdjacentHTML|srcdoc|writeln|eval|Function|createContextualFragment|parseFromString|setHTMLUnsafe|parseHTMLUnsafe)\b|\bdocument\s*(?:\?\.|\.)?\s*(?:\[\s*["'`]\s*)?write\b|\bimport\s*\(/;
   for (const name of files) {
     const source = await readFile(new URL(name, appDir), "utf8");
     assert.doesNotMatch(source, sinks, `${name} must not use an HTML or code sink`);
@@ -91,6 +98,8 @@ test("the dashboard page carries no inline script or inline event handler", asyn
     const src = /\ssrc="\.\/([^"/]+)"/.exec(tag)?.[1];
     assert.ok(src && scanned.includes(src), `only scanned dashboard script files are allowed: ${tag}`);
   }
-  assert.doesNotMatch(html, /<[^>]+\son[a-z]+\s*=/i, "inline event handlers are not allowed");
+  // Quoted attribute values are blanked first, so a ">" inside an earlier value cannot hide a later handler.
+  const unquoted = html.replace(/"[^"]*"|'[^']*'/g, '""');
+  assert.doesNotMatch(unquoted, /<[^>]+\son[a-z]+\s*=/i, "inline event handlers are not allowed");
   assert.doesNotMatch(html, /\bjavascript:/i);
 });
