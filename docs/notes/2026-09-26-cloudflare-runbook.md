@@ -381,6 +381,12 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 운영 DB는 조회하지 않아 `scheduled_steps`의 단계별 결과는 읽지 않았습니다. 대신 분석 API의 `workersInvocationsAdaptive`에서 배포 후 04:41Z~04:44Z의 cron을 포함한 새 버전 호출이 모두 `success`였고 오류는 0건이었습니다.
 2026-10-07에는 운영자가 승인한 #13 확인 버튼 실발송 테스트를 위해 `main` 커밋 `791267e`를 `--var SEND_ENABLED:true`로 배포했습니다. 버전 `d9d0fe42-0139-40aa-b78f-6ec18e58d22a`가 00:41:03Z부터 100% 활성화됐고, 버전 조회에서 `SEND_ENABLED=true`를 확인했습니다. 이 커밋은 `3745c82`와 코드가 같고 문서만 다릅니다.
 테스트 뒤 같은 커밋을 기본값으로 다시 배포해 버전 `c825eebe-e1f9-4950-8a95-a550e854f238`이 00:44:00Z부터 100% 활성화됐고, 버전 조회에서 `SEND_ENABLED=false`를 확인했습니다. 발송 3건과 종료 조회 결과는 [#13 운영 적용 검증 기록](2026-09-29-issue13-production-verification.md#2026-10-07-후속-검증)에 있습니다.
+같은 날 01:54Z에는 운영자의 "운영 DB 조회·백업, 마이그레이션 036~037 적용, 운영 배포" 승인에 따라 PR #157(sharp 0.35.5), #158(숫자·날짜 필드 순서 비교, migration 036), #159(태그·필드 AND/OR, migration 037)를 포함한 `main` 커밋 `c922e91`을 적용했습니다.
+적용 전 조회에서 `instagram_contact_segments`는 0행이었고, `contact_segment_field_condition`은 `eq`·`is_set`·`is_unset`만 허용했으며 `condition_operator` 열은 없었습니다. `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-07-migration-036-037/public-pre-036.dump`(275,070바이트, SHA-256 `b7db6e893f0d82b855d52b4b9ec2a24d040ce7b54fc61be10392537b07bae181`)에 저장했고 목록 읽기가 성공했습니다.
+해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했고, 로그는 `COMMIT`으로 끝났으며 오류나 경고는 없었습니다. 적용 후 조회에서 field 조건 CHECK가 `gt`·`gte`·`lt`·`lte`를 포함하고, `condition_operator`가 `NOT NULL DEFAULT 'and'`로 추가되고 `contact_segment_condition_operator` CHECK가 생겼습니다. RLS와 `auto_chatter_server`의 SELECT·INSERT·UPDATE 권한은 그대로였습니다.
+이어서 Worker를 버전 `cd170b5c-6af0-4bb8-995f-3b2874452567`로 배포했고, 01:55:22Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `c825eebe-e1f9-4950-8a95-a550e854f238`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+정적 파일·공개 경로 22개 항목 점검은 배포 전에 바뀐 `index.html`과 `app.js`의 해시만 달라 20개가 통과했고, 배포 후에는 22개가 모두 통과했습니다.
+`scheduled_steps`를 01:55:45Z, 01:56:50Z, 01:57:56Z에 조회했을 때, 발송과 무관하게 실행되는 6개 단계는 두 번째 조회부터 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. `SEND_ENABLED=true`일 때만 실행되는 `stale_recovery`, `wake`, `webhook_delivery`의 마지막 성공은 앞의 실발송 테스트 중인 00:43Z입니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
