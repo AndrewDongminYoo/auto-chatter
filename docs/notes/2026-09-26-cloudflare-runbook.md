@@ -387,6 +387,9 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 이어서 Worker를 버전 `cd170b5c-6af0-4bb8-995f-3b2874452567`로 배포했고, 01:55:22Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `c825eebe-e1f9-4950-8a95-a550e854f238`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 정적 파일·공개 경로 22개 항목 점검은 배포 전에 바뀐 `index.html`과 `app.js`의 해시만 달라 20개가 통과했고, 배포 후에는 22개가 모두 통과했습니다.
 `scheduled_steps`를 01:55:45Z, 01:56:50Z, 01:57:56Z에 조회했을 때, 발송과 무관하게 실행되는 6개 단계는 두 번째 조회부터 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. `SEND_ENABLED=true`일 때만 실행되는 `stale_recovery`, `wake`, `webhook_delivery`의 마지막 성공은 앞의 실발송 테스트 중인 00:43Z입니다.
+같은 날 03:27Z에는 운영자 요청에 따라 PR #162(#62 보안 회귀 테스트)와 #163(다른 작업 공간의 연결 해제 요청에 `404 connection_not_found`)을 포함한 `main` 커밋 `e924c09`의 Worker를 버전 `8eaeb7b0-d3ba-4af9-babb-825c098877ef`로 배포했고, 03:27:51Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `cd170b5c-6af0-4bb8-995f-3b2874452567`였습니다.
+`c922e91` 이후 실행 코드는 `src/app/settings.ts`의 연결 해제만 바뀌었고 나머지는 테스트와 문서이므로 마이그레이션은 없었으며, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+22개 항목 점검은 모두 통과했지만 정적 파일이 바뀌지 않아 배포 전후를 구별하지 못합니다. 운영 DB는 조회하지 않았고, 분석 API의 `workersInvocationsAdaptive`에서 배포 후 03:27Z~03:30Z의 cron을 포함한 새 버전 호출이 모두 `success`였고 오류는 0건이었습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
