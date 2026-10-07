@@ -65,8 +65,11 @@ test("the dashboard CSP allows only same-origin scripts, with no inline or eval 
       );
 });
 
+// The dashboard scripts the sink scan reads; the page test refuses any script that is not one of them.
+const scannedScripts = async () => (await readdir(appDir)).filter((name) => name.endsWith(".js"));
+
 test("dashboard scripts write user data as text, never through an HTML or code sink", async () => {
-  const files = (await readdir(appDir)).filter((name) => name.endsWith(".js"));
+  const files = await scannedScripts();
   assert.ok(files.length > 0);
   // The sink names are refused as words in any notation (dot, optional chaining, bracket or string), and
   // document.write in any of those forms. This is a text guard, not a parser: an alias such as
@@ -81,10 +84,13 @@ test("dashboard scripts write user data as text, never through an HTML or code s
 
 test("the dashboard page carries no inline script or inline event handler", async () => {
   const html = await readFile(new URL("index.html", appDir), "utf8");
-  for (const tag of html.match(/<script\b[^>]*>/gi) ?? [])
-    // Only a top-level public/app/*.js file, which the sink scan above reads: no inline body, no other host and no
-    // file outside that scan.
-    assert.match(tag, /\ssrc="\.\/[a-z0-9-]+\.js"/i, `only scanned dashboard script files are allowed: ${tag}`);
+  const scanned = await scannedScripts();
+  // Every script must be exactly one of the files the sink scan reads: no inline body, no other host, no other
+  // directory and no name that only matches the scan in a different letter case.
+  for (const tag of html.match(/<script\b[^>]*>/gi) ?? []) {
+    const src = /\ssrc="\.\/([^"/]+)"/.exec(tag)?.[1];
+    assert.ok(src && scanned.includes(src), `only scanned dashboard script files are allowed: ${tag}`);
+  }
   assert.doesNotMatch(html, /<[^>]+\son[a-z]+\s*=/i, "inline event handlers are not allowed");
   assert.doesNotMatch(html, /\bjavascript:/i);
 });
