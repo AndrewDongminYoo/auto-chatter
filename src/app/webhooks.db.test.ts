@@ -30,7 +30,7 @@ const missingId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const encryptionKey = Buffer.alloc(32, 5).toString("base64");
 const apiEnv = {
   SUPABASE_URL: "https://project.supabase.co",
-  SUPABASE_PUBLISHABLE_KEY: "test",
+  SUPABASE_SECRET_KEY: "sb_secret_test",
   TOKEN_ENCRYPTION_KEY: encryptionKey,
 };
 // Identifiers and text that must never reach a payload.

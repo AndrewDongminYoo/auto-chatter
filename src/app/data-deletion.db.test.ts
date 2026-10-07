@@ -21,7 +21,7 @@ const keptConnectionId = "66666666-6666-4666-8666-666666666666";
 const foreignConnectionId = "77777777-7777-4777-8777-777777777777";
 const fieldId = "99999999-9999-4999-8999-999999999999";
 const otherFieldId = "99999999-9999-4999-8999-999999999998";
-const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "test" };
+const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" };
 const connectionTables = [
   "instagram_comment_events",
   "private_reply_outbox",

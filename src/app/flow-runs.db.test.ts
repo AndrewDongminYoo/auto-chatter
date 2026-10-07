@@ -21,7 +21,7 @@ const otherWorkspaceId = "44444444-4444-4444-8444-444444444444";
 const connectionId = "55555555-5555-4555-8555-555555555555";
 const envConnectionId = "77777777-7777-4777-8777-777777777777";
 const fieldId = "99999999-9999-4999-8999-999999999999";
-const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "test" };
+const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" };
 const now = new Date("2026-09-25T00:00:00.000Z");
 
 before(async () => {

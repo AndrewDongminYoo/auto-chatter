@@ -20,7 +20,7 @@ const workspaceId = "33333333-3333-4333-8333-333333333333";
 const otherWorkspaceId = "44444444-4444-4444-8444-444444444444";
 const connectionId = "55555555-5555-4555-8555-555555555555";
 const foreignConnectionId = "77777777-7777-4777-8777-777777777777";
-const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "test" };
+const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" };
 // Columns whose names look secret but hold only timestamps.
 const benignSecretLikeColumns = new Set(["token_expires_at", "token_obtained_at", "token_refresh_attempted_at"]);
 

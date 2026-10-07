@@ -26,7 +26,7 @@ const sizeField = "88888888-8888-4888-8888-888888888888";
 const flagField = "99999999-9999-4999-8999-999999999999";
 const archivedField = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const endpointId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "test" };
+const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" };
 
 before(async () => {
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));

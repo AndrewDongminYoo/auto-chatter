@@ -19,7 +19,7 @@ const userId = "11111111-1111-4111-8111-111111111111";
 const workspaceId = "33333333-3333-4333-8333-333333333333";
 const connectionId = "55555555-5555-4555-8555-555555555555";
 const sizeField = "66666666-6666-4666-8666-666666666666";
-const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "test" };
+const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" };
 
 before(async () => {
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));

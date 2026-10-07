@@ -576,7 +576,7 @@ async function fieldRequest(
       headers: { origin: "https://app.test", cookie: "__Host-ac-access=test", "content-type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }),
-    { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "test", SEND_ENABLED: sendEnabled },
+    { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test", SEND_ENABLED: sendEnabled },
     () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
     (async () => Response.json({ ...user, email_confirmed_at: "2026-09-25" })) as typeof fetch,
     notifyReply,

@@ -5,7 +5,7 @@ import type { Pool } from "pg";
 import { sealSecret } from "./secrets.ts";
 const config = {
   SUPABASE_URL: "https://project.supabase.co",
-  SUPABASE_PUBLISHABLE_KEY: "public-test-key",
+  SUPABASE_SECRET_KEY: "sb_secret_test",
   AUTH_IP_LIMIT: { limit: async () => ({ success: true }) },
   AUTH_EMAIL_LIMIT: { limit: async () => ({ success: true }) },
   AUTH_MAIL_IP_LIMIT: { limit: async () => ({ success: true }) },
@@ -336,6 +336,62 @@ test("rate-limited public auth requests never reach Supabase and cross-origin re
   assert.deepEqual(await rejected.json(), { error: "auth_rate_limited" });
   assert.equal(keys.length, 1);
   assert.equal(providerCalls, 0);
+});
+
+test("session checks forward the caller's IP, and refresh and logout spend a per-IP allowance before Supabase (#164)", async () => {
+  const forwarded: Array<string | null> = [];
+  const provider = (async (_input: string | URL | Request, init?: RequestInit) => {
+    forwarded.push(new Headers(init?.headers).get("sb-forwarded-for"));
+    return Response.json({ id: userId, email: "owner@example.test", email_confirmed_at: "2026-01-01" });
+  }) as typeof fetch;
+  const headers = {
+    Origin: "https://app.test",
+    "CF-Connecting-IP": "198.51.100.7",
+    cookie: "__Host-ac-access=access-test; __Host-ac-refresh=refresh-test",
+  };
+  const me = await appApi(
+    new Request("https://app.test/api/me", { headers }),
+    config,
+    () => {
+      throw new Error("no db");
+    },
+    provider,
+  );
+  assert.equal(me.status, 200);
+  assert.deepEqual(forwarded, ["198.51.100.7"]);
+
+  forwarded.length = 0;
+  const keys: string[] = [];
+  const env = {
+    ...config,
+    AUTH_IP_LIMIT: {
+      limit: async ({ key }: { key: string }) => {
+        keys.push(key);
+        return { success: false };
+      },
+    },
+  };
+  for (const path of ["/api/auth/refresh", "/api/auth/logout"]) {
+    const response = await appApi(
+      new Request(`https://app.test${path}`, { method: "POST", headers }),
+      env,
+      () => {
+        throw new Error("no db");
+      },
+      provider,
+    );
+    assert.equal(response.status, 429, path);
+    assert.deepEqual(await response.json(), { error: "auth_rate_limited" }, path);
+    // A refused logout still clears the browser session, as a remote logout failure does.
+    assert.equal(
+      response.headers.getSetCookie().filter((value) => value.includes("Max-Age=0")).length,
+      path.endsWith("/logout") ? 2 : 0,
+      path,
+    );
+  }
+  assert.equal(keys.length, 2);
+  assert.notEqual(keys[0], keys[1]);
+  assert.deepEqual(forwarded, []);
 });
 
 test("owned media list returns display metadata and an opaque cursor without credentials or provider URLs", async () => {

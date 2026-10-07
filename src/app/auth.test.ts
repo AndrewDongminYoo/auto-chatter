@@ -30,7 +30,7 @@ test("request bodies are refused above the size limit and when not declared as J
     );
 });
 
-const config = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "public-test-key" };
+const config = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" };
 const userId = "11111111-1111-4111-8111-111111111111";
 
 test("protected requests require a session and a remotely verified confirmed user", async () => {
@@ -50,6 +50,61 @@ test("protected requests require a session and a remotely verified confirmed use
     { id: userId, email: "owner@example.test" },
   );
   assert.equal(calls, 1);
+});
+
+test("every provider call carries the secret key and forwards the client IP for Supabase's per-IP limits (#164)", async () => {
+  const secretConfig = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" };
+  const seen: Array<{ path: string; apikey: string | null; forwarded: string | null }> = [];
+  const provider = (async (url: string | URL | Request, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    const path = new URL(String(url)).pathname;
+    seen.push({ path, apikey: headers.get("apikey"), forwarded: headers.get("sb-forwarded-for") });
+    if (path.endsWith("/token"))
+      return Response.json({ access_token: "access-test", refresh_token: "refresh-test", expires_in: 3600 });
+    if (path.endsWith("/user") && init?.method === "GET")
+      return Response.json({ id: userId, email: "owner@example.test", email_confirmed_at: "2026-01-01" });
+    return new Response(null, { status: 204 });
+  }) as typeof fetch;
+  const exercise = async (client: AuthClient) => {
+    const cookies = { cookie: "__Host-ac-access=access-test; __Host-ac-refresh=refresh-test" };
+    await client.user(new Request("https://app.test/api/me", { headers: cookies }));
+    await client.login({ email: "owner@example.test", password: "example-password" });
+    await client.signup({ email: "owner@example.test", password: "example-password" });
+    await client.recover({ email: "owner@example.test" });
+    await client.resendConfirmation({ email: "owner@example.test" });
+    await client.resetPassword({ access_token: "recovery-test", password: "example-password" });
+    await client.refresh(new Request("https://app.test", { headers: cookies }));
+    await client.logout(new Request("https://app.test", { headers: cookies }));
+  };
+  await exercise(new AuthClient(secretConfig, provider, "203.0.113.9"));
+  assert.deepEqual(
+    seen.map((call) => call.path),
+    [
+      "/auth/v1/user",
+      "/auth/v1/token",
+      "/auth/v1/signup",
+      "/auth/v1/recover",
+      "/auth/v1/resend",
+      "/auth/v1/user",
+      "/auth/v1/logout",
+      "/auth/v1/token",
+      "/auth/v1/token",
+      "/auth/v1/logout",
+    ],
+  );
+  for (const call of seen) assert.deepEqual(call, { ...call, apikey: "sb_secret_test", forwarded: "203.0.113.9" });
+  // Without a client IP (a local request) the header is left out rather than invented.
+  seen.length = 0;
+  await exercise(new AuthClient(secretConfig, provider, null));
+  assert.equal(seen.length, 10);
+  assert.ok(seen.every((call) => call.apikey === "sb_secret_test" && call.forwarded === null));
+  // Supabase honours Sb-Forwarded-For only with a secret key, so a publishable or legacy key is refused.
+  for (const key of [undefined, "", "sb_publishable_test", "eyJhbGciOiJIUzI1NiJ9.legacy.anon"])
+    assert.throws(
+      () => new AuthClient({ SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: key }, provider),
+      (e: unknown) => e instanceof ApiError && e.status === 503 && e.message === "auth_not_configured",
+      String(key),
+    );
 });
 
 test("an expired, revoked or unverifiable session is refused instead of trusted", async () => {

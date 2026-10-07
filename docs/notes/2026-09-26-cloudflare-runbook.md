@@ -428,10 +428,16 @@ Worker secret과 Meta 대시보드의 Verify token에 같은 값을 저장합니
 ```bash
 corepack pnpm exec wrangler secret put INSTAGRAM_APP_SECRET --env-file /dev/null
 corepack pnpm exec wrangler secret put INSTAGRAM_VERIFY_TOKEN --env-file /dev/null
-corepack pnpm exec wrangler secret put SUPABASE_PUBLISHABLE_KEY --env-file /dev/null
+corepack pnpm exec wrangler secret put SUPABASE_SECRET_KEY --env-file /dev/null
 corepack pnpm exec wrangler secret put INSTAGRAM_OAUTH_APP_SECRET --env-file /dev/null
 corepack pnpm exec wrangler secret put TOKEN_ENCRYPTION_KEY --env-file /dev/null
 ```
+
+`SUPABASE_SECRET_KEY`는 Supabase 대시보드의 API 키 설정에서 이 Worker 전용으로 새로 만든 비밀 키(`sb_secret_`로 시작)입니다([#164](https://github.com/AndrewDongminYoo/auto-chatter/issues/164)).
+비밀 키만으로는 사용자 IP가 반영되지 않습니다. [Supabase 문서](https://supabase.com/docs/guides/auth/rate-limits#ip-address-forwarding)(2026-10-07 확인)에 따르면 새 프로젝트는 대시보드의 **Authentication > Rate Limits > IP Address Forwarding**을 명시적으로 켜야 하며(Management API의 `security_sb_forwarded_for_enabled`), 꺼져 있으면 Supabase가 `Sb-Forwarded-For`를 무시하고 계속 Worker의 출구 IP로 셉니다. 이 설정은 이전 Worker 버전에 영향이 없으므로 배포 전에 켭니다.
+이 키를 읽는 코드를 배포하기 전에 먼저 등록해야 합니다. 등록하지 않으면 로그인 경로뿐 아니라 모든 `/api/*` 요청이 `503 auth_not_configured`를 반환해 대시보드 전체가 멈춥니다. 웹훅과 cron은 이 키를 읽지 않으므로 계속 동작합니다.
+이전 `SUPABASE_PUBLISHABLE_KEY` secret은 운영 브라우저에서 로그인, `/api/me`, 세션 갱신이 동작하는 것을 확인한 뒤에만 `wrangler secret delete SUPABASE_PUBLISHABLE_KEY`로 삭제합니다. 이전 Worker 버전은 이 secret을 읽으므로, 먼저 삭제하면 `wrangler rollback`으로 되돌린 버전도 503을 반환합니다.
+비밀 키는 Auth 관리자 권한을 가지므로 다른 곳에 재사용하지 않으며, 노출되었다면 Supabase에서 그 키만 폐기하고 새 키로 바꿉니다.
 
 검수용 이메일의 Meta 앱 역할을 확인했다면 #14 연결 제한 코드 배포 전에 다음 secret을 등록합니다.
 
@@ -447,7 +453,7 @@ corepack pnpm exec wrangler secret put INSTAGRAM_INTERNAL_EMAILS --env-file /dev
 | `META_GRAPH_VERSION`               | `wrangler.json`의 `vars` | 실제 앱에서 사용할 Graph 버전                                              |
 | `SEND_ENABLED`                     | `wrangler.json`의 `vars` | 전역 발송 스위치, 최초 배포는 문자열 `false`                               |
 | `INSTAGRAM_PUBLIC_CONNECT_ENABLED` | `wrangler.json`의 `vars` | 일반 사용자 OAuth 연결 허용 스위치, 승인·실계정 검증 전에는 문자열 `false` |
-| `SUPABASE_PUBLISHABLE_KEY`         | Worker secret            | Supabase Auth 호출용 공개 키                                               |
+| `SUPABASE_SECRET_KEY`              | Worker secret            | Supabase Auth 호출용 비밀 키, 사용자 IP 전달(`Sb-Forwarded-For`)에 필요    |
 | `INSTAGRAM_OAUTH_APP_SECRET`       | Worker secret            | Instagram OAuth 앱 secret                                                  |
 | `INSTAGRAM_INTERNAL_EMAILS`        | Worker secret            | 검수용으로 허용할 확인된 이메일의 쉼표 구분 목록                           |
 | `TOKEN_ENCRYPTION_KEY`             | Worker secret            | 32바이트 무작위 키의 canonical base64                                      |

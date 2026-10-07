@@ -25,7 +25,7 @@ const outsider = { id: "55555555-5555-4555-8555-555555555555", email: "outsider@
 const workspaceId = "66666666-6666-4666-8666-666666666666";
 const otherWorkspaceId = "77777777-7777-4777-8777-777777777777";
 const connectionId = "88888888-8888-4888-8888-888888888888";
-const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "test" };
+const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" };
 
 type Actor = { id: string; email: string };
 type State = {

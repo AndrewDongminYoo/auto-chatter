@@ -59,13 +59,15 @@ test("workerd auth routes call the provider with the native fetch receiver", asy
     ),
     bindings: {
       SUPABASE_URL: "https://auth-test.supabase.co",
-      SUPABASE_PUBLISHABLE_KEY: "synthetic-public-key",
+      SUPABASE_SECRET_KEY: "sb_secret_test",
     },
     outboundService: async (request) => {
       const url = new URL(request.url);
       assert.equal(url.origin, "https://auth-test.supabase.co");
       assert.equal(request.method, "POST");
-      assert.equal(request.headers.get("apikey"), "synthetic-public-key");
+      assert.equal(request.headers.get("apikey"), "sb_secret_test");
+      // The caller's address reaches Supabase so its per-IP limits are not shared through the Worker (#164).
+      assert.equal(request.headers.get("sb-forwarded-for"), "203.0.113.20");
       const body = await request.json();
       if (url.pathname === "/auth/v1/signup") {
         assert.deepEqual(body, { email: "owner@example.test", password: "example-password" });
@@ -88,7 +90,7 @@ test("workerd auth routes call the provider with the native fetch receiver", asy
     ]) {
       const response = await runtime.dispatchFetch(`https://app.test/api/auth/${route}`, {
         method: "POST",
-        headers: { Origin: "https://app.test", "Content-Type": "application/json" },
+        headers: { Origin: "https://app.test", "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.20" },
         body: JSON.stringify({ email: "owner@example.test", password: "example-password" }),
       });
       assert.equal(response.status, status, `${route}: ${await response.clone().text()}`);
@@ -101,7 +103,7 @@ test("workerd auth routes call the provider with the native fetch receiver", asy
     ]) {
       const response = await runtime.dispatchFetch(`https://app.test/api/auth/${route}`, {
         method: "POST",
-        headers: { Origin: "https://app.test", "Content-Type": "application/json" },
+        headers: { Origin: "https://app.test", "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.20" },
         body: JSON.stringify({ email: "owner@example.test" }),
       });
       assert.equal(response.status, status);
@@ -112,7 +114,7 @@ test("workerd auth routes call the provider with the native fetch receiver", asy
     for (const [index, status] of [200, 200, 200, 200, 200, 429].entries()) {
       const response = await runtime.dispatchFetch("https://app.test/api/auth/recover", {
         method: "POST",
-        headers: { Origin: "https://app.test", "Content-Type": "application/json" },
+        headers: { Origin: "https://app.test", "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.20" },
         body: JSON.stringify({ email: `other-${index}@example.test` }),
       });
       assert.equal(response.status, status, `mail request ${index}`);
@@ -531,7 +533,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     hyperdrives: { HYPERDRIVE: serverUrl.href },
     bindings: {
       SUPABASE_URL: "https://auth-test.supabase.co",
-      SUPABASE_PUBLISHABLE_KEY: "synthetic-public-key",
+      SUPABASE_SECRET_KEY: "sb_secret_test",
       SEND_ENABLED: "true",
     },
     outboundService: async (request) => {

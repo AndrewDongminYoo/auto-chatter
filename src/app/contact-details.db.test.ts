@@ -68,7 +68,7 @@ after(async () => pool.end());
 async function request(path = detailPath(), actor = owner) {
   return appApi(
     new Request(`https://app.test${path}`, { headers: { cookie: "__Host-ac-access=test" } }),
-    { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "test" },
+    { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" },
     () =>
       ({
         query: pool.query.bind(pool),
