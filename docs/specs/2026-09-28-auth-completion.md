@@ -26,6 +26,7 @@
 - 모든 Supabase Auth 호출은 비밀 API 키(`SUPABASE_SECRET_KEY`)로 보내고, 접속 IP(`CF-Connecting-IP`)를 `Sb-Forwarded-For` 헤더로 전달합니다([#164](https://github.com/AndrewDongminYoo/auto-chatter/issues/164)).
   [Supabase Auth 요청 제한 문서](https://supabase.com/docs/guides/auth/rate-limits)(2026-10-07 확인)는 이 헤더를 비밀 키로 보낸 요청에서만 반영하고, 공개 키와 기존 `anon`·`service_role` 키는 지원하지 않는다고 설명합니다.
   그래서 `sb_secret_`로 시작하지 않는 키가 설정되어 있으면 공급자를 호출하지 않고 `503 auth_not_configured`로 거절합니다.
+  같은 문서에 따르면 Supabase 프로젝트의 IP 주소 전달 설정(`security_sb_forwarded_for_enabled`)도 켜져 있어야 하며, 새 프로젝트에서는 꺼져 있습니다. 이 설정은 코드로 확인할 수 없으므로 운영 절차는 [Cloudflare runbook](../notes/2026-09-26-cloudflare-runbook.md#3-workers-환경-값)이 담당합니다.
   이 헤더가 없으면 Supabase의 IP별 제한(`/token`은 5분에 150회)이 사용자 IP가 아니라 Worker가 Supabase로 나가는 Cloudflare 출구 IP를 기준으로 걸리므로, 같은 출구 IP를 쓰는 모든 사용자가 한 클라이언트의 요청 때문에 로그인과 세션 갱신을 거절당할 수 있습니다.
 
 ## 한계와 운영 조건
