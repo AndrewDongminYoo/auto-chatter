@@ -85,6 +85,8 @@ CSP 출처 값은 대소문자를 구분하지 않고 비교하며, sink 이름�
 | [#166](https://github.com/AndrewDongminYoo/auto-chatter/issues/166) | 게시물 목록 조회, 작업 공간 내보내기, OAuth 시작에 상한이 없습니다.                                                                                            | 차단 아님                     |
 | [#167](https://github.com/AndrewDongminYoo/auto-chatter/issues/167) | 사용자·작업 공간별 API 제한과 웹훅 전달의 작업 공간 간 공정성(설계 결정)입니다.                                                                                | 차단 아님                     |
 
+#164를 수정하면서 supabase/auth 소스를 확인한 결과, 세션 확인에 쓰는 `GET /user`에는 IP별 제한이 없고 `PUT /user`에만 있었습니다. 그래서 출구 IP 기준 제한이 실제로 문제가 되는 곳은 로그인·세션 갱신·로그아웃이 호출하는 `/token`(5분에 150회)입니다. Worker의 로그인 제한(분당 30회)이 5분 동안 정확히 이 한도와 같았고, 갱신과 로그아웃에는 Worker 제한이 없었습니다. 수정은 비밀 키와 `Sb-Forwarded-For`로 사용자 IP를 넘기고, 갱신과 로그아웃에도 IP별 제한을 둡니다([인증 스펙](../specs/2026-09-28-auth-completion.md)).
+
 [Meta 요청 제한 문서](https://developers.facebook.com/docs/graph-api/overview/rate-limiting/)(2026-10-07 확인)는 Instagram 한도를 앱과 사용자 쌍마다 세므로, 게시물 조회 남용은 그 작업 공간 계정의 한도만 씁니다. 앱 전체 발송 한도는 [#60](https://github.com/AndrewDongminYoo/auto-chatter/issues/60)이 다룹니다.
 
 ### 추가한 회귀 테스트

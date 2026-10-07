@@ -130,6 +130,8 @@ https://auto-chat.donminzzi.kr/api/instagram/callback
 | `INSTAGRAM_APP_SECRET`       | 기존 Worker secret | 웹훅 서명 검증                        |
 | `INSTAGRAM_VERIFY_TOKEN`     | 기존 Worker secret | 웹훅 URL 확인                         |
 
+이 표는 2026-09-26 전환 당시의 설정입니다. [#164](https://github.com/AndrewDongminYoo/auto-chatter/issues/164) 이후에는 `SUPABASE_PUBLISHABLE_KEY` 대신 비밀 키 `SUPABASE_SECRET_KEY`를 사용하며, 현재 설정은 [Cloudflare runbook](2026-09-26-cloudflare-runbook.md#3-workers-환경-값)이 기준입니다.
+
 키·토큰은 채팅이나 Git에 기록하지 않습니다.
 Wrangler에는 `--env-file /dev/null`을 사용합니다.
 새 암호화 키를 잃거나 교체하면 기존 토큰을 복호화할 수 없으므로 해당 계정의 재연결 또는 별도 키 이전이 필요합니다.

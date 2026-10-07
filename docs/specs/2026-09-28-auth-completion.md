@@ -19,8 +19,14 @@
   IP별 제한을 먼저 확인하므로, 자기 몫을 넘긴 클라이언트는 프로젝트 전체 몫을 쓰지 않습니다. 프로젝트 전체 제한은 Supabase 한도보다 낮게 두어, 한도에 걸리면 메일이 조용히 사라지는 대신 `429 auth_rate_limited`로 안내합니다. 이 제한은 계정 유무와 관계없이 같으므로 계정 존재 여부를 드러내지 않습니다.
   제한 창은 고정 창이므로 어떤 60분 구간이든 창 두 개에 걸칠 수 있습니다. 그래서 프로젝트 전체 제한을 Supabase 한도의 절반으로 두어, 창 경계 직전과 직후에 몰린 요청도 Supabase 한도를 넘지 않게 합니다.
   Supabase 메일 한도를 바꾸면 프로젝트 전체 제한도 그 절반 이하로 함께 조정합니다.
+- 세션 갱신과 로그아웃 요청도 Supabase `/token`을 호출하므로, 공급자 호출 전에 같은 접속 IP·경로별 분당 30회 제한을 통과해야 합니다([#164](https://github.com/AndrewDongminYoo/auto-chatter/issues/164)).
+  이 제한이 없으면 위조한 갱신 쿠키만으로 `/token`의 IP별 한도를 제한 없이 쓸 수 있습니다.
 - 로그아웃 요청은 Supabase 세션 종료를 확인한 뒤 브라우저 쿠키를 지웁니다.
-  종료 확인에 실패하면 브라우저 쿠키를 지우되 성공으로 표시하지 않습니다.
+  종료 확인에 실패하거나 요청 제한에 걸리면 브라우저 쿠키를 지우되 성공으로 표시하지 않습니다.
+- 모든 Supabase Auth 호출은 비밀 API 키(`SUPABASE_SECRET_KEY`)로 보내고, 접속 IP(`CF-Connecting-IP`)를 `Sb-Forwarded-For` 헤더로 전달합니다([#164](https://github.com/AndrewDongminYoo/auto-chatter/issues/164)).
+  [Supabase Auth 요청 제한 문서](https://supabase.com/docs/guides/auth/rate-limits)(2026-10-07 확인)는 이 헤더를 비밀 키로 보낸 요청에서만 반영하고, 공개 키와 기존 `anon`·`service_role` 키는 지원하지 않는다고 설명합니다.
+  그래서 `sb_secret_`로 시작하지 않는 키가 설정되어 있으면 공급자를 호출하지 않고 `503 auth_not_configured`로 거절합니다.
+  이 헤더가 없으면 Supabase의 IP별 제한(`/token`은 5분에 150회)이 사용자 IP가 아니라 Worker가 Supabase로 나가는 Cloudflare 출구 IP를 기준으로 걸리므로, 같은 출구 IP를 쓰는 모든 사용자가 한 클라이언트의 요청 때문에 로그인과 세션 갱신을 거절당할 수 있습니다.
 
 ## 한계와 운영 조건
 
@@ -28,8 +34,9 @@
 Durable Object 호출이 실패하면 요청을 `503 auth_unavailable`로 거절합니다.
 공유 네트워크의 사용자는 같은 IP 제한에 걸릴 수 있습니다.
 Supabase Auth에도 별도의 프로젝트·IP·사용자별 제한이 있으므로 이메일이 실제로 도착했는지는 응답 코드만으로 보장하지 않습니다.
-현재 공급자 호출은 공개 키를 사용하므로 최종 사용자 IP를 `Sb-Forwarded-For`로 전달하지 않습니다.
-이 구성을 바꾸려면 비밀 API 키와 Supabase 설정 변경을 따로 검토해야 합니다.
+비밀 API 키는 Auth 관리자 권한(사용자 생성·변경·삭제)을 가지므로 Worker secret으로만 보관합니다. 서버 역할과 마찬가지로 API 역할(`service_role` 포함)의 public 테이블 권한은 `deploy/supabase-access.sql`이 막습니다.
+Supabase 호스팅 프로젝트가 이 헤더를 실제로 반영해 사용자 IP로 세는지는 단위·workerd 테스트로 확인할 수 없으므로, 배포 뒤 Supabase Auth 로그의 요청 IP로 확인합니다.
+supabase/auth 소스(2026-10-07 확인)에서 세션 확인에 쓰는 `GET /user`에는 IP별 제한이 없고 `PUT /user`(비밀번호 재설정)에만 있습니다.
 
 ## 수용 기준
 
