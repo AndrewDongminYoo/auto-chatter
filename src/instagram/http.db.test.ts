@@ -156,8 +156,19 @@ test("subscription challenge accepts the configured token and rejects another", 
 });
 
 test("invalid signature cannot create an event or a private reply request", async () => {
-  const response = await signedPost(commentBody(), `sha256=${"0".repeat(64)}`);
+  const body = commentBody();
+  const response = await signedPost(body, `sha256=${"0".repeat(64)}`);
   assert.equal(response.status, 403);
+  const otherSecret = createHmac("sha256", "attacker-secret").update(body).digest("hex");
+  const validDigest = createHmac("sha256", "test-app-secret").update(body).digest("hex");
+  for (const signature of [`sha256=${otherSecret}`, `sha1=${validDigest}`, validDigest, "sha256="])
+    assert.equal((await signedPost(body, signature)).status, 403, signature);
+  const unsigned = await fetch(`${baseUrl}/webhooks/instagram`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body,
+  });
+  assert.equal(unsigned.status, 403);
   assert.equal(await rowCount("instagram_comment_events"), 0);
   assert.equal(await rowCount("private_reply_outbox"), 0);
 });

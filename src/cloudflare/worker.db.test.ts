@@ -223,6 +223,18 @@ test("subscription verifies without a DB connection; invalid signatures cannot p
   assert.equal(response.status, 200);
   assert.equal(await response.text(), "challenge");
   assert.equal((await worker.fetch(request("comment-1", "sender-1", false), env)).status, 403);
+  const signed = request();
+  const body = await signed.clone().text();
+  const unsigned: Record<string, string>[] = [
+    {},
+    { "x-hub-signature-256": signed.headers.get("x-hub-signature-256")!.slice(7) },
+  ];
+  for (const headers of unsigned)
+    assert.equal(
+      (await worker.fetch(new Request(signed.url, { method: "POST", body, headers }), env)).status,
+      403,
+      JSON.stringify(headers),
+    );
   assert.deepEqual(await rows(), []);
 });
 

@@ -95,6 +95,24 @@ test("expired, cross-user, and browser-mismatched states make no provider call",
   await assert.rejects(finishInstagramOAuth(pool, user, request, env, provider), /invalid_oauth_state/);
 });
 
+test("a repeated or missing state parameter and a role lost mid-flow make no provider call", async () => {
+  const { request, state } = await authorization();
+  const provider: typeof fetch = async () => {
+    throw new Error("provider must not be called");
+  };
+  const cookie = { cookie: `__Host-ac-oauth=${state}` };
+  const repeated = new Request(`https://app.test/api/instagram/callback?state=${state}&state=${state}&code=test-code`, {
+    headers: cookie,
+  });
+  await assert.rejects(finishInstagramOAuth(pool, user, repeated, env, provider), /invalid_oauth_state/);
+  const missing = new Request("https://app.test/api/instagram/callback?code=test-code", { headers: cookie });
+  await assert.rejects(finishInstagramOAuth(pool, user, missing, env, provider), /invalid_oauth_state/);
+  await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [user.id]);
+  await assert.rejects(finishInstagramOAuth(pool, user, request, env, provider), /role_forbidden/);
+  const states = await pool.query("SELECT consumed_at FROM instagram_oauth_states");
+  assert.deepEqual(states.rows, [{ consumed_at: null }]);
+});
+
 test("OAuth rejects a token that expires before it is eligible for refresh", async () => {
   const { request } = await authorization();
   let calls = 0;

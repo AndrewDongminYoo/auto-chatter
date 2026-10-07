@@ -720,6 +720,34 @@ test("API rejects unauthenticated and cross-origin requests before opening a dat
   assert.equal(crossOrigin.status, 403);
 });
 
+test("state-changing routes refuse a null, missing or foreign Origin before any provider or database call", async () => {
+  const open = () => {
+    throw new Error("DB must not be opened");
+  };
+  const provider = (async () => {
+    throw new Error("the auth provider must not be called");
+  }) as typeof fetch;
+  const routes: [string, string][] = [
+    ["PUT", "/api/workspace/settings"],
+    ["PUT", `/api/connections/${connectionId}/inbox/456/handoff`],
+    ["POST", "/api/auth/logout"],
+    ["POST", "/api/auth/refresh"],
+    ["POST", "/api/auth/reset-password"],
+  ];
+  for (const [method, path] of routes)
+    for (const origin of [null, "null", "https://attacker.test", "https://app.test.attacker.test", "http://app.test"]) {
+      const headers: Record<string, string> = { cookie: "__Host-ac-access=test; __Host-ac-refresh=test" };
+      if (origin !== null) headers.origin = origin;
+      const response = await appApi(
+        new Request(`https://app.test${path}`, { method, headers }),
+        config,
+        open,
+        provider,
+      );
+      assert.equal(response.status, 403, `${method} ${path} with Origin ${origin}`);
+    }
+});
+
 test("consent mutation rejects unauthenticated and cross-origin requests before DB access", async () => {
   let openCount = 0;
   const open = () => {
