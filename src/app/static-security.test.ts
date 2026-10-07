@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
+import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const publicDir = new URL("../../public/", import.meta.url);
@@ -68,10 +70,20 @@ test("the dashboard CSP allows only same-origin scripts, with no inline or eval 
 // The dashboard scripts the sink scan reads; the page test refuses any script that is not one of them.
 const scannedScripts = async () => (await readdir(appDir)).filter((name) => name.endsWith(".js"));
 
-test("public/app holds only the page, the stylesheet and scanned scripts", async () => {
-  // Any other file, a subdirectory or a module such as payload.mjs could be loaded same-origin without being scanned.
-  for (const entry of await readdir(appDir, { withFileTypes: true }))
-    assert.ok(entry.isFile() && /^[a-z0-9-]+\.(?:js|html|css)$/.test(entry.name), `unexpected entry: ${entry.name}`);
+test("public/ holds no file the sink scan does not read that a browser could run", async () => {
+  // Wrangler serves all of public/ same-origin, so any other script there could be loaded through a script tag, a
+  // static or dynamic import or a worker without being scanned. Every served file must match this allowlist.
+  const allowed = [/^_headers$/, /^app\/[a-z0-9-]+\.(?:js|html|css)$/, /^icons\/[a-z0-9-]+\.png$/];
+  const entries = await readdir(publicDir, { recursive: true, withFileTypes: true });
+  const files = entries.filter((entry) => entry.isFile());
+  assert.ok(files.length > 0);
+  for (const entry of files) {
+    const path = relative(fileURLToPath(publicDir), join(entry.parentPath, entry.name)).split(sep).join("/");
+    assert.ok(
+      allowed.some((pattern) => pattern.test(path)),
+      `unexpected public file: ${path}`,
+    );
+  }
 });
 
 test("dashboard scripts write user data as text, never through an HTML or code sink", async () => {
