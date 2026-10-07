@@ -284,6 +284,30 @@ test("a removed member is refused on the next request and a role change applies 
   }
 });
 
+test("the owner role can be neither granted nor invited, and open invites stop at 20", async () => {
+  const { token } = await invite();
+  assert.equal((await accept(invitee, token)).status, 200);
+  for (const role of ["owner", "OWNER", "superuser", ""]) {
+    const promoted = await request(owner, "PATCH", `/api/workspace/members/${invitee.id}`, { role });
+    assert.equal(promoted.status, 400, role);
+    assert.equal((await body<{ error: string }>(promoted)).error, "invalid_role");
+    const invited = await request(owner, "POST", "/api/workspace/invites", { email: "x@example.test", role });
+    assert.equal(invited.status, 400, role);
+  }
+  const members = await pool.query<{ user_id: string; role: string }>(
+    "SELECT user_id, role FROM workspace_members WHERE workspace_id=$1 AND (role='owner' OR user_id=$2) ORDER BY role",
+    [workspaceId, invitee.id],
+  );
+  assert.deepEqual(members.rows, [
+    { user_id: invitee.id, role: "agent" },
+    { user_id: owner.id, role: "owner" },
+  ]);
+  for (let index = 0; index < 20; index++) await invite(`open-${index}@example.test`);
+  const over = await request(owner, "POST", "/api/workspace/invites", { email: "open-20@example.test", role: "agent" });
+  assert.equal(over.status, 409);
+  assert.equal((await body<{ error: string }>(over)).error, "invite_limit_reached");
+});
+
 test("an acceptance waits for a concurrent re-invite instead of deadlocking with it", async () => {
   const { id, token } = await invite();
   const reinviting = await pool.connect();
