@@ -391,6 +391,10 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 같은 날 03:27Z에는 운영자 요청에 따라 PR #162(#62 보안 회귀 테스트)와 #163(다른 작업 공간의 연결 해제 요청에 `404 connection_not_found`)을 포함한 `main` 커밋 `e924c09`의 Worker를 버전 `8eaeb7b0-d3ba-4af9-babb-825c098877ef`로 배포했고, 03:27:51Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `cd170b5c-6af0-4bb8-995f-3b2874452567`였습니다.
 `c922e91` 이후 실행 코드는 `src/app/settings.ts`의 연결 해제만 바뀌었고 나머지는 테스트와 문서이므로 마이그레이션은 없었으며, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 22개 항목 점검은 모두 통과했지만 정적 파일이 바뀌지 않아 배포 전후를 구별하지 못합니다. 운영 DB는 조회하지 않았고, 분석 API의 `workersInvocationsAdaptive`에서 배포 후 03:27Z~03:30Z의 cron을 포함한 새 버전 호출이 모두 `success`였고 오류는 0건이었습니다.
+같은 날 05:08Z에는 운영자 요청에 따라 PR #170(#165: 인증 메일 요청의 IP별 시간당 10회·프로젝트 전체 시간당 15회 제한)을 포함한 `main` 커밋 `2fa939c`의 Worker를 버전 `ca5c276d-2e3e-44fd-8b9e-3749e1c82d9b`로 배포했고, 05:08:18Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `8eaeb7b0-d3ba-4af9-babb-825c098877ef`였습니다.
+`e924c09` 이후 실행 코드는 `src/app/auth-rate-limit.ts`와 `src/cloudflare/auth-limiter.ts`만 바뀌었고, 두 제한은 기존 `AuthLimiter` Durable Object의 새 이름(`mail-ip:`, `mail:`)을 쓰므로 Wrangler 설정과 마이그레이션은 바뀌지 않았습니다. `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+배포 후 05:08:47Z~05:09:06Z에 존재하지 않는 서로 다른 주소(`example.com`) 11개로 `POST /api/auth/recover`를 요청마다 새 연결로 보내자 처음 10번은 `200 recovery_requested`, 11번째는 `429 auth_rate_limited`였습니다. 이 확인은 그 시간 창의 프로젝트 전체 한도 15회 가운데 10회를 썼습니다.
+22개 항목 점검은 모두 통과했지만 정적 파일이 바뀌지 않아 배포 전후를 구별하지 못합니다. 운영 DB는 조회하지 않았고, 분석 API에서 배포 후 05:08Z~05:11Z의 cron을 포함한 새 버전 호출이 모두 `success`였고 오류는 0건이었습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
