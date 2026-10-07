@@ -20,7 +20,7 @@ const foreignConnectionId = "66666666-6666-4666-8666-666666666666";
 const envConnectionId = "77777777-7777-4777-8777-777777777777";
 const ruleId = "88888888-8888-4888-8888-888888888888";
 const fieldId = "99999999-9999-4999-8999-999999999999";
-const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "test" };
+const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" };
 
 before(async () => {
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));

@@ -21,7 +21,7 @@ const workspaceId = "66666666-6666-4666-8666-666666666666";
 const otherWorkspaceId = "77777777-7777-4777-8777-777777777777";
 const apiEnv = {
   SUPABASE_URL: "https://project.supabase.co",
-  SUPABASE_PUBLISHABLE_KEY: "test",
+  SUPABASE_SECRET_KEY: "sb_secret_test",
   TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 5).toString("base64"),
 };
 

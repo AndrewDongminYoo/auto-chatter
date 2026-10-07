@@ -1,6 +1,7 @@
 export interface AuthEnv {
   SUPABASE_URL?: string;
-  SUPABASE_PUBLISHABLE_KEY?: string;
+  // A secret API key: Supabase honours Sb-Forwarded-For only on requests made with one (#164).
+  SUPABASE_SECRET_KEY?: string;
 }
 
 export interface User {
@@ -81,17 +82,21 @@ export class AuthClient {
   private readonly origin: string;
   private readonly key: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly clientIp: string | null;
 
-  constructor(env: AuthEnv, fetchImpl: typeof fetch = fetch) {
+  // clientIp is the caller's address (CF-Connecting-IP). Supabase counts its per-IP auth limits against it instead
+  // of the Worker's shared egress address; without it the header is left out.
+  constructor(env: AuthEnv, fetchImpl: typeof fetch = fetch, clientIp: string | null = null) {
     if (
       !env.SUPABASE_URL ||
       !/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/.test(env.SUPABASE_URL) ||
-      !env.SUPABASE_PUBLISHABLE_KEY
+      !env.SUPABASE_SECRET_KEY?.startsWith("sb_secret_")
     )
       throw new ApiError(503, "auth_not_configured");
     this.origin = new URL(env.SUPABASE_URL).origin;
-    this.key = env.SUPABASE_PUBLISHABLE_KEY;
+    this.key = env.SUPABASE_SECRET_KEY;
     this.fetchImpl = (input, init) => fetchImpl(input, init);
+    this.clientIp = clientIp;
   }
 
   private async call(
@@ -109,6 +114,7 @@ export class AuthClient {
           apikey: this.key,
           "Content-Type": "application/json",
           ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          ...(this.clientIp ? { "Sb-Forwarded-For": this.clientIp } : {}),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(10_000),
@@ -285,7 +291,7 @@ export class AuthClient {
   }
 }
 
-function clearSession(response: Response): Response {
+export function clearSession(response: Response): Response {
   setSession(response, "__Host-ac-access", "", 0);
   setSession(response, "__Host-ac-refresh", "", 0);
   return response;

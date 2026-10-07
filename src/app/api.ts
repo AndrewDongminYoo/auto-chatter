@@ -15,7 +15,16 @@ import { addInboxNote, listInboxNotes } from "./inbox-notes.ts";
 import { archiveLabelRule, createLabelRule, listLabelRules, updateLabelRule } from "./inbox-label-rules.ts";
 import { changeReminder, closeReminder, createReminder, listReminders } from "./inbox-reminders.ts";
 import type { Pool } from "pg";
-import { ApiError, AuthClient, json, readJson, requireSameOrigin, type AuthEnv, type User } from "./auth.ts";
+import {
+  ApiError,
+  AuthClient,
+  clearSession,
+  json,
+  readJson,
+  requireSameOrigin,
+  type AuthEnv,
+  type User,
+} from "./auth.ts";
 import { limitAuthRequest, type AuthRateLimitEnv } from "./auth-rate-limit.ts";
 import {
   listActivity,
@@ -110,7 +119,7 @@ export async function appApi(
   try {
     const url = new URL(request.url);
     if (request.method !== "GET") requireSameOrigin(request);
-    const auth = new AuthClient(env, fetchImpl);
+    const auth = new AuthClient(env, fetchImpl, request.headers.get("CF-Connecting-IP"));
     if (request.method === "POST") {
       if (
         ["/api/auth/login", "/api/auth/signup", "/api/auth/recover", "/api/auth/resend-confirmation"].includes(
@@ -125,8 +134,18 @@ export async function appApi(
         return await auth.resendConfirmation(input);
       }
       if (url.pathname === "/api/auth/reset-password") return await auth.resetPassword(await readJson(request));
-      if (url.pathname === "/api/auth/refresh") return await auth.refresh(request);
-      if (url.pathname === "/api/auth/logout") return await auth.logout(request);
+      if (url.pathname === "/api/auth/refresh" || url.pathname === "/api/auth/logout") {
+        // Both call Supabase's /token, whose per-IP budget a forged refresh cookie would otherwise spend freely (#164).
+        try {
+          await limitAuthRequest(request, url.pathname, undefined, env);
+        } catch (error) {
+          // A refused logout still clears the browser session, as a remote logout failure does.
+          if (url.pathname === "/api/auth/logout" && error instanceof ApiError)
+            return clearSession(json({ error: error.message }, error.status));
+          throw error;
+        }
+        return url.pathname === "/api/auth/refresh" ? await auth.refresh(request) : await auth.logout(request);
+      }
     }
     const user = await auth.user(request);
     if (url.pathname === "/api/me" && request.method === "GET")

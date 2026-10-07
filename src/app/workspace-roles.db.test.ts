@@ -21,7 +21,7 @@ const connectionId = "77777777-7777-4777-8777-777777777777";
 const fieldId = "88888888-8888-4888-8888-888888888888";
 const ruleId = "99999999-9999-4999-8999-999999999999";
 const missingId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "test" };
+const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" };
 
 before(async () => {
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));

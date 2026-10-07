@@ -23,7 +23,7 @@ const otherWorkspaceId = "77777777-7777-4777-8777-777777777777";
 const connectionId = "88888888-8888-4888-8888-888888888888";
 const secondConnectionId = "99999999-9999-4999-8999-999999999999";
 const foreignConnectionId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_PUBLISHABLE_KEY: "test" };
+const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" };
 
 type Actor = { id: string; email: string };
 type Label = { id: string; name: string; archived: boolean };
