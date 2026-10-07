@@ -37,6 +37,18 @@ test("the dashboard CSP allows only same-origin scripts, with no inline or eval 
   const csp = headers.filter((header) => /^content-security-policy\s*:/i.test(header));
   assert.equal(csp.length, 1, "the /app/* block must set exactly one Content-Security-Policy");
   const policy = directives(csp[0]!.slice(csp[0]!.indexOf(":") + 1));
+  // An allowlist of directive names, so any new directive (script-src-elem, script-src-attr, worker-src, ...)
+  // that could override or widen script-src fails here and has to be reviewed on purpose.
+  assert.deepEqual([...policy.keys()].sort(), [
+    "base-uri",
+    "connect-src",
+    "default-src",
+    "form-action",
+    "frame-ancestors",
+    "img-src",
+    "script-src",
+    "style-src",
+  ]);
   assert.deepEqual(policy.get("default-src"), ["'none'"]);
   assert.deepEqual(policy.get("script-src"), ["'self'"]);
   assert.deepEqual(policy.get("base-uri"), ["'none'"]);
@@ -67,7 +79,8 @@ test("dashboard scripts write user data as text, never through an HTML or code s
 test("the dashboard page carries no inline script or inline event handler", async () => {
   const html = await readFile(new URL("index.html", appDir), "utf8");
   for (const tag of html.match(/<script\b[^>]*>/gi) ?? [])
-    assert.match(tag, /\ssrc="[^"]+"/, `inline script is not allowed: ${tag}`);
+    // A same-origin path only: no inline body, no scheme and no protocol-relative host.
+    assert.match(tag, /\ssrc="(?![a-z][a-z0-9+.-]*:|\/\/)[^"]+"/i, `only same-origin script files are allowed: ${tag}`);
   assert.doesNotMatch(html, /<[^>]+\son[a-z]+\s*=/i, "inline event handlers are not allowed");
   assert.doesNotMatch(html, /\bjavascript:/i);
 });
