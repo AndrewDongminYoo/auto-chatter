@@ -310,6 +310,7 @@ const errors = {
   invalid_contact_field: "필드 이름은 1–60자이며 값 종류를 선택해 주세요.",
   invalid_field_value: "선택한 종류에 맞는 값을 입력해 주세요. 텍스트는 최대 1000자입니다.",
   invalid_field_condition: "추가 정보의 필드·조건·찾을 값을 확인해 주세요.",
+  invalid_contact_condition: "OR 결합에는 태그와 추가 정보 조건이 모두 필요합니다.",
   field_not_found: "접근할 수 없거나 보관된 필드입니다. 필드를 다시 불러와 주세요.",
   field_in_use: "저장된 필터에서 사용하는 필드입니다. 해당 필터를 먼저 보관해 주세요.",
   field_name_exists: "보관된 필드를 포함해 같은 이름이 있습니다. 다른 이름을 사용해 주세요.",
@@ -2355,6 +2356,7 @@ async function loadContacts(more = false) {
     else {
       if (fields.connection_id.value) query.set("connection_id", fields.connection_id.value);
       if (fields.tag.value.trim()) query.set("tag", fields.tag.value.trim());
+      if (fields.condition_operator.value === "or") query.set("condition_operator", "or");
       const condition = fieldCondition;
       if (condition) {
         query.set("field_id", condition.field_id);
@@ -2440,9 +2442,10 @@ async function loadContactSegments(force = false) {
       byId("segments-status").textContent = `${error.message} 새로고침으로 다시 시도해 주세요.`;
   }
 }
-byId("contacts-filter").addEventListener("input", () => {
+byId("contacts-filter").addEventListener("input", (event) => {
   activeSegmentId = "";
   byId("contact-segment").value = "";
+  if (event.target.name === "tag") fieldFilterControls();
   segmentControls();
 });
 byId("contact-segment").addEventListener("change", (event) => {
@@ -2457,6 +2460,7 @@ byId("contact-segment").addEventListener("change", (event) => {
   fields.tag.value = segment?.tag || "";
   fields.field_id.value = segment?.field_id || "";
   fields.field_operator.value = segment?.field_operator || "eq";
+  fields.condition_operator.value = segment?.condition_operator || "and";
   fieldFilterControls();
   fields.field_value.value = fieldConditionNeedsValue(segment?.field_operator) ? String(segment.field_value) : "";
   fields.field_boolean.value = segment?.field_value === false ? "false" : "true";
@@ -2473,6 +2477,7 @@ byId("segment-save").addEventListener("submit", (event) => {
   const fields = byId("contacts-filter").elements;
   const name = byId("segment-save").elements.name.value;
   const payload = { name, connection_id: fields.connection_id.value || null, tag: fields.tag.value.trim() || null };
+  if (fields.condition_operator.value === "or") payload.condition_operator = "or";
   try {
     Object.assign(payload, contactFieldCondition());
   } catch (error) {
@@ -2518,6 +2523,7 @@ byId("segment-archive").addEventListener("click", (event) => {
         const query = new URLSearchParams();
         if (segment.connection_id) query.set("connection_id", segment.connection_id);
         if (segment.tag) query.set("tag", segment.tag);
+        if (segment.condition_operator === "or") query.set("condition_operator", "or");
         if (segment.field_id) {
           query.set("field_id", segment.field_id);
           query.set("field_operator", segment.field_operator);
@@ -2569,6 +2575,8 @@ function configureFieldInput(input, field) {
 function fieldFilterControls() {
   const fields = byId("contacts-filter").elements;
   const selected = Boolean(fields.field_id.value);
+  fields.condition_operator.disabled = !selected || !fields.tag.value.trim();
+  if (fields.condition_operator.disabled) fields.condition_operator.value = "and";
   byId("field-filter-operator").hidden = !selected;
   const field = contactFields.find((field) => field.id === fields.field_id.value);
   const orderedLabels =

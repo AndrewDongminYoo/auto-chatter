@@ -355,6 +355,14 @@ DO $$ BEGIN
 END $$;
 
 ALTER TABLE instagram_contact_automation ADD COLUMN IF NOT EXISTS handoff_paused boolean NOT NULL DEFAULT false;
+ALTER TABLE instagram_contact_segments ADD COLUMN IF NOT EXISTS condition_operator text NOT NULL DEFAULT 'and';
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname='contact_segment_condition_operator') THEN
+    ALTER TABLE instagram_contact_segments ADD CONSTRAINT contact_segment_condition_operator CHECK(
+      condition_operator IN ('and','or') AND (condition_operator='and' OR (tag IS NOT NULL AND field_id IS NOT NULL))
+    );
+  END IF;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS private_reply_outbox_identity_idx
   ON private_reply_outbox(id,connection_id,workspace_id);
 CREATE TABLE IF NOT EXISTS instagram_inbox_handoffs (

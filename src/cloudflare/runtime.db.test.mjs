@@ -853,6 +853,60 @@ test("workerd contact API uses restricted server privileges and verified workspa
       headers,
     });
     assert.equal(orderedArchived.status, 200);
+    const combinedCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        name: "Lead or nonnegative",
+        connection_id: connection,
+        tag: "lead",
+        field_id: field.id,
+        field_operator: "gte",
+        field_value: 0,
+        condition_operator: "or",
+      }),
+    });
+    assert.equal(combinedCreated.status, 201);
+    const combinedSegment = await combinedCreated.json();
+    assert.equal(combinedSegment.condition_operator, "or");
+    const combinedPath = `https://app.test/api/contacts?segment_id=${combinedSegment.id}`;
+    assert.equal(
+      (await (await runtime.dispatchFetch(combinedPath, { headers })).json()).contacts[0].sender_id,
+      "sender-1",
+    );
+    assert.equal(
+      (await runtime.dispatchFetch(combinedPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } }))
+        .status,
+      404,
+    );
+    const tagPath = `https://app.test/api/connections/${connection}/contacts/sender-1`;
+    assert.equal(
+      (await runtime.dispatchFetch(tagPath, { method: "PATCH", headers, body: JSON.stringify({ tags: ["lead"] }) }))
+        .status,
+      200,
+    );
+    await runtime.dispatchFetch(valuePath, { method: "PUT", headers, body: JSON.stringify({ value: -1 }) });
+    assert.equal((await (await runtime.dispatchFetch(combinedPath, { headers })).json()).contacts.length, 1);
+    assert.equal(
+      (await runtime.dispatchFetch(tagPath, { method: "PATCH", headers, body: JSON.stringify({ tags: [] }) })).status,
+      200,
+    );
+    assert.equal((await (await runtime.dispatchFetch(combinedPath, { headers })).json()).contacts.length, 0);
+    await runtime.dispatchFetch(valuePath, { method: "PUT", headers, body: JSON.stringify({ value: 0 }) });
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`https://app.test/api/contact-segments/${combinedSegment.id}`, {
+          method: "DELETE",
+          headers,
+        })
+      ).status,
+      200,
+    );
+    assert.equal(
+      (await runtime.dispatchFetch(tagPath, { method: "PATCH", headers, body: JSON.stringify({ tags: ["lead"] }) }))
+        .status,
+      200,
+    );
     // The restricted server role can read every exported table, and the export omits token ciphertext.
     const exported = await runtime.dispatchFetch("https://app.test/api/workspace/export", { headers });
     assert.equal(exported.status, 200);
