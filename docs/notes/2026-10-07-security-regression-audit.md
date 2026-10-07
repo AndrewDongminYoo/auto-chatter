@@ -40,8 +40,8 @@ GET은 설계상 검사하지 않습니다. 상태를 바꾸는 GET은 OAuth 콜
 기존 workerd 테스트의 CSP 확인은 `script-src 'self'` 문자열이 포함됐는지만 보므로, `'unsafe-inline'`이 추가돼도 통과했습니다.
 추가한 `static-security.test.ts`(`test` 스크립트에 등록)는 다음을 확인합니다. 세 테스트 모두 결함을 심으면 실패합니다.
 
-- CSP 지시어를 나눠 `script-src`가 정확히 `'self'`이고, 어느 지시어에도 `'unsafe-inline'`, `'unsafe-eval'`, `'unsafe-hashes'`, `data:`, `*`가 없는지 확인합니다.
-- `public/app/*.js`에 `innerHTML`·`outerHTML` 대입, `insertAdjacentHTML`, `document.write`, `eval`, `new Function`, `srcdoc` 대입이 없는지 확인합니다.
+- `_headers`의 `/app/*` 블록에서 CSP가 정확히 하나인지 확인하고, 지시어를 나눠 `script-src`가 정확히 `'self'`이며 어느 지시어에도 `'unsafe-inline'`, `'unsafe-eval'`, `'unsafe-hashes'`, `data:`, `*`가 없는지 확인합니다. 브라우저는 같은 지시어가 두 번 나오면 첫 번째만 적용하므로, 중복 지시어는 그 자체로 거부합니다.
+- `public/app/*.js`에 `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `srcdoc`, `document.write`, `eval`, `Function(` 같은 sink 이름이 점·대괄호·문자열 어느 표기로도 나오지 않는지 확인합니다.
 - `index.html`에 인라인 스크립트, `on*=` 이벤트 속성, `javascript:` URL이 없는지 확인합니다.
 
 이 검사는 정적 패턴 검사이므로, 저장된 악성 텍스트를 실제 브라우저에서 렌더링하는 확인을 대신하지 않습니다.

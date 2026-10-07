@@ -5,21 +5,35 @@ import { test } from "node:test";
 const publicDir = new URL("../../public/", import.meta.url);
 const appDir = new URL("app/", publicDir);
 
+// Headers of one path block in Cloudflare's _headers format: a path line followed by indented "Name: value" lines.
+function blockHeaders(file: string, path: string): string[] {
+  const lines = file.split("\n");
+  const start = lines.findIndex((line) => line.trim() === path && !/^\s/.test(line));
+  assert.notEqual(start, -1, `${path} block is missing`);
+  const headers = [];
+  for (const line of lines.slice(start + 1)) {
+    if (!/^\s+\S/.test(line)) break;
+    headers.push(line.trim());
+  }
+  return headers;
+}
+
+// Browsers apply the first occurrence of a directive and ignore later ones, so a duplicate is refused outright.
 function directives(policy: string): Map<string, string[]> {
-  return new Map(
-    policy
-      .split(";")
-      .map((part) => part.trim().split(/\s+/))
-      .filter((tokens) => tokens[0])
-      .map((tokens) => [tokens[0], tokens.slice(1)]),
-  );
+  const parsed = policy
+    .split(";")
+    .map((part) => part.trim().split(/\s+/))
+    .filter((tokens) => tokens[0]);
+  const names = parsed.map((tokens) => tokens[0]!.toLowerCase());
+  assert.equal(new Set(names).size, names.length, `duplicate CSP directive in: ${policy}`);
+  return new Map(parsed.map((tokens) => [tokens[0]!.toLowerCase(), tokens.slice(1)]));
 }
 
 test("the dashboard CSP allows only same-origin scripts, with no inline or eval escape", async () => {
-  const headers = await readFile(new URL("_headers", publicDir), "utf8");
-  const line = headers.split("\n").find((value) => value.trim().startsWith("Content-Security-Policy:"));
-  assert.ok(line, "the /app/* block must set a Content-Security-Policy");
-  const policy = directives(line.trim().slice("Content-Security-Policy:".length));
+  const headers = blockHeaders(await readFile(new URL("_headers", publicDir), "utf8"), "/app/*");
+  const csp = headers.filter((header) => /^content-security-policy\s*:/i.test(header));
+  assert.equal(csp.length, 1, "the /app/* block must set exactly one Content-Security-Policy");
+  const policy = directives(csp[0]!.slice(csp[0]!.indexOf(":") + 1));
   assert.deepEqual(policy.get("default-src"), ["'none'"]);
   assert.deepEqual(policy.get("script-src"), ["'self'"]);
   assert.deepEqual(policy.get("base-uri"), ["'none'"]);
@@ -36,8 +50,9 @@ test("the dashboard CSP allows only same-origin scripts, with no inline or eval 
 test("dashboard scripts write user data as text, never through an HTML or code sink", async () => {
   const files = (await readdir(appDir)).filter((name) => name.endsWith(".js"));
   assert.ok(files.length > 0);
+  // The sink names are refused in any notation (dot, bracket or string), not only as a dotted assignment.
   const sinks =
-    /\.(?:innerHTML|outerHTML)\s*[+]?=|insertAdjacentHTML\s*\(|document\.write(?:ln)?\s*\(|\beval\s*\(|new\s+Function\s*\(|\.srcdoc\s*=/;
+    /\b(?:innerHTML|outerHTML|insertAdjacentHTML|srcdoc|writeln)\b|\bdocument\s*(?:\.|\[\s*["'`])\s*write\b|\beval\b|\bFunction\s*\(/;
   for (const name of files) {
     const source = await readFile(new URL(name, appDir), "utf8");
     assert.doesNotMatch(source, sinks, `${name} must not use an HTML or code sink`);
