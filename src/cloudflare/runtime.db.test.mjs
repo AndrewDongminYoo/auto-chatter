@@ -825,6 +825,34 @@ test("workerd contact API uses restricted server privileges and verified workspa
       { headers },
     );
     assert.equal((await fieldFiltered.json()).contacts[0].fields[field.id], 0);
+    const orderedCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Nonnegative score", field_id: field.id, field_operator: "gte", field_value: 0 }),
+    });
+    assert.equal(orderedCreated.status, 201);
+    const orderedSegment = await orderedCreated.json();
+    assert.equal(orderedSegment.field_value, 0);
+    const orderedPath = `https://app.test/api/contacts?segment_id=${orderedSegment.id}`;
+    const orderedSelected = await runtime.dispatchFetch(orderedPath, { headers });
+    assert.equal(orderedSelected.status, 200);
+    assert.equal((await orderedSelected.json()).contacts[0].sender_id, "sender-1");
+    assert.equal(
+      (
+        await runtime.dispatchFetch(orderedPath, {
+          headers: { ...headers, cookie: "__Host-ac-access=foreign" },
+        })
+      ).status,
+      404,
+    );
+    await runtime.dispatchFetch(valuePath, { method: "PUT", headers, body: JSON.stringify({ value: -1 }) });
+    assert.equal((await (await runtime.dispatchFetch(orderedPath, { headers })).json()).contacts.length, 0);
+    await runtime.dispatchFetch(valuePath, { method: "PUT", headers, body: JSON.stringify({ value: 0 }) });
+    const orderedArchived = await runtime.dispatchFetch(`https://app.test/api/contact-segments/${orderedSegment.id}`, {
+      method: "DELETE",
+      headers,
+    });
+    assert.equal(orderedArchived.status, 200);
     // The restricted server role can read every exported table, and the export omits token ciphertext.
     const exported = await runtime.dispatchFetch("https://app.test/api/workspace/export", { headers });
     assert.equal(exported.status, 200);

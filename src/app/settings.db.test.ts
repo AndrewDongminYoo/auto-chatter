@@ -728,6 +728,152 @@ test("field filters reject malformed mixed and foreign conditions", async () => 
   );
 });
 
+test("ordered field filters compare numbers numerically and dates at each boundary", async () => {
+  await fieldContact();
+  for (const [type, low, equal, high] of [
+    ["number", -1.5, 0, 10],
+    ["date", "2024-02-28", "2024-02-29", "2024-03-01"],
+  ] as const) {
+    const field = await createField(`Ordered ${type}`, type);
+    for (const [operator, expected] of [
+      ["gt", [false, false, true]],
+      ["gte", [false, true, true]],
+      ["lt", [true, false, false]],
+      ["lte", [true, true, false]],
+    ] as const) {
+      const query = new URLSearchParams({
+        field_id: field.id,
+        field_operator: operator,
+        field_value: JSON.stringify(equal),
+      });
+      for (const [index, value] of [low, equal, high, null].entries()) {
+        assert.equal((await fieldRequest("PUT", fieldValuePath(field.id), { value })).status, 200);
+        const response = await fieldRequest("GET", `/api/contacts?${query}`);
+        assert.equal(response.status, 200);
+        assert.equal((await response.json()).contacts.length, expected[index] ? 1 : 0);
+      }
+    }
+  }
+  // 2 is less than 10 numerically even though their JSON spellings sort the other way.
+  const field = await createField("Numeric order", "number");
+  await fieldRequest("PUT", fieldValuePath(field.id), { value: 2 });
+  const query = new URLSearchParams({ field_id: field.id, field_operator: "lt", field_value: "10" });
+  assert.equal((await listContacts(pool, a, query)).contacts.length, 1);
+});
+
+test("ordered saved segments preserve values and re-evaluate scoped current data", async () => {
+  await fieldContact();
+  const workspace = await ensureWorkspace(pool, a);
+  const field = await createField("Score threshold", "number");
+  await fieldRequest("PUT", fieldValuePath(field.id), { value: 10 });
+  const created = await fieldRequest("POST", "/api/contact-segments", {
+    name: "Score at least 10",
+    connection_id: connectionId,
+    tag: "lead",
+    field_id: field.id,
+    field_operator: "gte",
+    field_value: 10,
+  });
+  assert.equal(created.status, 201);
+  const segment = await created.json();
+  assert.equal(segment.field_operator, "gte");
+  assert.equal(segment.field_value, 10);
+  assert.deepEqual((await listContactSegments(pool, a))[0], segment);
+  const query = new URLSearchParams({ segment_id: segment.id });
+  assert.equal((await listContacts(pool, a, query)).contacts.length, 0);
+  await saveContactTags(pool, a, connectionId, "sender", { tags: ["lead"] });
+  assert.equal((await listContacts(pool, a, query)).contacts.length, 1);
+  const other = "77777777-7777-4777-8777-777777777777";
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'ordered-other')", [
+    other,
+    workspace,
+  ]);
+  await pool.query(
+    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'ordered-other','media','sender','private')",
+    [workspace, other],
+  );
+  await fieldRequest("PUT", fieldValuePath(field.id, "sender", other), { value: 20 });
+  await saveContactTags(pool, a, other, "sender", { tags: ["lead"] });
+  assert.deepEqual(
+    (await listContacts(pool, a, query)).contacts.map((contact) => contact.connection_id),
+    [connectionId],
+  );
+  assert.equal((await fieldRequest("GET", `/api/contacts?${query}`, undefined, b)).status, 404);
+  assert.equal((await fieldRequest("DELETE", `/api/contact-fields/${field.id}`)).status, 409);
+  await fieldRequest("PUT", fieldValuePath(field.id), { value: 9 });
+  assert.equal((await listContacts(pool, a, query)).contacts.length, 0);
+  await archiveContactSegment(pool, a, segment.id);
+  assert.equal((await fieldRequest("DELETE", `/api/contact-fields/${field.id}`)).status, 200);
+});
+
+test("ordered conditions reject unsupported types missing values and foreign fields", async () => {
+  for (const [type, bad] of [
+    ["number", "10"],
+    ["number", true],
+    ["date", "2025-02-29"],
+    ["date", "2024-2-9"],
+    ["text", "text"],
+    ["boolean", false],
+  ] as const) {
+    const field = await createField(`Unsupported ${type}-${String(bad)}`, type);
+    const body = { name: "Invalid ordered segment", field_id: field.id, field_operator: "gte", field_value: bad };
+    const query = new URLSearchParams({ field_id: field.id, field_operator: "gte", field_value: JSON.stringify(bad) });
+    assert.equal((await fieldRequest("GET", `/api/contacts?${query}`)).status, 400);
+    assert.equal((await fieldRequest("POST", "/api/contact-segments", body)).status, 400);
+  }
+  const field = await createField("Required threshold", "number");
+  for (const operator of ["gt", "gte", "lt", "lte"]) {
+    assert.equal(
+      (await fieldRequest("GET", `/api/contacts?field_id=${field.id}&field_operator=${operator}`)).status,
+      400,
+    );
+    const query = new URLSearchParams({ field_id: field.id, field_operator: operator, field_value: "0" });
+    assert.equal((await fieldRequest("GET", `/api/contacts?${query}`, undefined, b)).status, 404);
+    assert.equal(
+      (
+        await fieldRequest(
+          "POST",
+          "/api/contact-segments",
+          {
+            name: `Foreign ${operator}`,
+            field_id: field.id,
+            field_operator: operator,
+            field_value: 0,
+          },
+          b,
+        )
+      ).status,
+      404,
+    );
+  }
+});
+
+test("ordered contact pages use the existing stable cursor without duplicates", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const field = await createField("Page score", "number");
+  await pool.query(
+    `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+    SELECT $1,$2,'page-'||n,'media',lpad(n::text,3,'0'),'private' FROM generate_series(1,55) n`,
+    [workspace, connectionId],
+  );
+  await pool.query(
+    `INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value)
+    SELECT $1,$2,lpad(n::text,3,'0'),$3,to_jsonb(n) FROM generate_series(1,55) n`,
+    [workspace, connectionId, field.id],
+  );
+  const query = new URLSearchParams({ field_id: field.id, field_operator: "gte", field_value: "1" });
+  const first = await listContacts(pool, a, query);
+  assert.equal(first.contacts.length, 50);
+  assert.ok(first.after);
+  query.set("after", first.after);
+  const second = await listContacts(pool, a, query);
+  assert.equal(second.after, null);
+  assert.deepEqual(
+    [...first.contacts, ...second.contacts].map((contact) => contact.sender_id),
+    Array.from({ length: 55 }, (_, n) => String(n + 1).padStart(3, "0")),
+  );
+});
+
 test("concurrent field creation enforces the active cap and field archive serializes segment creation", async () => {
   const workspace = await ensureWorkspace(pool, a);
   for (let n = 0; n < 49; n++) await createField(`field-${n}`, "text");

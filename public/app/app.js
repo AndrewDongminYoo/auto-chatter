@@ -2359,7 +2359,8 @@ async function loadContacts(more = false) {
       if (condition) {
         query.set("field_id", condition.field_id);
         query.set("field_operator", condition.field_operator);
-        if (condition.field_operator === "eq") query.set("field_value", JSON.stringify(condition.field_value));
+        if (fieldConditionNeedsValue(condition.field_operator))
+          query.set("field_value", JSON.stringify(condition.field_value));
       }
     }
     contactsQuery = query.toString();
@@ -2457,7 +2458,7 @@ byId("contact-segment").addEventListener("change", (event) => {
   fields.field_id.value = segment?.field_id || "";
   fields.field_operator.value = segment?.field_operator || "eq";
   fieldFilterControls();
-  fields.field_value.value = segment?.field_operator === "eq" ? String(segment.field_value) : "";
+  fields.field_value.value = fieldConditionNeedsValue(segment?.field_operator) ? String(segment.field_value) : "";
   fields.field_boolean.value = segment?.field_value === false ? "false" : "true";
   segmentControls();
   void loadContacts();
@@ -2520,7 +2521,8 @@ byId("segment-archive").addEventListener("click", (event) => {
         if (segment.field_id) {
           query.set("field_id", segment.field_id);
           query.set("field_operator", segment.field_operator);
-          if (segment.field_operator === "eq") query.set("field_value", JSON.stringify(segment.field_value));
+          if (fieldConditionNeedsValue(segment.field_operator))
+            query.set("field_value", JSON.stringify(segment.field_value));
         }
         contactsQuery = query.toString();
       }
@@ -2568,13 +2570,26 @@ function fieldFilterControls() {
   const fields = byId("contacts-filter").elements;
   const selected = Boolean(fields.field_id.value);
   byId("field-filter-operator").hidden = !selected;
-  byId("field-filter-value").hidden = !selected || fields.field_operator.value !== "eq";
   const field = contactFields.find((field) => field.id === fields.field_id.value);
+  const orderedLabels =
+    field?.type === "date"
+      ? { gte: "당일 포함 이후", gt: "당일 제외 이후", lte: "당일 포함 이전", lt: "당일 제외 이전" }
+      : { gte: "이상", gt: "초과", lte: "이하", lt: "미만" };
+  for (const option of fields.field_operator.options) {
+    if (!["gt", "gte", "lt", "lte"].includes(option.value)) continue;
+    option.textContent = orderedLabels[option.value];
+    option.hidden = option.disabled = !["number", "date"].includes(field?.type);
+  }
+  if (fields.field_operator.selectedOptions[0]?.disabled) fields.field_operator.value = "eq";
+  const needsValue = fieldConditionNeedsValue(fields.field_operator.value);
+  byId("field-filter-value").hidden = !selected || !needsValue;
   configureFieldInput(fields.field_value, field);
-  fields.field_value.required =
-    selected && fields.field_operator.value === "eq" && Boolean(field && !["text", "boolean"].includes(field.type));
+  fields.field_value.required = selected && needsValue && Boolean(field && !["text", "boolean"].includes(field.type));
   fields.field_value.hidden = field?.type === "boolean";
   fields.field_boolean.hidden = field?.type !== "boolean";
+}
+function fieldConditionNeedsValue(operator) {
+  return ["eq", "gt", "gte", "lt", "lte"].includes(operator);
 }
 function contactFieldCondition() {
   const fields = byId("contacts-filter").elements;
@@ -2584,7 +2599,7 @@ function contactFieldCondition() {
   return {
     field_id: field.id,
     field_operator: fields.field_operator.value,
-    ...(fields.field_operator.value === "eq"
+    ...(fieldConditionNeedsValue(fields.field_operator.value)
       ? {
           field_value: typedFieldValue(
             field,

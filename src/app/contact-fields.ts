@@ -33,6 +33,10 @@ export async function replySavedFields(
 
 export type FieldCondition = { field_id: string; field_operator: string; field_value?: unknown };
 
+export function fieldConditionNeedsValue(operator: string): boolean {
+  return ["eq", "gt", "gte", "lt", "lte"].includes(operator);
+}
+
 export function parseFieldCondition(input: Record<string, unknown>): FieldCondition | null {
   if (input.field_id === undefined || input.field_id === null) {
     if (input.field_operator != null || Object.hasOwn(input, "field_value"))
@@ -42,11 +46,11 @@ export function parseFieldCondition(input: Record<string, unknown>): FieldCondit
   if (
     !isUuid(input.field_id) ||
     typeof input.field_operator !== "string" ||
-    !["eq", "is_set", "is_unset"].includes(input.field_operator)
+    !["eq", "gt", "gte", "lt", "lte", "is_set", "is_unset"].includes(input.field_operator)
   )
     throw new ApiError(400, "invalid_field_condition");
   if (
-    input.field_operator === "eq"
+    fieldConditionNeedsValue(input.field_operator)
       ? !Object.hasOwn(input, "field_value") || input.field_value === null
       : Object.hasOwn(input, "field_value")
   )
@@ -54,7 +58,7 @@ export function parseFieldCondition(input: Record<string, unknown>): FieldCondit
   return {
     field_id: input.field_id,
     field_operator: input.field_operator,
-    ...(input.field_operator === "eq" ? { field_value: input.field_value } : {}),
+    ...(fieldConditionNeedsValue(input.field_operator) ? { field_value: input.field_value } : {}),
   };
 }
 
@@ -90,7 +94,11 @@ export async function validateFieldCondition(
     )
   ).rows[0];
   if (!field) throw new ApiError(404, "field_not_found");
-  if (condition.field_operator === "eq") validateValue(field.type, condition.field_value);
+  if (fieldConditionNeedsValue(condition.field_operator)) {
+    if (condition.field_operator !== "eq" && !["number", "date"].includes(field.type))
+      throw new ApiError(400, "invalid_field_condition");
+    validateValue(field.type, condition.field_value);
+  }
 }
 
 export async function listContactFields(pool: Pool, user: User) {
