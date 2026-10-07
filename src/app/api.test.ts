@@ -8,6 +8,8 @@ const config = {
   SUPABASE_PUBLISHABLE_KEY: "public-test-key",
   AUTH_IP_LIMIT: { limit: async () => ({ success: true }) },
   AUTH_EMAIL_LIMIT: { limit: async () => ({ success: true }) },
+  AUTH_MAIL_IP_LIMIT: { limit: async () => ({ success: true }) },
+  AUTH_MAIL_LIMIT: { limit: async () => ({ success: true }) },
 };
 const userId = "11111111-1111-4111-8111-111111111111";
 const workspaceId = "22222222-2222-4222-8222-222222222222";
