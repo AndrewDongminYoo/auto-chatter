@@ -142,6 +142,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
         code: "42501",
       });
       await assert.rejects(client.query("SELECT * FROM workspace_deletion_records"), { code: "42501" });
+      await assert.rejects(client.query("SELECT public.delete_expired_oauth_states()"), { code: "42501" });
       await client.query("RESET ROLE");
     }
     await client.query("SET ROLE auto_chatter_server");
@@ -332,12 +333,20 @@ test("Supabase roles cannot read product data; the server role has DML without D
       code: "42501",
     });
     await assert.rejects(client.query("SELECT * FROM workspace_deletion_records"), { code: "42501" });
+    // Expired OAuth states are removed only through the definer function; the table DELETE stays denied.
+    await client.query(
+      "INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES ('server-expired','33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111',now()-interval '1 second')",
+    );
+    await assert.rejects(client.query("DELETE FROM instagram_oauth_states"), { code: "42501" });
+    assert.equal((await client.query("SELECT public.delete_expired_oauth_states() AS deleted")).rows[0].deleted, 1);
     await client.query("RESET ROLE");
     await client.query("SET ROLE automations_app");
     assert.equal((await client.query("SELECT count(*) FROM workspace_members")).rows[0].count, "1");
     await client.query(
       "INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES ('compose-test','33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111',now()+interval '1 hour')",
     );
+    await assert.rejects(client.query("DELETE FROM instagram_oauth_states"), { code: "42501" });
+    assert.equal((await client.query("SELECT public.delete_expired_oauth_states() AS deleted")).rows[0].deleted, 0);
     assert.equal(
       (await client.query("UPDATE instagram_oauth_states SET consumed_at=now() WHERE state_hash='compose-test'"))
         .rowCount,

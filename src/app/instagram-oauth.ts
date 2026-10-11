@@ -87,6 +87,13 @@ export async function beginInstagramOAuth(pool: Pool, user: User, env: Instagram
   return response;
 }
 
+// Removes one batch of expired states through the administrator-owned function (server roles have no table
+// DELETE) and returns how many were removed. Completion already ignores an expired state (#173).
+export async function deleteExpiredOAuthStates(pool: Pool): Promise<number> {
+  const result = await pool.query<{ deleted: number }>("SELECT public.delete_expired_oauth_states() AS deleted");
+  return result.rows[0]!.deleted;
+}
+
 async function providerJson(fetchImpl: typeof fetch, url: URL | string, init: RequestInit): Promise<unknown> {
   let response: Response;
   try {

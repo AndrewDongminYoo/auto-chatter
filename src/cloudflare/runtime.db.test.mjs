@@ -457,7 +457,14 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
       { status: "pending", node_id: "notify" },
     ]);
     assert.deepEqual(webhookRequests, []);
+    // The restricted server role removes an expired OAuth state through the cleanup function and keeps a live one.
+    await pool.query(
+      "INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES ('runtime-expired','44444444-4444-4444-8444-444444444444','11111111-1111-4111-8111-111111111111',now()-interval '1 second'),('runtime-live','44444444-4444-4444-8444-444444444444','11111111-1111-4111-8111-111111111111',now()+interval '10 minutes')",
+    );
     await consumer.scheduled({ scheduledTime: Date.now(), cron: "* * * * *" });
+    assert.deepEqual((await pool.query("SELECT state_hash FROM instagram_oauth_states")).rows, [
+      { state_hash: "runtime-live" },
+    ]);
     assert.equal(sends, 3);
     assert.equal(webhookRequests.length, 1);
     const [webhookRequest] = webhookRequests;
@@ -496,6 +503,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
         "early_reply_reconcile",
         "flow_resume",
         "kept_reply_cleanup",
+        "oauth_state_cleanup",
         "stale_recovery",
         "token_refresh",
         "wake",

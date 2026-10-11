@@ -6,6 +6,7 @@
 
 export const OPERATION_STEPS = [
   "kept_reply_cleanup",
+  "oauth_state_cleanup",
   "token_refresh",
   "early_reply_reconcile",
   "flow_resume",

@@ -453,6 +453,8 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
     // The text of a DM kept while its reply was being sent (#108) is removed after 15 minutes. This
     // runs first and needs no other configuration.
     await step("kept_reply_cleanup", () => clearExpiredUnmatchedReplies(pool));
+    // Expired OAuth states (#173) are removed in batches; like the kept text, this needs no other configuration.
+    await step("oauth_state_cleanup", () => deleteExpiredOAuthStates(pool));
     await step("token_refresh", async () => {
       if (!env.TOKEN_ENCRYPTION_KEY) throw new ConfigurationError("Token encryption not configured");
       // A connection is attempted at most once a day, so a failure fails only the run that attempted it.
@@ -511,7 +513,7 @@ import { InstagramLoginPrivateReplyTransport } from "../instagram/instagram-logi
 import { publicPage } from "./public-pages.ts";
 import { appApi } from "../app/api.ts";
 import type { AuthEnv } from "../app/auth.ts";
-import type { InstagramOAuthEnv } from "../app/instagram-oauth.ts";
+import { deleteExpiredOAuthStates, type InstagramOAuthEnv } from "../app/instagram-oauth.ts";
 
 import { openSecret } from "../app/secrets.ts";
 import { isRecord, isUuid } from "../app/auth.ts";

@@ -197,6 +197,23 @@ REVOKE ALL ON FUNCTION public.delete_connection_data(uuid,uuid,uuid,text) FROM P
 DROP POLICY IF EXISTS server_insert ON public.data_deletion_records;
 DROP POLICY IF EXISTS server_update ON public.data_deletion_records;
 
+-- The cron removes expired OAuth states only through this function; server roles still have no table DELETE.
+DO $$
+DECLARE server_role text; api_role text;
+BEGIN
+  FOREACH server_role IN ARRAY ARRAY['auto_chatter_server','automations_app'] LOOP
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname=server_role) THEN
+      EXECUTE format('GRANT EXECUTE ON FUNCTION public.delete_expired_oauth_states() TO %I',server_role);
+    END IF;
+  END LOOP;
+  FOREACH api_role IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname=api_role) THEN
+      EXECUTE format('REVOKE ALL ON FUNCTION public.delete_expired_oauth_states() FROM %I',api_role);
+    END IF;
+  END LOOP;
+END $$;
+REVOKE ALL ON FUNCTION public.delete_expired_oauth_states() FROM PUBLIC;
+
 -- Person deletion is administrator-only: no runtime or API role may execute it.
 DO $$
 DECLARE any_role text;

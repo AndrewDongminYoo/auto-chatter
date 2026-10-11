@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
-import { beginInstagramOAuth, finishInstagramOAuth } from "./instagram-oauth.ts";
+import { beginInstagramOAuth, deleteExpiredOAuthStates, finishInstagramOAuth } from "./instagram-oauth.ts";
 import { refreshDueInstagramTokens, refreshDueInstagramTokensWithFailures } from "./instagram-token-refresh.ts";
 import { disconnectConnection, ensureWorkspace } from "./settings.ts";
 import { openSecret, sealSecret } from "./secrets.ts";
@@ -533,4 +533,43 @@ test("starting a connection while an invite moves the user does not leave a stat
   }
   const states = await pool.query("SELECT count(*) FROM instagram_oauth_states WHERE workspace_id=$1", [workspaceId]);
   assert.equal(states.rows[0].count, "0");
+});
+
+test("expired OAuth state cleanup removes only expired states, consumed or not", async () => {
+  await pool.query(
+    `INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at,consumed_at) VALUES
+       ('expired',$1,$2,now()-interval '1 second',NULL),
+       ('expired-consumed',$1,$2,now()-interval '1 minute',now()-interval '2 minutes'),
+       ('live',$1,$2,now()+interval '10 minutes',NULL),
+       ('live-consumed',$1,$2,now()+interval '5 minutes',now()-interval '1 minute')`,
+    [user.id, workspaceId],
+  );
+  assert.equal(await deleteExpiredOAuthStates(pool), 2);
+  assert.deepEqual(
+    (await pool.query("SELECT state_hash FROM instagram_oauth_states ORDER BY state_hash")).rows.map(
+      (row) => row.state_hash,
+    ),
+    ["live", "live-consumed"],
+  );
+  assert.equal(await deleteExpiredOAuthStates(pool), 0);
+  const definer = await pool.query(
+    "SELECT prosecdef, proconfig FROM pg_proc WHERE oid='public.delete_expired_oauth_states()'::regprocedure",
+  );
+  assert.equal(definer.rows[0].prosecdef, true);
+  assert.deepEqual(definer.rows[0].proconfig, ["search_path=public, pg_temp"]);
+});
+
+test("expired OAuth state cleanup removes at most 1,000 rows per call", async () => {
+  await pool.query(
+    "INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) SELECT 'expired-'||n,$1,$2,now()-interval '1 minute' FROM generate_series(1,1005) n",
+    [user.id, workspaceId],
+  );
+  await pool.query(
+    "INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES('live',$1,$2,now()+interval '10 minutes')",
+    [user.id, workspaceId],
+  );
+  assert.equal(await deleteExpiredOAuthStates(pool), 1000);
+  assert.equal(await deleteExpiredOAuthStates(pool), 5);
+  assert.equal(await deleteExpiredOAuthStates(pool), 0);
+  assert.deepEqual((await pool.query("SELECT state_hash FROM instagram_oauth_states")).rows, [{ state_hash: "live" }]);
 });

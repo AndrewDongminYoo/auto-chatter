@@ -907,8 +907,8 @@ CREATE TABLE IF NOT EXISTS data_deletion_records (
 CREATE INDEX IF NOT EXISTS data_deletion_records_connection_idx
   ON data_deletion_records(workspace_id,connection_id,completed_at DESC);
 
--- The only path that deletes product rows. It runs as its administrator owner, so the
--- runtime roles need EXECUTE on this function and no table DELETE grant.
+-- The only path that deletes product rows, apart from the expired OAuth state cleanup at the end of this file.
+-- It runs as its administrator owner, so the runtime roles need EXECUTE on this function and no table DELETE grant.
 CREATE OR REPLACE FUNCTION public.delete_connection_data(
   p_workspace uuid,
   p_connection uuid,
@@ -1612,3 +1612,27 @@ CREATE TABLE IF NOT EXISTS scheduled_steps (
   alert_changed_at timestamptz,
   alert_seen_count bigint CHECK(alert_seen_count>=0)
 );
+
+-- Expired Instagram OAuth states (#173). OAuth completion and the invite move check already ignore a state
+-- whose expires_at has passed, so removing it changes no behavior. Server roles have no table DELETE, so the
+-- Cloudflare cron removes them through this administrator-owned function, at most 1,000 rows per call; the
+-- next run removes the rest. SKIP LOCKED leaves a row that another transaction holds for a later run.
+CREATE OR REPLACE FUNCTION public.delete_expired_oauth_states()
+RETURNS integer
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  WITH gone AS (
+    DELETE FROM public.instagram_oauth_states
+    WHERE state_hash IN (
+      SELECT state_hash FROM public.instagram_oauth_states
+      WHERE expires_at<=now()
+      LIMIT 1000
+      FOR UPDATE SKIP LOCKED
+    )
+    RETURNING 1
+  )
+  SELECT count(*)::integer FROM gone
+$$;
+REVOKE ALL ON FUNCTION public.delete_expired_oauth_states() FROM PUBLIC;
