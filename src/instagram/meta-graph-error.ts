@@ -23,6 +23,48 @@ export async function readMetaGraphError(
   return { code, transient: body.error.is_transient === true || rateLimited, rateLimited };
 }
 
+// Whether Meta rejected the access token itself or the app's permission for it: HTTP 401, or Graph error code
+// 10, 190 or 200-299. Only a 400 or 403 body is read for the code. Timeouts, network errors, 5xx, rate limits
+// and other bodies are not rejections. The diagnostics route and the reconnect marker share this definition.
+export function isMetaTokenRejection(status: number, code: unknown): boolean {
+  if (status === 401) return true;
+  if (status !== 400 && status !== 403) return false;
+  return code === 10 || code === 190 || (typeof code === "number" && code >= 200 && code <= 299);
+}
+
+// Reads the error code of a 400 or 403 response, or returns undefined without reading the body.
+export async function readMetaGraphErrorCode(response: Response): Promise<unknown> {
+  if (response.status !== 400 && response.status !== 403) return undefined;
+  try {
+    const body: unknown = await response.json();
+    return isRecord(body) && isRecord(body.error) ? body.error.code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// The outcome of a pre-send identity read (me) that a transport reports to its optional observer: the token
+// was accepted for the configured account, or Meta rejected it. Other outcomes are not reported.
+export type IdentityCheck = "verified" | "rejected";
+export type IdentityObserver = (check: IdentityCheck) => Promise<void>;
+
+// Reports to an observer; the observer is best effort and can never change the caller's outcome.
+export async function reportIdentity(observer: IdentityObserver | undefined, check: IdentityCheck): Promise<void> {
+  try {
+    await observer?.(check);
+  } catch {
+    // The observer logs its own failures.
+  }
+}
+
+// Classifies a non-2xx response without consuming its body, so the caller can still read it.
+export async function metaTokenRejected(response: Response): Promise<boolean> {
+  if (response.ok) return false;
+  if (response.status === 401) return true;
+  if (response.status !== 400 && response.status !== 403) return false;
+  return isMetaTokenRejection(response.status, await readMetaGraphErrorCode(response.clone()));
+}
+
 export function retryAfterSeconds(header: string | null, now: Date): number | null {
   const value = header?.trim();
   if (!value) return null;

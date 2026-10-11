@@ -211,7 +211,8 @@ export async function finishInstagramOAuth(
        ON CONFLICT(account_id) DO UPDATE SET username=EXCLUDED.username,active=false,send_enabled=false,
          access_token_encrypted=EXCLUDED.access_token_encrypted,token_expires_at=EXCLUDED.token_expires_at,
          token_obtained_at=now(),
-         token_refresh_attempted_at=NULL
+         token_refresh_attempted_at=NULL,
+         reauth_required_at=NULL,reauth_reason=NULL,reauth_token_obtained_at=NULL
        WHERE instagram_connections.workspace_id=$2 RETURNING id`,
       [randomUUID(), workspaceId, account.user_id, account.username, encrypted, Math.floor(long.expires_in)],
     );

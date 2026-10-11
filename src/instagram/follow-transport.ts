@@ -1,6 +1,11 @@
 import { confirmationMessage } from "./confirmation-button.ts";
 import { isRecord } from "../app/auth.ts";
-import { classifyMetaGraphFailure } from "./meta-graph-error.ts";
+import {
+  classifyMetaGraphFailure,
+  metaTokenRejected,
+  reportIdentity,
+  type IdentityObserver,
+} from "./meta-graph-error.ts";
 import { PreSendVerificationError } from "./reply-worker.ts";
 export interface FollowSendContext {
   replyId: string;
@@ -18,13 +23,15 @@ export class InstagramFollowTransport implements FollowTransport {
     graphVersion: string;
     fetchImpl?: typeof fetch;
     beforeSend?: (context: FollowSendContext) => Promise<void>;
+    // Told when the identity read accepts or rejects the token; it cannot change a verification result.
+    onIdentity?: IdentityObserver;
   };
   constructor(config: InstagramFollowTransport["config"]) {
     if (!/^\d+$/.test(config.accountId) || !/^v\d+\.\d+$/.test(config.graphVersion) || !config.accessToken)
       throw new Error("Invalid Meta configuration");
     this.config = config;
   }
-  private async request(path: string, body?: unknown): Promise<unknown> {
+  private async request(path: string, body?: unknown, identity = false): Promise<unknown> {
     const method = body === undefined ? "GET" : "POST";
     const response = await (this.config.fetchImpl ?? fetch)(
       `https://graph.instagram.com/${this.config.graphVersion}/${path}`,
@@ -37,6 +44,7 @@ export class InstagramFollowTransport implements FollowTransport {
       },
     );
     if (!response.ok) {
+      if (identity && (await metaTokenRejected(response))) await reportIdentity(this.config.onIdentity, "rejected");
       const error = await classifyMetaGraphFailure(response, method, new Date());
       if (error) throw error;
       if (method === "GET") return null;
@@ -45,9 +53,11 @@ export class InstagramFollowTransport implements FollowTransport {
     return response.json();
   }
   async verifyAccount(): Promise<boolean> {
-    const me = await this.request("me?fields=user_id");
+    const me = await this.request("me?fields=user_id", undefined, true);
     const profile = isRecord(me) && Array.isArray(me.data) ? me.data[0] : me;
-    return isRecord(profile) && profile.user_id === this.config.accountId;
+    const verified = isRecord(profile) && profile.user_id === this.config.accountId;
+    if (verified) await reportIdentity(this.config.onIdentity, "verified");
+    return verified;
   }
   async followStatus(recipientId: string): Promise<boolean | null> {
     if (!/^\d+$/.test(recipientId) || recipientId === this.config.accountId) return null;

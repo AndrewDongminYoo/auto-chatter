@@ -6,6 +6,7 @@ import { beginInstagramOAuth, deleteExpiredOAuthStates, finishInstagramOAuth } f
 import { refreshDueInstagramTokens, refreshDueInstagramTokensWithFailures } from "./instagram-token-refresh.ts";
 import { disconnectConnection, ensureWorkspace } from "./settings.ts";
 import { openSecret, sealSecret } from "./secrets.ts";
+import { markReauthRequired } from "./instagram-reauth.ts";
 import { ingestMessages } from "../instagram/follow-flow.ts";
 import { acceptInvite, createInvite } from "./workspace-members.ts";
 
@@ -80,6 +81,39 @@ test("OAuth verifies ownership, stores ciphertext, subscribes webhooks, and cons
   assert.equal(calls, 4);
   await assert.rejects(finishInstagramOAuth(pool, user, request, env, provider));
   assert.equal(calls, 4);
+});
+
+test("an OAuth reconnect that stores a new token clears the reconnect marker", async () => {
+  const provider: typeof fetch = async (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/oauth/access_token")
+      return Response.json({
+        access_token: "short-token",
+        permissions: [
+          "instagram_business_basic",
+          "instagram_business_manage_comments",
+          "instagram_business_manage_messages",
+        ],
+      });
+    if (path === "/access_token") return Response.json({ access_token: "long-token", expires_in: 5_184_000 });
+    if (path.endsWith("/me")) return Response.json({ user_id: "98765", username: "account" });
+    return Response.json({ success: true });
+  };
+  assert.equal((await finishInstagramOAuth(pool, user, (await authorization()).request, env, provider)).status, 303);
+  const { id, access_token_encrypted } = (
+    await pool.query("SELECT id,access_token_encrypted FROM instagram_connections")
+  ).rows[0];
+  assert.equal(await markReauthRequired(pool, id, access_token_encrypted, "token_rejected"), true);
+  assert.equal((await finishInstagramOAuth(pool, user, (await authorization()).request, env, provider)).status, 303);
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT active,reauth_required_at,reauth_reason,reauth_token_obtained_at,access_token_encrypted<>$1 AS replaced FROM instagram_connections",
+        [access_token_encrypted],
+      )
+    ).rows,
+    [{ active: true, reauth_required_at: null, reauth_reason: null, reauth_token_obtained_at: null, replaced: true }],
+  );
 });
 
 test("expired, cross-user, and browser-mismatched states make no provider call", async () => {

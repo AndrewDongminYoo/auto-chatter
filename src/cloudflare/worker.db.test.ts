@@ -302,6 +302,33 @@ test("a failed Meta token refresh fails the token_refresh step without logging t
   );
 });
 
+test("a failed reconnect marker write in the cron refresh is logged with that run's correlation ID", async () => {
+  await pool.query(
+    "UPDATE instagram_connections SET token_expires_at=now()+interval '20 days',token_obtained_at=now()-interval '2 days' WHERE id=$1",
+    [connectionId],
+  );
+  // A recent successful run keeps cron_stale off, so the only lines are the marker and step failures.
+  await pool.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now())");
+  restoreMocks();
+  mock.method(globalThis, "fetch", async () => Response.json({ error: { code: 190 } }, { status: 400 }));
+  const originalQuery = Pool.prototype.query;
+  mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    if (typeof sql === "string" && sql.includes("SET reauth_required_at=coalesce"))
+      throw new Error("token for owner@example.test");
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  await assert.rejects(worker.scheduled({}, env), /^Error: Cloudflare scheduled recovery failed$/);
+  assert.deepEqual(
+    logLines.map(({ correlation_id, ...line }) => line),
+    [
+      { event: "reauth_record_failed", code: "unexpected_error", connection_id: connectionId },
+      { event: "cron_step_failed", code: "token_refresh_failed", step: "token_refresh" },
+    ],
+  );
+  assert.equal(typeof logLines[0]?.correlation_id, "string");
+  assert.equal(logLines[0]?.correlation_id, logLines[1]?.correlation_id);
+});
+
 test("duplicate webhook and queue delivery send one persisted reply", async () => {
   assert.equal((await worker.fetch(request(), env)).status, 200);
   assert.equal((await worker.fetch(request(), env)).status, 200);
@@ -1304,9 +1331,71 @@ test("Cloudflare verification retries when a rotated old token is rejected by Me
   await consume();
   assert.equal(sends, 0);
   assert.equal((await rows())[0].status, "pending");
+  // The rejection concerned the old token, so the rotated one is not marked for reconnection.
+  assert.deepEqual(await reauthMarker(), { reauth_reason: null, marked: false });
   await pool.query("UPDATE private_reply_outbox SET next_attempt_at=now()");
   await consume();
   assert.equal(sends, 1);
+});
+
+async function reauthMarker() {
+  return (
+    await pool.query(
+      "SELECT reauth_reason,reauth_required_at IS NOT NULL AS marked FROM instagram_connections WHERE id=$1",
+      [connectionId],
+    )
+  ).rows[0];
+}
+
+test("a rejected Cloudflare identity read marks the token without changing the reply outcome", async () => {
+  const providerFetch = globalThis.fetch;
+  let reject = true;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    if (reject && init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/me"))
+      return Response.json({ error: { code: 190, message: "Invalid OAuth access token" } }, { status: 401 });
+    return providerFetch(input, init);
+  });
+  await worker.fetch(request(), env);
+  assert.equal(await consume(), "ack");
+  // The reply is blocked by the pre-send verification exactly as without the marker.
+  assert.equal(sends, 0);
+  assert.deepEqual(await rows(), [
+    { status: "blocked", failure_code: "authorization_unverified", rate_limit_retries: 0 },
+  ]);
+  assert.deepEqual(await reauthMarker(), { reauth_reason: "token_rejected", marked: true });
+  assert.deepEqual(logLines, []);
+  // The marker does not stop a claim, and a verified identity read of the same token clears it.
+  reject = false;
+  await pool.query("UPDATE private_reply_outbox SET status='pending',failure_code=NULL,next_attempt_at=now()");
+  await consume();
+  assert.equal(sends, 1);
+  assert.deepEqual(await reauthMarker(), { reauth_reason: null, marked: false });
+});
+
+test("a failed reconnect marker write is logged and leaves the reply outcome unchanged", async () => {
+  const providerFetch = globalThis.fetch;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) =>
+    init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/me")
+      ? Response.json({ error: { code: 190 } }, { status: 400 })
+      : providerFetch(input, init),
+  );
+  const originalQuery = Pool.prototype.query;
+  mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    if (typeof sql === "string" && sql.includes("SET reauth_required_at=coalesce"))
+      throw new Error("token for owner@example.test");
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  await worker.fetch(request(), env);
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 0);
+  assert.deepEqual(await rows(), [
+    { status: "blocked", failure_code: "authorization_unverified", rate_limit_retries: 0 },
+  ]);
+  assert.deepEqual(await reauthMarker(), { reauth_reason: null, marked: false });
+  assert.deepEqual(
+    logLines.map(({ correlation_id, ...line }) => line),
+    [{ event: "reauth_record_failed", code: "unexpected_error", connection_id: connectionId }],
+  );
 });
 
 test("Cloudflare retries a definite POST rejection after token rotation", async () => {

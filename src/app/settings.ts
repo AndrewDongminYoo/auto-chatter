@@ -171,7 +171,12 @@ export async function listConnections(pool: Pool, user: User) {
       `SELECT id,account_id,username,active,send_enabled,inbox_enabled,token_expires_at,access_token_encrypted IS NOT NULL AS token_registered,
         CASE WHEN access_token_encrypted IS NULL THEN 'missing'
              WHEN token_expires_at IS NULL OR token_expires_at<=now() THEN 'expired'
-             ELSE 'valid' END AS credential_status
+             ELSE 'valid' END AS credential_status,
+        -- The reconnect marker, shown only while it belongs to the stored token.
+        CASE WHEN access_token_encrypted IS NOT NULL AND reauth_token_obtained_at=token_obtained_at
+          THEN reauth_required_at END AS reauth_required_at,
+        CASE WHEN access_token_encrypted IS NOT NULL AND reauth_token_obtained_at=token_obtained_at
+          THEN reauth_reason END AS reauth_reason
        FROM instagram_connections WHERE workspace_id=$1 ORDER BY id`,
       [workspaceId],
     )
@@ -282,7 +287,8 @@ export async function disconnectConnection(pool: Pool, user: User, id: string) {
       [id, workspaceId],
     );
     const disconnected = await client.query(
-      `WITH disconnected AS (UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL,token_expires_at=NULL
+      `WITH disconnected AS (UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL,token_expires_at=NULL,
+ reauth_required_at=NULL,reauth_reason=NULL,reauth_token_obtained_at=NULL
  WHERE id=$1 AND workspace_id=$2 RETURNING id), rules AS (UPDATE instagram_comment_rules SET enabled=false WHERE connection_id IN(SELECT id FROM disconnected) AND workspace_id=$2)
  SELECT id FROM disconnected`,
       [id, workspaceId],

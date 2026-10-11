@@ -33,7 +33,12 @@ const apiEnv = {
   WORKSPACE_EXPORT_LIMIT: { limit: async () => ({ success: true }) },
 };
 // Columns whose names look secret but hold only timestamps.
-const benignSecretLikeColumns = new Set(["token_expires_at", "token_obtained_at", "token_refresh_attempted_at"]);
+const benignSecretLikeColumns = new Set([
+  "token_expires_at",
+  "token_obtained_at",
+  "token_refresh_attempted_at",
+  "reauth_token_obtained_at",
+]);
 
 before(async () => {
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
