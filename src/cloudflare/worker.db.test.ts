@@ -1064,6 +1064,113 @@ test("oversized body is rejected before persistence even with no content-length"
   assert.deepEqual(await rows(), []);
 });
 
+function deauthorizeRequest(payload: unknown, key = "test-oauth-secret", init: RequestInit = {}): Request {
+  const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = createHmac("sha256", key).update(encoded).digest("base64url");
+  return new Request("https://example.test/instagram/deauthorize", {
+    method: "POST",
+    body: new URLSearchParams({ signed_request: `${signature}.${encoded}` }),
+    ...init,
+  });
+}
+async function connectionState() {
+  return (
+    await pool.query(
+      `SELECT c.active,c.send_enabled,c.access_token_encrypted IS NOT NULL AS token,c.deauthorized_at IS NOT NULL AS deauthorized,
+         (SELECT bool_or(enabled) FROM instagram_comment_rules WHERE connection_id=c.id) AS rule_enabled
+       FROM instagram_connections c WHERE c.id=$1`,
+      [connectionId],
+    )
+  ).rows[0];
+}
+
+test("the deauthorize callback answers unverified or unconfigured requests without touching the database", async () => {
+  const signed = { algorithm: "HMAC-SHA256", issued_at: Math.floor(Date.now() / 1000), user_id: "123" };
+  const before = await connectionState();
+  assert.deepEqual(before, { active: true, send_enabled: true, token: true, deauthorized: false, rule_enabled: true });
+  let databaseCalls = 0;
+  for (const method of ["query", "connect"] as const) {
+    const original = Pool.prototype[method];
+    mock.method(Pool.prototype, method, function (this: Pool, ...args: unknown[]) {
+      databaseCalls++;
+      return Reflect.apply(original, this, args);
+    });
+  }
+  // Without the OAuth app secret or the database binding nothing can be verified or recorded.
+  assert.equal((await worker.fetch(deauthorizeRequest(signed), env)).status, 503);
+  env.INSTAGRAM_OAUTH_APP_SECRET = "test-oauth-secret";
+  assert.equal(
+    (await worker.fetch(deauthorizeRequest(signed), { ...env, HYPERDRIVE: { connectionString: "" } })).status,
+    503,
+  );
+  assert.equal((await worker.fetch(deauthorizeRequest(signed, "other-secret"), env)).status, 400);
+  assert.equal((await worker.fetch(deauthorizeRequest({ ...signed, algorithm: "HMAC-SHA1" }), env)).status, 400);
+  assert.equal((await worker.fetch(deauthorizeRequest({ ...signed, user_id: undefined }), env)).status, 400);
+  assert.equal((await worker.fetch(deauthorizeRequest({ ...signed, issued_at: "soon" }), env)).status, 400);
+  const get = await worker.fetch(new Request("https://example.test/instagram/deauthorize"), env);
+  assert.equal(get.status, 405);
+  assert.equal(get.headers.get("allow"), "POST");
+  const oversized = new Request("https://example.test/instagram/deauthorize", {
+    method: "POST",
+    body: "x".repeat(8 * 1024 + 1),
+  });
+  assert.equal((await worker.fetch(oversized, env)).status, 413);
+  assert.equal(databaseCalls, 0);
+  restoreMocks();
+  assert.deepEqual(await connectionState(), before);
+  assert.deepEqual(
+    logLines.map(({ event, code }) => ({ event, code })),
+    [
+      { event: "request_failed", code: "not_configured" },
+      { event: "request_failed", code: "not_configured" },
+    ],
+  );
+});
+
+test("a verified deauthorize callback disconnects the matching connection and logs only its connection ID", async () => {
+  env.INSTAGRAM_OAUTH_APP_SECRET = "test-oauth-secret";
+  const signed = { algorithm: "HMAC-SHA256", issued_at: Math.floor(Date.now() / 1000), user_id: "123" };
+  // A request issued before the stored token was obtained is answered 200 and changes nothing.
+  const before = await connectionState();
+  const stale = await worker.fetch(
+    deauthorizeRequest({ ...signed, issued_at: signed.issued_at - 3600 }, undefined, {
+      headers: { "cf-ray": "ray-0" },
+    }),
+    env,
+  );
+  assert.equal(stale.status, 200);
+  assert.deepEqual(await connectionState(), before);
+  const response = await worker.fetch(deauthorizeRequest(signed, undefined, { headers: { "cf-ray": "ray-1" } }), env);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await connectionState(), {
+    active: false,
+    send_enabled: false,
+    token: false,
+    deauthorized: true,
+    rule_enabled: false,
+  });
+  const unmatched = await worker.fetch(
+    deauthorizeRequest({ ...signed, user_id: 424242 }, undefined, { headers: { "cf-ray": "ray-2" } }),
+    env,
+  );
+  assert.equal(unmatched.status, 200);
+  assert.deepEqual(logLines, [
+    {
+      event: "instagram_deauthorized",
+      code: "connection_skipped",
+      correlation_id: "ray-0",
+      connection_id: connectionId,
+    },
+    {
+      event: "instagram_deauthorized",
+      code: "connection_disconnected",
+      correlation_id: "ray-1",
+      connection_id: connectionId,
+    },
+    { event: "instagram_deauthorized", code: "no_connection_matched", correlation_id: "ray-2" },
+  ]);
+});
+
 test("cron wakes a missed notification for an inactive connection so its reply becomes blocked", async () => {
   env.SEND_ENABLED = "false";
   assert.equal((await worker.fetch(request(), env)).status, 200);

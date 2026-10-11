@@ -7,6 +7,7 @@ import { refreshDueInstagramTokens, refreshDueInstagramTokensWithFailures } from
 import { disconnectConnection, ensureWorkspace } from "./settings.ts";
 import { openSecret, sealSecret } from "./secrets.ts";
 import { markReauthRequired } from "./instagram-reauth.ts";
+import { deauthorizeInstagramUser } from "./instagram-deauthorization.ts";
 import { ingestMessages } from "../instagram/follow-flow.ts";
 import { acceptInvite, createInvite } from "./workspace-members.ts";
 
@@ -114,6 +115,49 @@ test("an OAuth reconnect that stores a new token clears the reconnect marker", a
     ).rows,
     [{ active: true, reauth_required_at: null, reauth_reason: null, reauth_token_obtained_at: null, replaced: true }],
   );
+});
+
+test("OAuth stores the exchange's user ID when it is unambiguous, and a reconnect clears the deauthorization", async () => {
+  let exchangeUserId: unknown;
+  const provider: typeof fetch = async (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/oauth/access_token")
+      return Response.json({
+        data: [
+          {
+            access_token: "short-token",
+            user_id: exchangeUserId,
+            permissions:
+              "instagram_business_basic,instagram_business_manage_comments,instagram_business_manage_messages",
+          },
+        ],
+      });
+    if (path === "/access_token") return Response.json({ access_token: "long-token", expires_in: 5_184_000 });
+    if (path.endsWith("/me")) return Response.json({ user_id: "98765", username: "account" });
+    return Response.json({ success: true });
+  };
+  const connect = async (userId: unknown) => {
+    exchangeUserId = userId;
+    assert.equal((await finishInstagramOAuth(pool, user, (await authorization()).request, env, provider)).status, 303);
+    return (await pool.query("SELECT active,instagram_user_id,deauthorized_at FROM instagram_connections")).rows;
+  };
+  // A number above 2^53 was rounded by the parser: the connection succeeds without an ID.
+  assert.deepEqual(await connect(2 ** 53), [{ active: true, instagram_user_id: null, deauthorized_at: null }]);
+  assert.deepEqual(await connect(12345), [{ active: true, instagram_user_id: "12345", deauthorized_at: null }]);
+  assert.deepEqual(await deauthorizeInstagramUser(pool, { userId: "12345", issuedAt: null }), {
+    disconnected: [(await pool.query("SELECT id FROM instagram_connections")).rows[0].id],
+    skipped: [],
+  });
+  assert.notEqual(
+    (await pool.query("SELECT deauthorized_at FROM instagram_connections")).rows[0].deauthorized_at,
+    null,
+  );
+  // A reconnect clears the deauthorization and stores what this exchange returned, NULL when it has no ID.
+  assert.deepEqual(await connect(undefined), [{ active: true, instagram_user_id: null, deauthorized_at: null }]);
+  assert.deepEqual(await connect("17841400000000001"), [
+    { active: true, instagram_user_id: "17841400000000001", deauthorized_at: null },
+  ]);
+  assert.deepEqual(await connect("12a"), [{ active: true, instagram_user_id: null, deauthorized_at: null }]);
 });
 
 test("expired, cross-user, and browser-mismatched states make no provider call", async () => {

@@ -89,7 +89,7 @@ async function wakeDueReplies(
   for (const row of due.rows) await env.REPLY_QUEUE.send({ connectionId: row.id });
 }
 
-async function readBody(request: Request): Promise<Uint8Array | null> {
+async function readBody(request: Request, limit = 1024 * 1024): Promise<Uint8Array | null> {
   if (!request.body) return new Uint8Array();
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -99,7 +99,7 @@ async function readBody(request: Request): Promise<Uint8Array | null> {
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > 1024 * 1024) {
+      if (size > limit) {
         await reader.cancel();
         return null;
       }
@@ -109,6 +109,39 @@ async function readBody(request: Request): Promise<Uint8Array | null> {
     reader.releaseLock();
   }
   return Buffer.concat(chunks, size);
+}
+
+// Meta's deauthorize callback (#16). Nothing reaches the database until the signed request verifies.
+async function deauthorize(request: Request, env: Env, correlationId: string): Promise<Response> {
+  if (!env.INSTAGRAM_OAUTH_APP_SECRET || !env.HYPERDRIVE?.connectionString)
+    throw new ConfigurationError("Deauthorize callback not configured");
+  if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
+  const body = await readBody(request, DEAUTHORIZE_BODY_LIMIT);
+  if (body === null) return new Response(null, { status: 413 });
+  const verified = parseDeauthorizeBody(body, env.INSTAGRAM_OAUTH_APP_SECRET);
+  if (verified === null) return new Response(null, { status: 400 });
+  const pool = openPool(env, correlationId);
+  try {
+    const { disconnected, skipped } = await deauthorizeInstagramUser(pool, verified);
+    // Only the internal connection IDs are logged, never the Instagram user ID or the signed request.
+    for (const [code, ids] of [
+      ["connection_disconnected", disconnected],
+      ["connection_skipped", skipped],
+    ] as const)
+      for (const connectionId of ids)
+        logOperation(
+          { event: "instagram_deauthorized", code, correlation_id: correlationId, connection_id: connectionId },
+          "info",
+        );
+    if (!disconnected.length && !skipped.length)
+      logOperation(
+        { event: "instagram_deauthorized", code: "no_connection_matched", correlation_id: correlationId },
+        "info",
+      );
+    return new Response(null, { status: 200 });
+  } finally {
+    await pool.end();
+  }
 }
 
 async function receive(request: Request, env: Env, correlationId: string): Promise<Response> {
@@ -126,6 +159,7 @@ async function receive(request: Request, env: Env, correlationId: string): Promi
       },
       correlationId,
     );
+  if (url.pathname === "/instagram/deauthorize") return deauthorize(request, env, correlationId);
   if (url.pathname !== "/webhooks/instagram") return new Response(null, { status: 404 });
   if (!env.INSTAGRAM_APP_SECRET || !env.INSTAGRAM_VERIFY_TOKEN) throw new ConfigurationError("Webhook secrets missing");
   if (request.method === "GET") {
@@ -537,6 +571,11 @@ import { publicPage } from "./public-pages.ts";
 import { appApi } from "../app/api.ts";
 import type { AuthEnv } from "../app/auth.ts";
 import { deleteExpiredOAuthStates, type InstagramOAuthEnv } from "../app/instagram-oauth.ts";
+import {
+  DEAUTHORIZE_BODY_LIMIT,
+  deauthorizeInstagramUser,
+  parseDeauthorizeBody,
+} from "../app/instagram-deauthorization.ts";
 
 import { openSecret } from "../app/secrets.ts";
 import { isRecord, isUuid } from "../app/auth.ts";

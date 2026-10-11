@@ -95,6 +95,10 @@ DO $$ BEGIN
       CHECK((reauth_required_at IS NULL) = (reauth_reason IS NULL) AND (reauth_reason IS NULL) = (reauth_token_obtained_at IS NULL));
   END IF;
 END $$;
+-- The deauthorize callback (#16): instagram_user_id is the OAuth token exchange's user_id, and deauthorized_at
+-- records when a verified callback disconnected the connection.
+ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS instagram_user_id text;
+ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS deauthorized_at timestamptz;
 
 CREATE TABLE IF NOT EXISTS channel_consent_events (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
