@@ -423,6 +423,7 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 18개 항목 점검은 배포 전에는 바뀐 `app.js`의 해시만 달라 17개가 통과했고, 배포 후에는 18개가 모두 통과했습니다. 배포 후 `/instagram/deauthorize`는 `GET`에 405, 본문 없는 `POST`와 위조한 서명의 `POST`에 400을 응답했습니다.
 `scheduled_steps`를 12:52:33Z, 12:53:38Z, 12:54:44Z에 조회했을 때 발송과 무관하게 실행되는 7개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. 같은 조회에서 연결은 수신 켜짐·토큰 있음·`deauthorized_at` 없음으로 그대로였습니다.
 서명이 맞는 콜백의 처리, 화면의 "Instagram에서 권한 해제됨" 배지, Meta가 실제로 보내는 ID는 운영에서 확인하지 않았습니다. Meta 앱 대시보드에 Deauthorize callback URL을 등록하는 일은 운영자가 따로 진행합니다([권한 해제 콜백](../specs/2026-09-28-instagram-token-refresh.md#권한-해제-콜백-16)).
+운영자는 Business login settings의 Deauthorize callback URL에 `https://auto-chat.donminzzi.kr/instagram/deauthorize`를 등록했고, 15:10Z에 저장을 마쳤다고 알렸습니다. 등록 직전에 같은 주소는 `GET`에 405, 본문 없는 `POST`에 400을 응답했습니다. 같은 화면의 데이터 삭제 요청 URL은 비어 있습니다. 앱 검수를 제출하기 전에 이 칸을 채워야 하지만, `/data-deletion`은 안내 페이지일 뿐 Meta의 데이터 삭제 콜백이 아니므로 아직 등록하지 않았습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
