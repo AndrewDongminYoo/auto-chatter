@@ -39,7 +39,7 @@ Node 워커의 `worker-main.ts`·`main.ts`가 터미널에 쓰는 사용법·설
 ## 정기 작업 기록
 
 `scheduled_steps`(migration 030)는 이름 하나에 한 행입니다.
-Cron 단계 `kept_reply_cleanup`, `token_refresh`, `early_reply_reconcile`, `flow_resume`, `stale_recovery`, `wake`, `webhook_delivery`, `alerts`는 마지막 성공·실패 시각과 고정 실패 코드를 남깁니다.
+Cron 단계 `kept_reply_cleanup`, `oauth_state_cleanup`, `token_refresh`, `early_reply_reconcile`, `flow_resume`, `stale_recovery`, `wake`, `webhook_delivery`, `alerts`는 마지막 성공·실패 시각과 고정 실패 코드를 남깁니다.
 `cron` 행은 실행한 모든 단계(`alerts` 포함)가 성공한 실행의 시각이며, 한 단계라도 실패하면 실패 코드 `step_failed`를 남깁니다. 그래서 `cron` 행은 `alerts` 단계 뒤에 씁니다. 앞 단계가 모두 성공한 실행은 `alerts` 단계에서 `cron_stale`을 꺼진 것으로 계산하므로, 복구한 실행이 그 실행 안에서 경보를 해제합니다.
 `alert_<이름>` 행은 경보가 켜져 있는지와 마지막으로 바뀐 시각을 남깁니다. `alert_unknown_outcome` 행의 `alert_seen_count`는 마지막 평가가 본 `unknown` 결과의 전체 수입니다.
 전역 발송이 꺼져 있으면 `stale_recovery`, `wake`, `webhook_delivery`는 실행하지 않고 이전 기록을 그대로 둡니다.

@@ -351,6 +351,7 @@ test("cron recovers a committed reply after queue publish failure", async () => 
       "early_reply_reconcile",
       "flow_resume",
       "kept_reply_cleanup",
+      "oauth_state_cleanup",
       "stale_recovery",
       "token_refresh",
       "wake",
@@ -535,6 +536,7 @@ test("a batched record write that fails once fails the run even when every row i
   // Every row of the failed statement is logged once, in step order, because no row's own retry failed.
   const steps = [
     "kept_reply_cleanup",
+    "oauth_state_cleanup",
     "token_refresh",
     "early_reply_reconcile",
     "flow_resume",
@@ -870,6 +872,55 @@ test("the cron links a kept DM to its sent reply and removes kept text after 15 
     ],
   );
   assert.equal(sends, 0);
+});
+
+test("the cron removes expired OAuth states with sending off and records the step", async () => {
+  await pool.query(
+    `INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at,consumed_at) VALUES
+       ('expired','33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111',now()-interval '1 second',NULL),
+       ('expired-consumed','33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111',now()-interval '1 minute',now()-interval '2 minutes'),
+       ('live','33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111',now()+interval '10 minutes',NULL)`,
+  );
+  env.SEND_ENABLED = "false";
+  await worker.scheduled({}, env);
+  assert.deepEqual((await pool.query("SELECT state_hash FROM instagram_oauth_states")).rows, [{ state_hash: "live" }]);
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT failure_code,last_success_at IS NOT NULL AS succeeded,last_failure_at IS NULL AS never_failed FROM scheduled_steps WHERE name='oauth_state_cleanup'",
+      )
+    ).rows,
+    [{ failure_code: null, succeeded: true, never_failed: true }],
+  );
+});
+
+test("without the cleanup function the oauth_state_cleanup step and the whole run fail while later steps still run", async () => {
+  // Code deployed before migration 038: the function does not exist yet.
+  await pool.query("ALTER FUNCTION public.delete_expired_oauth_states() RENAME TO delete_expired_oauth_states_hidden");
+  try {
+    await assert.rejects(worker.scheduled({}, env), /scheduled recovery failed/);
+  } finally {
+    await pool.query(
+      "ALTER FUNCTION public.delete_expired_oauth_states_hidden() RENAME TO delete_expired_oauth_states",
+    );
+  }
+  assert.deepEqual(
+    logLines.filter((line) => line.event === "cron_step_failed").map(({ correlation_id, ...line }) => line),
+    [{ event: "cron_step_failed", code: "database_error", step: "oauth_state_cleanup" }],
+  );
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('cron','oauth_state_cleanup','token_refresh','wake') ORDER BY name",
+      )
+    ).rows,
+    [
+      { name: "cron", failure_code: "step_failed", succeeded: false },
+      { name: "oauth_state_cleanup", failure_code: "database_error", succeeded: false },
+      { name: "token_refresh", failure_code: null, succeeded: true },
+      { name: "wake", failure_code: null, succeeded: true },
+    ],
+  );
 });
 
 test("disabled sending preserves pending replies and does not schedule work", async () => {
