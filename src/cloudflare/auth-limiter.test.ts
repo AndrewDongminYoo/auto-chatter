@@ -132,6 +132,25 @@ test("durableLimits gives the mail allowances an hourly window: 10 per IP and 15
   assert.ok(2 * calls[1]!.limit <= 30);
 });
 
+test("durableLimits gives the workspace export 5 and the Instagram connect 10 per user per hour (#166)", async () => {
+  const calls: { name: string; limit: number; period: number }[] = [];
+  const limits = durableLimits({
+    idFromName: (name: string) => name,
+    get: (id: unknown) => ({
+      fetch: async (_input: string, init?: RequestInit) => {
+        calls.push({ name: String(id), ...(JSON.parse(String(init?.body)) as { limit: number; period: number }) });
+        return Response.json({ success: true });
+      },
+    }),
+  });
+  await limits.WORKSPACE_EXPORT_LIMIT!.limit({ key: "user" });
+  await limits.INSTAGRAM_CONNECT_LIMIT!.limit({ key: "user" });
+  assert.deepEqual(calls, [
+    { name: "workspace-export:user", limit: 5, period: 3_600_000 },
+    { name: "instagram-connect:user", limit: 10, period: 3_600_000 },
+  ]);
+});
+
 test("durableLimits fails closed when the limiter object does not answer", async () => {
   const limits = durableLimits({
     idFromName: (name: string) => name,

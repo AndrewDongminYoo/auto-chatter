@@ -66,7 +66,24 @@ export const EXCLUDED_ITEMS = [
   ...EXCLUDED_TABLES,
 ];
 
-export async function exportWorkspace(pool: Pool, user: User) {
+// The export is built in Worker memory, so an oversized workspace is refused whole instead of truncated (#166).
+type WorkspaceExportLimits = { maxRows: number; maxBytes: number };
+export const WORKSPACE_EXPORT_LIMITS: Readonly<WorkspaceExportLimits> = Object.freeze({
+  maxRows: 50_000,
+  maxBytes: 20 * 1024 * 1024,
+});
+
+function scopeFilter(scope: "self" | "workspace" | "connection"): string {
+  return scope === "self"
+    ? "t.id=$1"
+    : scope === "workspace"
+      ? "t.workspace_id=$1"
+      : "t.connection_id IN (SELECT id FROM instagram_connections WHERE workspace_id=$1)";
+}
+
+// Trusted internal limits support smaller budgets in tests; HTTP never accepts an override.
+export async function exportWorkspace(pool: Pool, user: User, options: Partial<WorkspaceExportLimits> = {}) {
+  const limits = { ...WORKSPACE_EXPORT_LIMITS, ...options };
   const client = await pool.connect();
   try {
     // One snapshot for the membership check and every exported row, so a member removed concurrently
@@ -80,15 +97,23 @@ export async function exportWorkspace(pool: Pool, user: User) {
     // The export holds every comment, DM and contact record, so agents cannot take it.
     if (!roleAllows(membership.rows[0].role, "admin")) throw new ApiError(403, "role_forbidden");
     const workspace = membership.rows[0].workspace_id;
+    // One query in the same snapshot counts the rows and the bytes of the row text the export emits, before any
+    // jsonb_agg builds it.
+    const sizes = Object.entries(EXPORTED_TABLES).map(
+      ([table, { scope }], index) =>
+        `SELECT count(*) AS row_count, coalesce(sum(octet_length((to_jsonb(t) - $${index + 2}::text[])::text)),0) AS byte_count
+         FROM ${table} t WHERE ${scopeFilter(scope)}`,
+    );
+    const size = await client.query<{ too_large: boolean }>(
+      `SELECT sum(row_count)>$${sizes.length + 2} OR sum(byte_count)>$${sizes.length + 3} AS too_large
+       FROM (${sizes.join(" UNION ALL ")}) sizes`,
+      [workspace, ...Object.values(EXPORTED_TABLES).map(({ omit = [] }) => omit), limits.maxRows, limits.maxBytes],
+    );
+    if (size.rows[0]!.too_large) throw new ApiError(422, "workspace_export_too_large");
     // Rows stay as PostgreSQL JSON text: parsing them in JavaScript would round bigint IDs above 2^53.
     const tables: string[] = [];
     for (const [table, { scope, omit = [] }] of Object.entries(EXPORTED_TABLES)) {
-      const filter =
-        scope === "self"
-          ? "t.id=$1"
-          : scope === "workspace"
-            ? "t.workspace_id=$1"
-            : "t.connection_id IN (SELECT id FROM instagram_connections WHERE workspace_id=$1)";
+      const filter = scopeFilter(scope);
       const result = await client.query<{ rows: string }>(
         `SELECT coalesce(jsonb_agg(to_jsonb(t) - $2::text[] ORDER BY to_jsonb(t)::text), '[]'::jsonb)::text AS rows
          FROM ${table} t WHERE ${filter}`,

@@ -62,7 +62,8 @@ export class AuthLimiter {
 // The limits limitAuthRequest reads, each a namespace of its own inside the one Durable Object class. The two
 // mail allowances are hourly: per client IP, and for the whole project (#165). The windows are fixed, so any
 // 60 minutes can span two of them; the project allowance is half of Supabase's 30 mails per hour so that even a
-// burst at a window boundary stays within the provider quota.
+// burst at a window boundary stays within the provider quota. The workspace export and the Instagram OAuth start
+// are limited per user (#166).
 export function durableLimits(namespace: LimiterNamespace): Required<AuthRateLimitEnv> {
   const limiter = (name: string, limit: number, period: number) => ({
     async limit({ key }: { key: string }): Promise<{ success: boolean }> {
@@ -79,5 +80,7 @@ export function durableLimits(namespace: LimiterNamespace): Required<AuthRateLim
     AUTH_EMAIL_LIMIT: limiter("email", 5, 60_000),
     AUTH_MAIL_IP_LIMIT: limiter("mail-ip", 10, 3_600_000),
     AUTH_MAIL_LIMIT: limiter("mail", 15, 3_600_000),
+    WORKSPACE_EXPORT_LIMIT: limiter("workspace-export", 5, 3_600_000),
+    INSTAGRAM_CONNECT_LIMIT: limiter("instagram-connect", 10, 3_600_000),
   };
 }

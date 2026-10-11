@@ -531,6 +531,10 @@ test("workerd contact API uses restricted server privileges and verified workspa
     compatibilityDate: config.compatibility_date,
     compatibilityFlags: config.compatibility_flags,
     hyperdrives: { HYPERDRIVE: serverUrl.href },
+    // The workspace export spends a per-user allowance from the limiter object (#166).
+    durableObjects: Object.fromEntries(
+      config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }]),
+    ),
     bindings: {
       SUPABASE_URL: "https://auth-test.supabase.co",
       SUPABASE_SECRET_KEY: "sb_secret_test",
