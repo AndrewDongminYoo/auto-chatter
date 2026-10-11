@@ -25,7 +25,7 @@ import {
   type AuthEnv,
   type User,
 } from "./auth.ts";
-import { limitAuthRequest, type AuthRateLimitEnv } from "./auth-rate-limit.ts";
+import { limitAuthRequest, type AuthRateLimitEnv, type RateLimitBinding } from "./auth-rate-limit.ts";
 import {
   listActivity,
   currentWorkspace,
@@ -97,6 +97,23 @@ function instagramConnectAvailable(user: User, env: InstagramOAuthEnv): boolean 
     .some((email) => email.trim() !== "" && email.trim().toLowerCase() === user.email.toLowerCase());
 }
 
+// Spends one request from a per-user allowance (#166). A missing binding or a limiter that does not answer fails
+// closed with 503, so the route never runs unlimited.
+async function spendUserAllowance(
+  binding: RateLimitBinding | undefined,
+  key: string,
+  codes: { limited: string; unavailable: string },
+): Promise<void> {
+  if (!binding) throw new ApiError(503, codes.unavailable);
+  let allowance: { success: boolean };
+  try {
+    allowance = await binding.limit({ key });
+  } catch {
+    throw new ApiError(503, codes.unavailable);
+  }
+  if (!allowance.success) throw new ApiError(429, codes.limited);
+}
+
 // The reply is stored; the cron repairs the missing queue notification.
 function logManualNotificationFailure(correlationId: string, connectionId: string): void {
   logOperation({
@@ -162,8 +179,14 @@ export async function appApi(
       throw new ApiError(403, "instagram_public_access_restricted");
     const pool = openPool(correlationId);
     try {
-      if (url.pathname === "/api/instagram/connect" && request.method === "POST")
+      if (url.pathname === "/api/instagram/connect" && request.method === "POST") {
+        // Each start stores an OAuth state row that only workspace deletion removes.
+        await spendUserAllowance(env.INSTAGRAM_CONNECT_LIMIT, user.id, {
+          limited: "instagram_connect_rate_limited",
+          unavailable: "instagram_connect_unavailable",
+        });
         return await beginInstagramOAuth(pool, user, env);
+      }
       if (url.pathname === "/api/instagram/callback" && request.method === "GET")
         return await finishInstagramOAuth(pool, user, request, env, fetchImpl);
       if (url.pathname === "/api/workspace" && request.method === "POST") {
@@ -187,6 +210,10 @@ export async function appApi(
       const invite = /^\/api\/workspace\/invites\/([a-f0-9-]+)$/.exec(url.pathname);
       if (invite && request.method === "DELETE") return json(await revokeInvite(pool, user, invite[1]!));
       if (url.pathname === "/api/workspace/export" && request.method === "GET") {
+        await spendUserAllowance(env.WORKSPACE_EXPORT_LIMIT, user.id, {
+          limited: "workspace_export_rate_limited",
+          unavailable: "workspace_export_unavailable",
+        });
         const exported = await exportWorkspace(pool, user);
         return new Response(exported.body, {
           headers: {
@@ -517,6 +544,13 @@ export async function appApi(
       const media = /^\/api\/connections\/([a-f0-9-]+)\/media(?:\/(\d{1,40}))?$/.exec(url.pathname);
       if (media && request.method === "GET") {
         if (url.searchParams.getAll("after").length > 1) throw new ApiError(400, "invalid_media_request");
+        // Every request reads Instagram Graph. The rule list looks up each visible rule's post, so single-post
+        // lookups have their own allowance; the lookup on rule save above is not counted.
+        await spendUserAllowance(
+          env.AUTH_IP_LIMIT,
+          media[2] ? `connection-media-item:${user.id}` : `connection-media:${user.id}`,
+          { limited: "media_rate_limited", unavailable: "media_unavailable" },
+        );
         return json(
           await connectionMedia(
             pool,

@@ -3,7 +3,14 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { appApi } from "./api.ts";
-import { EXCLUDED_ITEMS, EXCLUDED_TABLES, EXPORTED_TABLES } from "./workspace-export.ts";
+import { ApiError } from "./auth.ts";
+import {
+  EXCLUDED_ITEMS,
+  EXCLUDED_TABLES,
+  EXPORTED_TABLES,
+  WORKSPACE_EXPORT_LIMITS,
+  exportWorkspace,
+} from "./workspace-export.ts";
 import { seedWorkspace } from "./workspace-fixture.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -20,7 +27,11 @@ const workspaceId = "33333333-3333-4333-8333-333333333333";
 const otherWorkspaceId = "44444444-4444-4444-8444-444444444444";
 const connectionId = "55555555-5555-4555-8555-555555555555";
 const foreignConnectionId = "77777777-7777-4777-8777-777777777777";
-const apiEnv = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" };
+const apiEnv = {
+  SUPABASE_URL: "https://project.supabase.co",
+  SUPABASE_SECRET_KEY: "sb_secret_test",
+  WORKSPACE_EXPORT_LIMIT: { limit: async () => ({ success: true }) },
+};
 // Columns whose names look secret but hold only timestamps.
 const benignSecretLikeColumns = new Set(["token_expires_at", "token_obtained_at", "token_refresh_attempted_at"]);
 
@@ -136,6 +147,51 @@ test("bigint identifiers above 2^53 are exported exactly", async () => {
   );
   const text = await (await request()).text();
   assert.ok(text.includes('"id": 9007199254740993') || text.includes('"id":9007199254740993'), "bigint id was rounded");
+});
+
+const owner = { id: userId, email: "a@example.test" };
+const tooLarge = (error: unknown) =>
+  error instanceof ApiError && error.status === 422 && error.message === "workspace_export_too_large";
+// Two exports differ only in their export time.
+const withoutTime = (body: string) => body.replace(/"exported_at":"[^"]*"/, "");
+
+test("the workspace export is capped at 50,000 rows and 20 MiB (#166)", () => {
+  assert.deepEqual(WORKSPACE_EXPORT_LIMITS, { maxRows: 50_000, maxBytes: 20 * 1024 * 1024 });
+});
+
+test("a workspace over the row cap is refused whole, and one at the cap exports unchanged (#166)", async () => {
+  const full = await exportWorkspace(pool, owner);
+  const tables = JSON.parse(full.body).tables as Record<string, unknown[]>;
+  const rows = Object.values(tables).reduce((total, table) => total + table.length, 0);
+  const atCap = await exportWorkspace(pool, owner, { maxRows: rows });
+  assert.equal(withoutTime(atCap.body), withoutTime(full.body));
+  await assert.rejects(exportWorkspace(pool, owner, { maxRows: rows - 1 }), tooLarge);
+});
+
+test("the byte cap counts the exported row text, not the omitted ciphertext (#166)", async () => {
+  const ciphertext = 1024 * 1024;
+  await pool.query("UPDATE instagram_connections SET access_token_encrypted=repeat('x',$2) WHERE id=$1", [
+    connectionId,
+    ciphertext,
+  ]);
+  const full = await exportWorkspace(pool, owner);
+  const bytes = Buffer.byteLength(full.body);
+  assert.ok(bytes < ciphertext);
+  // The counted row text is never larger than the file that holds it, so a cap at the file size admits it.
+  const atFileSize = await exportWorkspace(pool, owner, { maxBytes: bytes });
+  assert.equal(withoutTime(atFileSize.body), withoutTime(full.body));
+  await assert.rejects(exportWorkspace(pool, owner, { maxBytes: 1000 }), tooLarge);
+});
+
+test("the API refuses a workspace over the default row cap with 422 (#166)", async () => {
+  await pool.query(
+    `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+     SELECT $1,$2,'bulk-'||n,'1789','123','x' FROM generate_series(1,$3::int) n`,
+    [workspaceId, connectionId, WORKSPACE_EXPORT_LIMITS.maxRows],
+  );
+  const response = await request();
+  assert.equal(response.status, 422);
+  assert.deepEqual(await response.json(), { error: "workspace_export_too_large" });
 });
 
 test("a signed-in user without a workspace cannot export", async () => {

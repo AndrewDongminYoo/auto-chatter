@@ -1,6 +1,6 @@
 import { ApiError, isRecord } from "./auth.ts";
 
-interface RateLimitBinding {
+export interface RateLimitBinding {
   limit(input: { key: string }): Promise<{ success: boolean }>;
 }
 
@@ -10,6 +10,9 @@ export interface AuthRateLimitEnv {
   // Hourly allowances for requests that make Supabase send mail, per client IP and for the whole project (#165).
   AUTH_MAIL_IP_LIMIT?: RateLimitBinding;
   AUTH_MAIL_LIMIT?: RateLimitBinding;
+  // Per-user allowances for the whole-workspace export and for starting an Instagram OAuth connection (#166).
+  WORKSPACE_EXPORT_LIMIT?: RateLimitBinding;
+  INSTAGRAM_CONNECT_LIMIT?: RateLimitBinding;
 }
 
 // The routes whose Supabase call sends an auth mail.

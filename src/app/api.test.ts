@@ -10,6 +10,8 @@ const config = {
   AUTH_EMAIL_LIMIT: { limit: async () => ({ success: true }) },
   AUTH_MAIL_IP_LIMIT: { limit: async () => ({ success: true }) },
   AUTH_MAIL_LIMIT: { limit: async () => ({ success: true }) },
+  WORKSPACE_EXPORT_LIMIT: { limit: async () => ({ success: true }) },
+  INSTAGRAM_CONNECT_LIMIT: { limit: async () => ({ success: true }) },
 };
 const userId = "11111111-1111-4111-8111-111111111111";
 const workspaceId = "22222222-2222-4222-8222-222222222222";
@@ -457,6 +459,150 @@ test("connection health rate limit prevents Meta requests", async () => {
   );
   assert.equal(response.status, 429);
   assert.deepEqual(graph.paths, []);
+});
+
+// A limiter stand-in that records every key it is asked to count.
+function recordingLimit(answer: boolean | "throw") {
+  const keys: string[] = [];
+  return {
+    keys,
+    binding: {
+      limit: async ({ key }: { key: string }) => {
+        keys.push(key);
+        if (answer === "throw") throw new Error("limiter down");
+        return { success: answer };
+      },
+    },
+  };
+}
+
+// A pool that fails the test if a refused request reads the database.
+const untouchedPool = () =>
+  ({
+    query: async () => assert.fail("a refused request must not read the database"),
+    connect: async () => assert.fail("a refused request must not read the database"),
+    end: async () => {},
+  }) as unknown as Pool;
+
+test("media list and single-post lookups spend separate per-user allowances (#166)", async () => {
+  const allowed = recordingLimit(true);
+  const list = await appApi(
+    mediaRequest(),
+    { ...mediaConfig, AUTH_IP_LIMIT: allowed.binding },
+    () => mediaPool(),
+    mediaFetch(),
+  );
+  assert.equal(list.status, 200);
+  const item = await appApi(
+    mediaRequest("/456"),
+    { ...mediaConfig, AUTH_IP_LIMIT: allowed.binding },
+    () => mediaPool(),
+    mediaFetch(post),
+  );
+  assert.equal(item.status, 200);
+  assert.deepEqual(allowed.keys, [`connection-media:${userId}`, `connection-media-item:${userId}`]);
+});
+
+test("a refused or unavailable media allowance prevents every Graph and database read (#166)", async () => {
+  let graphReads = 0;
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (new URL(String(input)).hostname !== "project.supabase.co") graphReads++;
+    return mediaFetch()(input, init);
+  }) as typeof fetch;
+  const cases: Array<[{ limit(input: { key: string }): Promise<{ success: boolean }> } | undefined, number, string]> = [
+    [recordingLimit(false).binding, 429, "media_rate_limited"],
+    [undefined, 503, "media_unavailable"],
+    [recordingLimit("throw").binding, 503, "media_unavailable"],
+  ];
+  for (const [binding, status, error] of cases) {
+    for (const suffix of ["", "/456"]) {
+      const response = await appApi(
+        mediaRequest(suffix),
+        { ...mediaConfig, AUTH_IP_LIMIT: binding },
+        untouchedPool,
+        fetchImpl,
+      );
+      assert.equal(response.status, status, `${error} ${suffix}`);
+      assert.deepEqual(await response.json(), { error }, suffix);
+    }
+  }
+  assert.equal(graphReads, 0);
+});
+
+test("the media check on a new rule save spends no media allowance (#166)", async () => {
+  const limiter = recordingLimit(false);
+  const response = await appApi(
+    new Request("https://app.test/api/rules", {
+      method: "PUT",
+      headers: {
+        cookie: "__Host-ac-access=test-session",
+        origin: "https://app.test",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        connection_id: connectionId,
+        media_id: "456",
+        keywords: ["link"],
+        excluded_keywords: [],
+        match_mode: "contains",
+        private_reply_text: "A reply",
+        enabled: false,
+        follow_gate_enabled: false,
+      }),
+    }),
+    { ...mediaConfig, AUTH_IP_LIMIT: limiter.binding },
+    () => mediaPool(),
+    mediaFetch({ ...post, owner: { id: "888" } }),
+  );
+  // The ownership refusal shows the lookup reached Graph; a counted lookup would have answered 429.
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: "media_not_owned" });
+  assert.deepEqual(limiter.keys, []);
+});
+
+test("workspace export and Instagram connect spend a per-user allowance before the database (#166)", async () => {
+  const fetchImpl = (async () =>
+    Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
+  const oauth = {
+    ...config,
+    APP_ORIGIN: "https://app.test",
+    INSTAGRAM_OAUTH_APP_ID: "123",
+    INSTAGRAM_OAUTH_APP_SECRET: "synthetic-secret",
+    TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
+    META_GRAPH_VERSION: "v26.0",
+    INSTAGRAM_PUBLIC_CONNECT_ENABLED: "true",
+  };
+  const routes = [
+    {
+      binding: "WORKSPACE_EXPORT_LIMIT",
+      request: () =>
+        new Request("https://app.test/api/workspace/export", { headers: { cookie: "__Host-ac-access=test-session" } }),
+      prefix: "workspace_export",
+    },
+    {
+      binding: "INSTAGRAM_CONNECT_LIMIT",
+      request: () =>
+        new Request("https://app.test/api/instagram/connect", {
+          method: "POST",
+          headers: { origin: "https://app.test", cookie: "__Host-ac-access=test-session" },
+        }),
+      prefix: "instagram_connect",
+    },
+  ] as const;
+  for (const route of routes) {
+    const refused = recordingLimit(false);
+    const cases: Array<[unknown, number, string]> = [
+      [refused.binding, 429, `${route.prefix}_rate_limited`],
+      [undefined, 503, `${route.prefix}_unavailable`],
+      [recordingLimit("throw").binding, 503, `${route.prefix}_unavailable`],
+    ];
+    for (const [binding, status, error] of cases) {
+      const response = await appApi(route.request(), { ...oauth, [route.binding]: binding }, untouchedPool, fetchImpl);
+      assert.equal(response.status, status, error);
+      assert.deepEqual(await response.json(), { error }, error);
+    }
+    assert.deepEqual(refused.keys, [userId], route.binding);
+  }
 });
 
 test("connection health distinguishes token expiry, account access and webhook subscription", async () => {

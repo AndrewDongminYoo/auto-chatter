@@ -275,6 +275,10 @@ const errors = {
   invalid_contact_export_request: "전체 연락처 내보내기 요청을 확인해 주세요.",
   contact_export_too_large: "내보내기 한도(5,000명 또는 5 MiB)를 넘었습니다. 파일을 만들지 않았습니다.",
   contact_export_timeout: "내보내기 처리 시간 한도를 넘었습니다. 파일을 만들지 않았습니다. 잠시 후 다시 시도해 주세요.",
+  workspace_export_too_large:
+    "작업 공간 내보내기 한도(데이터 50,000건 또는 20 MiB)를 넘었습니다. 파일을 만들지 않았습니다. 서비스 운영자에게 문의해 주세요.",
+  workspace_export_rate_limited: "데이터 내보내기 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
+  workspace_export_unavailable: "지금은 데이터를 내보낼 수 없습니다. 잠시 후 다시 시도해 주세요.",
   invalid_contact_request: "연락처 필터를 확인한 뒤 다시 불러와 주세요.",
   contact_not_found: "연락처에 접근할 수 없습니다. 목록을 다시 불러와 주세요.",
   invalid_segment: "필터 이름은 1–60자이며 계정과 태그 조건을 확인해 주세요.",
@@ -324,9 +328,12 @@ const errors = {
   media_unavailable: "게시물을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.",
   media_not_owned: "선택한 계정의 게시물만 사용할 수 있습니다. 게시물을 다시 선택해 주세요.",
   media_unsupported: "이 게시물은 댓글 자동화를 지원하지 않습니다. 피드 게시물이나 릴스를 선택해 주세요.",
+  media_rate_limited: "게시물 조회 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
   remote_logout_unconfirmed:
     "브라우저에서 로그아웃했습니다. 서버 세션 종료를 확인하지 못했으니 다시 로그인해 로그아웃하거나 운영자에게 문의해 주세요.",
   instagram_not_configured: "Instagram 연결 서비스를 준비 중입니다.",
+  instagram_connect_rate_limited: "계정 연결 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
+  instagram_connect_unavailable: "지금은 계정 연결을 시작할 수 없습니다. 잠시 후 다시 시도해 주세요.",
   instagram_public_access_restricted:
     "일반 사용자의 Instagram 연결에 필요한 Meta 승인을 확인하지 못해 계정 연결을 제한합니다. 검수에 참여하는 계정만 연결할 수 있습니다.",
   instagram_authorization_denied: "Instagram 연결이 완료되지 않았습니다. 권한 동의를 취소했거나 요청이 거부됐습니다.",
@@ -1428,12 +1435,22 @@ const ruleMediaObserver = new IntersectionObserver(
           if (!target.isConnected) return;
           target.replaceChildren(mediaImage(media), mediaSummary(media));
         })
-        .catch(() => {
-          if (target.isConnected)
+        .catch((error) => {
+          if (!target.isConnected) return;
+          if (error.code === "media_rate_limited") {
             target.replaceChildren(
-              node("strong", "게시물 정보를 확인할 수 없습니다"),
-              node("span", "규칙 수정에서 다시 확인하세요."),
+              node("strong", "게시물 정보 조회가 잠시 제한되었습니다"),
+              node("span", "1분 뒤 자동으로 다시 확인합니다."),
             );
+            setTimeout(() => {
+              if (target.isConnected) ruleMediaObserver.observe(target);
+            }, 60_000);
+            return;
+          }
+          target.replaceChildren(
+            node("strong", "게시물 정보를 확인할 수 없습니다"),
+            node("span", "규칙 수정에서 다시 확인하세요."),
+          );
         });
     }
   },
