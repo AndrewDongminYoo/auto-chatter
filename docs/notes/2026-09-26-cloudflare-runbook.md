@@ -395,6 +395,15 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 `e924c09` 이후 실행 코드는 `src/app/auth-rate-limit.ts`와 `src/cloudflare/auth-limiter.ts`만 바뀌었고, 두 제한은 기존 `AuthLimiter` Durable Object의 새 이름(`mail-ip:`, `mail:`)을 쓰므로 Wrangler 설정과 마이그레이션은 바뀌지 않았습니다. `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 배포 후 05:08:47Z~05:09:06Z에 존재하지 않는 서로 다른 주소(`example.com`) 11개로 `POST /api/auth/recover`를 요청마다 새 연결로 보내자 처음 10번은 `200 recovery_requested`, 11번째는 `429 auth_rate_limited`였습니다. 이 확인은 그 시간 창의 프로젝트 전체 한도 15회 가운데 10회를 썼습니다.
 22개 항목 점검은 모두 통과했지만 정적 파일이 바뀌지 않아 배포 전후를 구별하지 못합니다. 운영 DB는 조회하지 않았고, 분석 API에서 배포 후 05:08Z~05:11Z의 cron을 포함한 새 버전 호출이 모두 `success`였고 오류는 0건이었습니다.
+같은 날 운영자가 PR #172(#164: Supabase 비밀 키와 사용자 IP 전달)의 `main` 커밋 `8ffc2c5`를 배포했고, 이전 secret을 삭제하면서 생긴 버전 `7070d24a-795f-406b-b213-ec553e06b80d`가 13:26:48Z부터 활성화됐습니다. 자세한 확인 내용은 [#164의 완료 기록](https://github.com/AndrewDongminYoo/auto-chatter/issues/164)에 있습니다.
+2026-10-11에는 운영자의 "마이그레이션 진행하고 배포해주세요" 요청에 따라 PR #174(#166: 게시물 조회·작업 공간 내보내기·OAuth 시작의 사용자별 제한)와 PR #175(#173: 만료된 OAuth state 정리, migration 038)를 포함한 `main` 커밋 `13577c1`을 적용했습니다.
+적용 전 조회(06:02Z)에서 운영 DB는 037까지 적용된 상태였고(`delete_expired_oauth_states` 없음, public 테이블 44개), OAuth state 6행이 모두 만료 상태였으며, 연결 1개(수신 켜짐·발송 꺼짐)·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-11-migration-038/public-pre-038.dump`(275,589바이트, SHA-256 `245e3994714369cdb7bd5caaa29316b286a2ae48904099d5669f94cc6b714c6b`)에 저장했고, 목록 읽기에서 데이터 테이블 44개를 확인했습니다.
+관리자 연결은 앞과 같은 Session pooler를 TLS `verify-full`로 사용했고, 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE 129건은 모두 이미 있는 객체를 건너뛴다는 알림이었습니다.
+적용 후 `public.delete_expired_oauth_states()`는 소유자 `postgres`, `SECURITY DEFINER`, `search_path=public, pg_temp`였고, 실행 권한은 `auto_chatter_server`에만 있었습니다(`anon`, `authenticated`, `service_role`, PUBLIC은 없음). 서버 역할의 테이블 DELETE·TRUNCATE 권한과 `anon`·`authenticated`의 public 테이블 권한은 계속 0개였습니다.
+이어서 Worker를 버전 `3880574d-1b20-44f0-a4c6-05e871900116`로 배포했고, 06:07:44Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `7070d24a-795f-406b-b213-ec553e06b80d`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. 새 제한은 기존 `AuthLimiter` Durable Object의 새 이름을 쓰므로 Wrangler 설정은 바뀌지 않았습니다.
+정적 파일 8개의 해시와 공개 경로·세션 없는 API 거부·다른 출처 요청 거부·웹후크 거부를 확인하는 18개 항목의 점검은, 배포 전에는 바뀐 `app.js`의 해시만 달라 17개가 통과했고 배포 후에는 18개가 모두 통과했습니다. Python `urllib`처럼 `Accept` 헤더 없이 요청하면 Cloudflare가 `/app/`에 Web Analytics 스크립트를 넣어 해시가 달라지므로, 점검은 `Accept: */*`를 보냅니다.
+`scheduled_steps`를 06:08:43Z, 06:09:48Z, 06:10:53Z에 조회했을 때 새 단계 `oauth_state_cleanup`을 포함해 발송과 무관하게 실행되는 7개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. 첫 조회에서 이미 OAuth state가 0행이 되어 만료된 6행이 지워진 것을 확인했습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
