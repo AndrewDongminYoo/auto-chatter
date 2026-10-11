@@ -414,6 +414,15 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 `scheduled_steps`를 08:01:32Z, 08:02:38Z, 08:03:43Z에 조회했을 때 발송과 무관하게 실행되는 7개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 `token_refresh`는 갱신할 토큰이 있을 때만 새 열을 쓰므로, 이 성공은 새 열을 쓰는 경로를 보여 주지 않습니다. 대신 `GET /api/connections`의 조회문을 관리자 연결의 읽기 전용 트랜잭션에서 실행해 연결 1개가 표시 없이(`credential_status=valid`) 반환되는 것을 확인했습니다. 관리자 역할은 서버 역할의 구성원이 아니므로 서버 역할로는 실행하지 않았습니다.
 로그인한 화면의 "재연결 필요" 배지와 Meta가 실제로 토큰을 거부했을 때의 기록은 운영에서 확인하지 않았습니다.
+같은 날 12:48Z에는 운영자의 "040 마이그레이션 진행하고 배포해주세요" 요청에 따라 PR #180(#16: Meta 권한 해제 콜백, migration 040)을 포함한 `main` 커밋 `094e182`를 적용했습니다.
+적용 전 조회에서 운영 DB는 039까지 적용된 상태였고(`instagram_user_id`·`deauthorized_at` 열 없음, public 테이블 44개), 연결 1개(수신 켜짐·발송 꺼짐·토큰 있음)·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-11-migration-040/public-pre-040.dump`(276,716바이트, SHA-256 `30efd7db5305e1723f567716f3009ea2a3842824bb4c9e47fe0f99ef7f82966c`)에 저장했고, 목록 읽기에서 데이터 테이블 44개를 확인했습니다.
+같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류는 없었으며, NOTICE 132건은 모두 건너뛰기 알림이었습니다(039의 세 열을 다시 실행한 3건이 늘었습니다).
+적용 후 `instagram_connections`에 `instagram_user_id`(text)와 `deauthorized_at`(timestamptz)이 NULL 허용으로 추가됐고, `auto_chatter_server`는 두 열을 SELECT·UPDATE할 수 있습니다. 서버 역할의 테이블 DELETE·TRUNCATE 권한과 `anon`·`authenticated`의 public 테이블 권한은 계속 0개였습니다. 기존 연결은 `instagram_user_id`가 비어 있어 재연결하기 전까지 `account_id`로만 일치합니다. `GET /api/connections`의 조회문을 관리자 연결의 읽기 전용 트랜잭션에서 실행해 연결 1개가 `deauthorized_at` 없이 반환되는 것을 확인했습니다.
+이어서 Worker를 버전 `f1f3e9b5-9480-4346-a8a3-e76db680d293`로 배포했고, 12:50:42Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `20d5078d-0105-4b8d-8f17-d8ef63c8a284`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. 콜백이 쓰는 `INSTAGRAM_OAUTH_APP_SECRET`은 secret 이름 목록에서 확인했습니다.
+18개 항목 점검은 배포 전에는 바뀐 `app.js`의 해시만 달라 17개가 통과했고, 배포 후에는 18개가 모두 통과했습니다. 배포 후 `/instagram/deauthorize`는 `GET`에 405, 본문 없는 `POST`와 위조한 서명의 `POST`에 400을 응답했습니다.
+`scheduled_steps`를 12:52:33Z, 12:53:38Z, 12:54:44Z에 조회했을 때 발송과 무관하게 실행되는 7개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. 같은 조회에서 연결은 수신 켜짐·토큰 있음·`deauthorized_at` 없음으로 그대로였습니다.
+서명이 맞는 콜백의 처리, 화면의 "Instagram에서 권한 해제됨" 배지, Meta가 실제로 보내는 ID는 운영에서 확인하지 않았습니다. Meta 앱 대시보드에 Deauthorize callback URL을 등록하는 일은 운영자가 따로 진행합니다([권한 해제 콜백](../specs/2026-09-28-instagram-token-refresh.md#권한-해제-콜백-16)).
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
