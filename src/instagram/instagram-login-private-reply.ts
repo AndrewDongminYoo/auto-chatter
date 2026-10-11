@@ -1,7 +1,12 @@
 import { confirmationMessage } from "./confirmation-button.ts";
 import { PreSendVerificationError, type PrivateReplyRequest, type PrivateReplyTransport } from "./reply-worker.ts";
 import { evaluatePrivateReply } from "./reply-policy.ts";
-import { classifyMetaGraphFailure } from "./meta-graph-error.ts";
+import {
+  classifyMetaGraphFailure,
+  metaTokenRejected,
+  reportIdentity,
+  type IdentityObserver,
+} from "./meta-graph-error.ts";
 
 export interface InstagramLoginPrivateReplyConfig {
   graphVersion: string;
@@ -12,6 +17,8 @@ export interface InstagramLoginPrivateReplyConfig {
   timeoutMs?: number;
   now?: () => Date;
   beforeSend?: (request: PrivateReplyRequest) => Promise<void>;
+  // Told when the identity read accepts or rejects the token; it cannot change a verification result.
+  onIdentity?: IdentityObserver;
 }
 
 type AccountInspection = { verified: true } | { verified: false; reason: string };
@@ -51,7 +58,7 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
     return url;
   }
 
-  private async graphRequest(url: URL, method = "GET", body?: unknown): Promise<unknown> {
+  private async graphRequest(url: URL, method = "GET", body?: unknown, identity = false): Promise<unknown> {
     let response: Response;
     try {
       response = await this.fetchImpl(url, {
@@ -70,6 +77,7 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
     }
     if (response.status >= 500) throw new Error(`Meta Graph HTTP ${response.status}`);
     if (!response.ok) {
+      if (identity && (await metaTokenRejected(response))) await reportIdentity(this.config.onIdentity, "rejected");
       const failure = await classifyMetaGraphFailure(response, method, this.now());
       if (failure) throw failure;
       return null;
@@ -82,12 +90,18 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
   }
 
   private async inspectIdentity(): Promise<AccountIdentity> {
-    const result = await this.graphRequest(this.graphUrl("me", { fields: "id,user_id,username" }));
+    const result = await this.graphRequest(
+      this.graphUrl("me", { fields: "id,user_id,username" }),
+      "GET",
+      undefined,
+      true,
+    );
     const profile = isRecord(result) && Array.isArray(result.data) ? result.data[0] : result;
     if (!isRecord(profile) || typeof profile.user_id !== "string") {
       return { verified: false, reason: "account_unverified" };
     }
     if (profile.user_id !== this.config.accountId) return { verified: false, reason: "account_mismatch" };
+    await reportIdentity(this.config.onIdentity, "verified");
     const ownerId = typeof profile.id === "string" && /^\d+$/.test(profile.id) ? profile.id : profile.user_id;
     return { verified: true, ownerId };
   }

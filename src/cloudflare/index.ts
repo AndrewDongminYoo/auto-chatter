@@ -11,7 +11,8 @@ import {
   reconcileUnmatchedReplies,
   recoverStaleFollowReplies,
 } from "../instagram/follow-flow.ts";
-import { readMetaGraphError } from "../instagram/meta-graph-error.ts";
+import { readMetaGraphError, type IdentityCheck } from "../instagram/meta-graph-error.ts";
+import { clearReauthRequired, markReauthRequired } from "../app/instagram-reauth.ts";
 import { refreshDueInstagramTokensWithFailures } from "../app/instagram-token-refresh.ts";
 import { deliveryRecipientOptedOut } from "../instagram/channel-consent.ts";
 import { durableLimits, type LimiterNamespace } from "./auth-limiter.ts";
@@ -271,12 +272,33 @@ export default {
               }
               return response;
             };
+            // Records or clears the reconnect marker for this token after an identity read. It never changes
+            // the reply outcome: a failed write is logged with a fixed code. Each outcome is written once per
+            // message, because one send can read the identity twice.
+            const reported = new Set<IdentityCheck>();
+            const onIdentity = async (check: IdentityCheck): Promise<void> => {
+              if (reported.has(check)) return;
+              reported.add(check);
+              try {
+                if (check === "rejected")
+                  await markReauthRequired(pool, connectionId, connection.access_token_encrypted, "token_rejected");
+                else await clearReauthRequired(pool, connectionId, connection.access_token_encrypted);
+              } catch (error) {
+                logOperation({
+                  event: "reauth_record_failed",
+                  code: failureCode(error),
+                  correlation_id: correlationId,
+                  connection_id: connectionId,
+                });
+              }
+            };
             const config = {
               graphVersion: env.META_GRAPH_VERSION,
               accessToken,
               accountId: connection.account_id,
               connectionId,
               fetchImpl: graphFetch,
+              onIdentity,
             };
             // Manual replies own active handoff conversations and share the normal DM window.
             const manualProcessed = await processNextManualReply(
@@ -464,6 +486,7 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
         countedFetch,
         new Date(),
         env.META_GRAPH_VERSION,
+        correlationId,
       );
       if (refreshFailures > 0) throw new TokenRefreshFailedError();
     });

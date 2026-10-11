@@ -1,5 +1,8 @@
 import type { Pool } from "pg";
 import { openSecret, sealSecret } from "./secrets.ts";
+import { metaTokenRejected } from "../instagram/meta-graph-error.ts";
+import { markReauthRequired } from "./instagram-reauth.ts";
+import { failureCode, logOperation } from "./operations-log.ts";
 
 interface DueToken {
   id: string;
@@ -8,16 +11,22 @@ interface DueToken {
   access_token_encrypted: string;
 }
 
-async function providerJson(fetchImpl: typeof fetch, url: URL | string, init: RequestInit): Promise<unknown> {
+// value is null when the call failed; rejected is set only when Meta rejected the token (metaTokenRejected).
+async function providerJson(
+  fetchImpl: typeof fetch,
+  url: URL | string,
+  init: RequestInit,
+): Promise<{ value: unknown; rejected: boolean }> {
   try {
     const response = await fetchImpl(url, { ...init, redirect: "manual", signal: AbortSignal.timeout(10_000) });
     if (!response.ok) {
+      const rejected = await metaTokenRejected(response);
       await response.body?.cancel();
-      return null;
+      return { value: null, rejected };
     }
-    return await response.json();
+    return { value: await response.json(), rejected: false };
   } catch {
-    return null;
+    return { value: null, rejected: false };
   }
 }
 
@@ -33,13 +42,16 @@ export async function refreshDueInstagramTokens(
 
 // Also counts the claimed connections whose token could not be refreshed: a token that does not decrypt, a
 // failed or timed-out Meta call, an invalid refresh body or a profile that does not match the account. A
-// refresh that loses to a newer token or a stopped connection is not a failure.
+// refresh that loses to a newer token or a stopped connection is not a failure. A refresh call that Meta
+// rejects also records the reconnect marker (refresh_rejected), and a stored refresh clears it.
+// correlationId is the caller's run ID, written on the log line of a failed marker write.
 export async function refreshDueInstagramTokensWithFailures(
   pool: Pool,
   key: string,
   fetchImpl: typeof fetch = fetch,
   now: Date = new Date(),
   graphVersion = "v26.0",
+  correlationId?: string,
 ): Promise<{ refreshed: number; failed: number }> {
   if (!Number.isFinite(now.getTime())) throw new Error("Invalid refresh time");
   if (!/^v\d+\.\d+$/.test(graphVersion)) throw new Error("Invalid Graph API version");
@@ -71,7 +83,21 @@ export async function refreshDueInstagramTokensWithFailures(
     const endpoint = new URL("https://graph.instagram.com/refresh_access_token");
     endpoint.searchParams.set("grant_type", "ig_refresh_token");
     endpoint.searchParams.set("access_token", accessToken);
-    const value = await providerJson(fetchImpl, endpoint, { method: "GET" });
+    const { value, rejected } = await providerJson(fetchImpl, endpoint, { method: "GET" });
+    if (rejected) {
+      // Recorded for the token that was sent, so a token replaced meanwhile stays unmarked. A failed write
+      // changes nothing else: the refresh already counts as failed.
+      try {
+        await markReauthRequired(pool, connection.id, connection.access_token_encrypted, "refresh_rejected", now);
+      } catch (error) {
+        logOperation({
+          event: "reauth_record_failed",
+          code: failureCode(error),
+          correlation_id: correlationId,
+          connection_id: connection.id,
+        });
+      }
+    }
     if (
       !value ||
       typeof value !== "object" ||
@@ -87,10 +113,12 @@ export async function refreshDueInstagramTokensWithFailures(
       failed++;
       continue;
     }
-    const profile = await providerJson(fetchImpl, `https://graph.instagram.com/${graphVersion}/me?fields=user_id`, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${value.access_token}` },
-    });
+    // A rejection here concerns the returned token, which is not stored, so it is never recorded.
+    const { value: profile } = await providerJson(
+      fetchImpl,
+      `https://graph.instagram.com/${graphVersion}/me?fields=user_id`,
+      { method: "GET", headers: { Authorization: `Bearer ${value.access_token}` } },
+    );
     const account =
       profile && typeof profile === "object" && "data" in profile && Array.isArray(profile.data)
         ? profile.data[0]
@@ -110,7 +138,8 @@ export async function refreshDueInstagramTokensWithFailures(
         : sealSecret(value.access_token, key, context);
     const saved = await pool.query(
       `UPDATE instagram_connections SET access_token_encrypted=$4,token_expires_at=$5,
-         token_obtained_at=$3,token_refresh_attempted_at=NULL
+         token_obtained_at=$3,token_refresh_attempted_at=NULL,
+         reauth_required_at=NULL,reauth_reason=NULL,reauth_token_obtained_at=NULL
        WHERE id=$1 AND active=true AND access_token_encrypted=$2 AND token_refresh_attempted_at=$3 RETURNING id`,
       [
         connection.id,

@@ -26,6 +26,7 @@ Node 워커의 `worker-main.ts`·`main.ts`가 터미널에 쓰는 사용법·설
 | `queue_message_failed`          | 실패 코드                                                      | Queue 소비 실패(재시도)                 |
 | `database_connection_error`     | `database_unavailable`                                         | 연결 풀 오류                            |
 | `early_reply_reconcile_failed`  | 실패 코드                                                      | 발송 직후의 이른 DM 연결 실패           |
+| `reauth_record_failed`          | 실패 코드                                                      | 재연결 표시 기록·해제 실패              |
 | `cron_step_failed`              | 실패 코드                                                      | Cron 단계 실패, `step`에 단계 이름      |
 | `cron_run_failed`               | 실패 코드                                                      | Cron의 DB 연결 풀 열기·닫기 실패        |
 | `cron_step_record_failed`       | 실패 코드                                                      | 단계 결과 기록 실패, `step`에 단계 이름 |

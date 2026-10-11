@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { openSecret } from "./secrets.ts";
 import { workspaceFor } from "./settings.ts";
+import { isMetaTokenRejection, readMetaGraphErrorCode } from "../instagram/meta-graph-error.ts";
 
 type HealthStatus = "missing" | "expired" | "reconnect_required" | "fields_missing" | "fields_present" | "unverified";
 type ProviderResult = { status: "ok"; value: unknown } | { status: "reconnect_required" | "unverified" };
@@ -15,19 +16,10 @@ async function providerGet(fetchImpl: typeof fetch, url: string, token: string):
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) {
-      let code: unknown;
-      if (response.status === 400 || response.status === 403) {
-        try {
-          const body: unknown = await response.json();
-          code = isRecord(body) && isRecord(body.error) ? body.error.code : undefined;
-        } catch {
-          code = undefined;
-        }
-      } else {
-        await response.body?.cancel();
-      }
-      const denied = code === 10 || code === 190 || (typeof code === "number" && code >= 200 && code <= 299);
-      return { status: response.status === 401 || denied ? "reconnect_required" : "unverified" };
+      // Only a 400 or 403 body is read; any other body is released unread.
+      const code = await readMetaGraphErrorCode(response);
+      if (response.status !== 400 && response.status !== 403) await response.body?.cancel();
+      return { status: isMetaTokenRejection(response.status, code) ? "reconnect_required" : "unverified" };
     }
     return { status: "ok", value: await response.json() };
   } catch {

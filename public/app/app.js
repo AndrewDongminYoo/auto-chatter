@@ -1161,12 +1161,18 @@ async function loadWorkspace() {
         : Date.parse(account.token_expires_at) > Date.now()
           ? "valid"
           : "expired";
+    // Meta rejected the stored token (refresh or pre-send identity check); the server records it, display only.
+    const reauthReason = {
+      refresh_rejected: "Meta가 토큰 자동 갱신을 거부했습니다.",
+      token_rejected: "발송 전 계정 확인에서 Meta가 토큰을 거부했습니다.",
+    }[account.reauth_reason];
     const state = node("div", "", "badges");
     state.append(
       badge(
         credentialStatus === "valid" ? "토큰 만료 전" : credentialStatus === "expired" ? "토큰 만료" : "토큰 없음",
         credentialStatus === "valid" ? "" : "warning",
       ),
+      ...(reauthReason ? [badge("재연결 필요", "warning")] : []),
       badge(
         account.active ? "수신 설정 켜짐" : "수신 설정 꺼짐",
         account.active && credentialStatus === "valid" ? "success" : "",
@@ -1209,6 +1215,14 @@ async function loadWorkspace() {
         "hint",
       ),
     );
+    if (reauthReason)
+      item.append(
+        node(
+          "p",
+          `${new Date(account.reauth_required_at).toLocaleString("ko-KR")} · ${reauthReason} 다시 연결하기 전까지 대기 중인 답장이 발송 전 확인에서 차단될 수 있습니다. 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`,
+          "hint",
+        ),
+      );
     const healthStatus = node("p", "Meta 계정과 웹훅 구독 상태는 아직 확인하지 않았습니다.", "hint");
     healthStatus.setAttribute("role", "status");
     const healthButton = node("button", "Meta 상태 확인", "secondary");
