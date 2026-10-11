@@ -404,6 +404,16 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 이어서 Worker를 버전 `3880574d-1b20-44f0-a4c6-05e871900116`로 배포했고, 06:07:44Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `7070d24a-795f-406b-b213-ec553e06b80d`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. 새 제한은 기존 `AuthLimiter` Durable Object의 새 이름을 쓰므로 Wrangler 설정은 바뀌지 않았습니다.
 정적 파일 8개의 해시와 공개 경로·세션 없는 API 거부·다른 출처 요청 거부·웹후크 거부를 확인하는 18개 항목의 점검은, 배포 전에는 바뀐 `app.js`의 해시만 달라 17개가 통과했고 배포 후에는 18개가 모두 통과했습니다. Python `urllib`처럼 `Accept` 헤더 없이 요청하면 Cloudflare가 `/app/`에 Web Analytics 스크립트를 넣어 해시가 달라지므로, 점검은 `Accept: */*`를 보냅니다.
 `scheduled_steps`를 06:08:43Z, 06:09:48Z, 06:10:53Z에 조회했을 때 새 단계 `oauth_state_cleanup`을 포함해 발송과 무관하게 실행되는 7개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. 첫 조회에서 이미 OAuth state가 0행이 되어 만료된 6행이 지워진 것을 확인했습니다.
+같은 날 07:58Z에는 운영자의 "039 마이그레이션 진행하고 배포해주세요" 요청에 따라 PR #177(#16: Meta가 토큰을 거부한 연결의 재연결 필요 표시, migration 039)을 포함한 `main` 커밋 `ec6841e`을 적용했습니다.
+적용 전 조회에서 운영 DB는 038까지 적용된 상태였고(`reauth_*` 열 없음, public 테이블 44개), 연결 1개(수신 켜짐·발송 꺼짐)·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-11-migration-039/public-pre-039.dump`(276,200바이트, SHA-256 `a4d78d27512fd69dd5218a24fceab25b2beb1a5fe46ee9ef3f212c643e415007`)에 저장했고, 목록 읽기에서 데이터 테이블 44개를 확인했습니다.
+같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류는 없었으며, NOTICE 129건은 038 적용 때와 같은 건너뛰기 알림이었습니다.
+적용 후 `instagram_connections`에 `reauth_required_at`·`reauth_token_obtained_at`(timestamptz)과 `reauth_reason`(text)이 NULL 허용으로 추가됐고, `instagram_connections_reauth_reason`·`instagram_connections_reauth_marker` CHECK가 생겼습니다. `auto_chatter_server`는 새 열을 SELECT·UPDATE할 수 있고, 서버 역할의 테이블 DELETE·TRUNCATE 권한과 `anon`·`authenticated`의 public 테이블 권한은 계속 0개였습니다. 표시가 남은 연결은 0개였습니다.
+이어서 Worker를 버전 `20d5078d-0105-4b8d-8f17-d8ef63c8a284`로 배포했고, 07:59:31Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `3880574d-1b20-44f0-a4c6-05e871900116`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+18개 항목 점검은 배포 전에는 바뀐 `app.js`의 해시만 달라 17개가 통과했고, 배포 후에는 18개가 모두 통과했습니다.
+`scheduled_steps`를 08:01:32Z, 08:02:38Z, 08:03:43Z에 조회했을 때 발송과 무관하게 실행되는 7개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
+`token_refresh`는 갱신할 토큰이 있을 때만 새 열을 쓰므로, 이 성공은 새 열을 쓰는 경로를 보여 주지 않습니다. 대신 `GET /api/connections`의 조회문을 관리자 연결의 읽기 전용 트랜잭션에서 실행해 연결 1개가 표시 없이(`credential_status=valid`) 반환되는 것을 확인했습니다. 관리자 역할은 서버 역할의 구성원이 아니므로 서버 역할로는 실행하지 않았습니다.
+로그인한 화면의 "재연결 필요" 배지와 Meta가 실제로 토큰을 거부했을 때의 기록은 운영에서 확인하지 않았습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
