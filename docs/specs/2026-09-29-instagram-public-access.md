@@ -15,6 +15,9 @@ Meta 앱의 게시 상태와 권한 화면의 테스트 준비 상태만으로 �
 `GET /api/me`의 `instagram_connect_available`은 현재 로그인 사용자의 연결 가능 여부를 알려줍니다.
 제한된 사용자의 `POST /api/instagram/connect`와 `GET /api/instagram/callback`은 `403`과 `instagram_public_access_restricted`를 반환합니다.
 화면의 `계정 연결` 버튼은 비활성화하고 제한 사유를 표시합니다.
+허용된 사용자의 `POST /api/instagram/connect`는 OAuth state 행을 하나씩 저장하므로, 한 사용자가 한 시간 고정 구간에 10번까지 시작할 수 있습니다(`INSTAGRAM_CONNECT_LIMIT`, [이슈 #166](https://github.com/AndrewDongminYoo/auto-chatter/issues/166)).
+넘으면 `429 instagram_connect_rate_limited`를, 한도 바인딩이 없거나 응답하지 않으면 `503 instagram_connect_unavailable`을 DB를 읽기 전에 반환합니다.
+만료된 OAuth state 정리는 이 한도에 포함되지 않으며 [이슈 #173](https://github.com/AndrewDongminYoo/auto-chatter/issues/173)에서 다룹니다.
 허용된 연결 중 Instagram이 권한 동의를 거부하거나 필수 권한이 빠지면 콜백은 제한된 오류 코드로 앱에 돌아와 이유를 알립니다.
 기존 연결의 수신·발송 스위치와 규칙은 이 새 연결 제한으로 바뀌지 않습니다.
 발송은 별도의 전역 및 계정별 스위치와 공급자 권한 검증을 따릅니다.

@@ -26,6 +26,11 @@ GET `/api/connections/:id/media/:mediaId`는 같은 계정의 게시물 상세�
 토큰과 provider 오류 본문은 브라우저로 반환하지 않습니다.
 메타데이터는 DB에 추가 저장하지 않으며 새 규칙은 기본 비활성으로 작성합니다.
 
+두 경로는 요청마다 Graph를 호출하므로 사용자별 분당 30회로 제한합니다([이슈 #166](https://github.com/AndrewDongminYoo/auto-chatter/issues/166)).
+목록은 `connection-media:<사용자 ID>`, 단일 게시물 조회는 `connection-media-item:<사용자 ID>` 키로 `AUTH_IP_LIMIT`를 씁니다. 규칙 목록이 보이는 규칙마다 단일 게시물을 조회하므로 두 키를 나눕니다.
+한도를 넘으면 Graph와 DB를 읽기 전에 `429 media_rate_limited`를, 한도 바인딩이 없거나 응답하지 않으면 `503 media_unavailable`을 반환합니다.
+새 규칙 저장 시 서버가 하는 게시물 소유 확인은 이 한도에 세지 않습니다.
+
 ## 완료 기준
 
 - 인증되지 않은 요청과 다른 workspace의 연결은 Graph 조회 전에 거부됩니다.
