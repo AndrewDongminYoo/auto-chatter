@@ -176,7 +176,8 @@ export async function listConnections(pool: Pool, user: User) {
         CASE WHEN access_token_encrypted IS NOT NULL AND reauth_token_obtained_at=token_obtained_at
           THEN reauth_required_at END AS reauth_required_at,
         CASE WHEN access_token_encrypted IS NOT NULL AND reauth_token_obtained_at=token_obtained_at
-          THEN reauth_reason END AS reauth_reason
+          THEN reauth_reason END AS reauth_reason,
+        deauthorized_at
        FROM instagram_connections WHERE workspace_id=$1 ORDER BY id`,
       [workspaceId],
     )
@@ -275,26 +276,9 @@ export async function disconnectConnection(pool: Pool, user: User, id: string) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    // Flows first, all of them: enabling or publishing locks one flow row before its trigger connection
-    // row, so waiting here lets a concurrent enable commit and be turned off below, and any later one
-    // finds the connection inactive. A row skipped by the filter alone would not wait. NO KEY UPDATE
-    // still conflicts with their FOR UPDATE but not with the KEY SHARE that comment ingestion's foreign
-    // key checks hold on flows, so a multi-comment ingestion batch cannot deadlock with this.
-    await client.query("SELECT id FROM flows WHERE workspace_id=$1 ORDER BY id FOR NO KEY UPDATE", [workspaceId]);
-    await client.query(
-      `UPDATE flows f SET enabled=false,updated_at=clock_timestamp() FROM flow_versions v
-       WHERE v.id=f.published_version_id AND v.trigger_connection_id=$1 AND f.workspace_id=$2 AND f.enabled`,
-      [id, workspaceId],
-    );
-    const disconnected = await client.query(
-      `WITH disconnected AS (UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL,token_expires_at=NULL,
- reauth_required_at=NULL,reauth_reason=NULL,reauth_token_obtained_at=NULL
- WHERE id=$1 AND workspace_id=$2 RETURNING id), rules AS (UPDATE instagram_comment_rules SET enabled=false WHERE connection_id IN(SELECT id FROM disconnected) AND workspace_id=$2)
- SELECT id FROM disconnected`,
-      [id, workspaceId],
-    );
     // The connection left the workspace after the check above (a workspace deletion); undo the flow changes.
-    if (!disconnected.rowCount) throw new ApiError(404, "connection_not_found");
+    if (!(await disconnectInTransaction(client, id, workspaceId, null)))
+      throw new ApiError(404, "connection_not_found");
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -303,6 +287,40 @@ export async function disconnectConnection(pool: Pool, user: User, id: string) {
     client.release();
   }
   return { disconnected: true };
+}
+// The disconnect shared by the settings screen and the deauthorize callback, inside the caller's transaction.
+// It returns false when nothing was disconnected; the caller then rolls back the flow changes.
+// A manual disconnect (deauthorization null) clears deauthorized_at, and a verified deauthorize callback records
+// it, unless the stored token was obtained in a later second than the callback's issued_at: then the callback
+// predates that token and changes nothing. The check is in the UPDATE, so a reconnect that commits while this
+// waits for the row lock is seen.
+export async function disconnectInTransaction(
+  client: Pick<PoolClient, "query">,
+  id: string,
+  workspaceId: string,
+  deauthorization: { issuedAt: number | null } | null,
+): Promise<boolean> {
+  // Flows first, all of them: enabling or publishing locks one flow row before its trigger connection
+  // row, so waiting here lets a concurrent enable commit and be turned off below, and any later one
+  // finds the connection inactive. A row skipped by the filter alone would not wait. NO KEY UPDATE
+  // still conflicts with their FOR UPDATE but not with the KEY SHARE that comment ingestion's foreign
+  // key checks hold on flows, so a multi-comment ingestion batch cannot deadlock with this.
+  await client.query("SELECT id FROM flows WHERE workspace_id=$1 ORDER BY id FOR NO KEY UPDATE", [workspaceId]);
+  await client.query(
+    `UPDATE flows f SET enabled=false,updated_at=clock_timestamp() FROM flow_versions v
+     WHERE v.id=f.published_version_id AND v.trigger_connection_id=$1 AND f.workspace_id=$2 AND f.enabled`,
+    [id, workspaceId],
+  );
+  const disconnected = await client.query(
+    `WITH disconnected AS (UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL,token_expires_at=NULL,
+ reauth_required_at=NULL,reauth_reason=NULL,reauth_token_obtained_at=NULL,
+ deauthorized_at=CASE WHEN $3 THEN clock_timestamp() END
+ WHERE id=$1 AND workspace_id=$2 AND ($4::bigint IS NULL OR to_timestamp($4::bigint)>=date_trunc('second',token_obtained_at))
+ RETURNING id), rules AS (UPDATE instagram_comment_rules SET enabled=false WHERE connection_id IN(SELECT id FROM disconnected) AND workspace_id=$2)
+ SELECT id FROM disconnected`,
+    [id, workspaceId, deauthorization !== null, deauthorization?.issuedAt ?? null],
+  );
+  return disconnected.rowCount === 1;
 }
 export async function listActivity(pool: Pool, user: User) {
   const workspaceId = await workspaceFor(pool, user, "agent");

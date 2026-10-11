@@ -128,6 +128,7 @@ OAuth subscribes `messaging_postbacks` as well as comments/messages, so existing
 **Token lifecycle**: active Instagram Login connections refresh valid long-lived tokens from 30 days before expiry, after the token is at least 24 hours old.
 Inactive, expired, or disconnected connections do not refresh; an expired token requires OAuth reconnection.
 A token that Meta rejects gets a display-only reconnect marker; its signals, clearing and deploy order are in the [token refresh spec](docs/specs/2026-09-28-instagram-token-refresh.md#재연결-필요-표시-16).
+A verified Meta deauthorize callback disconnects the matching connections like the settings screen; its contract, ID matching and deploy order are in the [token refresh spec](docs/specs/2026-09-28-instagram-token-refresh.md#권한-해제-콜백-16).
 
 ## Feature invariants
 

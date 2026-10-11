@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import type { Pool } from "pg";
 import { ApiError, cookie, isRecord, json, type User } from "./auth.ts";
 import { lockWorkspaceForMember, workspaceFor } from "./settings.ts";
+import { normalizedUserId } from "./instagram-deauthorization.ts";
 import { sealSecret } from "./secrets.ts";
 
 export interface InstagramOAuthEnv {
@@ -162,6 +163,9 @@ export async function finishInstagramOAuth(
       : [];
   if (!permissions.every((permission) => granted.includes(permission)))
     throw new ApiError(400, "instagram_permissions_required");
+  // The app-scoped user ID that the deauthorize callback may carry. A missing or malformed value does not fail
+  // the connection.
+  const instagramUserId = normalizedUserId(entry.user_id);
   // Instagram's documented long-lived token exchange requires these server-only query parameters.
   const exchange = new URL("https://graph.instagram.com/access_token");
   exchange.searchParams.set("grant_type", "ig_exchange_token");
@@ -206,15 +210,24 @@ export async function finishInstagramOAuth(
     );
     if (member.rowCount !== 1) throw new ApiError(403, "workspace_required");
     saved = await client.query(
-      `INSERT INTO instagram_connections(id,workspace_id,account_id,username,active,send_enabled,access_token_encrypted,token_expires_at)
-       VALUES($1,$2,$3,$4,false,false,$5,now()+make_interval(secs=>$6))
+      `INSERT INTO instagram_connections(id,workspace_id,account_id,username,active,send_enabled,access_token_encrypted,token_expires_at,instagram_user_id,deauthorized_at)
+       VALUES($1,$2,$3,$4,false,false,$5,now()+make_interval(secs=>$6),$7,NULL)
        ON CONFLICT(account_id) DO UPDATE SET username=EXCLUDED.username,active=false,send_enabled=false,
          access_token_encrypted=EXCLUDED.access_token_encrypted,token_expires_at=EXCLUDED.token_expires_at,
          token_obtained_at=now(),
          token_refresh_attempted_at=NULL,
-         reauth_required_at=NULL,reauth_reason=NULL,reauth_token_obtained_at=NULL
+         reauth_required_at=NULL,reauth_reason=NULL,reauth_token_obtained_at=NULL,
+         instagram_user_id=EXCLUDED.instagram_user_id,deauthorized_at=NULL
        WHERE instagram_connections.workspace_id=$2 RETURNING id`,
-      [randomUUID(), workspaceId, account.user_id, account.username, encrypted, Math.floor(long.expires_in)],
+      [
+        randomUUID(),
+        workspaceId,
+        account.user_id,
+        account.username,
+        encrypted,
+        Math.floor(long.expires_in),
+        instagramUserId,
+      ],
     );
     await client.query("COMMIT");
   } catch (error) {

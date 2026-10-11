@@ -1173,6 +1173,7 @@ async function loadWorkspace() {
         credentialStatus === "valid" ? "" : "warning",
       ),
       ...(reauthReason ? [badge("재연결 필요", "warning")] : []),
+      ...(account.deauthorized_at ? [badge("Instagram에서 권한 해제됨", "warning")] : []),
       badge(
         account.active ? "수신 설정 켜짐" : "수신 설정 꺼짐",
         account.active && credentialStatus === "valid" ? "success" : "",
@@ -1220,6 +1221,15 @@ async function loadWorkspace() {
         node(
           "p",
           `${new Date(account.reauth_required_at).toLocaleString("ko-KR")} · ${reauthReason} 다시 연결하기 전까지 대기 중인 답장이 발송 전 확인에서 차단될 수 있습니다. 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`,
+          "hint",
+        ),
+      );
+    // Meta reported that the account owner removed the app in Instagram; the server disconnected the account.
+    if (account.deauthorized_at)
+      item.append(
+        node(
+          "p",
+          `${new Date(account.deauthorized_at).toLocaleString("ko-KR")} · 계정 소유자가 Instagram에서 이 앱의 권한을 해제해 연결이 해제됐습니다. 수신과 발송, 이 계정의 댓글 규칙과 플로우가 꺼졌습니다. 다시 사용하려면 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`,
           "hint",
         ),
       );
