@@ -217,6 +217,8 @@ export async function finishInstagramOAuth(
          token_obtained_at=now(),
          token_refresh_attempted_at=NULL,
          reauth_required_at=NULL,reauth_reason=NULL,reauth_token_obtained_at=NULL,
+         subscription_check_attempted_at=NULL,subscription_checked_at=NULL,subscription_missing_at=NULL,
+         subscription_token_obtained_at=NULL,
          instagram_user_id=EXCLUDED.instagram_user_id,deauthorized_at=NULL
        WHERE instagram_connections.workspace_id=$2 RETURNING id`,
       [

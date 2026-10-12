@@ -20,8 +20,8 @@ export const WEBHOOK_MAX_DELIVERIES_PER_RUN = 10;
 export const WEBHOOK_SUBREQUESTS_PER_ATTEMPT = 3;
 // The fetch calls one scheduled invocation may make: the per-invocation subrequest limit of Workers Free (50,
 // https://developers.cloudflare.com/workers/platform/limits/, read 2026-10-02) minus a reserve of 5 for
-// requests the cron's fetch counter cannot see, such as whatever the database connection costs. Token refresh
-// and webhook delivery share it. That page limits requests to Cloudflare services separately, so the wake
+// requests the cron's fetch counter cannot see, such as whatever the database connection costs. Token refresh,
+// the webhook subscription check and webhook delivery share it. That page limits requests to Cloudflare services separately, so the wake
 // step's Queue sends are not counted here; it does not name Queues or Hyperdrive. This is service policy.
 export const CRON_SUBREQUEST_BUDGET = 45;
 export const WEBHOOK_RUN_BUDGET_MS = 20_000;

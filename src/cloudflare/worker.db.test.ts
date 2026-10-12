@@ -81,7 +81,9 @@ async function resetStoredFixture() {
     [connectionId],
   );
   await pool.query(
-    "UPDATE instagram_connections SET send_enabled=true,token_expires_at=now()+interval '1 day',access_token_encrypted=$1",
+    // The fixture's webhook subscription check (#179) is not due, so a cron run makes no Graph call for it; the
+    // subscription tests set the attempt time back themselves.
+    "UPDATE instagram_connections SET send_enabled=true,token_expires_at=now()+interval '1 day',access_token_encrypted=$1,subscription_check_attempted_at=now()",
     [sealSecret("synthetic", Buffer.alloc(32, 1).toString("base64"), "11111111-1111-4111-8111-111111111111:123")],
   );
   await pool.query(
@@ -329,6 +331,85 @@ test("a failed reconnect marker write in the cron refresh is logged with that ru
   assert.equal(logLines[0]?.correlation_id, logLines[1]?.correlation_id);
 });
 
+test("the cron records a lost webhook subscription in the subscription_check step while sending is disabled", async () => {
+  env.SEND_ENABLED = "false";
+  await pool.query(
+    "UPDATE instagram_connections SET token_expires_at=now()+interval '30 days',subscription_check_attempted_at=NULL",
+  );
+  // A recent successful run keeps cron_stale off, so the only line is the newly recorded loss.
+  await pool.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now())");
+  restoreMocks();
+  const calls: string[] = [];
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const graphUrl = new URL(String(input));
+    assert.equal(init?.method, "GET");
+    calls.push(graphUrl.pathname);
+    if (graphUrl.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    return Response.json({ data: [{ id: "app", subscribed_fields: ["comments"] }] });
+  });
+  await worker.scheduled({}, env);
+  assert.deepEqual(calls, ["/v24.0/me", "/v24.0/123/subscribed_apps"]);
+  assert.deepEqual(
+    logLines.map(({ correlation_id, ...line }) => line),
+    [{ event: "instagram_subscription_check", code: "subscription_lost", connection_id: connectionId }],
+  );
+  assert.equal(typeof logLines[0]?.correlation_id, "string");
+  const stored = (
+    await pool.query(
+      "SELECT subscription_missing_at IS NOT NULL AS missing,subscription_check_attempted_at IS NOT NULL AS attempted FROM instagram_connections",
+    )
+  ).rows;
+  assert.deepEqual(stored, [{ missing: true, attempted: true }]);
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('cron','subscription_check','wake') ORDER BY name",
+      )
+    ).rows,
+    [
+      { name: "cron", failure_code: null, succeeded: true },
+      { name: "subscription_check", failure_code: null, succeeded: true },
+    ],
+  );
+  // The next run within six hours makes no Graph call.
+  await worker.scheduled({}, env);
+  assert.equal(calls.length, 2);
+  assert.equal(sends, 0);
+  assert.deepEqual(published, []);
+});
+
+test("a token the subscription check cannot decrypt fails its step while later steps still run", async () => {
+  await longLivedToken();
+  await pool.query("UPDATE instagram_connections SET subscription_check_attempted_at=NULL,access_token_encrypted=$1", [
+    sealSecret("synthetic", env.TOKEN_ENCRYPTION_KEY!, "another-context"),
+  ]);
+  await pool.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now())");
+  restoreMocks();
+  let calls = 0;
+  mock.method(globalThis, "fetch", async () => {
+    calls++;
+    return Response.json({});
+  });
+  await assert.rejects(worker.scheduled({}, env), /^Error: Cloudflare scheduled recovery failed$/);
+  assert.equal(calls, 0);
+  assert.deepEqual(
+    logLines.map(({ correlation_id, ...line }) => line),
+    [{ event: "cron_step_failed", code: "subscription_check_failed", step: "subscription_check" }],
+  );
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('cron','subscription_check','wake') ORDER BY name",
+      )
+    ).rows,
+    [
+      { name: "cron", failure_code: "step_failed", succeeded: true },
+      { name: "subscription_check", failure_code: "subscription_check_failed", succeeded: false },
+      { name: "wake", failure_code: null, succeeded: true },
+    ],
+  );
+});
+
 test("duplicate webhook and queue delivery send one persisted reply", async () => {
   assert.equal((await worker.fetch(request(), env)).status, 200);
   assert.equal((await worker.fetch(request(), env)).status, 200);
@@ -380,6 +461,7 @@ test("cron recovers a committed reply after queue publish failure", async () => 
       "kept_reply_cleanup",
       "oauth_state_cleanup",
       "stale_recovery",
+      "subscription_check",
       "token_refresh",
       "wake",
       "webhook_delivery",
@@ -565,6 +647,7 @@ test("a batched record write that fails once fails the run even when every row i
     "kept_reply_cleanup",
     "oauth_state_cleanup",
     "token_refresh",
+    "subscription_check",
     "early_reply_reconcile",
     "flow_resume",
     "stale_recovery",
@@ -1319,8 +1402,8 @@ test("consuming one account cannot multiply notifications for another due accoun
   await worker.fetch(request("comment-2", "sender-2"), env);
   const other = "44444444-4444-4444-8444-444444444444";
   await pool.query(
-    `INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,access_token_encrypted,token_expires_at)
-    SELECT $1,workspace_id,'999',true,true,access_token_encrypted,token_expires_at FROM instagram_connections WHERE id=$2`,
+    `INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,access_token_encrypted,token_expires_at,subscription_check_attempted_at)
+    SELECT $1,workspace_id,'999',true,true,access_token_encrypted,token_expires_at,subscription_check_attempted_at FROM instagram_connections WHERE id=$2`,
     [other, connectionId],
   );
   await pool.query(
@@ -2218,7 +2301,7 @@ test("the cron delivers a queued flow webhook after the message steps, and only 
   assert.deepEqual(logLines, []);
 });
 
-test("token refresh and webhook delivery share one subrequest budget per cron invocation", async () => {
+test("token refresh, the subscription check and webhook delivery share one subrequest budget per cron invocation", async () => {
   await longLivedToken();
   // Ten connections whose tokens are due, so token refresh makes two Graph calls for each of them.
   for (let index = 0; index < 10; index++) {
@@ -2259,8 +2342,9 @@ test("token refresh and webhook delivery share one subrequest budget per cron in
     return new Response("ok");
   });
   await worker.scheduled({}, env);
-  // 20 refresh calls leave 25 of the 45: eight attempts of three subrequests, and no claim for the ninth.
-  assert.equal(calls, 20 + 8 * 3);
+  // 20 refresh calls and two subscription checks of two calls leave 21 of the 45: seven attempts of three
+  // subrequests, and no claim for the eighth.
+  assert.equal(calls, 20 + 2 * 2 + 7 * 3);
   assert.deepEqual(
     (
       await pool.query(
@@ -2268,9 +2352,17 @@ test("token refresh and webhook delivery share one subrequest budget per cron in
       )
     ).rows,
     [
-      { status: "pending", attempt_count: 0, count: 2 },
-      { status: "sent", attempt_count: 1, count: 8 },
+      { status: "pending", attempt_count: 0, count: 3 },
+      { status: "sent", attempt_count: 1, count: 7 },
     ],
+  );
+  assert.equal(
+    (
+      await pool.query(
+        "SELECT count(*)::int AS count FROM instagram_connections WHERE account_id LIKE 'refresh-%' AND subscription_check_attempted_at IS NOT NULL",
+      )
+    ).rows[0].count,
+    2,
   );
   assert.equal(
     (

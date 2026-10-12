@@ -181,6 +181,11 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
         return Response.json({ message_id: "runtime-message" });
       }
       if (graphUrl.pathname.endsWith("/me")) return Response.json({ id: "987", user_id: "123" });
+      // The cron's webhook subscription check (#179).
+      if (graphUrl.pathname.endsWith("/123/subscribed_apps"))
+        return Response.json({
+          data: [{ id: "app", subscribed_fields: ["comments", "messages", "messaging_postbacks"] }],
+        });
       if (graphUrl.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "987" } });
       if (graphUrl.pathname.endsWith("/1789")) return Response.json({ id: "1789", owner: { id: "987" } });
       if (graphUrl.pathname.endsWith("/comment-flow"))
@@ -505,6 +510,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
         "kept_reply_cleanup",
         "oauth_state_cleanup",
         "stale_recovery",
+        "subscription_check",
         "token_refresh",
         "wake",
         "webhook_delivery",
@@ -513,6 +519,16 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
     assert.deepEqual((await pool.query("SELECT name FROM scheduled_steps WHERE alert_active")).rows, [
       { name: "alert_token_expiring" },
     ]);
+    // The restricted server role claims the connection and stores the subscription check's result.
+    assert.deepEqual(
+      (
+        await pool.query(
+          `SELECT subscription_check_attempted_at IS NOT NULL AS attempted,subscription_checked_at IS NOT NULL AS checked,
+             subscription_missing_at,subscription_token_obtained_at=token_obtained_at AS same_token FROM instagram_connections`,
+        )
+      ).rows,
+      [{ attempted: true, checked: true, subscription_missing_at: null, same_token: true }],
+    );
   } finally {
     await runtime.dispose();
     await pool.end();

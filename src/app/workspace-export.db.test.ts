@@ -38,6 +38,7 @@ const benignSecretLikeColumns = new Set([
   "token_obtained_at",
   "token_refresh_attempted_at",
   "reauth_token_obtained_at",
+  "subscription_token_obtained_at",
 ]);
 
 before(async () => {
