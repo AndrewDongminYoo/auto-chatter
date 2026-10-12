@@ -9,6 +9,7 @@ import { Pool } from "pg";
 import worker, { type Env } from "./index.ts";
 import { operationsHealth } from "../app/operations-health.ts";
 import { signingKeyContext } from "../app/webhook-delivery.ts";
+import { PRIVATE_REPLY_HOURLY_BUDGET } from "../instagram/send-quota.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
@@ -1065,6 +1066,220 @@ test("cron respects future due time and connection pause, then wakes due work", 
   assert.deepEqual(published, [{ connectionId }]);
 });
 
+// Records count sent private replies of the fixture connection whose provider call was that long ago (#60).
+async function recordProviderCalls(count: number, ago = "10 minutes") {
+  await pool.query(
+    `WITH events AS (
+       INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+       SELECT workspace_id,id,'called-'||n,'called-media','called-'||n,'hello'
+       FROM instagram_connections, generate_series(1,$2::int) n WHERE id=$1 RETURNING id,workspace_id,comment_id,sender_id
+     )
+     INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,
+       private_reply_text,status,provider_message_id,sent_at,provider_called_at)
+     SELECT workspace_id,$1,id,'33333333-3333-4333-8333-333333333333',comment_id,'called-media',sender_id,
+       'reply','sent','mid-'||comment_id,now(),now()-$3::interval FROM events`,
+    [connectionId, count, ago],
+  );
+}
+
+async function replyState(commentId: string) {
+  return (
+    await pool.query(
+      "SELECT status,failure_code,rate_limit_retries,next_attempt_at FROM private_reply_outbox WHERE comment_id=$1",
+      [commentId],
+    )
+  ).rows[0];
+}
+
+test("a connection at its private reply budget is neither claimed nor queued again until the hour frees", async () => {
+  await worker.fetch(request(), env);
+  await recordProviderCalls(PRIVATE_REPLY_HOURLY_BUDGET);
+  const held = await replyState("comment-1");
+  published = [];
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 0);
+  // The wake after the message does not queue the connection again for a reply it cannot claim.
+  assert.deepEqual(published, []);
+  await worker.scheduled({}, env);
+  assert.equal((await worker.fetch(request("comment-2", "sender-2"), env)).status, 200);
+  assert.deepEqual(published, []);
+  assert.deepEqual(await replyState("comment-1"), held);
+  assert.deepEqual(held, {
+    status: "pending",
+    failure_code: null,
+    rate_limit_retries: 0,
+    next_attempt_at: held.next_attempt_at,
+  });
+  await pool.query(
+    "UPDATE private_reply_outbox SET provider_called_at=now()-interval '61 minutes' WHERE comment_id='called-1'",
+  );
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, [{ connectionId }]);
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 1);
+  assert.equal((await replyState("comment-1")).status, "sent");
+});
+
+// Adds count connections that copy the fixture's send settings, each with one due private reply. Only the wake
+// reads them; their copied token does not open for their account.
+async function addDueConnections(count: number) {
+  await pool.query(
+    `INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,access_token_encrypted,token_expires_at,subscription_check_attempted_at)
+     SELECT gen_random_uuid(),workspace_id,'rotation-'||n,true,true,access_token_encrypted,token_expires_at,subscription_check_attempted_at
+     FROM instagram_connections, generate_series(1,$2::int) n WHERE id=$1`,
+    [connectionId, count],
+  );
+  await pool.query(
+    `INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled)
+     SELECT gen_random_uuid(),workspace_id,id,'media-1','hello','reply',true FROM instagram_connections WHERE account_id LIKE 'rotation-%'`,
+  );
+  await pool.query(
+    `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+     SELECT workspace_id,id,'comment-'||account_id,'media-1','sender-1','hello' FROM instagram_connections WHERE account_id LIKE 'rotation-%'`,
+  );
+  await pool.query(
+    `INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text)
+     SELECT event.workspace_id,event.connection_id,event.id,rule.id,event.comment_id,event.media_id,event.sender_id,'reply'
+     FROM instagram_comment_events event JOIN instagram_comment_rules rule ON rule.connection_id=event.connection_id
+     WHERE event.comment_id LIKE 'comment-rotation-%'`,
+  );
+}
+
+test("with more than 100 due connections the cron wake reaches every one in rotation", async () => {
+  // A scoped webhook wake queues its connection without changing the rotation.
+  await worker.fetch(request(), env);
+  assert.deepEqual(published, [{ connectionId }]);
+  assert.equal(
+    (await pool.query("SELECT send_woken_at FROM instagram_connections WHERE id=$1", [connectionId])).rows[0]
+      .send_woken_at,
+    null,
+  );
+  await addDueConnections(150);
+  const woken = () => published.map((body) => (body as { connectionId: string }).connectionId);
+  published = [];
+  await worker.scheduled({}, env);
+  const first = woken();
+  published = [];
+  await worker.scheduled({}, env);
+  const second = woken();
+  assert.equal(first.length, 100);
+  assert.equal(second.length, 100);
+  // The second run queues the 51 connections the first run left before any it already woke.
+  assert.equal(new Set([...first, ...second]).size, 151);
+  const stamped = await pool.query(
+    "SELECT count(*)::int AS count FROM instagram_connections WHERE send_woken_at IS NOT NULL AND id=ANY($1::uuid[])",
+    [second],
+  );
+  assert.equal(stamped.rows[0].count, 100);
+});
+
+test("the cron wake moves only the connections it published to the back of the rotation", async () => {
+  await worker.fetch(request(), env);
+  await addDueConnections(2);
+  const order = (await pool.query<{ id: string }>("SELECT id FROM instagram_connections ORDER BY id")).rows.map(
+    (row) => row.id,
+  );
+  const queue = env.REPLY_QUEUE;
+  env.REPLY_QUEUE = {
+    async send(body) {
+      if (published.length > 0) throw new Error("queue offline");
+      published.push(body);
+    },
+  };
+  published = [];
+  // The failed publish fails the wake step, which the cron reports after its other steps.
+  await assert.rejects(worker.scheduled({}, env), /Cloudflare scheduled recovery failed/);
+  env.REPLY_QUEUE = queue;
+  assert.deepEqual(published, [{ connectionId: order[0] }]);
+  const stamped = await pool.query<{ id: string }>(
+    "SELECT id FROM instagram_connections WHERE send_woken_at IS NOT NULL ORDER BY id",
+  );
+  assert.deepEqual(
+    stamped.rows.map((row) => row.id),
+    [order[0]],
+  );
+  // The two connections the failed publish never queued are first on the next run.
+  published = [];
+  await worker.scheduled({}, env);
+  assert.deepEqual(
+    published,
+    [order[1], order[2], order[0]].map((id) => ({ connectionId: id })),
+  );
+});
+
+test("a backlog on one connection does not delay another connection's first send through the queue", async () => {
+  const other = "44444444-4444-4444-8444-444444444444";
+  await pool.query(
+    "INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,access_token_encrypted,token_expires_at,subscription_check_attempted_at) VALUES($1,'11111111-1111-4111-8111-111111111111','999',true,true,$2,now()+interval '1 day',now())",
+    [other, sealSecret("other-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:999")],
+  );
+  await pool.query(
+    "INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES('55555555-5555-4555-8555-555555555555','11111111-1111-4111-8111-111111111111',$1,'other-media','hello','other reply',true)",
+    [other],
+  );
+  await pool.query(
+    `WITH events AS (
+       INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+       SELECT '11111111-1111-4111-8111-111111111111',$1,'backlog-'||n,'media-1','backlog-'||n,'hello'
+       FROM generate_series(1,200) n RETURNING id,comment_id,sender_id
+     )
+     INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text)
+     SELECT '11111111-1111-4111-8111-111111111111',$1,id,'33333333-3333-4333-8333-333333333333',comment_id,'media-1',sender_id,'reply'
+     FROM events`,
+    [connectionId],
+  );
+  await pool.query(
+    `WITH event AS (
+       INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+       VALUES('11111111-1111-4111-8111-111111111111',$1,'other-comment','other-media','777','hello') RETURNING id
+     )
+     INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text)
+     SELECT '11111111-1111-4111-8111-111111111111',$1,id,'55555555-5555-4555-8555-555555555555','other-comment','other-media','777','other reply'
+     FROM event`,
+    [other],
+  );
+  const delivered: string[] = [];
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const otherToken = new Headers(init?.headers).get("authorization") === "Bearer other-token";
+    const path = new URL(String(input)).pathname;
+    const id = path.split("/").at(-1)!;
+    if (init?.method === "POST") {
+      delivered.push(otherToken ? "other" : "backlog");
+      return Response.json({ message_id: "message-" + delivered.length });
+    }
+    if (path.endsWith("/me")) return Response.json({ user_id: otherToken ? "999" : "123" });
+    if (id === "media-1" || id === "other-media")
+      return Response.json({ id, owner: { id: otherToken ? "999" : "123" } });
+    return Response.json({
+      id,
+      from: { id: otherToken ? "777" : id },
+      media: { id: otherToken ? "other-media" : "media-1" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  published = [];
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, [{ connectionId }, { connectionId: other }]);
+  // The queue delivers in publish order; each message sends one row and queues only its own connection again.
+  const queue: unknown[] = published;
+  published = [];
+  for (let message = 0; message < 3 && !delivered.includes("other"); message++) {
+    assert.equal(await consume(queue.shift()), "ack");
+    queue.push(...published);
+    published = [];
+  }
+  assert.deepEqual(delivered, ["backlog", "other"]);
+  assert.equal(
+    (
+      await pool.query(
+        "SELECT count(*)::int AS count FROM private_reply_outbox WHERE connection_id=$1 AND status='pending'",
+        [connectionId],
+      )
+    ).rows[0].count,
+    199,
+  );
+});
+
 test("interrupted sends remain unknown on queue redelivery", async () => {
   await worker.fetch(request(), env);
   await pool.query(
@@ -1326,6 +1541,44 @@ test("signed comment and confirmation webhooks complete the conditional DM flow 
   await consume();
   await consume();
   assert.deepEqual(delivered, ["reply", "Follow and confirm again", "Final link"]);
+  assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "sent");
+});
+
+test("a connection at its private reply budget still sends follow confirmation DMs", async () => {
+  await pool.query(
+    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final link',non_follower_reply_text='Follow and confirm again'",
+  );
+  const delivered: string[] = [];
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (init?.method === "POST") {
+      delivered.push(JSON.parse(String(init.body)).message.text);
+      return Response.json({ message_id: "message-" + delivered.length, recipient_id: "456" });
+    }
+    if (url.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (url.pathname.endsWith("/456")) return Response.json({ is_user_follow_business: true });
+    if (url.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
+    return Response.json({
+      id: "comment-1",
+      from: { id: "456" },
+      media: { id: "media-1" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  await worker.fetch(request("comment-1", "456"), env);
+  assert.equal(await consume(), "ack");
+  assert.deepEqual(delivered, ["reply"]);
+  await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 second'");
+  // The first DM was the private reply; the confirmation answer is a Send API DM outside the budget.
+  await recordProviderCalls(PRIVATE_REPLY_HOURLY_BUDGET);
+  await ingestMessages(pool, [
+    { accountId: "123", senderId: "456", messageId: "budget-confirm", text: "확인", timestamp: new Date() },
+  ]);
+  published = [];
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, [{ connectionId }]);
+  assert.equal(await consume(), "ack");
+  assert.deepEqual(delivered, ["reply", "Final link"]);
   assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "sent");
 });
 
@@ -2105,6 +2358,22 @@ test("manual queued reply wakes on cron and duplicate queue messages send once",
   assert.deepEqual((await pool.query("SELECT status,provider_message_id FROM instagram_manual_replies")).rows, [
     { status: "sent", provider_message_id: "message-1" },
   ]);
+});
+
+test("a connection at its private reply budget still sends manual replies", async () => {
+  await manualFixture();
+  await recordProviderCalls(PRIVATE_REPLY_HOURLY_BUDGET);
+  assert.equal((await worker.fetch(request("held-comment", "sender-2"), env)).status, 200);
+  published = [];
+  await worker.scheduled(null, env);
+  assert.deepEqual(published, [{ connectionId }]);
+  published = [];
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 1);
+  assert.equal((await pool.query("SELECT status FROM instagram_manual_replies")).rows[0].status, "sent");
+  // Only the held private reply is left, so the connection is not queued again.
+  assert.deepEqual(published, []);
+  assert.equal((await replyState("held-comment")).status, "pending");
 });
 
 test("manual POST guard rejects token rotation handoff resume expiry and receive stop after verification", async () => {

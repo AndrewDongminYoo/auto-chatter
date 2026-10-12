@@ -41,5 +41,6 @@ BEGIN;
 \ir ../db/migrations/039_connection_reauth_required.sql
 \ir ../db/migrations/040_instagram_deauthorization.sql
 \ir ../db/migrations/041_instagram_subscription_check.sql
+\ir ../db/migrations/042_send_quotas.sql
 \ir supabase-access.sql
 COMMIT;
