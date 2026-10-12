@@ -5,6 +5,7 @@ import {
   failureCode,
   logOperation,
   operationLogEntry,
+  SubscriptionCheckFailedError,
   TokenRefreshFailedError,
 } from "./operations-log.ts";
 
@@ -78,6 +79,7 @@ test("log levels map to the matching console method", () => {
 test("failure codes come from the error class and code, never from the message", () => {
   assert.equal(failureCode(new ConfigurationError("Token encryption not configured")), "not_configured");
   assert.equal(failureCode(new TokenRefreshFailedError()), "token_refresh_failed");
+  assert.equal(failureCode(new SubscriptionCheckFailedError()), "subscription_check_failed");
   assert.equal(
     failureCode(Object.assign(new Error("terminating connection"), { code: "57P01" })),
     "database_unavailable",

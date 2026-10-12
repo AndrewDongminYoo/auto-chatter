@@ -39,6 +39,9 @@ let mediaAfter = null;
 let mediaBusy = false;
 let mediaSession = 0;
 const mediaCache = new Map();
+// The manual Meta status result per connection, handed to the one list refresh that follows the check and removed
+// there, so a later refresh (disconnect, toggles) does not show a result for a changed account.
+const healthResults = new Map();
 function editorState(
   message = dirty ? "저장하지 않은 변경 사항이 있습니다." : "새 댓글부터 저장한 설정이 적용됩니다.",
 ) {
@@ -207,6 +210,7 @@ function resetSession() {
   byId("contacts-more").hidden = true;
   byId("contacts-status").textContent = "";
   mediaCache.clear();
+  healthResults.clear();
   mediaSession++;
   ruleMediaObserver.disconnect();
   dirty = false;
@@ -1161,10 +1165,11 @@ async function loadWorkspace() {
         : Date.parse(account.token_expires_at) > Date.now()
           ? "valid"
           : "expired";
-    // Meta rejected the stored token (refresh or pre-send identity check); the server records it, display only.
+    // Meta rejected the stored token (refresh, pre-send identity check or subscription check); the server records
+    // it, display only.
     const reauthReason = {
       refresh_rejected: "Meta가 토큰 자동 갱신을 거부했습니다.",
-      token_rejected: "발송 전 계정 확인에서 Meta가 토큰을 거부했습니다.",
+      token_rejected: "발송 전 계정 확인이나 Meta 상태 확인에서 Meta가 토큰을 거부했습니다.",
     }[account.reauth_reason];
     const state = node("div", "", "badges");
     state.append(
@@ -1173,6 +1178,7 @@ async function loadWorkspace() {
         credentialStatus === "valid" ? "" : "warning",
       ),
       ...(reauthReason ? [badge("재연결 필요", "warning")] : []),
+      ...(account.subscription_missing_at ? [badge("웹후크 구독 유실", "warning")] : []),
       ...(account.deauthorized_at ? [badge("Instagram에서 권한 해제됨", "warning")] : []),
       badge(
         account.active ? "수신 설정 켜짐" : "수신 설정 꺼짐",
@@ -1205,13 +1211,16 @@ async function loadWorkspace() {
       });
     });
     item.append(inboxToggle);
+    const unconfirmed = account.subscription_checked_at
+      ? "철회·권한 여부는 확인되지 않았습니다."
+      : "철회·권한·구독 여부는 확인되지 않았습니다.";
     item.append(
       node(
         "p",
         credentialStatus === "valid"
           ? account.active
-            ? `토큰 만료일: ${new Date(account.token_expires_at).toLocaleDateString("ko-KR")} · 만료 30일 전부터 갱신을 시도합니다. 철회·권한·구독 여부는 확인되지 않았습니다.`
-            : `토큰 만료일: ${new Date(account.token_expires_at).toLocaleDateString("ko-KR")} · 수신 중지 중에는 갱신하지 않습니다. 철회·권한·구독 여부는 확인되지 않았습니다.`
+            ? `토큰 만료일: ${new Date(account.token_expires_at).toLocaleDateString("ko-KR")} · 만료 30일 전부터 갱신을 시도합니다. ${unconfirmed}`
+            : `토큰 만료일: ${new Date(account.token_expires_at).toLocaleDateString("ko-KR")} · 수신 중지 중에는 갱신하지 않습니다. ${unconfirmed}`
           : `${credentialStatus === "expired" ? "토큰이 만료됐습니다." : "연결 토큰이 없습니다."} 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`,
         "hint",
       ),
@@ -1224,6 +1233,21 @@ async function loadWorkspace() {
           "hint",
         ),
       );
+    // The periodic or manual check found a required webhook subscription field missing for the stored token;
+    // the server records it, display only.
+    const subscriptionChecked = account.subscription_checked_at
+      ? ` 마지막 확인: ${new Date(account.subscription_checked_at).toLocaleString("ko-KR")}.`
+      : "";
+    if (account.subscription_missing_at)
+      item.append(
+        node(
+          "p",
+          `${new Date(account.subscription_missing_at).toLocaleString("ko-KR")} 처음 기록 · Meta가 이 계정의 댓글·DM·확인 버튼 웹후크 구독 필드를 모두 반환하지 않았습니다. 새 댓글과 DM이 이 앱에 도착하지 않을 수 있습니다. 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택하거나 'Meta 상태 확인'을 실행해 주세요.${subscriptionChecked}`,
+          "hint",
+        ),
+      );
+    else if (account.subscription_checked_at)
+      item.append(node("p", `Meta가 필수 웹후크 구독 필드를 반환했습니다.${subscriptionChecked}`, "hint"));
     // Meta reported that the account owner removed the app in Instagram; the server disconnected the account.
     if (account.deauthorized_at)
       item.append(
@@ -1233,7 +1257,12 @@ async function loadWorkspace() {
           "hint",
         ),
       );
-    const healthStatus = node("p", "Meta 계정과 웹훅 구독 상태는 아직 확인하지 않았습니다.", "hint");
+    const healthStatus = node(
+      "p",
+      healthResults.get(account.id) ?? "Meta 계정과 웹훅 구독 상태는 아직 확인하지 않았습니다.",
+      "hint",
+    );
+    healthResults.delete(account.id);
     healthStatus.setAttribute("role", "status");
     const healthButton = node("button", "Meta 상태 확인", "secondary");
     healthButton.disabled = credentialStatus !== "valid";
@@ -1255,6 +1284,9 @@ async function loadWorkspace() {
         healthStatus.textContent = message
           ? `${new Date(result.checked_at).toLocaleTimeString("ko-KR")} 확인 · ${message}`
           : "Meta 상태 응답을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.";
+        // The check also stores the subscription record and the reconnect marker; reload so the badges match.
+        healthResults.set(account.id, healthStatus.textContent);
+        await loadWorkspace();
       }),
     );
     item.append(healthButton, healthStatus);

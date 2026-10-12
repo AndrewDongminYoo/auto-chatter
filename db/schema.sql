@@ -99,6 +99,12 @@ END $$;
 -- records when a verified callback disconnected the connection.
 ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS instagram_user_id text;
 ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS deauthorized_at timestamptz;
+-- The webhook subscription check (#179): the last attempt (scheduling only), the last definite result, the first
+-- recorded loss, and the token_obtained_at of the token the result belongs to. Display only.
+ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS subscription_check_attempted_at timestamptz;
+ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS subscription_checked_at timestamptz;
+ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS subscription_missing_at timestamptz;
+ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS subscription_token_obtained_at timestamptz;
 
 CREATE TABLE IF NOT EXISTS channel_consent_events (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

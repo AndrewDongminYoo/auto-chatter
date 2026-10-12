@@ -8,6 +8,7 @@ export const OPERATION_STEPS = [
   "kept_reply_cleanup",
   "oauth_state_cleanup",
   "token_refresh",
+  "subscription_check",
   "early_reply_reconcile",
   "flow_resume",
   "stale_recovery",
@@ -70,11 +71,21 @@ export class TokenRefreshFailedError extends Error {
   }
 }
 
+// At least one claimed connection's webhook subscription check could not run or be recorded: a token that
+// does not decrypt or a failed record write. The provider response is never kept.
+export class SubscriptionCheckFailedError extends Error {
+  constructor() {
+    super("Instagram subscription check failed");
+    this.name = "SubscriptionCheckFailedError";
+  }
+}
+
 // A fixed failure code for an error, read from its class and error code only; the message is never used
 // because SQL and provider messages can carry submitted content.
 export function failureCode(error: unknown): string {
   if (error instanceof ConfigurationError) return "not_configured";
   if (error instanceof TokenRefreshFailedError) return "token_refresh_failed";
+  if (error instanceof SubscriptionCheckFailedError) return "subscription_check_failed";
   const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
   if (typeof code === "string" && /^[0-9A-Z]{5}$/.test(code))
     // SQLSTATE classes 08 (connection exception) and 57 (operator intervention) mean the database is unreachable.

@@ -14,6 +14,7 @@ import {
 import { readMetaGraphError, type IdentityCheck } from "../instagram/meta-graph-error.ts";
 import { clearReauthRequired, markReauthRequired } from "../app/instagram-reauth.ts";
 import { refreshDueInstagramTokensWithFailures } from "../app/instagram-token-refresh.ts";
+import { checkDueInstagramSubscriptions } from "../app/instagram-subscription-check.ts";
 import { deliveryRecipientOptedOut } from "../instagram/channel-consent.ts";
 import { durableLimits, type LimiterNamespace } from "./auth-limiter.ts";
 // The Durable Object class behind AUTH_LIMITER must be exported from the Worker's main module.
@@ -524,6 +525,19 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
       );
       if (refreshFailures > 0) throw new TokenRefreshFailedError();
     });
+    // The webhook subscription check (#179) runs while sending is off too, because receiving still depends on
+    // it. A connection is attempted at most once per interval, so a failure fails only the run that attempted it.
+    await step("subscription_check", async () => {
+      const { failed: checkFailures } = await checkDueInstagramSubscriptions(
+        pool,
+        env.TOKEN_ENCRYPTION_KEY,
+        countedFetch,
+        new Date(),
+        env.META_GRAPH_VERSION,
+        correlationId,
+      );
+      if (checkFailures > 0) throw new SubscriptionCheckFailedError();
+    });
     // Linking a kept DM to its now-sent reply and resuming a delayed flow run only change state or
     // queue a reply, so they run while sending is off too. The link runs first: a DM that answered a reply
     // wait in time must reach the run before the resume times that wait out, and the resume holds a wait
@@ -584,6 +598,7 @@ import {
   ConfigurationError,
   failureCode,
   logOperation,
+  SubscriptionCheckFailedError,
   TokenRefreshFailedError,
   type OperationStep,
 } from "../app/operations-log.ts";

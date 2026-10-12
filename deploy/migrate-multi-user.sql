@@ -40,5 +40,6 @@ BEGIN;
 \ir ../db/migrations/038_oauth_state_cleanup.sql
 \ir ../db/migrations/039_connection_reauth_required.sql
 \ir ../db/migrations/040_instagram_deauthorization.sql
+\ir ../db/migrations/041_instagram_subscription_check.sql
 \ir supabase-access.sql
 COMMIT;

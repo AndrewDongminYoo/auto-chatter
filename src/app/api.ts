@@ -238,7 +238,7 @@ export async function appApi(
         if (!env.AUTH_IP_LIMIT) throw new ApiError(503, "health_unavailable");
         const allowance = await env.AUTH_IP_LIMIT.limit({ key: `connection-health:${user.id}` });
         if (!allowance.success) throw new ApiError(429, "health_rate_limited");
-        return json(await connectionHealth(pool, user, health[1]!, env, fetchImpl));
+        return json(await connectionHealth(pool, user, health[1]!, env, fetchImpl, correlationId));
       }
       if (url.pathname === "/api/inbox" && request.method === "GET")
         return json(await listInbox(pool, user, url.searchParams));

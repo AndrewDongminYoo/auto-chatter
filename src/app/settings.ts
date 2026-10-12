@@ -177,6 +177,11 @@ export async function listConnections(pool: Pool, user: User) {
           THEN reauth_required_at END AS reauth_required_at,
         CASE WHEN access_token_encrypted IS NOT NULL AND reauth_token_obtained_at=token_obtained_at
           THEN reauth_reason END AS reauth_reason,
+        -- The webhook subscription record (#179), shown only while it belongs to the stored token.
+        CASE WHEN access_token_encrypted IS NOT NULL AND subscription_token_obtained_at=token_obtained_at
+          THEN subscription_missing_at END AS subscription_missing_at,
+        CASE WHEN access_token_encrypted IS NOT NULL AND subscription_token_obtained_at=token_obtained_at
+          THEN subscription_checked_at END AS subscription_checked_at,
         deauthorized_at
        FROM instagram_connections WHERE workspace_id=$1 ORDER BY id`,
       [workspaceId],
@@ -314,6 +319,7 @@ export async function disconnectInTransaction(
   const disconnected = await client.query(
     `WITH disconnected AS (UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL,token_expires_at=NULL,
  reauth_required_at=NULL,reauth_reason=NULL,reauth_token_obtained_at=NULL,
+ subscription_check_attempted_at=NULL,subscription_checked_at=NULL,subscription_missing_at=NULL,subscription_token_obtained_at=NULL,
  deauthorized_at=CASE WHEN $3 THEN clock_timestamp() END
  WHERE id=$1 AND workspace_id=$2 AND ($4::bigint IS NULL OR to_timestamp($4::bigint)>=date_trunc('second',token_obtained_at))
  RETURNING id), rules AS (UPDATE instagram_comment_rules SET enabled=false WHERE connection_id IN(SELECT id FROM disconnected) AND workspace_id=$2)

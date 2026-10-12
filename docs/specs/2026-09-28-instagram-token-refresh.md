@@ -16,7 +16,7 @@ Instagram Login으로 연결한 계정은 장기 액세스 토큰의 만료일�
 
 ## 이번 범위에 포함하지 않는 작업
 
-- Meta 권한 철회와 웹훅 구독 유실을 실시간으로 판별하는 기능은 추가하지 않습니다. 권한 철회는 이후 [권한 해제 콜백](#권한-해제-콜백-16)이 처리합니다.
+- Meta 권한 철회와 웹훅 구독 유실을 실시간으로 판별하는 기능은 추가하지 않습니다. 권한 철회는 이후 [권한 해제 콜백](#권한-해제-콜백-16)이 처리하고, 웹훅 구독 유실은 [웹후크 구독 유실 표시](#웹후크-구독-유실-표시-179)가 주기적으로 확인합니다.
 - 공급자 오류만으로 계정을 끊거나 기존 토큰을 삭제하지 않습니다.
 - 실제 메시지 발송과 운영 DB 마이그레이션·배포는 이 변경에 포함하지 않습니다.
 
@@ -36,17 +36,19 @@ Meta가 저장된 토큰을 거부하면 연결에 재연결 필요 표시를 �
 
 - 예약 토큰 갱신에서 Meta가 갱신 요청(`refresh_access_token`)을 거부하면 `refresh_rejected`를 기록합니다. 이 실행은 기존처럼 갱신 실패로 집계됩니다.
 - Cloudflare 발송 경로(댓글 비공개 답장, 팔로우 확인 DM, 수동 답장)에서 발송 전 계정 확인(`me`)을 Meta가 거부하면 `token_rejected`를 기록합니다.
+- [웹훅 구독 확인](#웹후크-구독-유실-표시-179)(예약 단계와 연결 상태 수동 확인)에서 Meta가 `me` 또는 `subscribed_apps` 요청의 토큰을 거부해도 `token_rejected`를 기록합니다. 계정 ID가 다른 응답은 거부가 아니므로 기록하지 않습니다.
 - 거부 기준은 HTTP 401, 또는 400·403 응답의 Graph 오류 코드 10, 190, 200–299입니다. 연결 상태 수동 확인과 같은 정의(`isMetaTokenRejection`, `src/instagram/meta-graph-error.ts`)를 사용합니다.
 - 시간 초과, 네트워크 오류, 5xx, 속도 제한, 형식을 알 수 없는 응답은 기록하지 않습니다.
 - 갱신으로 받은 새 토큰의 계정 확인이 거부된 경우는 저장되지 않은 토큰이므로 기록하지 않습니다.
-- 연결 상태 수동 확인의 결과는 저장하지 않으며, Node 환경 토큰 워커도 기록하지 않습니다.
+- Node 환경 토큰 워커는 기록하지 않습니다.
 
 ### 토큰 식별과 해제
 
 - 기록과 해제는 호출에 사용한 암호문이 현재 저장된 암호문과 같을 때만 반영합니다. Cloudflare 최종 확인이 토큰 교체를 판별하는 방식과 같아서, 교체된 이전 토큰의 결과는 새 토큰에 남지 않습니다.
 - `reauth_token_obtained_at`에는 거부된 토큰의 `token_obtained_at`을 남기며, 계정 목록은 현재 토큰과 일치하는 표시만 반환합니다.
 - 같은 토큰이 다시 거부되면 처음 기록한 시각과 사유를 유지합니다.
-- OAuth 재연결로 새 토큰을 저장하거나, 같은 토큰의 갱신이 성공하거나, 같은 토큰의 발송 전 계정 확인이 성공하거나, 연결을 해제하면 표시를 지웁니다.
+- OAuth 재연결로 새 토큰을 저장하거나, 같은 토큰의 갱신이 성공하거나, 같은 토큰의 발송 전 계정 확인에서 Meta가 저장된 계정으로 토큰을 받아들이거나, 연결을 해제하면 표시를 지웁니다.
+- 같은 토큰의 웹훅 구독 확인에서 Meta가 저장된 계정으로 토큰을 받아들이면 `token_rejected` 표시만 지우고 `refresh_rejected` 표시는 유지합니다. `me` 요청의 수락은 그 토큰을 쓸 수 있다는 뜻이지 Meta가 갱신을 받아 준다는 뜻이 아니며, 발송이 꺼져 있어도 주기마다 실행되는 확인이 하루 한 번 다시 기록되는 갱신 거부를 지우면 처음 기록한 시각이 유지되지 않습니다.
 
 ### 표시 전용
 
@@ -120,7 +122,57 @@ Meta 문서는 Instagram Login의 Deauthorize 콜백이 어떤 ID를 담는지 �
 
 예약 작업, 웹훅 수신, 발송 경로는 새 열을 읽지 않습니다.
 배포 뒤 운영자는 Meta 앱 대시보드의 Instagram > API setup with Instagram business login > Business login settings에서 Deauthorize callback URL에 `https://auto-chat.donminzzi.kr/instagram/deauthorize`를 등록합니다.
-웹훅 구독 유실의 주기적 판별은 이 변경에 포함하지 않으며 [#179](https://github.com/AndrewDongminYoo/auto-chatter/issues/179)에서 다룹니다.
+웹훅 구독 유실의 주기적 판별은 이 변경에 포함하지 않았으며, 이후 [웹후크 구독 유실 표시](#웹후크-구독-유실-표시-179)가 다룹니다.
+
+## 웹후크 구독 유실 표시 (#179)
+
+계정이 이 앱의 `comments`, `messages`, `messaging_postbacks` 웹훅 구독을 잃으면 댓글과 DM이 조용히 들어오지 않습니다.
+예약 작업이 연결마다 구독을 주기적으로 조회하고, 유실을 기록해 운영자가 계정 화면에서 볼 수 있게 합니다([#179](https://github.com/AndrewDongminYoo/auto-chatter/issues/179), #16의 일부).
+조회와 분류는 [연결 상태 수동 확인](2026-09-29-instagram-connection-diagnostics.md)과 같은 함수(`checkInstagramSubscription`, `src/app/instagram-subscription-check.ts`)를 사용하므로 두 경로의 판정이 같습니다.
+자동으로 다시 구독하지 않습니다.
+
+### 주기와 대상
+
+- 예약 단계 `subscription_check`는 `token_refresh` 바로 뒤에 실행합니다. 전역 발송이 꺼져 있어도 수신은 구독에 달려 있으므로 실행합니다.
+- 연결 하나는 `SUBSCRIPTION_CHECK_INTERVAL_HOURS`마다 한 번만 시도하고, 한 실행은 `SUBSCRIPTION_CHECKS_PER_RUN`개까지 확인합니다. 두 값은 운영자 결정(2026-10-11)이며 `src/app/instagram-subscription-check.ts`가 소유합니다. 확인 한 번은 Meta GET 두 번(`me?fields=user_id`, `subscribed_apps`)이며, 예약 작업의 [호출당 subrequest 예산](2026-10-01-flow-webhook-delivery.md#전달)을 함께 씁니다.
+- 대상은 수신 중(`active`)이고 토큰이 있으며 만료되지 않았고 권한 해제 기록(`deauthorized_at`)이 없는 연결 가운데, 시도한 적이 없거나 마지막 시도에서 주기가 지난 연결입니다. 시도한 적이 없는 연결부터, 그다음 가장 오래전에 시도한 연결부터 고릅니다.
+- claim은 `token_refresh`처럼 `FOR UPDATE SKIP LOCKED`로 한 행씩 고르고 같은 문장에서 `subscription_check_attempted_at`을 씁니다. 그래서 일시적인 실패가 계속돼도 매분이 아니라 주기마다 다시 시도합니다. 연결 상태 수동 확인도 이 시각을 쓰므로, 수동으로 확인한 토큰은 예약 작업이 한 주기 동안 다시 확인하지 않습니다.
+
+### 기록 규칙
+
+`instagram_connections`의 네 열(migration 041)에 기록합니다.
+모든 쓰기는 확인에 사용한 암호문이 지금 저장된 암호문과 같을 때만 반영하므로, 교체된 토큰의 결과는 아무것도 바꾸지 않습니다.
+
+- `fields_missing`: `subscription_checked_at`을 쓰고 `subscription_token_obtained_at`에 그 토큰의 `token_obtained_at`을 남깁니다. `subscription_missing_at`은 같은 토큰에 이미 기록된 유실이 있으면 처음 시각을 유지하고, 없으면 지금 시각을 씁니다.
+- `fields_present`: `subscription_checked_at`과 토큰 식별을 쓰고 `subscription_missing_at`을 지웁니다.
+- Meta의 토큰 거부: [재연결 필요 표시](#재연결-필요-표시-16)에 `token_rejected`를 기록하고 구독 열은 바꾸지 않습니다.
+- Meta가 같은 토큰을 저장된 계정으로 받아들이면 `token_rejected` 재연결 필요 표시를 지웁니다. 그 뒤 `subscribed_apps` 조회가 일시적으로 실패해도 마찬가지입니다. `refresh_rejected` 표시는 [토큰 식별과 해제](#토큰-식별과-해제)에 적은 이유로 유지합니다.
+- 시간 초과, 네트워크 오류, 5xx, 속도 제한, 형식을 알 수 없는 응답, 남은 다음 페이지, 계정 ID 불일치, 복호화되지 않는 토큰은 구독 열을 바꾸지 않습니다.
+- 유실을 새로 기록하면 `instagram_subscription_check`(`subscription_lost`, warn), 유실을 지우면 같은 이벤트(`subscription_restored`, info)의 운영 로그를 `connection_id`와 그 실행이나 요청의 `correlation_id`로 한 번 남깁니다. 토큰, 계정 ID, Meta 응답은 기록하지 않습니다.
+- 구독 열의 쓰기가 실패하면 `subscription_record_failed`, 재연결 필요 표시의 쓰기가 실패하면 `reauth_record_failed` 운영 로그를 고정 코드로 남깁니다. 수동 확인의 응답은 바뀌지 않습니다.
+- 예약 단계는 claim한 연결을 모두 확인한 뒤, 복호화되지 않는 토큰이나 구독 열의 쓰기 실패가 하나라도 있으면 `subscription_check_failed`로 실패합니다. `token_refresh`가 복호화 실패를 실패로 세는 것과 같습니다. Meta의 일시적 오류, 토큰 거부, 계정 ID 불일치는 실패가 아닙니다. `TOKEN_ENCRYPTION_KEY`가 없거나 쓸 수 없는 값이거나 `META_GRAPH_VERSION`이 형식에 맞지 않으면 claim 전에 `not_configured`로 실패하므로 시도 시각을 쓰지 않습니다.
+- OAuth 연결·재연결과 연결 해제(계정 화면과 권한 해제 콜백이 함께 쓰는 `disconnectInTransaction`)는 네 열을 모두 지웁니다. 재연결한 새 토큰은 다음 예약 실행에서 확인합니다.
+- 토큰 갱신은 `token_obtained_at`을 바꾸지만 시도 시각은 지우지 않습니다. 그래서 갱신 전 토큰의 기록은 다음 확인까지 최대 한 주기 동안 목록에서 보이지 않습니다.
+
+### 구독 기록의 표시
+
+- 자동 claim, 깨우기 조회, 최종 확인, 웹훅 수신, 발송 판단과 경보는 이 기록을 읽지 않습니다.
+- `GET /api/connections`는 토큰이 있고 `subscription_token_obtained_at`이 현재 토큰의 `token_obtained_at`과 같을 때만 `subscription_missing_at`과 `subscription_checked_at`을 반환합니다.
+- 계정 화면은 "웹후크 구독 유실" 배지와 처음 기록한 시각, '계정 연결'로 다시 연결하거나 'Meta 상태 확인'을 실행하라는 안내, 마지막 확인 시각을 보여 줍니다. 유실이 없고 확인 기록이 있으면 마지막 확인 시각만 보여 줍니다. 'Meta 상태 확인'을 실행하면 결과를 남긴 채 계정 목록을 다시 불러와 배지를 맞춥니다.
+- 작업 공간 내보내기는 네 열을 포함합니다. 비밀 값이 아니므로 제외하지 않습니다.
+
+### 마이그레이션 041 배포 순서
+
+마이그레이션 041(`db/migrations/041_instagram_subscription_check.sql`)을 코드보다 먼저 적용합니다.
+코드가 먼저 배포되면 새 열을 읽거나 쓰는 다음 작업이 `42703`(열 없음) 오류로 실패합니다.
+
+- `GET /api/connections`가 실패해 대시보드 시작이 [권한 해제 콜백의 배포](#배포와-운영자-작업)에서 설명한 지점에서 멈춥니다.
+- OAuth 연결·재연결의 저장이 실패합니다. 새 계정의 첫 연결도 같은 문장을 쓰므로 실패합니다.
+- 계정 화면의 연결 해제가 실패하고, 권한 해제 콜백은 해제에서 실패해 503(`request_failed`, `database_error`)을 응답하며 그 연결을 바꾸지 않습니다.
+- `subscription_check` 예약 단계가 claim에서 매 실행 `database_error`로 실패합니다. 다른 단계는 계속 실행합니다.
+- 연결 상태 수동 확인은 응답을 그대로 반환하고, 구독 열의 쓰기마다 `subscription_record_failed` 로그를 남깁니다. 재연결 필요 표시의 기록·해제는 migration 039의 열만 쓰므로 영향이 없습니다.
+
+웹훅 수신과 발송 경로는 새 열을 읽지 않습니다.
 
 ## 근거
 

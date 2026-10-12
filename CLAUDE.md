@@ -104,7 +104,7 @@ It reuses ingestion and the single-row worker; it does not run the Node polling 
 Queue messages contain only a connection ID; database status remains authoritative.
 Each notification processes at most one row, then wakes remaining due work only for that connection.
 Webhook notifications are scoped to the account IDs in the received events; only cron discovers due work globally.
-Cron runs each minute to remove the text of kept early DMs after 15 minutes, remove expired OAuth states in batches (`oauth_state_cleanup`, [spec](docs/specs/2026-09-29-instagram-public-access.md)), recover stale sends, refresh due tokens, link kept early DMs and then resume due delayed flow runs (both even while sending is off, and in that order so an in-time reply is linked before its wait times out), and repair missed notifications or delayed retries.
+Cron runs each minute to remove the text of kept early DMs after 15 minutes, remove expired OAuth states in batches (`oauth_state_cleanup`, [spec](docs/specs/2026-09-29-instagram-public-access.md)), recover stale sends, refresh due tokens, check due connections' webhook subscriptions (`subscription_check`, even while sending is off), link kept early DMs and then resume due delayed flow runs (both even while sending is off, and in that order so an in-time reply is linked before its wait times out), and repair missed notifications or delayed retries.
 `TOKEN_ENCRYPTION_KEY` decrypts workspace/account-bound AES-GCM credentials; a valid per-account token and `send_enabled` are required in addition to the global switch.
 The adapter prioritizes manual replies, then pending follow confirmations, and rechecks the rule, claim, connection, token version, cooldown and 24-hour window immediately before a normal DM POST.
 There is no atomic transaction spanning PostgreSQL and Meta: a setting change after the final guard cannot recall an in-flight request.
@@ -129,6 +129,7 @@ OAuth subscribes `messaging_postbacks` as well as comments/messages, so existing
 Inactive, expired, or disconnected connections do not refresh; an expired token requires OAuth reconnection.
 A token that Meta rejects gets a display-only reconnect marker; its signals, clearing and deploy order are in the [token refresh spec](docs/specs/2026-09-28-instagram-token-refresh.md#재연결-필요-표시-16).
 A verified Meta deauthorize callback disconnects the matching connections like the settings screen; its contract, ID matching and deploy order are in the [token refresh spec](docs/specs/2026-09-28-instagram-token-refresh.md#권한-해제-콜백-16).
+The cron and the manual status check share one webhook subscription check and store a display-only loss record per token; cadence, recording rules and deploy order are in the [token refresh spec](docs/specs/2026-09-28-instagram-token-refresh.md#웹후크-구독-유실-표시-179).
 
 ## Feature invariants
 
