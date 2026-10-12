@@ -38,6 +38,7 @@ Node 워커의 `worker-main.ts`·`main.ts`가 터미널에 쓰는 사용법·설
 | `alert_new_occurrence`          | `alert_unknown_outcome`                                        | 경보가 켜진 동안 새 `unknown` 발생      |
 | `webhook_delivery_failed`       | [전달](2026-10-01-flow-webhook-delivery.md#전달)의 실패 코드   | 외부 전송 실패, 다시 시도할 때          |
 | `webhook_delivery_dead`         | 같은 실패 코드                                                 | 외부 전송이 `dead`로 끝날 때            |
+| `rate_limit_unavailable`        | `api_limit_unavailable`                                        | API 기본 요청 한도를 셀 수 없을 때      |
 | `webhook_delivery_claim_lost`   | `claim_lost`                                                   | 외부 전송 시도가 claim을 잃었을 때      |
 
 ## 정기 작업 기록
