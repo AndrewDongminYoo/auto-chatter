@@ -172,6 +172,7 @@ Hyperdrive query caching MUST be disabled to keep authorization and active-state
 The Worker serves both workers.dev and `auto-chat.donminzzi.kr` with both webhook secrets registered; incorrect verification tokens and unsigned requests return 403.
 Public GET/HEAD routes `/privacy`, `/data-deletion` and `/service` serve static Korean pages from `src/cloudflare/public-pages.ts` without secrets or database bindings; no automatic or unauthenticated deletion API exists.
 Wrangler serves `public/` as static assets before Worker routing; keep only public files in that directory.
+The `/app/*` files are not versioned, so `public/_headers` sends `Cache-Control: no-cache` (revalidate every load, never stale after a deploy); `_headers` does not apply to Worker responses, which set their own headers.
 Generated provisioning credentials stay in the ignored `deploy/secrets/` directory; never log or commit them.
 
 **Database changes**: add a numbered file under `db/migrations/`, update `db/schema.sql`, and include the migration in `deploy/migrate-multi-user.sql`.
