@@ -12,6 +12,9 @@ const config = {
   AUTH_MAIL_LIMIT: { limit: async () => ({ success: true }) },
   WORKSPACE_EXPORT_LIMIT: { limit: async () => ({ success: true }) },
   INSTAGRAM_CONNECT_LIMIT: { limit: async () => ({ success: true }) },
+  API_WRITE_USER_LIMIT: { limit: async () => ({ success: true }) },
+  API_WRITE_WORKSPACE_LIMIT: { limit: async () => ({ success: true }) },
+  INBOX_LIST_LIMIT: { limit: async () => ({ success: true }) },
 };
 const userId = "11111111-1111-4111-8111-111111111111";
 const workspaceId = "22222222-2222-4222-8222-222222222222";
@@ -484,6 +487,18 @@ const untouchedPool = () =>
     end: async () => {},
   }) as unknown as Pool;
 
+// A pool that answers only the membership read of the workspace write limit (#167) and fails the test on any other
+// query, so a write refused by its route handler still reads and writes nothing else.
+const membershipOnlyPool = () =>
+  ({
+    query: async (sql: string) => {
+      assert.match(sql, /^SELECT workspace_id FROM workspace_members WHERE user_id=\$1 AND removed_at IS NULL$/);
+      return { rows: [{ workspace_id: workspaceId }] };
+    },
+    connect: async () => assert.fail("a refused request must not write the database"),
+    end: async () => {},
+  }) as unknown as Pool;
+
 test("media list and single-post lookups spend separate per-user allowances (#166)", async () => {
   const allowed = recordingLimit(true);
   const list = await appApi(
@@ -560,7 +575,7 @@ test("the media check on a new rule save spends no media allowance (#166)", asyn
   assert.deepEqual(limiter.keys, []);
 });
 
-test("workspace export and Instagram connect spend a per-user allowance before the database (#166)", async () => {
+test("workspace export and Instagram connect spend a per-user allowance before the route reads the database (#166)", async () => {
   const fetchImpl = (async () =>
     Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
   const oauth = {
@@ -578,6 +593,7 @@ test("workspace export and Instagram connect spend a per-user allowance before t
       request: () =>
         new Request("https://app.test/api/workspace/export", { headers: { cookie: "__Host-ac-access=test-session" } }),
       prefix: "workspace_export",
+      pool: untouchedPool,
     },
     {
       binding: "INSTAGRAM_CONNECT_LIMIT",
@@ -587,6 +603,8 @@ test("workspace export and Instagram connect spend a per-user allowance before t
           headers: { origin: "https://app.test", cookie: "__Host-ac-access=test-session" },
         }),
       prefix: "instagram_connect",
+      // The OAuth start is a write, so the workspace write limit reads the caller's membership first (#167).
+      pool: membershipOnlyPool,
     },
   ] as const;
   for (const route of routes) {
@@ -597,7 +615,7 @@ test("workspace export and Instagram connect spend a per-user allowance before t
       [recordingLimit("throw").binding, 503, `${route.prefix}_unavailable`],
     ];
     for (const [binding, status, error] of cases) {
-      const response = await appApi(route.request(), { ...oauth, [route.binding]: binding }, untouchedPool, fetchImpl);
+      const response = await appApi(route.request(), { ...oauth, [route.binding]: binding }, route.pool, fetchImpl);
       assert.equal(response.status, status, error);
       assert.deepEqual(await response.json(), { error }, error);
     }
@@ -956,7 +974,7 @@ test("consent mutation rejects unauthenticated and cross-origin requests before 
   let openCount = 0;
   const open = () => {
     openCount += 1;
-    return { end: async () => {} } as unknown as Pool;
+    return membershipOnlyPool();
   };
   const path = `https://app.test/api/connections/${connectionId}/channel-consent-events`;
   const unauthenticated = await appApi(
@@ -1094,12 +1112,8 @@ test("contact mutations reject cross-origin writes and invalid tags before a wri
       .status,
     403,
   );
-  const pool = {
-    query: async () => {
-      throw new Error("No SQL on invalid input");
-    },
-    end: async () => {},
-  } as unknown as Pool;
+  // Invalid input runs no SQL after the workspace write limit's membership read (#167).
+  const pool = membershipOnlyPool();
   const invalid = await appApi(
     new Request(path, {
       method: "PATCH",
@@ -1154,4 +1168,283 @@ test("contact automation rejects unauthenticated and cross-origin writes before 
     (await appApi(new Request(path, { method: "PUT", headers: { origin: "https://app.test" } }), config, open)).status,
     401,
   );
+});
+
+// Default API request limits (#167).
+const sessionFetch = (async () =>
+  Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
+const writeRequest = (path: string, method = "POST") =>
+  new Request(`https://app.test${path}`, {
+    method,
+    headers: {
+      origin: "https://app.test",
+      cookie: "__Host-ac-access=test-session",
+      "content-type": "application/json",
+    },
+    body: "{}",
+  });
+const sessionGet = (path: string) =>
+  new Request(`https://app.test${path}`, { headers: { cookie: "__Host-ac-access=test-session" } });
+const memberId = "33333333-3333-4333-8333-333333333333";
+// A pool for an owner of the test workspace: every read answers the caller's membership and its time zone, and a
+// transaction finds the target member as an agent.
+const ownerPool = () => {
+  const row = { workspace_id: workspaceId, role: "owner", time_zone: "Asia/Seoul" };
+  return {
+    query: async () => ({ rows: [row], rowCount: 1 }),
+    connect: async () => ({
+      query: async (sql: string) =>
+        sql.includes("SELECT role FROM workspace_members")
+          ? { rows: [{ role: "agent" }], rowCount: 1 }
+          : { rows: sql.includes("workspace_members") ? [row] : [], rowCount: 0 },
+      release: () => {},
+    }),
+    end: async () => {},
+  } as unknown as Pool;
+};
+
+test("a write over the per-user limit returns 429 before any route handler or database access (#167)", async () => {
+  const user = recordingLimit(false),
+    workspace = recordingLimit(true);
+  let opened = 0;
+  for (const [path, method] of [
+    [`/api/connections/${connectionId}/contacts/888`, "PATCH"],
+    // Member removal skips only the workspace limit.
+    [`/api/workspace/members/${memberId}`, "DELETE"],
+    [`/api/connections/${connectionId}`, "DELETE"],
+  ] as const) {
+    const response = await appApi(
+      writeRequest(path, method),
+      { ...config, API_WRITE_USER_LIMIT: user.binding, API_WRITE_WORKSPACE_LIMIT: workspace.binding },
+      () => {
+        opened++;
+        return untouchedPool();
+      },
+      sessionFetch,
+    );
+    assert.equal(response.status, 429);
+    assert.deepEqual(await response.json(), { error: "rate_limited" });
+  }
+  assert.equal(opened, 0);
+  assert.deepEqual(user.keys, [userId, userId, userId]);
+  assert.deepEqual(workspace.keys, []);
+});
+
+test("a write over the per-workspace limit returns 429 after only the membership read (#167)", async () => {
+  const user = recordingLimit(true),
+    workspace = recordingLimit(false);
+  const response = await appApi(
+    writeRequest(`/api/connections/${connectionId}/contacts/888`, "PATCH"),
+    { ...config, API_WRITE_USER_LIMIT: user.binding, API_WRITE_WORKSPACE_LIMIT: workspace.binding },
+    membershipOnlyPool,
+    sessionFetch,
+  );
+  assert.equal(response.status, 429);
+  assert.deepEqual(await response.json(), { error: "rate_limited" });
+  assert.deepEqual(user.keys, [userId]);
+  assert.deepEqual(workspace.keys, [workspaceId]);
+});
+
+test("the dashboard bootstrap spends no write limit for a member and only the user limit to create (#167)", async () => {
+  const user = recordingLimit(false),
+    workspace = recordingLimit(false);
+  const env = { ...config, API_WRITE_USER_LIMIT: user.binding, API_WRITE_WORKSPACE_LIMIT: workspace.binding };
+  // A member loads the dashboard even after both write limits are spent.
+  const member = await appApi(writeRequest("/api/workspace"), env, ownerPool, sessionFetch);
+  assert.equal(member.status, 200);
+  assert.deepEqual(await member.json(), { workspace_id: workspaceId, role: "owner", time_zone: "Asia/Seoul" });
+  assert.deepEqual([user.keys, workspace.keys], [[], []]);
+  // Without a membership the request creates a workspace, so it spends the user limit after the membership read.
+  const queries: string[] = [];
+  const create = await appApi(
+    writeRequest("/api/workspace"),
+    env,
+    () =>
+      ({
+        query: async (sql: string) => {
+          queries.push(sql);
+          return { rows: [] };
+        },
+        connect: async () => assert.fail("a refused bootstrap must not write the database"),
+        end: async () => {},
+      }) as unknown as Pool,
+    sessionFetch,
+  );
+  assert.equal(create.status, 429);
+  assert.deepEqual(await create.json(), { error: "rate_limited" });
+  assert.equal(queries.length, 1);
+  assert.deepEqual([user.keys, workspace.keys], [[userId], []]);
+});
+
+test("an owner removes a member after the workspace write limit is spent (#167)", async () => {
+  const user = recordingLimit(true),
+    workspace = recordingLimit(false);
+  const response = await appApi(
+    writeRequest(`/api/workspace/members/${memberId}`, "DELETE"),
+    { ...config, API_WRITE_USER_LIMIT: user.binding, API_WRITE_WORKSPACE_LIMIT: workspace.binding },
+    ownerPool,
+    sessionFetch,
+  );
+  assert.equal(response.status, 200);
+  assert.equal(((await response.json()) as { removed: boolean }).removed, true);
+  assert.deepEqual([user.keys, workspace.keys], [[userId], []]);
+  // Any other write of the same owner is still refused by the spent workspace limit.
+  const other = await appApi(
+    writeRequest(`/api/workspace/members/${memberId}`, "PATCH"),
+    { ...config, API_WRITE_USER_LIMIT: user.binding, API_WRITE_WORKSPACE_LIMIT: workspace.binding },
+    ownerPool,
+    sessionFetch,
+  );
+  assert.equal(other.status, 429);
+  assert.deepEqual(workspace.keys, [workspaceId]);
+});
+
+test("a user without a workspace spends only the per-user write limit (#167)", async () => {
+  const user = recordingLimit(true),
+    workspace = recordingLimit(true);
+  const queries: string[] = [];
+  const pool = {
+    query: async (sql: string) => {
+      queries.push(sql);
+      return { rows: [] };
+    },
+    connect: async () => assert.fail("no write is expected"),
+    end: async () => {},
+  } as unknown as Pool;
+  const response = await appApi(
+    writeRequest("/api/no-such-route"),
+    { ...config, API_WRITE_USER_LIMIT: user.binding, API_WRITE_WORKSPACE_LIMIT: workspace.binding },
+    () => pool,
+    sessionFetch,
+  );
+  assert.equal(response.status, 404);
+  assert.deepEqual(user.keys, [userId]);
+  assert.deepEqual(workspace.keys, []);
+  assert.equal(queries.length, 1);
+});
+
+test("GET routes other than the inbox list and the auth routes spend none of the default limits (#167)", async () => {
+  const user = recordingLimit(false),
+    workspace = recordingLimit(false),
+    inbox = recordingLimit(false);
+  const env = {
+    ...config,
+    API_WRITE_USER_LIMIT: user.binding,
+    API_WRITE_WORKSPACE_LIMIT: workspace.binding,
+    INBOX_LIST_LIMIT: inbox.binding,
+  };
+  const pool = () =>
+    ({
+      query: async (sql: string) => ({
+        rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : [],
+      }),
+      end: async () => {},
+    }) as unknown as Pool;
+  for (const path of ["/api/me", "/api/contacts", "/api/inbox/labels", "/api/no-such-route"]) {
+    const response = await appApi(sessionGet(path), env, pool, sessionFetch);
+    assert.notEqual(response.status, 429, path);
+  }
+  // Auth routes return before the session check, or (any other /api/auth/ path) are excluded by prefix.
+  const login = await appApi(
+    new Request("https://app.test/api/auth/login", {
+      method: "POST",
+      headers: { origin: "https://app.test", "content-type": "application/json" },
+      body: JSON.stringify({ email: "a@example.test", password: "password-123" }),
+    }),
+    { ...env, AUTH_IP_LIMIT: { limit: async () => ({ success: false }) } },
+    untouchedPool,
+    sessionFetch,
+  );
+  assert.equal(login.status, 429);
+  assert.deepEqual(await login.json(), { error: "auth_rate_limited" });
+  const otherAuth = await appApi(writeRequest("/api/auth/unknown", "PUT"), env, pool, sessionFetch);
+  assert.equal(otherAuth.status, 404);
+  assert.deepEqual([user.keys, workspace.keys, inbox.keys], [[], [], []]);
+});
+
+test("the inbox list over its per-user limit returns 429 before any database access (#167)", async () => {
+  const inbox = recordingLimit(false),
+    user = recordingLimit(true);
+  const response = await appApi(
+    sessionGet("/api/inbox"),
+    { ...config, INBOX_LIST_LIMIT: inbox.binding, API_WRITE_USER_LIMIT: user.binding },
+    untouchedPool,
+    sessionFetch,
+  );
+  assert.equal(response.status, 429);
+  assert.deepEqual(await response.json(), { error: "rate_limited" });
+  assert.deepEqual(inbox.keys, [userId]);
+  assert.deepEqual(user.keys, []);
+});
+
+test("an unavailable default limiter lets the request through and logs one fixed code (#167)", async (t) => {
+  const lines: unknown[] = [];
+  for (const method of ["error", "warn", "log"] as const)
+    t.mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
+  const expected = { event: "rate_limit_unavailable", code: "api_limit_unavailable", correlation_id: "corr-167" };
+  // Both write limits unavailable: a throwing per-user limiter and a missing workspace binding.
+  const write = await appApi(
+    writeRequest("/api/no-such-route"),
+    { ...config, API_WRITE_USER_LIMIT: recordingLimit("throw").binding, API_WRITE_WORKSPACE_LIMIT: undefined },
+    untouchedPool,
+    sessionFetch,
+    undefined,
+    "corr-167",
+  );
+  assert.equal(write.status, 404);
+  assert.deepEqual(lines, [expected]);
+  // A limiter object that answers with a non-OK status throws from durableLimits; a missing per-user binding too.
+  lines.length = 0;
+  const workspaceDown = await appApi(
+    writeRequest("/api/no-such-route"),
+    { ...config, API_WRITE_USER_LIMIT: undefined, API_WRITE_WORKSPACE_LIMIT: recordingLimit("throw").binding },
+    membershipOnlyPool,
+    sessionFetch,
+    undefined,
+    "corr-167",
+  );
+  assert.equal(workspaceDown.status, 404);
+  assert.deepEqual(lines, [expected]);
+  lines.length = 0;
+  const inbox = await appApi(
+    sessionGet("/api/inbox?unknown=1"),
+    { ...config, INBOX_LIST_LIMIT: undefined },
+    () =>
+      ({
+        query: async () => ({ rows: [{ workspace_id: workspaceId, role: "owner" }] }),
+        end: async () => {},
+      }) as unknown as Pool,
+    sessionFetch,
+    undefined,
+    "corr-167",
+  );
+  // The list handler ran: it refused the unknown query key.
+  assert.equal(inbox.status, 400);
+  assert.deepEqual(await inbox.json(), { error: "invalid_inbox_query" });
+  assert.deepEqual(lines, [expected]);
+  assert.equal(JSON.stringify(lines).includes(userId), false);
+});
+
+test("a write refused by a default limit spends no Instagram connect allowance (#167)", async () => {
+  const oauth = {
+    ...config,
+    APP_ORIGIN: "https://app.test",
+    INSTAGRAM_OAUTH_APP_ID: "123",
+    INSTAGRAM_OAUTH_APP_SECRET: "synthetic-secret",
+    TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
+    META_GRAPH_VERSION: "v26.0",
+    INSTAGRAM_PUBLIC_CONNECT_ENABLED: "true",
+  };
+  for (const refused of ["API_WRITE_USER_LIMIT", "API_WRITE_WORKSPACE_LIMIT"] as const) {
+    const connect = recordingLimit(true);
+    const response = await appApi(
+      writeRequest("/api/instagram/connect"),
+      { ...oauth, [refused]: recordingLimit(false).binding, INSTAGRAM_CONNECT_LIMIT: connect.binding },
+      membershipOnlyPool,
+      sessionFetch,
+    );
+    assert.equal(response.status, 429, refused);
+    assert.deepEqual(await response.json(), { error: "rate_limited" }, refused);
+    assert.deepEqual(connect.keys, [], refused);
+  }
 });

@@ -544,6 +544,8 @@ test("workerd contact API uses restricted server privileges and verified workspa
   const workspace = "11111111-1111-4111-8111-111111111111",
     user = "66666666-6666-4666-8666-666666666666",
     foreign = "77777777-7777-4777-8777-777777777777",
+    // A signed-in user with no workspace and no earlier writes, for the per-user write limit (#167).
+    writer = "88888888-8888-4888-8888-888888888888",
     connection = "22222222-2222-4222-8222-222222222222";
   const serverUrl = new URL(databaseUrl);
   serverUrl.username = "auto_chatter_server";
@@ -567,7 +569,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     outboundService: async (request) => {
       assert.equal(new URL(request.url).origin, "https://auth-test.supabase.co");
       return Response.json({
-        id: request.headers.get("authorization") === "Bearer foreign" ? foreign : user,
+        id: { "Bearer foreign": foreign, "Bearer writer": writer }[request.headers.get("authorization")] ?? user,
         email: "owner@example.test",
         email_confirmed_at: "2026-09-27",
       });
@@ -1036,6 +1038,20 @@ test("workerd contact API uses restricted server privileges and verified workspa
     });
     assert.equal(other.status, 404);
     assert.deepEqual((await pool.query("SELECT tags FROM instagram_contact_tags")).rows[0].tags, ["lead"]);
+    // The limiter object counts signed-in writes per user: 120 per minute, then 429 (#167). A user without a
+    // workspace spends only that limit, and reads stay open.
+    const writerHeaders = { ...headers, cookie: "__Host-ac-access=writer" };
+    for (let index = 0; index < 121; index++) {
+      const response = await runtime.dispatchFetch("https://app.test/api/no-such-route", {
+        method: "POST",
+        headers: writerHeaders,
+        body: "{}",
+      });
+      assert.equal(response.status, index < 120 ? 404 : 429, `write ${index}`);
+      if (index === 120) assert.deepEqual(await response.json(), { error: "rate_limited" });
+      else await response.arrayBuffer();
+    }
+    assert.equal((await runtime.dispatchFetch("https://app.test/api/me", { headers: writerHeaders })).status, 200);
   } finally {
     await runtime.dispose();
     await pool.end();
