@@ -334,6 +334,7 @@ export async function deliverDueWebhooks(
   const started = now();
   const spent = new Map<string, number>();
   const exhausted: string[] = [];
+  const served: string[] = [];
   let attempted = 0;
   let sent = 0;
   while (
@@ -342,19 +343,28 @@ export async function deliverDueWebhooks(
     subrequestsLeft() >= WEBHOOK_SUBREQUESTS_PER_ATTEMPT
   ) {
     const attemptId = crypto.randomUUID();
+    // Workspaces take turns: first one not yet served in this run, then the one whose latest attempt is oldest
+    // (never attempted first; attempt_started_at is kept after an attempt ends), then the oldest due delivery.
+    // The whole due set is ordered, so a row another run holds is skipped for the next one and one workspace
+    // alone still gets every slot.
     const claimed = (
       await pool.query<Claimed>(
         `UPDATE webhook_deliveries delivery SET status='sending',attempt_id=$1,attempt_started_at=now(),updated_at=now()
          WHERE delivery.event_id=(SELECT due.event_id FROM webhook_deliveries due
            WHERE due.status IN ('pending','retry') AND due.next_attempt_at<=now() AND NOT due.endpoint_id=ANY($2::uuid[])
-           ORDER BY due.next_attempt_at,due.event_id LIMIT 1 FOR UPDATE SKIP LOCKED)
+           ORDER BY due.workspace_id=ANY($3::uuid[]),
+             (SELECT max(latest.attempt_started_at) FROM webhook_deliveries latest
+               WHERE latest.workspace_id=due.workspace_id) NULLS FIRST,
+             due.next_attempt_at,due.event_id
+           LIMIT 1 FOR UPDATE SKIP LOCKED)
          RETURNING delivery.event_id::text,delivery.workspace_id::text,delivery.endpoint_id::text,
            delivery.connection_id::text,delivery.payload`,
-        [attemptId, exhausted],
+        [attemptId, exhausted, served],
       )
     ).rows[0];
     if (!claimed) break;
     attempted++;
+    if (!served.includes(claimed.workspace_id)) served.push(claimed.workspace_id);
     const attemptStarted = now();
     const result = await attempt(pool, claimed, encryptionKey, fetchImpl, resolve, now, timeoutMs);
     const used = (spent.get(claimed.endpoint_id) ?? 0) + (now() - attemptStarted);

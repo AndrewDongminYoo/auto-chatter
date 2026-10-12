@@ -78,19 +78,58 @@ async function endpoint(name = "crm", url = "https://hooks.example.test/in?token
   return { id: created.id as string, keyId: created.key.id, secret: created.key.secret };
 }
 
+type Tenant = { workspaceId: string; connectionId: string; flowId: string; runId: string };
+
+// Another workspace with its own owner, connection, flow run and endpoint. The endpoint's host names the
+// workspace, so a recorded request shows which workspace it was for.
+async function tenant(name: string) {
+  const owner = { id: crypto.randomUUID(), email: `${name}@example.test` };
+  const ids = { workspaceId: crypto.randomUUID(), connectionId: crypto.randomUUID(), flowId: crypto.randomUUID() };
+  const version = crypto.randomUUID();
+  await pool.query("INSERT INTO workspaces(id) VALUES($1)", [ids.workspaceId]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2)", [ids.workspaceId, owner.id]);
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,$3,true)", [
+    ids.connectionId,
+    ids.workspaceId,
+    `account-${name}`,
+  ]);
+  await pool.query("INSERT INTO flows(id,workspace_id,name,draft) VALUES($1,$2,'Notify','{}')", [
+    ids.flowId,
+    ids.workspaceId,
+  ]);
+  await pool.query(
+    `INSERT INTO flow_versions(id,flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,published_by)
+     VALUES($1,$2,$3,1,0,'{}',$4,'1789',$5)`,
+    [version, ids.flowId, ids.workspaceId, ids.connectionId, owner.id],
+  );
+  const event = await pool.query<{ id: string }>(
+    `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+     VALUES($1,$2,'comment-1','1789','sender-1','COMMENT-SENTINEL') RETURNING id`,
+    [ids.workspaceId, ids.connectionId],
+  );
+  const run = await pool.query<{ id: string }>(
+    `INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,event_id,status)
+     VALUES($1,$2,$3,$4,$5,'ended') RETURNING id`,
+    [ids.workspaceId, ids.connectionId, ids.flowId, version, event.rows[0]!.id],
+  );
+  const created = await createWebhookEndpoint(pool, owner, { name, url: `https://${name}.example.test/in` }, env);
+  return { ...ids, runId: run.rows[0]!.id, endpointId: created.id as string };
+}
+
 // One queued delivery of the fixture run; each call uses another node, as one node has one delivery per run.
-async function delivery(endpointId: string, dueSecondsAgo = 1): Promise<string> {
+async function delivery(endpointId: string, dueSecondsAgo = 1, owner?: Tenant): Promise<string> {
   const eventId = crypto.randomUUID();
+  const target = owner ?? { workspaceId, connectionId, flowId, runId };
   await pool.query(
     `INSERT INTO webhook_deliveries(event_id,workspace_id,endpoint_id,connection_id,flow_id,flow_run_id,node_id,sender_id,payload,next_attempt_at)
      VALUES($1,$2,$3,$4,$5,$6,$7,'sender-1',$8,now()-make_interval(secs=>$9))`,
     [
       eventId,
-      workspaceId,
+      target.workspaceId,
       endpointId,
-      connectionId,
-      flowId,
-      runId,
+      target.connectionId,
+      target.flowId,
+      target.runId,
       `hook-${++nodeNumber}`,
       JSON.stringify({ event_id: eventId, type: "flow.webhook", fields: { city: "PAYLOAD-SENTINEL" } }),
       dueSecondsAgo,
@@ -669,6 +708,156 @@ test("a slow endpoint gets one attempt per run and the other endpoints keep the 
   assert.deepEqual(await Promise.all(fastDeliveries.map(async (eventId) => (await row(eventId)).status)), [
     "sent",
     "sent",
+  ]);
+});
+
+function eventIdsOf(calls: Call[]): string[] {
+  return calls.map((call) => new Headers(call.init.headers).get("x-autochatter-event-id")!);
+}
+
+test("a workspace with a backlog does not hold back another workspace's later due delivery", async () => {
+  const busy = await endpoint();
+  const backlog: string[] = [];
+  for (let index = 0; index < 30; index++) backlog.push(await delivery(busy.id, 1_000 - index));
+  const other = await tenant("other");
+  const later = await delivery(other.endpointId, 1, other);
+  const { calls, fetchImpl } = recorder();
+  assert.deepEqual(await deliver(fetchImpl), {
+    attempted: WEBHOOK_MAX_DELIVERIES_PER_RUN,
+    sent: WEBHOOK_MAX_DELIVERIES_PER_RUN,
+  });
+  assert.equal((await row(later)).status, "sent");
+  // The busy workspace keeps the other slots, oldest first.
+  assert.deepEqual(
+    eventIdsOf(calls).filter((eventId) => eventId !== later),
+    backlog.slice(0, WEBHOOK_MAX_DELIVERIES_PER_RUN - 1),
+  );
+});
+
+test("consecutive runs reach every workspace when more workspaces have due work than one run attempts", async () => {
+  const tenants = [];
+  for (let index = 0; index < 12; index++) tenants.push(await tenant(`ws${index}`));
+  // Each workspace's two deliveries are older than the next workspace's, so the global due order would give
+  // the first workspaces every slot of two runs.
+  for (const [index, owner] of tenants.entries()) {
+    await delivery(owner.endpointId, 2_000 - 2 * index, owner);
+    await delivery(owner.endpointId, 1_999 - 2 * index, owner);
+  }
+  const workspaceOf = (call: Call) => new URL(call.url).hostname.split(".")[0]!;
+  const first = recorder();
+  await deliver(first.fetchImpl);
+  assert.deepEqual(
+    first.calls.map(workspaceOf),
+    tenants.slice(0, 10).map((_owner, index) => `ws${index}`),
+  );
+  // The next run starts with the workspaces never attempted, then the one whose latest attempt is oldest.
+  const second = recorder();
+  await deliver(second.fetchImpl);
+  assert.deepEqual(second.calls.map(workspaceOf), [
+    "ws10",
+    "ws11",
+    "ws0",
+    "ws1",
+    "ws2",
+    "ws3",
+    "ws4",
+    "ws5",
+    "ws6",
+    "ws7",
+  ]);
+  const third = recorder();
+  assert.deepEqual(await deliver(third.fetchImpl), { attempted: 4, sent: 4 });
+  assert.deepEqual(third.calls.map(workspaceOf), ["ws8", "ws9", "ws10", "ws11"]);
+});
+
+test("one workspace with due work uses every slot of a run in next attempt time and event ID order", async () => {
+  const target = await endpoint();
+  const due: { eventId: string; at: string }[] = [];
+  for (let index = 0; index < WEBHOOK_MAX_DELIVERIES_PER_RUN + 2; index++) {
+    const eventId = await delivery(target.id);
+    // Three deliveries share each time, so the event ID decides between them.
+    const at = new Date(Date.UTC(2026, 0, 1, Math.floor(index / 3))).toISOString();
+    await pool.query("UPDATE webhook_deliveries SET next_attempt_at=$2 WHERE event_id=$1", [eventId, at]);
+    due.push({ eventId, at });
+  }
+  due.sort((a, b) => (a.at === b.at ? (a.eventId < b.eventId ? -1 : 1) : a.at < b.at ? -1 : 1));
+  const { calls, fetchImpl } = recorder();
+  assert.deepEqual(await deliver(fetchImpl), {
+    attempted: WEBHOOK_MAX_DELIVERIES_PER_RUN,
+    sent: WEBHOOK_MAX_DELIVERIES_PER_RUN,
+  });
+  assert.deepEqual(
+    eventIdsOf(calls),
+    due.slice(0, WEBHOOK_MAX_DELIVERIES_PER_RUN).map((entry) => entry.eventId),
+  );
+});
+
+test("overlapping runs attempt each due delivery of several workspaces once", async () => {
+  const deliveries = new Set<string>();
+  for (let index = 0; index < 3; index++) {
+    const owner = await tenant(`ws${index}`);
+    for (let count = 0; count < 4; count++) deliveries.add(await delivery(owner.endpointId, 100 - count, owner));
+  }
+  const { calls, fetchImpl } = recorder(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return new Response("ok");
+  });
+  const results = await Promise.all([deliver(fetchImpl), deliver(fetchImpl), deliver(fetchImpl)]);
+  assert.equal(
+    results.reduce((sum, result) => sum + result.sent, 0),
+    12,
+  );
+  assert.equal(calls.length, 12);
+  assert.deepEqual(new Set(eventIdsOf(calls)), deliveries);
+});
+
+test("an endpoint that used its budget stays skipped when its workspace's turn comes again", async () => {
+  const slow = await tenant("slow");
+  const fast = await tenant("fast");
+  const slowDeliveries = [
+    await delivery(slow.endpointId, 300, slow),
+    await delivery(slow.endpointId, 200, slow),
+    await delivery(slow.endpointId, 100, slow),
+  ];
+  const fastDeliveries = [await delivery(fast.endpointId, 20, fast), await delivery(fast.endpointId, 10, fast)];
+  let clock = 0;
+  const { calls, fetchImpl } = recorder((call) => {
+    clock += call.url.startsWith("https://slow.") ? 6_000 : 50;
+    return call.url.startsWith("https://slow.") ? new Response(null, { status: 503 }) : new Response("ok");
+  });
+  // After the first fast attempt the slow workspace's latest attempt is the older one, but its endpoint is
+  // out of budget, so the run continues with the fast workspace.
+  assert.deepEqual(await deliver(fetchImpl, { now: () => clock }), { attempted: 3, sent: 2 });
+  assert.deepEqual(
+    calls.map((call) => new URL(call.url).hostname),
+    ["slow.example.test", "fast.example.test", "fast.example.test"],
+  );
+  assert.deepEqual(await Promise.all(slowDeliveries.map(async (eventId) => (await row(eventId)).status)), [
+    "retry",
+    "pending",
+    "pending",
+  ]);
+  assert.deepEqual(await Promise.all(fastDeliveries.map(async (eventId) => (await row(eventId)).status)), [
+    "sent",
+    "sent",
+  ]);
+});
+
+test("the delivery fairness migration keeps its index when reapplied", async () => {
+  const migration = await readFile(
+    new URL("../../db/migrations/043_webhook_delivery_fairness.sql", import.meta.url),
+    "utf8",
+  );
+  await pool.query(migration);
+  await pool.query(migration);
+  const index = await pool.query(
+    "SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND indexname='webhook_deliveries_workspace_attempt_idx'",
+  );
+  assert.deepEqual(index.rows, [
+    {
+      indexdef:
+        "CREATE INDEX webhook_deliveries_workspace_attempt_idx ON public.webhook_deliveries USING btree (workspace_id, attempt_started_at)",
+    },
   ]);
 });
 
