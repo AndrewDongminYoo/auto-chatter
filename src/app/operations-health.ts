@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import type { User } from "./auth.ts";
 import { logOperation, type OperationStep } from "./operations-log.ts";
 import { workspaceFor } from "./settings.ts";
+import { privateReplyBudgetOpenSql } from "../instagram/send-quota.ts";
 
 // Alert thresholds are service policy (#59, docs/specs/2026-10-01-operations-health.md).
 export const ALERT_THRESHOLDS = {
@@ -31,8 +32,8 @@ export interface ConnectionMetrics {
 }
 
 // Computed on read; there is no time-series store. The due predicates are those of wakeDueReplies in
-// src/cloudflare/index.ts, so held work (contact pause, connection pause, sending off, no valid token) is not
-// counted as waiting. The 24-hour window uses the last claim time, or the creation or confirmation time of a
+// src/cloudflare/index.ts, so held work (contact pause, connection pause, sending off, no valid token, a used-up
+// private reply budget) is not counted as waiting. The 24-hour window uses the last claim time, or the creation or confirmation time of a
 // row that was never claimed, because the rows have no terminal timestamp.
 const METRICS_SQL = `
 WITH metrics AS (
@@ -44,7 +45,8 @@ WITH metrics AS (
         (SELECT min(greatest(reply.next_attempt_at,c.send_paused_until)) FROM private_reply_outbox reply
          WHERE reply.connection_id=c.id AND reply.status='pending' AND reply.next_attempt_at<=now()
            AND NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
-             AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused))),
+             AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused))
+           AND ${privateReplyBudgetOpenSql("c.id")}),
         (SELECT min(greatest(flow.next_attempt_at,c.send_paused_until)) FROM instagram_follow_conversations flow
          JOIN private_reply_outbox reply ON reply.id=flow.reply_id
          WHERE flow.connection_id=c.id AND flow.status='pending' AND flow.next_attempt_at<=now()

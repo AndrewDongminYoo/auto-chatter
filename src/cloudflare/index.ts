@@ -66,6 +66,10 @@ async function wakeDueReplies(
   scope?: { connectionId: string } | { accountIds: string[] },
 ): Promise<void> {
   if (env.SEND_ENABLED !== "true") return;
+  // A connection at its private reply budget (#60) is due only for manual replies and follow confirmations, so
+  // the wake after a queue message does not queue it again for replies it cannot claim. The unscoped cron wake
+  // queues the connections it woke least recently first and then stamps the ones it queued, so beyond the bound
+  // every due connection is reached in rotation; scoped wakes keep the ID order and do not stamp.
   const due = await pool.query<{ id: string }>(
     `SELECT c.id FROM instagram_connections c
      WHERE ($1::uuid IS NULL OR c.id=$1) AND ($2::text[] IS NULL OR c.account_id=ANY($2))
@@ -74,20 +78,38 @@ async function wakeDueReplies(
          AND NOT EXISTS(SELECT 1 FROM instagram_manual_replies earlier WHERE earlier.workspace_id=manual.workspace_id AND earlier.connection_id=manual.connection_id AND earlier.recipient_id=manual.recipient_id
            AND (earlier.created_at,earlier.id)<(manual.created_at,manual.id) AND (earlier.status IN ('pending','sending') OR (earlier.status='unknown' AND earlier.resolved_at IS NULL))))
        OR (c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>now()
-       AND (EXISTS(SELECT 1 FROM private_reply_outbox reply WHERE reply.connection_id=c.id AND reply.status='pending' AND reply.next_attempt_at<=now()
+       AND ((EXISTS(SELECT 1 FROM private_reply_outbox reply WHERE reply.connection_id=c.id AND reply.status='pending' AND reply.next_attempt_at<=now()
          AND NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
            AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused)))
+         AND ${privateReplyBudgetOpenSql("c.id")})
        OR EXISTS(SELECT 1 FROM instagram_follow_conversations flow JOIN private_reply_outbox reply ON reply.id=flow.reply_id
          WHERE flow.connection_id=c.id AND flow.status='pending' AND flow.next_attempt_at<=now()
          AND NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
            AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused))))))
-     ORDER BY c.id LIMIT 100`,
+     ORDER BY CASE WHEN $3 THEN c.send_woken_at END NULLS FIRST, c.id LIMIT 100`,
     [
       scope && "connectionId" in scope ? scope.connectionId : null,
       scope && "accountIds" in scope ? scope.accountIds : null,
+      !scope,
     ],
   );
-  for (const row of due.rows) await env.REPLY_QUEUE.send({ connectionId: row.id });
+  const queued: string[] = [];
+  try {
+    for (const row of due.rows) {
+      await env.REPLY_QUEUE.send({ connectionId: row.id });
+      queued.push(row.id);
+    }
+  } finally {
+    // Only connections whose message was published move to the back, so a publish failure leaves the rest first
+    // in line. The stamp locks in ID order and skips a row another transaction holds, so it never waits on or
+    // deadlocks with a connection lock; a skipped connection stays early in the rotation.
+    if (!scope && queued.length > 0)
+      await pool.query(
+        `UPDATE instagram_connections SET send_woken_at=now()
+         WHERE id IN (SELECT id FROM instagram_connections WHERE id=ANY($1::uuid[]) ORDER BY id FOR NO KEY UPDATE SKIP LOCKED)`,
+        [queued],
+      );
+  }
 }
 
 async function readBody(request: Request, limit = 1024 * 1024): Promise<Uint8Array | null> {
@@ -581,6 +603,7 @@ import { Pool } from "pg";
 import { ingestComments, resumeDueFlowRuns } from "../instagram/store.ts";
 import { verifySignature, verifySubscription } from "../instagram/webhook.ts";
 import { processNextPrivateReply, PreSendVerificationError } from "../instagram/reply-worker.ts";
+import { privateReplyBudgetOpenSql } from "../instagram/send-quota.ts";
 import { InstagramLoginPrivateReplyTransport } from "../instagram/instagram-login-private-reply.ts";
 import { publicPage } from "./public-pages.ts";
 import { appApi } from "../app/api.ts";

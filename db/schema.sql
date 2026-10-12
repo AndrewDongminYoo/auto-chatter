@@ -105,6 +105,8 @@ ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS subscription_check_at
 ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS subscription_checked_at timestamptz;
 ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS subscription_missing_at timestamptz;
 ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS subscription_token_obtained_at timestamptz;
+-- When the cron last queued the connection (#60); used only for the wake order.
+ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS send_woken_at timestamptz;
 
 CREATE TABLE IF NOT EXISTS channel_consent_events (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -836,6 +838,11 @@ DO $$ BEGIN
   END IF;
 END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS private_reply_outbox_flow_run_idx ON private_reply_outbox(flow_run_id) WHERE flow_run_id IS NOT NULL;
+-- The per-account private reply budget (#60): set immediately before the provider send request, overwritten by a
+-- later attempt and never cleared. The claim and the wake count a connection's rows from the last hour.
+ALTER TABLE private_reply_outbox ADD COLUMN IF NOT EXISTS provider_called_at timestamptz;
+CREATE INDEX IF NOT EXISTS private_reply_outbox_provider_called_idx
+  ON private_reply_outbox(connection_id, provider_called_at) WHERE provider_called_at IS NOT NULL;
 -- Outbound webhooks (#47). An endpoint is an HTTPS address that an administrator registered; a flow's
 -- webhook node queues one signed delivery to it. Server roles never delete these rows; the deletion
 -- functions do. The limit of active endpoints per workspace is enforced in code under the workspace lock.

@@ -10,6 +10,7 @@ import {
 import type { FollowTransport } from "./follow-transport.ts";
 import { deliveryRecipientOptedOut } from "./channel-consent.ts";
 import { evaluatePrivateReply } from "./reply-policy.ts";
+import { privateReplyBudgetOpenSql } from "./send-quota.ts";
 import { failureCode, logOperation } from "../app/operations-log.ts";
 
 export interface PrivateReplyRequest {
@@ -127,6 +128,7 @@ export async function processNextPrivateReply(
            SELECT 1 FROM instagram_connections AS connection
            WHERE connection.id = $2 AND connection.send_paused_until > now()
          )
+         AND ${privateReplyBudgetOpenSql("$2")}
        ORDER BY created_at, id
        FOR UPDATE SKIP LOCKED
        LIMIT 1
@@ -283,6 +285,13 @@ export async function processNextPrivateReply(
     );
     return true;
   }
+  // The hourly budget counts this row from here on (#60). A transport can still stop before its POST, which
+  // counts a call that was not made; the budget errs toward stopping early.
+  await updateClaim(
+    pool,
+    "UPDATE private_reply_outbox SET provider_called_at=now() WHERE id=$1 AND status='sending' AND attempt_id=$2",
+    [row.id, attemptId],
+  );
   let messageId: string;
   let recipientId: string | null = null;
   try {
