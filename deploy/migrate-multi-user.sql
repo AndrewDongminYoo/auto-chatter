@@ -42,5 +42,6 @@ BEGIN;
 \ir ../db/migrations/040_instagram_deauthorization.sql
 \ir ../db/migrations/041_instagram_subscription_check.sql
 \ir ../db/migrations/042_send_quotas.sql
+\ir ../db/migrations/043_webhook_delivery_fairness.sql
 \ir supabase-access.sql
 COMMIT;

@@ -914,6 +914,9 @@ CREATE INDEX IF NOT EXISTS webhook_deliveries_sending_idx ON webhook_deliveries(
 CREATE INDEX IF NOT EXISTS webhook_deliveries_recent_idx ON webhook_deliveries(workspace_id,created_at DESC,event_id);
 CREATE INDEX IF NOT EXISTS webhook_deliveries_person_idx ON webhook_deliveries(connection_id,sender_id);
 CREATE INDEX IF NOT EXISTS webhook_deliveries_endpoint_idx ON webhook_deliveries(endpoint_id);
+-- The latest attempt of a workspace's deliveries, read by every claim to rotate across workspaces (migration 043).
+CREATE INDEX IF NOT EXISTS webhook_deliveries_workspace_attempt_idx
+  ON webhook_deliveries(workspace_id, attempt_started_at);
 -- Append-only audit of a manual redelivery of a dead delivery: who asked for it and when.
 CREATE TABLE IF NOT EXISTS webhook_redelivery_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
