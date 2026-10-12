@@ -521,6 +521,36 @@ test("Supabase roles cannot read product data; the server role has DML without D
       assert.deepEqual(row.api_access, [], `${row.table} must grant nothing to the API roles`);
       assert.deepEqual(row.server_delete, [], `${row.table} must not let a server role delete or truncate`);
     }
+    // Security audit #62, third pass: a SECURITY DEFINER function runs with its owner's rights, so each one in public
+    // pins search_path (an object planted earlier in the path cannot take over a name), is owned by neither the
+    // server roles nor the API roles, and grants EXECUTE to neither PUBLIC nor an API role.
+    const definers = await client.query<{
+      name: string;
+      config: string[] | null;
+      owner: string;
+      executors: string[];
+    }>(
+      `SELECT p.proname AS name, p.proconfig AS config, pg_get_userbyid(p.proowner) AS owner,
+         ARRAY(SELECT r FROM unnest(ARRAY['public','anon','authenticated','service_role']) r
+               WHERE has_function_privilege(r, p.oid, 'EXECUTE')) AS executors
+       FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND p.prosecdef ORDER BY 1`,
+    );
+    assert.deepEqual(
+      definers.rows.map((row) => row.name),
+      ["delete_connection_data", "delete_expired_oauth_states"],
+    );
+    for (const row of definers.rows) {
+      assert.equal(
+        row.config?.find((setting) => setting.startsWith("search_path=")),
+        "search_path=public, pg_temp",
+        `${row.name} must pin search_path to public, pg_temp`,
+      );
+      assert.ok(
+        !["auto_chatter_server", "automations_app", "anon", "authenticated", "service_role"].includes(row.owner),
+        `${row.name} must not be owned by a server or API role`,
+      );
+      assert.deepEqual(row.executors, [], `${row.name} must not be executable by PUBLIC or an API role`);
+    }
     // Exercise RLS independently of table grants: an accidental future grant must not expose rows.
     await client.query("GRANT SELECT ON workspaces TO anon");
     await client.query("SET ROLE anon");

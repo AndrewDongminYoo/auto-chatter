@@ -5,7 +5,7 @@ import { Pool } from "pg";
 import { appApi } from "./api.ts";
 import { beginInstagramOAuth, finishInstagramOAuth } from "./instagram-oauth.ts";
 import { PLANS } from "./plans.ts";
-import { disconnectConnection, ensureWorkspace } from "./settings.ts";
+import { disconnectConnection, ensureWorkspace, saveWorkspaceSettings, updateConnection } from "./settings.ts";
 import { acceptInvite, createInvite, removeMember, revokeInvite } from "./workspace-members.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -304,6 +304,26 @@ test("a disconnect frees the connection, and reconnecting a disconnected account
   await setPlan("essential");
   await connect("1001");
   assert.deepEqual(await connectedAccounts(), ["1001", "1002"]);
+});
+
+// Security audit #62, third pass: the connection switch and the settings route are the other writers of these rows.
+test("neither the connection switch nor the settings route raises the plan or reactivates a disconnected account", async () => {
+  await connect("1001");
+  const id = (await pool.query("SELECT id FROM instagram_connections WHERE account_id='1001'")).rows[0].id;
+  await disconnectConnection(pool, owner, id);
+  await connect("1002");
+  // The free plan's one connection is taken by 1002; switching 1001 back on would be a second without OAuth.
+  await assert.rejects(updateConnection(pool, owner, id, { active: true, send_enabled: false }), {
+    status: 409,
+    message: "connection_unavailable",
+  });
+  assert.deepEqual(await connectedAccounts(), ["1002"]);
+  // The settings route writes only the time zone, whatever else the body carries.
+  assert.deepEqual(
+    await saveWorkspaceSettings(pool, owner, { time_zone: "Asia/Tokyo", plan: "advanced", limits: { seats: 99 } }),
+    { time_zone: "Asia/Tokyo" },
+  );
+  assert.equal((await pool.query("SELECT plan FROM workspaces WHERE id=$1", [workspaceId])).rows[0].plan, "free");
 });
 
 test("a downgrade keeps connected accounts and their re-authorization, and another workspace is unaffected", async () => {
