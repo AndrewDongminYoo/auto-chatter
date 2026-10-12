@@ -435,6 +435,15 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 배포 직후 03:14:25Z의 cron이 운영 연결 1개의 구독을 Meta에서 확인했고, 결과는 구독이 있음(`subscription_checked_at` 03:14:26Z, `subscription_missing_at` 없음, 기록이 현재 토큰과 일치)이었습니다. 이후 두 번의 실행은 6시간 간격에 따라 같은 연결을 다시 확인하지 않았습니다.
 이어서 운영자가 로그인한 계정 화면에서 "Meta 상태 확인"을 실행했고, 화면에는 저장된 기록("Meta가 필수 웹후크 구독 필드를 반환했습니다. 마지막 확인: 2026. 10. 12. 오후 12:37:04.")과 이번 확인 결과가 함께 표시됐습니다. 03:37:33Z의 조회에서 `subscription_check_attempted_at`은 03:37:04.19Z, `subscription_checked_at`은 03:37:04.68Z로 갱신됐고, 유실 기록은 없었으며 기록은 현재 토큰과 일치했습니다. 수동 확인도 시도 시각을 갱신하므로, cron의 다음 확인은 그로부터 6시간 뒤로 미뤄집니다.
 구독이 실제로 유실된 경우의 기록과 화면의 "웹후크 구독 유실" 배지는 실제 구독을 해제해야 하므로 운영에서 확인하지 않았습니다.
+2026-10-12 08:14Z에는 운영자의 "042·043 마이그레이션 진행하고 배포해주세요" 요청에 따라 `main` 커밋 `fb2a621`을 적용했습니다. 이 커밋에는 PR #187(#184: 발송 전 계정 확인이 `refresh_rejected` 표시를 지우지 않음), PR #188(#60 일부: 계정별 비공개 답장 시간당 한도와 cron 깨우기 순환, migration 042), PR #190(#167 일부: 작업 공간을 돌아가는 웹후크 전달 순서, migration 043)이 들어 있습니다.
+적용 전 조회에서 운영 DB는 041까지 적용된 상태였고(`provider_called_at`·`send_woken_at` 열과 두 새 인덱스 없음, public 테이블 44개), 연결 1개(수신 켜짐·발송 꺼짐)·비공개 답장 4행·외부 전송 0행·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-12-migration-042-043/public-pre-042-043.dump`(277,330바이트, SHA-256 `d32ef71eab2d44fbc5489764e0e427c875d6dce9395c9e732790d552e36adc70`)에 저장했고, 목록 읽기에서 데이터 테이블 44개를 확인했습니다.
+같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행해 042와 043을 함께 적용했습니다. 로그는 `COMMIT`으로 끝났고 오류는 없었으며, NOTICE 138건은 모두 건너뛰기 알림이었습니다(041의 네 열을 다시 실행한 4건이 늘었습니다).
+적용 후 `private_reply_outbox.provider_called_at`과 `instagram_connections.send_woken_at`(모두 timestamptz)이 NULL 허용으로 추가됐고, `auto_chatter_server`는 두 열을 SELECT·UPDATE할 수 있습니다. 인덱스 `private_reply_outbox_provider_called_idx`와 `webhook_deliveries_workspace_attempt_idx`는 유효(`indisvalid`) 상태입니다. 서버 역할의 테이블 DELETE·TRUNCATE 권한과 `anon`·`authenticated`의 public 테이블 권한은 계속 0개였습니다. 관리자 연결의 읽기 전용 트랜잭션에서 cron 깨우기의 순서·한도 조건과 웹후크 claim의 정렬 조회를 실행해, 연결 1개가 한도 여유 있음·`send_woken_at` 없음으로 반환되고 기한이 된 웹후크 전달은 없음을 확인했습니다.
+이어서 Worker를 버전 `d62e2d49-7fee-4029-b7c7-28217b76cc5d`로 배포했고, 08:18:05Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `0370bb92-b6e6-453b-82de-7cef131e3c1f`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+이번 커밋은 `public/`을 바꾸지 않았으므로 18개 항목 점검은 배포 전과 배포 후 모두 18개가 통과했습니다.
+`scheduled_steps`를 08:19:51Z, 08:20:51Z, 08:21:52Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
+발송이 꺼져 있어 `wake`·`webhook_delivery`·`stale_recovery` 단계는 실행되지 않으므로, 시간당 한도의 셈, cron 깨우기의 `send_woken_at` 기록, 작업 공간 순환 전달, #184의 표시 유지는 운영에서 실행되지 않았습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
