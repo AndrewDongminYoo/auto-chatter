@@ -212,6 +212,147 @@ test("a call is recorded before the transport's send, so a send stopped before i
   assert.ok(second.provider_called_at! > first.provider_called_at!);
 });
 
+const operatorId = "66666666-6666-4666-8666-666666666666";
+
+async function carry(connection = connectionId) {
+  return (
+    await pool.query<{ calls: number; until: Date | null }>(
+      "SELECT private_reply_carried_calls AS calls,private_reply_carried_until AS until FROM instagram_connections WHERE id=$1",
+      [connection],
+    )
+  ).rows[0]!;
+}
+
+async function calledAt(commentId: string): Promise<Date> {
+  return (await reply(commentId)).provider_called_at!;
+}
+
+function hourAfter(time: Date): Date {
+  return new Date(time.getTime() + 60 * 60 * 1000);
+}
+
+async function deletePerson(sender: string) {
+  await pool.query("SELECT public.delete_person_data($1,$2,$3,'comment_sender',$4)", [
+    workspaceId,
+    connectionId,
+    operatorId,
+    sender,
+  ]);
+}
+
+test("connection data deletion and a reconnect keep the deleted rows' recent calls counted until they expire", async () => {
+  await insertReplies(connectionId, "called-", 400, { calledAgo: "30 minutes" });
+  const latest = await calledAt("called-400");
+  await pool.query("UPDATE instagram_connections SET active=false WHERE id=$1", [connectionId]);
+  await pool.query("SELECT public.delete_connection_data($1,$2,$3,'account-1')", [
+    workspaceId,
+    connectionId,
+    operatorId,
+  ]);
+  assert.equal(
+    (await pool.query("SELECT count(*)::int AS count FROM private_reply_outbox WHERE connection_id=$1", [connectionId]))
+      .rows[0].count,
+    0,
+  );
+  assert.deepEqual(await carry(), { calls: 400, until: hourAfter(latest) });
+  // The reconnect reuses the same connection row, as the OAuth upsert does.
+  await pool.query("UPDATE instagram_connections SET active=true WHERE id=$1", [connectionId]);
+  await insertReplies(connectionId, "recent-", PRIVATE_REPLY_HOURLY_BUDGET - 400 - 1, { calledAgo: "10 minutes" });
+  await insertReplies(connectionId, "queued-", 2);
+  const sent: string[] = [];
+  assert.equal(await processNextPrivateReply(pool, recordingTransport(sent), () => now, connectionId), true);
+  assert.equal(await processNextPrivateReply(pool, recordingTransport(sent), () => now, connectionId), false);
+  assert.deepEqual(sent, ["queued-1"]);
+  assert.equal((await reply("queued-2")).status, "pending");
+  // Moving the carry's end into the past stands for the hour passing.
+  await pool.query(
+    "UPDATE instagram_connections SET private_reply_carried_until=now()-interval '1 second' WHERE id=$1",
+    [connectionId],
+  );
+  assert.equal(await processNextPrivateReply(pool, recordingTransport(sent), () => now, connectionId), true);
+  assert.deepEqual(sent, ["queued-1", "queued-2"]);
+});
+
+test("person data deletion keeps the person's recent calls counted", async () => {
+  await insertReplies(connectionId, "called-", PRIVATE_REPLY_HOURLY_BUDGET - 1, { calledAgo: "30 minutes" });
+  await insertReplies(connectionId, "queued-", 2);
+  const deletedCall = await calledAt("called-1");
+  await deletePerson("called-1");
+  assert.equal(await reply("called-1"), undefined);
+  assert.deepEqual(await carry(), { calls: 1, until: hourAfter(deletedCall) });
+  const sent: string[] = [];
+  assert.equal(await processNextPrivateReply(pool, recordingTransport(sent), () => now, connectionId), true);
+  assert.equal(await processNextPrivateReply(pool, recordingTransport(sent), () => now, connectionId), false);
+  assert.deepEqual(sent, ["queued-1"]);
+});
+
+test("deletions within the hour add to the carry and keep its latest end; an expired carry is replaced", async () => {
+  await insertReplies(connectionId, "called-", 3, { calledAgo: "30 minutes" });
+  await pool.query(
+    "UPDATE private_reply_outbox SET provider_called_at=now()-interval '10 minutes' WHERE comment_id='called-2'",
+  );
+  const later = await calledAt("called-2");
+  await deletePerson("called-2");
+  assert.deepEqual(await carry(), { calls: 1, until: hourAfter(later) });
+  // An earlier call deleted afterwards adds its count and does not move the end back.
+  await deletePerson("called-1");
+  assert.deepEqual(await carry(), { calls: 2, until: hourAfter(later) });
+
+  await pool.query(
+    "UPDATE instagram_connections SET private_reply_carried_until=now()-interval '1 second' WHERE id=$1",
+    [connectionId],
+  );
+  const last = await calledAt("called-3");
+  await deletePerson("called-3");
+  assert.deepEqual(await carry(), { calls: 1, until: hourAfter(last) });
+});
+
+test("deleted rows called over an hour ago or never called carry nothing", async () => {
+  await insertReplies(connectionId, "old-", 2, { calledAgo: "61 minutes" });
+  await insertReplies(connectionId, "never-", 1);
+  await insertReplies(otherConnectionId, "other-", 1, { calledAgo: "5 minutes" });
+  const otherCall = await calledAt("other-1");
+  // One statement across two connections carries each connection's own recent calls only.
+  await pool.query("DELETE FROM private_reply_outbox");
+  assert.deepEqual(await carry(), { calls: 0, until: null });
+  assert.deepEqual(await carry(otherConnectionId), { calls: 1, until: hourAfter(otherCall) });
+});
+
+test("workspace data deletion still succeeds with recent calls and removes the connections with their carry", async () => {
+  await insertReplies(connectionId, "called-", 3, { calledAgo: "5 minutes" });
+  await insertReplies(otherConnectionId, "other-", 2, { calledAgo: "5 minutes" });
+  await pool.query("UPDATE instagram_connections SET active=false");
+  const result = await pool.query<{ result: { deleted_counts: Record<string, number> } }>(
+    "SELECT public.delete_workspace_data($1,$2) AS result",
+    [workspaceId, operatorId],
+  );
+  assert.equal(result.rows[0]!.result.deleted_counts.private_reply_outbox, 5);
+  assert.equal(result.rows[0]!.result.deleted_counts.instagram_connections, 2);
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_connections")).rows[0].count, 0);
+});
+
+test("the budget carry migration keeps a carry and one trigger when reapplied", async () => {
+  await insertReplies(connectionId, "called-", 1, { calledAgo: "5 minutes" });
+  await deletePerson("called-1");
+  const before = await carry();
+  assert.equal(before.calls, 1);
+  const migration = await readFile(
+    new URL("../../db/migrations/044_private_reply_budget_carry.sql", import.meta.url),
+    "utf8",
+  );
+  await pool.query(migration);
+  await pool.query(migration);
+  assert.deepEqual(await carry(), before);
+  const triggers = await pool.query(
+    "SELECT tgname FROM pg_trigger WHERE tgrelid='private_reply_outbox'::regclass AND NOT tgisinternal",
+  );
+  assert.deepEqual(triggers.rows, [{ tgname: "carry_deleted_private_reply_calls" }]);
+  await assert.rejects(
+    pool.query("UPDATE instagram_connections SET private_reply_carried_calls=-1 WHERE id=$1", [connectionId]),
+    { code: "23514" },
+  );
+});
+
 test("the send quota migration keeps recorded calls and wake times when reapplied", async () => {
   await insertReplies(connectionId, "called-", 1, { calledAgo: "5 minutes" });
   await pool.query("UPDATE instagram_connections SET send_woken_at=now()-interval '1 minute' WHERE id=$1", [

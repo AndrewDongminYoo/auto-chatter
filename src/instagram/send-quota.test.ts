@@ -13,3 +13,9 @@ test("the budget condition counts the given connection's provider calls of the l
   assert.match(sql, /called\.provider_called_at>now\(\)-interval '1 hour'/);
   assert.match(sql, /\)<700$/);
 });
+
+test("the budget condition adds the connection's carried calls only while the carry is in force", () => {
+  const sql = privateReplyBudgetOpenSql("c.id");
+  assert.match(sql, /\+coalesce\(\(SELECT carry\.private_reply_carried_calls FROM instagram_connections carry/);
+  assert.match(sql, /carry\.id=c\.id AND carry\.private_reply_carried_until>now\(\)\),0\)\)<700$/);
+});

@@ -107,6 +107,16 @@ ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS subscription_missing_
 ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS subscription_token_obtained_at timestamptz;
 -- When the cron last queued the connection (#60); used only for the wake order.
 ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS send_woken_at timestamptz;
+-- The private reply budget carry (#189): recent provider calls of deleted outbox rows, counted by the budget while
+-- private_reply_carried_until is in the future. Only the trigger after private_reply_outbox writes them.
+ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS private_reply_carried_calls integer NOT NULL DEFAULT 0;
+ALTER TABLE instagram_connections ADD COLUMN IF NOT EXISTS private_reply_carried_until timestamptz;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='instagram_connections'::regclass AND conname='instagram_connections_private_reply_carried_calls') THEN
+    ALTER TABLE instagram_connections ADD CONSTRAINT instagram_connections_private_reply_carried_calls
+      CHECK(private_reply_carried_calls>=0);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS channel_consent_events (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -843,6 +853,45 @@ CREATE UNIQUE INDEX IF NOT EXISTS private_reply_outbox_flow_run_idx ON private_r
 ALTER TABLE private_reply_outbox ADD COLUMN IF NOT EXISTS provider_called_at timestamptz;
 CREATE INDEX IF NOT EXISTS private_reply_outbox_provider_called_idx
   ON private_reply_outbox(connection_id, provider_called_at) WHERE provider_called_at IS NOT NULL;
+-- Deleting rows with a call in the last hour carries their number on the connection (#189), so a data deletion
+-- and an OAuth reconnect of the same row do not reset the budget. Server roles have no DELETE on this table, so
+-- this runs only inside the administrator deletion functions. It is SECURITY INVOKER: in delete_connection_data
+-- (SECURITY DEFINER) it runs as that function's administrator owner, and in delete_person_data and
+-- delete_workspace_data as the calling administrator. Each of them already holds the connection rows it deletes
+-- from (delete_connection_data and delete_workspace_data FOR UPDATE, delete_person_data FOR NO KEY UPDATE), and
+-- this UPDATE changes only non-key columns, so it takes no lock those functions do not hold. delete_workspace_data
+-- deletes the outbox before the connections, so a carry it writes is deleted with its connection. A carry still in
+-- force keeps its calls and is extended to the latest deleted call's hour; an expired one is replaced. Every
+-- carried call counts until that time, so an older call can be held back slightly too long but never counts too
+-- little. TRUNCATE does not fire this.
+CREATE OR REPLACE FUNCTION public.carry_deleted_private_reply_calls()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  UPDATE public.instagram_connections connection
+  SET private_reply_carried_calls=CASE WHEN connection.private_reply_carried_until>now()
+      THEN connection.private_reply_carried_calls ELSE 0 END+recent.calls,
+    private_reply_carried_until=greatest(
+      CASE WHEN connection.private_reply_carried_until>now() THEN connection.private_reply_carried_until END,
+      recent.until)
+  FROM (
+    SELECT deleted_row.connection_id,count(*)::integer AS calls,
+      max(deleted_row.provider_called_at)+interval '1 hour' AS until
+    FROM deleted_replies deleted_row
+    WHERE deleted_row.provider_called_at>now()-interval '1 hour'
+    GROUP BY deleted_row.connection_id
+  ) recent
+  WHERE connection.id=recent.connection_id;
+  RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS carry_deleted_private_reply_calls ON public.private_reply_outbox;
+CREATE TRIGGER carry_deleted_private_reply_calls
+AFTER DELETE ON public.private_reply_outbox
+REFERENCING OLD TABLE AS deleted_replies
+FOR EACH STATEMENT EXECUTE FUNCTION public.carry_deleted_private_reply_calls();
 -- Outbound webhooks (#47). An endpoint is an HTTPS address that an administrator registered; a flow's
 -- webhook node queues one signed delivery to it. Server roles never delete these rows; the deletion
 -- functions do. The limit of active endpoints per workspace is enforced in code under the workspace lock.
