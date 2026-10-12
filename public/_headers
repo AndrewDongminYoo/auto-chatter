@@ -1,5 +1,8 @@
+# The dashboard files carry no user data and their names are not versioned, so browsers may keep them but must
+# revalidate on every load (ETag, 304 without a body): a deploy is never served stale, and an unchanged file is
+# not downloaded again (#199).
 /app/*
   Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https://*.cdninstagram.com https://*.fbcdn.net; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
-  Cache-Control: no-store
+  Cache-Control: no-cache

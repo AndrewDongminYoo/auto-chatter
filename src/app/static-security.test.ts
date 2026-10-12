@@ -105,6 +105,14 @@ test("the dashboard CSP allows only same-origin scripts, with no inline or eval 
       );
 });
 
+test("the dashboard files are revalidated on every load because their names are not versioned", async () => {
+  // A max-age or immutable here would keep running the previous scripts after a deploy that changed the API they
+  // call; no-store would download every unchanged file again on each visit (#199).
+  const headers = blockHeaders(await readFile(new URL("_headers", publicDir), "utf8"), "/app/*");
+  const cache = headers.filter((header) => /^cache-control\s*:/i.test(header));
+  assert.deepEqual(cache, ["Cache-Control: no-cache"]);
+});
+
 // The dashboard scripts the sink scan reads; the page test refuses any script that is not one of them.
 const scannedScripts = async () => (await readdir(appDir)).filter((name) => name.endsWith(".js"));
 
