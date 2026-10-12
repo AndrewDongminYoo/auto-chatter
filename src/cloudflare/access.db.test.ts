@@ -540,9 +540,10 @@ test("Supabase roles cannot read product data; the server role has DML without D
       ["delete_connection_data", "delete_expired_oauth_states"],
     );
     for (const row of definers.rows) {
-      assert.ok(
-        row.config?.some((setting) => setting.startsWith("search_path=")),
-        `${row.name} must pin search_path`,
+      assert.equal(
+        row.config?.find((setting) => setting.startsWith("search_path=")),
+        "search_path=public, pg_temp",
+        `${row.name} must pin search_path to public, pg_temp`,
       );
       assert.ok(
         !["auto_chatter_server", "automations_app", "anon", "authenticated", "service_role"].includes(row.owner),
