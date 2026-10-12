@@ -444,6 +444,15 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 이번 커밋은 `public/`을 바꾸지 않았으므로 18개 항목 점검은 배포 전과 배포 후 모두 18개가 통과했습니다.
 `scheduled_steps`를 08:19:51Z, 08:20:51Z, 08:21:52Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 발송이 꺼져 있어 `wake`·`webhook_delivery`·`stale_recovery` 단계는 실행되지 않으므로, 시간당 한도의 셈, cron 깨우기의 `send_woken_at` 기록, 작업 공간 순환 전달, #184의 표시 유지는 운영에서 실행되지 않았습니다.
+2026-10-12 10:47Z에는 운영자의 "044 마이그레이션 진행하고 배포해주세요" 요청에 따라 `main` 커밋 `868d737`을 적용했습니다. 이 커밋에는 PR #192(#189: 데이터 삭제 뒤에도 비공개 답장 예산의 최근 호출 수를 연결 행에 이월, migration 044)와 PR #193(#167: 로그인한 API 쓰기와 받은 편지함 목록의 기본 요청 한도, 마이그레이션 없음)이 들어 있습니다.
+적용 전 조회에서 운영 DB는 043까지 적용된 상태였고(`private_reply_carried_*` 열과 `carry_deleted_private_reply_calls` 함수·트리거 없음, public 테이블 44개), 연결 1개(수신 켜짐·발송 꺼짐)·비공개 답장 4행(호출 기록 0행)·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-12-migration-044/public-pre-044.dump`(278,256바이트, SHA-256 `42981b4adcee166f0e93a35c8db9c776a60f84f94a48bce218d4ee37f7043a0b`)에 저장했고, 목록 읽기에서 데이터 테이블 44개를 확인했습니다.
+같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE 143건은 모두 건너뛰기 알림이었습니다(042·043을 다시 실행한 4건과, 처음 적용한 044의 없는 트리거를 지우는 1건이 늘었습니다).
+적용 후 `instagram_connections`에 `private_reply_carried_calls`(integer, NOT NULL, 기본값 0, CHECK `>= 0`)와 `private_reply_carried_until`(timestamptz, NULL 허용)이 추가됐고, `auto_chatter_server`는 두 열을 SELECT·UPDATE할 수 있습니다. 트리거 함수 `carry_deleted_private_reply_calls`는 SECURITY INVOKER에 `search_path=public, pg_temp`로 고정됐고, 같은 이름의 문장 단위 `AFTER DELETE` 트리거가 `private_reply_outbox`에서 활성 상태입니다. 서버 역할의 테이블 DELETE·TRUNCATE 권한과 `anon`·`authenticated`의 public 테이블 권한은 계속 0개였습니다. 관리자 연결의 읽기 전용 트랜잭션에서 새 예산 조건을 실행해, 연결 1개가 이월 0·한도 여유 있음으로 반환되는 것을 확인했습니다.
+이어서 Worker를 버전 `294292f3-aa59-40a9-8f45-6a2c45148016`로 배포했고, 10:52:38Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `d62e2d49-7fee-4029-b7c7-28217b76cc5d`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. 새 요청 한도는 기존 `AUTH_LIMITER` Durable Object 바인딩을 쓰므로 `wrangler.json`은 바뀌지 않았습니다.
+18개 항목 점검은 배포 전에는 바뀐 `app.js`와 `inbox.js`의 해시만 달라 16개가 통과했고, 배포 직후의 첫 점검에서는 `app.js`의 해시만 달라 17개가 통과했습니다. 10:59:30Z에 다시 받은 `app.js`는 로컬 파일과 해시가 같았고(`cf-cache-status: MISS`, `cache-control: no-store`), 11:02Z에 끝난 재점검에서는 18개가 모두 통과했습니다.
+`scheduled_steps`를 10:57:17Z, 10:58:18Z, 10:59:18Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
+적용 뒤 데이터 삭제를 실행하지 않았으므로 이월 트리거는 실행되지 않았고, 로그인한 세션으로 요청하지 않았으므로 새 요청 한도의 `429`와 한도 장치가 응답하지 않을 때의 동작도 운영에서 확인하지 않았습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
