@@ -476,3 +476,24 @@ test("a failed record write never changes the manual response and is logged with
   assert.equal((await record()).subscription_check_attempted_at, null);
   assert.equal((await record()).subscription_missing_at, null);
 });
+
+// Security audit #62, third pass: the manual check is a GET that writes, so its ownership read is what keeps another
+// workspace from spending this token's Meta calls or moving this connection's record and marker.
+test("another workspace or a user without one cannot run the manual check on this connection", async () => {
+  const other = { id: "22222222-2222-4222-8222-222222222222", email: "other@example.test" };
+  const stranger = { id: "44444444-4444-4444-8444-444444444444", email: "stranger@example.test" };
+  await ensureWorkspace(pool, other);
+  const before = (await pool.query("SELECT * FROM instagram_connections ORDER BY id")).rows;
+  const graph = meta(() => Response.json({ error: { code: 190 } }, { status: 400 }));
+  await assert.rejects(connectionHealth(pool, other, connection, env, graph.fetchImpl, correlationId), {
+    status: 404,
+    message: "connection_not_found",
+  });
+  await assert.rejects(connectionHealth(pool, stranger, connection, env, graph.fetchImpl, correlationId), {
+    status: 403,
+    message: "workspace_required",
+  });
+  assert.deepEqual(graph.accounts, []);
+  assert.deepEqual((await pool.query("SELECT * FROM instagram_connections ORDER BY id")).rows, before);
+  assert.deepEqual(logLines, []);
+});
