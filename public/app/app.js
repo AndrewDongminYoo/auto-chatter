@@ -368,6 +368,7 @@ const errors = {
   invalid_credentials: "이메일과 8자 이상의 비밀번호를 입력해 주세요.",
   invalid_recovery_email: "이메일 주소를 확인해 주세요.",
   auth_rate_limited: "요청이 많습니다. 잠시 기다린 뒤 다시 시도해 주세요.",
+  rate_limited: "요청이 많습니다. 잠시 후 다시 시도해 주세요.",
   invalid_recovery_link: "변경 링크를 다시 요청해 주세요.",
   recovery_link_invalid: "변경 링크가 만료되었거나 유효하지 않습니다. 새 링크를 요청해 주세요.",
   password_rejected: "새 비밀번호가 보안 기준을 충족하지 않습니다. 다른 비밀번호로 다시 시도해 주세요.",

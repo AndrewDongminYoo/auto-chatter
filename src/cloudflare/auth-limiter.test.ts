@@ -151,6 +151,27 @@ test("durableLimits gives the workspace export 5 and the Instagram connect 10 pe
   ]);
 });
 
+test("durableLimits gives API writes 120 per user per minute and 3,000 per workspace per hour, and the inbox list 60 per user per minute (#167)", async () => {
+  const calls: { name: string; limit: number; period: number }[] = [];
+  const limits = durableLimits({
+    idFromName: (name: string) => name,
+    get: (id: unknown) => ({
+      fetch: async (_input: string, init?: RequestInit) => {
+        calls.push({ name: String(id), ...(JSON.parse(String(init?.body)) as { limit: number; period: number }) });
+        return Response.json({ success: true });
+      },
+    }),
+  });
+  await limits.API_WRITE_USER_LIMIT!.limit({ key: "user" });
+  await limits.API_WRITE_WORKSPACE_LIMIT!.limit({ key: "workspace" });
+  await limits.INBOX_LIST_LIMIT!.limit({ key: "user" });
+  assert.deepEqual(calls, [
+    { name: "api-write-user:user", limit: 120, period: 60_000 },
+    { name: "api-write-workspace:workspace", limit: 3_000, period: 3_600_000 },
+    { name: "inbox-list:user", limit: 60, period: 60_000 },
+  ]);
+});
+
 test("durableLimits fails closed when the limiter object does not answer", async () => {
   const limits = durableLimits({
     idFromName: (name: string) => name,

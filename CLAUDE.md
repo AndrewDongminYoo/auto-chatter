@@ -113,6 +113,7 @@ There is no atomic transaction spanning PostgreSQL and Meta: a setting change af
 **Dashboard and API** (`src/app/`, `public/app/`):
 The Worker delegates `/api/*` to `appApi` in `src/app/api.ts`; the modules beside it own auth, OAuth, token refresh, secrets, contacts, fields, inbox, handoff, manual replies and consent.
 Every non-GET `/api/*` request must be same-origin (`requireSameOrigin`); routes other than `/api/auth/*` require a verified session and scope data to the caller's workspace, and each one names its least role through `workspaceFor` ([roles](docs/specs/2026-09-30-workspace-roles.md)).
+Signed-in writes outside `/api/auth/*` spend fixed default per-user and per-workspace limits in `appApi` before any route handler (per-user before the database opens), and `GET /api/inbox` spends its own before `listInbox`, all counted by the `AuthLimiter` Durable Object through `durableLimits`; a member's `POST /api/workspace` (the dashboard bootstrap) spends neither write limit and member removal skips the workspace one, and unlike the fail-closed auth and #166 allowances these limits fail open with one fixed log code ([spec](docs/specs/2026-10-12-api-request-limits.md)).
 `public/app/` is a build-free static client (`app.js`, `inbox.js`) served by Wrangler assets.
 The auth client wraps injected fetch in a standalone call because workerd rejects a native fetch invoked with the client object as its receiver.
 

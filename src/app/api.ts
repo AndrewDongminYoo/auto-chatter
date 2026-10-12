@@ -114,6 +114,21 @@ async function spendUserAllowance(
   if (!allowance.success) throw new ApiError(429, codes.limited);
 }
 
+// Spends one request from a default API limit (#167). Unlike spendUserAllowance, a missing binding or a limiter
+// that does not answer lets the request through and reports "unavailable": these limits bound growth, and a
+// limiter outage must not stop every dashboard write. The caller logs the outage once per request.
+async function spendApiAllowance(binding: RateLimitBinding | undefined, key: string): Promise<"ok" | "unavailable"> {
+  if (!binding) return "unavailable";
+  let allowance: { success: boolean };
+  try {
+    allowance = await binding.limit({ key });
+  } catch {
+    return "unavailable";
+  }
+  if (!allowance.success) throw new ApiError(429, "rate_limited");
+  return "ok";
+}
+
 // The reply is stored; the cron repairs the missing queue notification.
 function logManualNotificationFailure(correlationId: string, connectionId: string): void {
   logOperation({
@@ -165,6 +180,24 @@ export async function appApi(
       }
     }
     const user = await auth.user(request);
+    // Default request limits (#167). An unavailable limiter is logged once per request with a fixed code only.
+    let limitUnavailableLogged = false;
+    const spendApiLimit = async (binding: RateLimitBinding | undefined, key: string) => {
+      if ((await spendApiAllowance(binding, key)) === "ok" || limitUnavailableLogged) return;
+      limitUnavailableLogged = true;
+      logOperation(
+        { event: "rate_limit_unavailable", code: "api_limit_unavailable", correlation_id: correlationId },
+        "warn",
+      );
+    };
+    // Every signed-in write spends the per-user limit before the database is opened, so a refused write reads and
+    // writes nothing. POST /api/workspace is the dashboard's bootstrap: for a member it reads the membership (and at
+    // most refreshes the stored email), so it is counted, per user only, when it creates the first workspace, below.
+    const write = request.method !== "GET" && request.method !== "HEAD" && !url.pathname.startsWith("/api/auth/");
+    const bootstrap = url.pathname === "/api/workspace" && request.method === "POST";
+    // Member removal skips the shared workspace limit, so an owner can still remove the member who spent it.
+    const memberRemoval = request.method === "DELETE" && /^\/api\/workspace\/members\/[a-f0-9-]+$/.test(url.pathname);
+    if (write && !bootstrap) await spendApiLimit(env.API_WRITE_USER_LIMIT, user.id);
     if (url.pathname === "/api/me" && request.method === "GET")
       return json({
         user,
@@ -179,6 +212,25 @@ export async function appApi(
       throw new ApiError(403, "instagram_public_access_restricted");
     const pool = openPool(correlationId);
     try {
+      // The workspace write limit reads only the caller's membership, before any route handler and before the #166
+      // OAuth start allowance. A user without a workspace has only the user limit.
+      // A missing binding is logged as unavailable without reading the membership.
+      const membership = async () =>
+        (
+          await pool.query<{ workspace_id: string }>(
+            "SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL",
+            [user.id],
+          )
+        ).rows[0]?.workspace_id;
+      if (bootstrap) {
+        if (!(await membership())) await spendApiLimit(env.API_WRITE_USER_LIMIT, user.id);
+      } else if (write && !memberRemoval) {
+        if (!env.API_WRITE_WORKSPACE_LIMIT) await spendApiLimit(undefined, "");
+        else {
+          const workspace = await membership();
+          if (workspace) await spendApiLimit(env.API_WRITE_WORKSPACE_LIMIT, workspace);
+        }
+      }
       if (url.pathname === "/api/instagram/connect" && request.method === "POST") {
         // Each start stores an OAuth state row that only workspace deletion removes.
         await spendUserAllowance(env.INSTAGRAM_CONNECT_LIMIT, user.id, {
@@ -240,8 +292,11 @@ export async function appApi(
         if (!allowance.success) throw new ApiError(429, "health_rate_limited");
         return json(await connectionHealth(pool, user, health[1]!, env, fetchImpl, correlationId));
       }
-      if (url.pathname === "/api/inbox" && request.method === "GET")
+      if (url.pathname === "/api/inbox" && request.method === "GET") {
+        // Every list request scans all of the workspace's DMs.
+        await spendApiLimit(env.INBOX_LIST_LIMIT, user.id);
         return json(await listInbox(pool, user, url.searchParams));
+      }
       if (url.pathname === "/api/inbox/assignees" && request.method === "GET")
         return json({ assignees: await listAssignees(pool, user) });
       const conversationState = /^\/api\/inbox\/conversations\/([a-f0-9-]+)\/(\d+)\/state$/.exec(url.pathname);

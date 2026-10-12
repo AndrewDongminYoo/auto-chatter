@@ -69,6 +69,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     conversation_conflict: "다른 요청으로 대화 상태나 담당자가 먼저 바뀌어 최신 상태를 다시 불러왔습니다.",
     assignee_unavailable: "작업 공간에서 제거되었거나 다른 작업 공간의 멤버에게는 배정할 수 없습니다.",
     role_forbidden: "상담원은 미배정 대화를 맡거나 자신의 담당만 해제할 수 있습니다.",
+    rate_limited: "요청이 많습니다. 잠시 후 다시 시도해 주세요.",
   };
   const failure = (code) => reasons[code] || "전송 조건을 확인하지 못했습니다. 상태를 새로고침해 주세요.";
   const date = (value) => new Date(value).toLocaleString("ko-KR");

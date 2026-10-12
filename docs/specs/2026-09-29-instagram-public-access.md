@@ -16,7 +16,7 @@ Meta 앱의 게시 상태와 권한 화면의 테스트 준비 상태만으로 �
 제한된 사용자의 `POST /api/instagram/connect`와 `GET /api/instagram/callback`은 `403`과 `instagram_public_access_restricted`를 반환합니다.
 화면의 `계정 연결` 버튼은 비활성화하고 제한 사유를 표시합니다.
 허용된 사용자의 `POST /api/instagram/connect`는 OAuth state 행을 하나씩 저장하므로, 한 사용자가 한 시간 고정 구간에 10번까지 시작할 수 있습니다(`INSTAGRAM_CONNECT_LIMIT`, [이슈 #166](https://github.com/AndrewDongminYoo/auto-chatter/issues/166)).
-넘으면 `429 instagram_connect_rate_limited`를, 한도 바인딩이 없거나 응답하지 않으면 `503 instagram_connect_unavailable`을 DB를 읽기 전에 반환합니다.
+넘으면 `429 instagram_connect_rate_limited`를, 한도 바인딩이 없거나 응답하지 않으면 `503 instagram_connect_unavailable`을 경로 처리기가 DB를 읽기 전에 반환합니다. 그 전에 API 기본 쓰기 한도가 호출자의 멤버십 하나를 읽으며, 그 한도에서 거절된 시작은 이 한도를 쓰지 않습니다([API 요청 한도](2026-10-12-api-request-limits.md#순서)).
 만료된 OAuth state는 Cloudflare cron 단계 `oauth_state_cleanup`이 관리자 소유 함수 `public.delete_expired_oauth_states`(migration 038)로 지웁니다([이슈 #173](https://github.com/AndrewDongminYoo/auto-chatter/issues/173)).
 이 함수는 `expires_at`이 지난 행만, 한 번에 최대 1,000행을 지우고 나머지는 다음 실행이 지웁니다. 만료된 state는 OAuth 완료와 초대 이동 검사가 이미 무시하므로 동작은 바뀌지 않으며, 사용했지만 아직 만료되지 않은 행은 만료될 때까지 남습니다.
 서버 역할은 이 함수의 실행 권한만 받고 테이블 DELETE 권한은 여전히 없으며, API 역할은 실행할 수 없습니다. 전역 발송이 꺼져 있어도 실행하며, 이 정리는 시작 한도에 포함되지 않습니다.

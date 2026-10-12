@@ -13,6 +13,10 @@ export interface AuthRateLimitEnv {
   // Per-user allowances for the whole-workspace export and for starting an Instagram OAuth connection (#166).
   WORKSPACE_EXPORT_LIMIT?: RateLimitBinding;
   INSTAGRAM_CONNECT_LIMIT?: RateLimitBinding;
+  // Default request limits for signed-in API writes, per user and per workspace, and for the inbox list (#167).
+  API_WRITE_USER_LIMIT?: RateLimitBinding;
+  API_WRITE_WORKSPACE_LIMIT?: RateLimitBinding;
+  INBOX_LIST_LIMIT?: RateLimitBinding;
 }
 
 // The routes whose Supabase call sends an auth mail.
