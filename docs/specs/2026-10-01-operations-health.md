@@ -15,7 +15,7 @@
 그래서 Node 워커와 Compose의 표준 출력에서도 줄 단위 수집기가 한 줄씩 JSON으로 읽을 수 있습니다.
 `event`와 `code`는 `^[a-z][a-z0-9_]{0,63}$`, `connection_id`는 UUID, `correlation_id`는 영문·숫자·`-` 64자 이하, `step`은 정해진 단계 이름이어야 하며, 그 밖의 키와 형식이 맞지 않는 값은 버립니다.
 그래서 요청 본문, 토큰, 이메일, 댓글·DM 본문, Meta·SQL 오류 원문은 호출자가 실수로 넘겨도 기록되지 않습니다.
-실패 코드는 `failureCode`가 오류 클래스와 오류 코드만 보고 정합니다(`not_configured`, `token_refresh_failed`, `database_unavailable`, `database_error`, `connection_unavailable`, `unexpected_error`). 오류 메시지는 읽지 않습니다.
+실패 코드는 `failureCode`가 오류 클래스와 오류 코드만 보고 정합니다(`not_configured`, `token_refresh_failed`, `subscription_check_failed`, `database_unavailable`, `database_error`, `connection_unavailable`, `unexpected_error`). 오류 메시지는 읽지 않습니다.
 상관 ID는 웹훅·API 요청이면 Cloudflare의 `cf-ray` 헤더(없으면 새 UUID), Queue 메시지 묶음과 Cron 실행마다 새 UUID입니다. Worker는 요청마다 한 번 정한 ID를 `appApi`와 그 요청의 DB 연결 풀에도 넘기므로 풀 오류 줄도 같은 ID를 가집니다.
 Node 워커의 `worker-main.ts`·`main.ts`가 터미널에 쓰는 사용법·설정 안내는 운영 로그가 아니므로 바꾸지 않았습니다.
 
@@ -28,6 +28,8 @@ Node 워커의 `worker-main.ts`·`main.ts`가 터미널에 쓰는 사용법·설
 | `early_reply_reconcile_failed`  | 실패 코드                                                      | 발송 직후의 이른 DM 연결 실패           |
 | `reauth_record_failed`          | 실패 코드                                                      | 재연결 표시 기록·해제 실패              |
 | `instagram_deauthorized`        | `connection_disconnected` 등(토큰 갱신 명세)                   | 검증된 권한 해제 콜백                   |
+| `instagram_subscription_check`  | `subscription_lost`·`subscription_restored`                    | 웹훅 구독 유실의 새 기록·해제           |
+| `subscription_record_failed`    | 실패 코드                                                      | 웹훅 구독 확인 결과 기록 실패           |
 | `cron_step_failed`              | 실패 코드                                                      | Cron 단계 실패, `step`에 단계 이름      |
 | `cron_run_failed`               | 실패 코드                                                      | Cron의 DB 연결 풀 열기·닫기 실패        |
 | `cron_step_record_failed`       | 실패 코드                                                      | 단계 결과 기록 실패, `step`에 단계 이름 |
@@ -41,11 +43,12 @@ Node 워커의 `worker-main.ts`·`main.ts`가 터미널에 쓰는 사용법·설
 ## 정기 작업 기록
 
 `scheduled_steps`(migration 030)는 이름 하나에 한 행입니다.
-Cron 단계 `kept_reply_cleanup`, `oauth_state_cleanup`, `token_refresh`, `early_reply_reconcile`, `flow_resume`, `stale_recovery`, `wake`, `webhook_delivery`, `alerts`는 마지막 성공·실패 시각과 고정 실패 코드를 남깁니다.
+Cron 단계 `kept_reply_cleanup`, `oauth_state_cleanup`, `token_refresh`, `subscription_check`, `early_reply_reconcile`, `flow_resume`, `stale_recovery`, `wake`, `webhook_delivery`, `alerts`는 마지막 성공·실패 시각과 고정 실패 코드를 남깁니다.
 `cron` 행은 실행한 모든 단계(`alerts` 포함)가 성공한 실행의 시각이며, 한 단계라도 실패하면 실패 코드 `step_failed`를 남깁니다. 그래서 `cron` 행은 `alerts` 단계 뒤에 씁니다. 앞 단계가 모두 성공한 실행은 `alerts` 단계에서 `cron_stale`을 꺼진 것으로 계산하므로, 복구한 실행이 그 실행 안에서 경보를 해제합니다.
 `alert_<이름>` 행은 경보가 켜져 있는지와 마지막으로 바뀐 시각을 남깁니다. `alert_unknown_outcome` 행의 `alert_seen_count`는 마지막 평가가 본 `unknown` 결과의 전체 수입니다.
 전역 발송이 꺼져 있으면 `stale_recovery`, `wake`, `webhook_delivery`는 실행하지 않고 이전 기록을 그대로 둡니다.
 `token_refresh`는 갱신 대상 연결을 모두 시도한 뒤, 토큰 복호화 실패, Meta 호출 실패·시간 초과, 잘못된 갱신 응답, 계정이 다른 프로필이 하나라도 있으면 `token_refresh_failed`로 실패합니다. 더 새 토큰이나 수신 중지에 밀린 갱신은 실패가 아닙니다. 한 연결은 하루에 한 번만 갱신을 시도하므로 계속 실패해도 실패는 시도한 실행에만 남고 다음 실행은 성공으로 기록됩니다. 지속 실패의 신호는 연결마다 하루 한 번 남는 `cron_step_failed`(`step = token_refresh`) 줄이고, 만료 7일 전부터는 `token_expiring` 경보입니다.
+`subscription_check`의 실패 조건과 주기는 [웹후크 구독 유실 표시](2026-09-28-instagram-token-refresh.md#웹후크-구독-유실-표시-179)에 있으며, 전역 발송이 꺼져 있어도 실행합니다.
 한 단계가 실패해도 다음 단계는 계속 실행하고, 실행 끝에 고정 메시지 `Cloudflare scheduled recovery failed`의 오류를 던져 Cloudflare가 실패로 기록하게 합니다. DB 연결 풀을 열거나 닫다 실패해도 원래 오류 메시지는 던지지 않고 `cron_run_failed` 줄과 같은 고정 메시지만 남깁니다. 이전에는 토큰 갱신 실패나 `TOKEN_ENCRYPTION_KEY` 누락이 이후 단계를 모두 멈췄습니다.
 기록 쓰기 자체가 실패하면 단계가 성공했어도 `cron_step_record_failed`(`cron` 행이면 `cron_record_failed`) 줄을 남기고 그 실행을 실패로 봅니다. 저장된 결과가 낡았으므로 `cron` 행에도 `step_failed`를 남기며, DB가 중단되면 단계마다 단계 실패 줄과 기록 실패 줄이 함께 남습니다.
 단계 결과는 실행 중 메모리에 모았다가 두 문장으로 씁니다.
