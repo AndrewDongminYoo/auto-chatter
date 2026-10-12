@@ -424,6 +424,16 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 `scheduled_steps`를 12:52:33Z, 12:53:38Z, 12:54:44Z에 조회했을 때 발송과 무관하게 실행되는 7개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. 같은 조회에서 연결은 수신 켜짐·토큰 있음·`deauthorized_at` 없음으로 그대로였습니다.
 서명이 맞는 콜백의 처리, 화면의 "Instagram에서 권한 해제됨" 배지, Meta가 실제로 보내는 ID는 운영에서 확인하지 않았습니다. Meta 앱 대시보드에 Deauthorize callback URL을 등록하는 일은 운영자가 따로 진행합니다([권한 해제 콜백](../specs/2026-09-28-instagram-token-refresh.md#권한-해제-콜백-16)).
 운영자는 Business login settings의 Deauthorize callback URL에 `https://auto-chat.donminzzi.kr/instagram/deauthorize`를 등록했고, 15:10Z에 저장을 마쳤다고 알렸습니다. 등록 직전에 같은 주소는 `GET`에 405, 본문 없는 `POST`에 400을 응답했습니다. 같은 화면의 데이터 삭제 요청 URL은 비어 있습니다. 앱 검수를 제출하기 전에 이 칸을 채워야 하지만, `/data-deletion`은 안내 페이지일 뿐 Meta의 데이터 삭제 콜백이 아니므로 아직 등록하지 않았습니다.
+2026-10-12 03:12Z에는 운영자의 "041 마이그레이션 진행하고 배포해주세요" 요청에 따라 PR #183(#179: 웹후크 구독 유실 주기 검사, migration 041)을 포함한 `main` 커밋 `f9c4c9c`를 적용했습니다.
+적용 전 조회에서 운영 DB는 040까지 적용된 상태였고(`subscription_*` 열 없음, public 테이블 44개), 연결 1개(수신 켜짐·발송 꺼짐·만료 전 토큰 있음·재연결 필요 표시 없음)·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-12-migration-041/public-pre-041.dump`(276,828바이트, SHA-256 `8902c4131d38c4c8fedd57e8d89c7c4d2c6be50febede02ce1c6b82c070ea1c8`)에 저장했고, 목록 읽기에서 데이터 테이블 44개를 확인했습니다.
+같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE 134건은 모두 건너뛰기 알림이었습니다(040의 두 열을 다시 실행한 2건이 늘었습니다).
+적용 후 `instagram_connections`에 `subscription_check_attempted_at`·`subscription_checked_at`·`subscription_missing_at`·`subscription_token_obtained_at`(모두 timestamptz)이 NULL 허용으로 추가됐고, `auto_chatter_server`는 네 열을 SELECT·UPDATE할 수 있습니다. 서버 역할의 테이블 DELETE·TRUNCATE 권한과 `anon`·`authenticated`의 public 테이블 권한은 계속 0개였습니다. `GET /api/connections`의 조회문을 관리자 연결의 읽기 전용 트랜잭션에서 실행해 연결 1개가 구독 기록 없이 반환되는 것을 확인했습니다.
+이어서 Worker를 버전 `0370bb92-b6e6-453b-82de-7cef131e3c1f`로 배포했고, 03:14:21Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `f1f3e9b5-9480-4346-a8a3-e76db680d293`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`, `META_GRAPH_VERSION=v26.0`을 유지했습니다.
+18개 항목 점검은 배포 전에는 바뀐 `app.js`의 해시만 달라 17개가 통과했고, 배포 후에는 18개가 모두 통과했습니다.
+`scheduled_steps`를 03:16:00Z, 03:17:06Z, 03:18:11Z에 조회했을 때 새 단계 `subscription_check`를 포함해 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
+배포 직후 03:14:25Z의 cron이 운영 연결 1개의 구독을 Meta에서 확인했고, 결과는 구독이 있음(`subscription_checked_at` 03:14:26Z, `subscription_missing_at` 없음, 기록이 현재 토큰과 일치)이었습니다. 이후 두 번의 실행은 6시간 간격에 따라 같은 연결을 다시 확인하지 않았습니다.
+구독이 실제로 유실된 경우의 기록, 화면의 "웹후크 구독 유실" 배지, 상태 확인 버튼이 같은 기록을 쓰는 경로는 운영에서 확인하지 않았습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
