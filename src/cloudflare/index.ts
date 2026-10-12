@@ -309,7 +309,8 @@ export default {
             };
             // Records or clears the reconnect marker for this token after an identity read. It never changes
             // the reply outcome: a failed write is logged with a fixed code. Each outcome is written once per
-            // message, because one send can read the identity twice.
+            // message, because one send can read the identity twice. An accepted read clears only token_rejected:
+            // it proves the token works, not that Meta will refresh it (refresh_rejected).
             const reported = new Set<IdentityCheck>();
             const onIdentity = async (check: IdentityCheck): Promise<void> => {
               if (reported.has(check)) return;
@@ -317,7 +318,7 @@ export default {
               try {
                 if (check === "rejected")
                   await markReauthRequired(pool, connectionId, connection.access_token_encrypted, "token_rejected");
-                else await clearReauthRequired(pool, connectionId, connection.access_token_encrypted);
+                else await clearReauthRequired(pool, connectionId, connection.access_token_encrypted, "token_rejected");
               } catch (error) {
                 logOperation({
                   event: "reauth_record_failed",
