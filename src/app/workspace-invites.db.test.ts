@@ -33,7 +33,11 @@ before(async () => {
 
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
-  await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspaceId, otherWorkspaceId]);
+  // The largest plan, so these tests are not limited by seats; plans.db.test.ts covers the seat limits.
+  await pool.query("INSERT INTO workspaces(id,plan) VALUES($1,'advanced'),($2,'advanced')", [
+    workspaceId,
+    otherWorkspaceId,
+  ]);
   await pool.query(
     `INSERT INTO workspace_members(workspace_id,user_id,role,email)
      VALUES($1,$2,'owner',$3),($1,$4,'admin',$5),($6,$7,'owner',$8)`,
@@ -284,7 +288,7 @@ test("a removed member is refused on the next request and a role change applies 
   }
 });
 
-test("the owner role can be neither granted nor invited, and open invites stop at 20", async () => {
+test("the owner role can be neither granted nor invited, and open invites stop at the plan's seats", async () => {
   const { token } = await invite();
   assert.equal((await accept(invitee, token)).status, 200);
   for (const role of ["owner", "OWNER", "superuser", ""]) {
@@ -302,10 +306,12 @@ test("the owner role can be neither granted nor invited, and open invites stop a
     { user_id: invitee.id, role: "agent" },
     { user_id: owner.id, role: "owner" },
   ]);
-  for (let index = 0; index < 20; index++) await invite(`open-${index}@example.test`);
-  const over = await request(owner, "POST", "/api/workspace/invites", { email: "open-20@example.test", role: "agent" });
+  // Three members on the advanced plan's 10 seats leave 7 for open invites. The cap of 20 open invites
+  // (invite_limit_reached) stays as a backstop that no plan in the catalog reaches.
+  for (let index = 0; index < 7; index++) await invite(`open-${index}@example.test`);
+  const over = await request(owner, "POST", "/api/workspace/invites", { email: "open-7@example.test", role: "agent" });
   assert.equal(over.status, 409);
-  assert.equal((await body<{ error: string }>(over)).error, "invite_limit_reached");
+  assert.equal((await body<{ error: string }>(over)).error, "seat_limit_reached");
 });
 
 test("an acceptance waits for a concurrent re-invite instead of deadlocking with it", async () => {
@@ -318,7 +324,7 @@ test("an acceptance waits for a concurrent re-invite instead of deadlocking with
     const accepting = accept(invitee, token);
     for (let attempt = 0; attempt < 40; attempt++) {
       const waiting = await pool.query(
-        "SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FROM workspaces WHERE id=%FOR SHARE%'",
+        "SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FROM workspaces WHERE id=%FOR NO KEY UPDATE%'",
       );
       if (waiting.rowCount) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -452,7 +458,7 @@ test("creations that resolved the old workspace before an acceptance moved the u
 
 test("two owners accepting each other's invites get workspace_not_empty instead of a deadlock", async () => {
   const strangerWorkspace = "99999999-9999-4999-8999-999999999999";
-  await pool.query("INSERT INTO workspaces(id) VALUES($1)", [strangerWorkspace]);
+  await pool.query("INSERT INTO workspaces(id,plan) VALUES($1,'advanced')", [strangerWorkspace]);
   await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role,email) VALUES($1,$2,'owner',$3)", [
     strangerWorkspace,
     stranger.id,
@@ -500,7 +506,7 @@ test("a removed member cannot rejoin with the invite link they already used", as
 
 test("an owner whose workspace holds only revoked or expired invites cannot leave it", async () => {
   const strangerWorkspace = "99999999-9999-4999-8999-999999999998";
-  await pool.query("INSERT INTO workspaces(id) VALUES($1)", [strangerWorkspace]);
+  await pool.query("INSERT INTO workspaces(id,plan) VALUES($1,'advanced')", [strangerWorkspace]);
   await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role,email) VALUES($1,$2,'owner',$3)", [
     strangerWorkspace,
     stranger.id,

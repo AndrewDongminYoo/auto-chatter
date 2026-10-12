@@ -44,6 +44,7 @@ import {
   createInvite,
   listInvites,
   listMembers,
+  memberEntitlements,
   removeMember,
   revokeInvite,
 } from "./workspace-members.ts";
@@ -250,7 +251,7 @@ export async function appApi(
       if (url.pathname === "/api/invites/accept" && request.method === "POST")
         return json(await acceptInvite(pool, user, await readJson(request)));
       if (url.pathname === "/api/workspace/members" && request.method === "GET")
-        return json({ members: await listMembers(pool, user) });
+        return json({ members: await listMembers(pool, user), ...(await memberEntitlements(pool, user)) });
       const member = /^\/api\/workspace\/members\/([a-f0-9-]+)$/.exec(url.pathname);
       if (member && request.method === "PATCH")
         return json(await changeMemberRole(pool, user, member[1]!, await readJson(request)));
@@ -639,7 +640,9 @@ export async function appApi(
       error instanceof ApiError &&
       request.method === "GET" &&
       new URL(request.url).pathname === "/api/instagram/callback" &&
-      ["instagram_authorization_denied", "instagram_permissions_required"].includes(error.message)
+      ["instagram_authorization_denied", "instagram_permissions_required", "connection_limit_reached"].includes(
+        error.message,
+      )
     ) {
       const response = new Response(null, {
         status: 303,

@@ -67,6 +67,21 @@ BEGIN
   END LOOP;
 END $$;
 
+-- A workspace's plan changes only through an administrator statement (#52). Server roles insert a workspace and
+-- change its time zone, and nothing else on the row: the table-level INSERT and UPDATE from the loop above are
+-- replaced by column grants, so a new server-written workspaces column must be added here. Row locks on
+-- workspaces need UPDATE on one column, which time_zone provides.
+DO $$
+DECLARE server_role text;
+BEGIN
+  FOREACH server_role IN ARRAY ARRAY['auto_chatter_server','automations_app'] LOOP
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname=server_role) THEN
+      EXECUTE format('REVOKE INSERT, UPDATE ON public.workspaces FROM %I',server_role);
+      EXECUTE format('GRANT INSERT (id, time_zone), UPDATE (time_zone) ON public.workspaces TO %I',server_role);
+    END IF;
+  END LOOP;
+END $$;
+
 -- Handoff audit is append-only even for the server roles.
 DO $$
 DECLARE server_role text;

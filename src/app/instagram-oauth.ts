@@ -4,6 +4,7 @@ import { ApiError, cookie, isRecord, json, type User } from "./auth.ts";
 import { lockWorkspaceForMember, workspaceFor } from "./settings.ts";
 import { normalizedUserId } from "./instagram-deauthorization.ts";
 import { sealSecret } from "./secrets.ts";
+import { requireConnectionSlot } from "./plans.ts";
 
 export interface InstagramOAuthEnv {
   APP_ORIGIN?: string;
@@ -198,17 +199,29 @@ export async function finishInstagramOAuth(
   const encrypted = sealSecret(long.access_token, settings.key, `${workspaceId}:${account.user_id}`);
   // The provider calls above take seconds, and accepting an invite can move the user out of this workspace
   // meanwhile. acceptInvite holds the old workspace row FOR UPDATE while it checks that the workspace is empty,
-  // so re-check the membership under FOR SHARE on the same row and store the connection in that transaction.
+  // so re-check the membership under a lock on the same row and store the connection in that transaction.
+  // NO KEY UPDATE also serializes two completions in one workspace, so both cannot pass the connection limit;
+  // foreign key checks (KEY SHARE) from ingestion still go through. Only here is the account known, so the limit
+  // cannot be checked before the provider calls without refusing a re-authorization.
   const client = await pool.connect();
   let saved;
   try {
     await client.query("BEGIN");
-    await client.query("SELECT id FROM workspaces WHERE id=$1 FOR SHARE", [workspaceId]);
+    await client.query("SELECT id FROM workspaces WHERE id=$1 FOR NO KEY UPDATE", [workspaceId]);
     const member = await client.query(
       "SELECT 1 FROM workspace_members WHERE user_id=$1 AND workspace_id=$2 AND removed_at IS NULL AND role IN ('owner','admin')",
       [user.id, workspaceId],
     );
     if (member.rowCount !== 1) throw new ApiError(403, "workspace_required");
+    // An account held by another workspace is refused here, not by the INSERT below: that row is not locked, and
+    // if its deletion committed before the INSERT, the INSERT would add a connection that skipped the limit.
+    const holder = await client.query<{ workspace_id: string }>(
+      "SELECT workspace_id FROM instagram_connections WHERE account_id=$1",
+      [account.user_id],
+    );
+    if ((holder.rows[0]?.workspace_id ?? workspaceId) !== workspaceId)
+      throw new ApiError(409, "instagram_account_already_connected");
+    await requireConnectionSlot(client, workspaceId, account.user_id);
     saved = await client.query(
       `INSERT INTO instagram_connections(id,workspace_id,account_id,username,active,send_enabled,access_token_encrypted,token_expires_at,instagram_user_id,deauthorized_at)
        VALUES($1,$2,$3,$4,false,false,$5,now()+make_interval(secs=>$6),$7,NULL)

@@ -113,11 +113,11 @@ test("exports every table of the caller's workspace and nothing from another wor
   assert.equal(body.tables.webhook_redelivery_events[0].actor_id, userId);
 });
 
-test("the export carries the caller's workspace row with its time zone and no other workspace", async () => {
-  await pool.query("UPDATE workspaces SET time_zone='America/New_York' WHERE id=$1", [workspaceId]);
+test("the export carries the caller's workspace row with its time zone and plan and no other workspace", async () => {
+  await pool.query("UPDATE workspaces SET time_zone='America/New_York',plan='pro' WHERE id=$1", [workspaceId]);
   await pool.query("UPDATE workspaces SET time_zone='Europe/Paris' WHERE id=$1", [otherWorkspaceId]);
   const body = await (await request()).json();
-  assert.deepEqual(body.tables.workspaces, [{ id: workspaceId, time_zone: "America/New_York" }]);
+  assert.deepEqual(body.tables.workspaces, [{ id: workspaceId, time_zone: "America/New_York", plan: "pro" }]);
   assert.ok(!body.excluded.includes("workspaces"));
 });
 

@@ -33,6 +33,8 @@ test("Supabase roles cannot read product data; the server role has DML without D
     assert.ok(grants, "Compose initializer must declare application table grants");
     await client.query(grants[0]);
     await client.query("SET ROLE automations_app");
+    await assert.rejects(client.query("UPDATE workspaces SET plan='advanced'"), { code: "42501" });
+    await client.query("UPDATE workspaces SET time_zone=time_zone");
     await assert.rejects(client.query("UPDATE data_deletion_records SET id=id"), { code: "42501" });
     await assert.rejects(
       client.query(
@@ -147,7 +149,16 @@ test("Supabase roles cannot read product data; the server role has DML without D
     }
     await client.query("SET ROLE auto_chatter_server");
     await client.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
-    await client.query("UPDATE workspaces SET id=id");
+    // The server role writes a workspace's ID and time zone and locks its row, but never sets or changes its plan.
+    await client.query("UPDATE workspaces SET time_zone=time_zone");
+    for (const lock of ["UPDATE", "NO KEY UPDATE", "SHARE"])
+      assert.equal((await client.query(`SELECT id FROM workspaces FOR ${lock}`)).rowCount, 1, lock);
+    await assert.rejects(client.query("UPDATE workspaces SET plan='advanced'"), { code: "42501" });
+    await assert.rejects(client.query("UPDATE workspaces SET id=id"), { code: "42501" });
+    await assert.rejects(
+      client.query("INSERT INTO workspaces(id,plan) VALUES ('22222222-2222-4222-8222-222222222229','advanced')"),
+      { code: "42501" },
+    );
     await client.query(
       "INSERT INTO workspace_members VALUES ('33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111')",
     );
@@ -354,7 +365,9 @@ test("Supabase roles cannot read product data; the server role has DML without D
     );
     assert.equal((await client.query("SELECT count(*) FROM workspaces")).rows[0].count, "1");
     await client.query("INSERT INTO workspaces VALUES ('22222222-2222-4222-8222-222222222222')");
-    await client.query("UPDATE workspaces SET id=id");
+    await client.query("UPDATE workspaces SET time_zone=time_zone");
+    assert.equal((await client.query("SELECT id FROM workspaces FOR NO KEY UPDATE")).rowCount, 2);
+    await assert.rejects(client.query("UPDATE workspaces SET plan='advanced'"), { code: "42501" });
     const composeConsentEventId = (
       await client.query(
         `INSERT INTO channel_consent_events(request_key,workspace_id,connection_id,channel,identity_kind,identity_value,purpose,decision,evidence_kind,evidence_reference,occurred_at,actor_id)

@@ -47,7 +47,11 @@ before(async () => {
 
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces, workspace_deletion_records CASCADE");
-  await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspaceId, otherWorkspaceId]);
+  // The other workspace invites a member in the move check below, so it needs a second seat.
+  await pool.query("INSERT INTO workspaces(id,plan) VALUES($1,'free'),($2,'essential')", [
+    workspaceId,
+    otherWorkspaceId,
+  ]);
   await pool.query(
     `INSERT INTO workspace_members(workspace_id,user_id,role,email)
      VALUES($1,$2,'owner',$3),($1,$4,'admin',$5),($1,$6,'agent',$7),($8,$9,'owner',$10)`,
