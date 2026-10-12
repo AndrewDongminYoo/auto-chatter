@@ -1186,12 +1186,13 @@ const writeRequest = (path: string, method = "POST") =>
 const sessionGet = (path: string) =>
   new Request(`https://app.test${path}`, { headers: { cookie: "__Host-ac-access=test-session" } });
 const memberId = "33333333-3333-4333-8333-333333333333";
-// A pool for an owner of the test workspace: every read answers the caller's membership and its time zone, and a
-// transaction finds the target member as an agent.
+// A pool for an owner of the test workspace: every read answers the caller's membership, its time zone and its
+// plan usage, and a transaction finds the target member as an agent.
 const ownerPool = () => {
   const row = { workspace_id: workspaceId, role: "owner", time_zone: "Asia/Seoul" };
+  const usage = { plan: "free", members: 1, open_invites: 0, connections: 0 };
   return {
-    query: async () => ({ rows: [row], rowCount: 1 }),
+    query: async (sql: string) => ({ rows: [sql.includes("open_invites") ? usage : row], rowCount: 1 }),
     connect: async () => ({
       query: async (sql: string) =>
         sql.includes("SELECT role FROM workspace_members")
@@ -1252,7 +1253,14 @@ test("the dashboard bootstrap spends no write limit for a member and only the us
   // A member loads the dashboard even after both write limits are spent.
   const member = await appApi(writeRequest("/api/workspace"), env, ownerPool, sessionFetch);
   assert.equal(member.status, 200);
-  assert.deepEqual(await member.json(), { workspace_id: workspaceId, role: "owner", time_zone: "Asia/Seoul" });
+  assert.deepEqual(await member.json(), {
+    workspace_id: workspaceId,
+    role: "owner",
+    time_zone: "Asia/Seoul",
+    plan: "free",
+    limits: { seats: 1, connections: 1 },
+    usage: { seats: 1, connections: 0 },
+  });
   assert.deepEqual([user.keys, workspace.keys], [[], []]);
   // Without a membership the request creates a workspace, so it spends the user limit after the membership read.
   const queries: string[] = [];

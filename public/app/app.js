@@ -28,6 +28,8 @@ let currentRole;
 let currentView;
 // The workspace time zone, which the inbox reminder editor shows its date and time in.
 let workspaceTimeZone;
+// The workspace plan, its limits and usage (#52) from the latest workspace or member list response.
+let workspacePlan;
 let pendingInvite = null;
 // Set when acceptPendingInvite reports an outcome, so the login notice does not overwrite it.
 let inviteNoticeShown = false;
@@ -163,6 +165,8 @@ function resetSession() {
   currentRole = undefined;
   currentView = undefined;
   workspaceTimeZone = undefined;
+  workspacePlan = undefined;
+  planControls();
   byId("members-section").hidden = true;
   byId("getting-started").hidden = true;
   byId("time-zone-form").reset();
@@ -250,6 +254,10 @@ const errors = {
   assignee_unavailable: "작업 공간에서 제거되었거나 다른 작업 공간의 멤버에게는 배정할 수 없습니다.",
   invalid_conversation_request: "대화 상태 요청을 확인해 주세요. 새로고침한 뒤 다시 시도해 주세요.",
   invite_limit_reached: "대기 중인 초대가 너무 많습니다. 사용하지 않는 초대를 취소한 뒤 다시 시도해 주세요.",
+  seat_limit_reached:
+    "요금제의 멤버 자리를 모두 쓰고 있습니다. 대기 중인 초대를 취소하거나 멤버를 제거한 뒤 다시 시도해 주세요.",
+  connection_limit_reached:
+    "요금제에서 연결할 수 있는 Instagram 계정 수를 모두 썼습니다. 새 계정을 연결하려면 다른 계정의 연결을 먼저 해제해 주세요.",
   invite_not_found: "초대 링크를 확인할 수 없습니다. 링크 전체를 복사했는지 확인하거나 새 초대를 요청해 주세요.",
   invite_used: "이미 사용한 초대 링크입니다. 새 초대를 요청해 주세요.",
   invite_revoked: "취소된 초대 링크입니다. 새 초대를 요청해 주세요.",
@@ -659,7 +667,8 @@ async function acceptPendingInvite() {
     // Only a definitive refusal drops the token; a network failure, an expired session, a rate limit or a
     // server error keeps it so the next load or login retries the acceptance.
     if ([400, 403, 404, 409, 410].includes(error.status)) rememberInvite(null);
-    notice(error.message, true);
+    // The errors map speaks to the owner who creates invites; the invitee gets its own text for a full workspace.
+    notice(error.code === "seat_limit_reached" ? planAcceptSeatRefusal() : error.message, true);
   }
   inviteNoticeShown = true;
 }
@@ -745,6 +754,8 @@ async function loadMembers() {
     const [members, invites] = await Promise.all([api("/api/workspace/members"), api("/api/workspace/invites")]);
     if (generation !== segmentsGeneration) return;
     byId("member-count").textContent = members.members.length;
+    workspacePlan = { plan: members.plan, limits: members.limits, usage: members.usage };
+    planControls();
     byId("members").replaceChildren(...members.members.map(memberItem));
     byId("invites").replaceChildren(
       ...(invites.invites.length ? invites.invites.map(inviteItem) : [node("p", "대기 중인 초대가 없습니다.", "hint")]),
@@ -763,6 +774,16 @@ function inviteLinkLocked() {
 }
 function inviteControls() {
   byId("invite-form").querySelector("button[type=submit]").disabled = inviteLinkLocked();
+}
+// The plan line in the settings and the limit help beside the invite and connect actions. Both actions stay
+// enabled at the limit, because a new link for an invited email and re-authorizing a connected account are
+// allowed; the server refuses a new email or a new account.
+function planControls() {
+  byId("plan-summary").textContent = planSummary(workspacePlan);
+  byId("seat-limit-help").textContent = planSeatHelp(workspacePlan);
+  byId("seat-limit-help").hidden = !planSeatsFull(workspacePlan);
+  byId("connection-limit-help").textContent = planConnectionHelp(workspacePlan);
+  byId("connection-limit-help").hidden = !planConnectionsFull(workspacePlan);
 }
 function showInviteLink(link) {
   byId("invite-link").value = link;
@@ -1100,6 +1121,8 @@ async function loadWorkspace() {
   const membership = await api("/api/workspace", "POST");
   currentRole = membership.role;
   workspaceTimeZone = membership.time_zone ?? undefined;
+  workspacePlan = { plan: membership.plan, limits: membership.limits, usage: membership.usage };
+  planControls();
   byId("time-zone-form").elements.time_zone.value = membership.time_zone ?? "";
   timeZoneControls();
   const operationsVisible = currentRole === "owner" || currentRole === "admin";
@@ -1939,9 +1962,15 @@ form.addEventListener("submit", (event) => {
     }
   });
 });
+// Refusals the OAuth callback sends back to the dashboard as ?instagram=<code> (src/app/api.ts).
+const instagramErrors = [
+  "instagram_authorization_denied",
+  "instagram_permissions_required",
+  "connection_limit_reached",
+];
 async function start() {
   const instagramResult = new URLSearchParams(location.search).get("instagram");
-  if (instagramResult === "instagram_authorization_denied" || instagramResult === "instagram_permissions_required") {
+  if (instagramErrors.includes(instagramResult)) {
     authLinkNotice = errors[instagramResult];
     history.replaceState(null, "", location.pathname + location.hash);
   }
@@ -1991,9 +2020,7 @@ async function start() {
     if (authLinkNotice)
       notice(
         authLinkNotice,
-        authLinkNotice.startsWith("인증 또는 변경 링크") ||
-          instagramResult === "instagram_authorization_denied" ||
-          instagramResult === "instagram_permissions_required",
+        authLinkNotice.startsWith("인증 또는 변경 링크") || instagramErrors.includes(instagramResult),
       );
   }
 }

@@ -8,6 +8,8 @@ CREATE ROLE automations_app LOGIN PASSWORD :'app_password';
 GRANT CONNECT ON DATABASE automations TO automations_app;
 GRANT USAGE ON SCHEMA public TO automations_app;
 GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO automations_app;
+REVOKE INSERT, UPDATE ON workspaces FROM automations_app;
+GRANT INSERT (id, time_zone), UPDATE (time_zone) ON workspaces TO automations_app;
 REVOKE UPDATE ON instagram_manual_reply_events FROM automations_app;
 REVOKE UPDATE ON instagram_inbox_handoff_events FROM automations_app;
 REVOKE UPDATE ON instagram_inbox_conversation_events FROM automations_app;

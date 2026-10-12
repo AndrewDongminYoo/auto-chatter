@@ -4,6 +4,16 @@ CREATE TABLE IF NOT EXISTS workspaces (
 -- The workspace's IANA time zone, read when a flow run reaches a wait_until node. The API accepts only
 -- names in pg_timezone_names; there is no CHECK constraint because that list is not immutable.
 ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS time_zone text NOT NULL DEFAULT 'Asia/Seoul';
+-- The workspace's plan (#52). Its seat and connection limits live in PLANS in src/app/plans.ts, which lists the
+-- same keys as this CHECK. New workspaces start on free; only an administrator statement changes a plan, because
+-- server roles have no INSERT or UPDATE privilege on this column (deploy/supabase-access.sql).
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS plan text NOT NULL DEFAULT 'free';
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='workspaces'::regclass AND conname='workspaces_plan') THEN
+    ALTER TABLE workspaces ADD CONSTRAINT workspaces_plan
+      CHECK(plan IN ('free','essential','pro','business','advanced'));
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS workspace_members (
   user_id uuid PRIMARY KEY,

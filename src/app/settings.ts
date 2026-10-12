@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
+import { workspaceEntitlements } from "./plans.ts";
 export async function ensureWorkspace(pool: Pool, user: User): Promise<string> {
   const client = await pool.connect();
   try {
@@ -85,13 +86,17 @@ export async function lockWorkspaceForMember(
   if (!roleAllows(member.role, minimum)) throw new ApiError(403, "role_forbidden");
 }
 
-// The caller's membership and the workspace settings the dashboard shows to every role.
+// The caller's membership and the workspace settings, plan, limits and usage the dashboard shows to every role.
 export async function currentWorkspace(pool: Pool, user: User) {
   const member = await membershipFor(pool, user, "agent");
   const settings = await pool.query<{ time_zone: string }>("SELECT time_zone FROM workspaces WHERE id=$1", [
     member.workspace_id,
   ]);
-  return { ...member, time_zone: settings.rows[0]?.time_zone ?? null };
+  return {
+    ...member,
+    time_zone: settings.rows[0]?.time_zone ?? null,
+    ...(await workspaceEntitlements(pool, member.workspace_id)),
+  };
 }
 
 // The time zone a wait_until node reads (#32). Only names PostgreSQL knows are stored, compared

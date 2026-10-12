@@ -32,6 +32,8 @@ beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
   workspaceId = await ensureWorkspace(pool, user);
   await ensureWorkspace(pool, other);
+  // The other workspace invites this user in the move tests; plans.db.test.ts covers the limits themselves.
+  await pool.query("UPDATE workspaces SET plan='essential' WHERE id<>$1", [workspaceId]);
 });
 after(async () => {
   await pool.end();

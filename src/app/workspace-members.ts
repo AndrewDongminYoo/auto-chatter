@@ -4,6 +4,7 @@ import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { lockWorkspaceForMember, normalizeEmail, workspaceFor } from "./settings.ts";
 import { unassignRemovedMember } from "./inbox-conversations.ts";
 import { cancelRemovedMemberReminders } from "./inbox-reminders.ts";
+import { requireInviteSeat, requireMemberSeat, workspaceEntitlements } from "./plans.ts";
 
 const INVITE_DAYS = 7;
 const MAX_OPEN_INVITES = 20;
@@ -42,6 +43,11 @@ export async function listMembers(pool: Pool, user: User) {
       [workspace, user.id],
     )
   ).rows;
+}
+
+// The plan, its limits and the seat and connection usage, shown beside the owner's member list.
+export async function memberEntitlements(pool: Pool, user: User) {
+  return workspaceEntitlements(pool, await workspaceFor(pool, user, "owner"));
 }
 
 export async function listInvites(pool: Pool, user: User) {
@@ -86,6 +92,8 @@ export async function createInvite(pool: Pool, user: User, input: unknown, origi
       "UPDATE workspace_invites SET revoked_at=now() WHERE workspace_id=$1 AND email=$2 AND accepted_at IS NULL AND revoked_at IS NULL",
       [workspace, email],
     );
+    // Counted after the replacement above, so a new link for an invited email needs no extra seat.
+    await requireInviteSeat(client, workspace);
     const created = await client.query(
       `INSERT INTO workspace_invites(workspace_id,email,role,token_hash,created_by,expires_at)
        SELECT $1,$2,$3,$4,$5,now()+make_interval(days=>$6)
@@ -202,7 +210,9 @@ export async function acceptInvite(pool: Pool, user: User, input: unknown) {
         [user.id],
       )
     ).rows[0]?.workspace_id;
-    const workspaceLocks: [string, "SHARE" | "UPDATE"][] = [[target.workspace_id, "SHARE"]];
+    // NO KEY UPDATE on the target serializes acceptances and invite creation in it, so two acceptances cannot both
+    // pass the seat count below; foreign key checks (KEY SHARE) on the row still go through.
+    const workspaceLocks: [string, "NO KEY UPDATE" | "UPDATE"][] = [[target.workspace_id, "NO KEY UPDATE"]];
     if (source && source !== target.workspace_id) workspaceLocks.push([source, "UPDATE"]);
     workspaceLocks.sort(([a], [b]) => (a < b ? -1 : 1));
     for (const [id, mode] of workspaceLocks)
@@ -255,6 +265,7 @@ export async function acceptInvite(pool: Pool, user: User, input: unknown) {
       if (current.role !== "owner" || !(await currentWorkspaceMovable(client, current.workspace_id, user.id)))
         throw new ApiError(409, "workspace_not_empty");
     }
+    await requireMemberSeat(client, invite.workspace_id);
     await client.query(
       `INSERT INTO workspace_members(user_id,workspace_id,role,email) VALUES($1,$2,$3,$4)
        ON CONFLICT(user_id) DO UPDATE SET workspace_id=EXCLUDED.workspace_id,role=EXCLUDED.role,email=EXCLUDED.email,
