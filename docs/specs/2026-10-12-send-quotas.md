@@ -7,6 +7,7 @@
 앱 전체가 나눠 쓰는 공유 한도, 캠페인 발송, 비용 상한, 웹훅 전달의 공평성(#167)은 이 문서의 범위가 아닙니다.
 이미 있는 사후 대응(`ProviderRateLimitedError`, 연결의 `send_paused_until`, `src/instagram/reply-worker.ts`의 재시도 간격)과 발송 결과의 의미는 바꾸지 않습니다.
 migration 042가 열 두 개와 인덱스 하나를 더하며, 운영 DB 적용과 배포는 이 PR의 범위가 아닙니다.
+데이터 삭제 뒤에도 예산의 셈을 이어 가는 이월([이슈 #189](https://github.com/AndrewDongminYoo/auto-chatter/issues/189))은 migration 044가 더하며, 그 운영 적용과 배포도 그 PR의 범위가 아닙니다.
 
 ## Meta의 공식 한도
 
@@ -29,14 +30,27 @@ migration 042가 열 두 개와 인덱스 하나를 더하며, 운영 DB 적용�
 ## 비공개 답장 예산
 
 - 값: 연결마다 최근 1시간(현재 시각부터 거꾸로 60분) 동안 700회입니다. Meta의 750회보다 50회 적게 잡아, 아래에 적은 초과와 셈의 오차가 이 여유 안에 들게 합니다. 값은 `PRIVATE_REPLY_HOURLY_BUDGET`(`src/instagram/send-quota.ts`) 하나에만 있습니다.
-- 세는 대상: `private_reply_outbox.provider_called_at`이 최근 1시간 안인 그 연결의 행 수입니다. 이 시각은 claim한 답장을 transport의 `send()`에 넘기기 직전에, claim을 확인하는 조건부 UPDATE(`status='sending' AND attempt_id=$n`)로 기록합니다. 다음 시도가 덮어쓰고, 지우지 않습니다.
+- 세는 대상: `private_reply_outbox.provider_called_at`이 최근 1시간 안인 그 연결의 행 수에, 연결에 이월된 호출 수를 그 이월이 끝나기 전까지 더한 값입니다([삭제한 행의 호출 이월](#삭제한-행의-호출-이월)). 이 시각은 claim한 답장을 transport의 `send()`에 넘기기 직전에, claim을 확인하는 조건부 UPDATE(`status='sending' AND attempt_id=$n`)로 기록합니다. 다음 시도가 덮어쓰고, 지우지 않습니다.
 - 막는 곳: `processNextPrivateReply`의 claim(Node와 Cloudflare가 함께 씀)과 `wakeDueReplies`의 비공개 답장 조건입니다. 예산을 다 쓴 연결의 비공개 답장은 claim하지 않으므로 `pending`으로 남고, `next_attempt_at`, `rate_limit_retries`, `failure_code`는 바뀌지 않습니다. 1시간 창에서 호출이 빠져나가면 다음 claim이 다시 보냅니다.
 - 깨우기: 예산을 다 쓴 연결은 비공개 답장 때문에는 Queue에 넣지 않습니다. 그렇지 않으면 Queue 메시지를 처리한 뒤의 연결 단위 깨우기가 같은 연결을 계속 다시 넣어, 동시 처리 수가 1인 Queue를 그 연결이 차지합니다. 수동 답장과 팔로우 응답이 기다리면 그 연결도 깨웁니다.
 - 세지 않는 것: 수동 답장과 팔로우 응답(Send API DM)은 예산을 쓰지도, 예산에 막히지도 않습니다. 팔로우 조건 규칙의 첫 DM은 비공개 답장 행 그 자체이므로 셉니다.
 - 운영 지표: `oldest_due_pending_seconds`는 예산에 막힌 비공개 답장을 세지 않습니다([운영 지표](2026-10-01-operations-health.md#지표와-api)). 연결 일시 중지와 달리 끝나는 시각이 없으므로, 예산이 풀린 답장은 자기 `next_attempt_at`부터 세어 바로 경보 기준을 넘을 수 있습니다. 새 경보나 로그 코드는 두지 않습니다.
 
+### 삭제한 행의 호출 이월
+
+연결 데이터 삭제(`delete_connection_data`)와 사람 데이터 삭제(`delete_person_data`)는 `private_reply_outbox` 행을 지우고, OAuth 재연결은 같은 `instagram_connections` 행을 다시 씁니다(`src/app/instagram-oauth.ts`의 `ON CONFLICT(account_id)`). 이월이 없으면 관리자가 연결을 끊고 데이터를 삭제한 뒤 1시간 안에 다시 연결할 때 셈이 0부터 시작해, 그 계정이 같은 1시간 안에 700회를 넘을 수 있습니다.
+
+- 기록: `private_reply_outbox`의 문장 단위 `AFTER DELETE` 트리거(`carry_deleted_private_reply_calls`)가, 지운 행 가운데 `provider_called_at`이 최근 1시간 안인 행을 연결마다 셉니다. 그런 행이 있는 연결만 고칩니다. 이월된 호출 수는 기존 이월이 아직 끝나지 않았으면 그 수에 더하고, 끝났으면 0에 더합니다. 이월이 끝나는 시각은 끝나지 않은 기존 시각과, 지운 행 가운데 가장 늦은 `provider_called_at`에 1시간을 더한 시각 가운데 늦은 쪽입니다. 시각은 예산 조건과 같이 `now()`로 비교합니다.
+- 읽기: `privateReplyBudgetOpenSql`이 행 수에 `private_reply_carried_calls`를 `private_reply_carried_until > now()`인 동안만 더합니다. 조건은 여전히 SQL 조건 하나이므로 claim, 깨우기, 운영 지표가 함께 씁니다.
+- 실행 주체: 서버 역할에는 이 테이블의 DELETE 권한이 없으므로, 트리거는 관리자 삭제 함수 안에서만 실행됩니다. 트리거 함수는 SECURITY INVOKER이고 `search_path`를 `public, pg_temp`로 고정합니다. `delete_connection_data`(SECURITY DEFINER) 안에서는 그 함수의 관리자 소유자로, 다른 두 함수 안에서는 호출한 관리자로 실행됩니다.
+- 잠금: 트리거의 UPDATE는 키가 아닌 열만 바꿉니다. `delete_connection_data`와 `delete_workspace_data`는 연결 행을 `FOR UPDATE`로, `delete_person_data`는 `FOR NO KEY UPDATE`로 이미 잡고 있으므로 트리거가 새 잠금을 더하지 않습니다.
+- 작업 공간 삭제: `delete_workspace_data`는 발송 행을 연결보다 먼저 지우므로 트리거가 쓴 이월은 곧 연결과 함께 지워지고, 함수는 그대로 성공합니다.
+- `TRUNCATE`는 트리거를 실행하지 않습니다. DB 테스트는 이것에 기대어 테스트 사이에 표를 비웁니다.
+
 ### 셈의 오차
 
+- 많이 세는 경우(이월): 이월은 호출마다의 시각을 남기지 않으므로, 이월이 끝날 때까지 이월된 호출을 모두 셉니다. 그 가운데 더 일찍 한 호출이 있어도 1시간 창에서 빠지지 않으므로, 연결을 조금 더 오래 멈출 뿐 예산을 넘게 하지는 않습니다.
+- 적게 세는 경우(작업 공간 삭제): 작업 공간 삭제는 연결 행을 지우므로 이월도 함께 사라집니다. 같은 Instagram 계정을 1시간 안에 다른 작업 공간에 새로 연결하면 새 연결 행의 셈은 0부터 시작합니다. 작업 공간 삭제는 API가 없는 관리자 전용 절차이므로 이 경우를 그대로 둡니다.
 - 많이 세는 경우: transport가 `send()` 안에서 POST 전에 멈추면(`PreSendVerificationError`, 예: Cloudflare의 마지막 확인이나 transport의 읽기 확인) 보내지 않은 호출이 1시간 동안 셉니다. 예산이 일찍 멈추는 쪽이므로 그대로 둡니다.
 - 적게 세는 경우: 한 행을 1시간 안에 두 번 POST하면(Meta가 호출 제한으로 거절한 뒤 15분 뒤의 재시도) 시각을 덮어써 한 번만 셉니다. 이 경우는 이미 연결 일시 중지를 걸어 다른 답장도 멈춥니다.
 - 동시 claim: claim은 개수를 읽은 뒤 행을 잡고, 호출 시각은 그 뒤에 기록합니다. 그래서 한 연결을 동시에 claim하는 수만큼, 정확히는 그 수에서 하나를 뺀 만큼까지 예산을 넘을 수 있습니다. Cloudflare Queue 소비자는 `max_concurrency: 1`, `max_batch_size: 1`(`wrangler.json`)이고, Node 작업자는 환경 변수로 정한 연결 하나를 순서대로 처리하며, 두 경로는 같은 연결을 맡지 않습니다(OAuth 연결은 Cloudflare만 보냄). 지금 구성에서는 넘지 않으며, 동시 처리 수를 늘려도 연결당 동시 claim이 50을 넘지 않는 한 Meta 한도 안입니다. 같은 행은 `FOR UPDATE SKIP LOCKED`와 `attempt_id` 확인 때문에 두 번 보내지 않습니다.
@@ -59,7 +73,8 @@ migration 042가 열 두 개와 인덱스 하나를 더하며, 운영 DB 적용�
 
 - `private_reply_outbox.provider_called_at timestamptz`: 위의 호출 시각입니다. `(connection_id, provider_called_at)`에 `provider_called_at IS NOT NULL`인 부분 인덱스가 있습니다.
 - `instagram_connections.send_woken_at timestamptz`: Cron이 마지막으로 그 연결을 Queue에 넣은 시각이며 순서에만 씁니다.
-- 두 열은 기존 테이블의 열이므로 서버 역할의 권한(SELECT·INSERT·UPDATE)은 그대로이고 DELETE는 없습니다. 작업 공간 내보내기는 두 테이블을 이미 내보내므로 두 열도 함께 나갑니다. 둘 다 비밀 값이 아닙니다.
+- `instagram_connections.private_reply_carried_calls integer NOT NULL DEFAULT 0`(`>= 0` CHECK)과 `instagram_connections.private_reply_carried_until timestamptz`: 위의 이월된 호출 수와 이월이 끝나는 시각입니다(migration 044). 트리거만 씁니다.
+- 이 열들은 기존 테이블의 열이므로 서버 역할의 권한(SELECT·INSERT·UPDATE)은 그대로이고 DELETE는 없습니다. 작업 공간 내보내기는 두 테이블을 이미 내보내므로 이 열들도 함께 나갑니다. 모두 비밀 값이 아닙니다.
 
 ## 배포 순서
 
@@ -73,6 +88,12 @@ migration 042(`deploy/migrate-multi-user.sql`로 적용)를 코드보다 먼저 
 - Cron 깨우기의 `send_woken_at` 기록: 고르는 문장이 먼저 실패하므로 닿지 않습니다.
 - 운영 지표(`GET /api/workspace/health`와 Cron의 `alerts` 단계): 지표 문장이 실패합니다.
 
+### migration 044(이월)
+
+migration 044(`deploy/migrate-multi-user.sql`로 적용)도 코드보다 먼저 적용합니다.
+migration을 먼저 적용하면 그때부터 삭제 함수가 이월을 기록하지만, 지금 코드는 이월을 읽지 않으므로 바뀌는 것은 작업 공간 내보내기뿐입니다. 두 열이 그때부터 `0`과 `null`(또는 기록된 이월)로 나갑니다.
+코드를 먼저 배포하면 `privateReplyBudgetOpenSql`을 쓰는 문장(비공개 답장 claim, `wakeDueReplies`, 운영 지표)이 `42703`(열 없음)으로 실패하며, 그 결과는 위 migration 042의 목록과 같습니다.
+
 ## #60에 남은 완료 조건
 
 - 캠페인 발송(#35, #36)과 비용 상한(#52)이 생기면 같은 연결별 한도와 이 예산을 써야 합니다.
@@ -82,5 +103,5 @@ migration 042(`deploy/migrate-multi-user.sql`로 적용)를 코드보다 먼저 
 ## 검증
 
 - `src/instagram/send-quota.test.ts`: 예산 값과 SQL 조건.
-- `src/instagram/send-quota.db.test.ts`: 699회와 700회의 경계, 1시간 창이 비는 것, 다른 연결은 그대로 보냄, 재시도를 쓰지 않음, 동시 claim이 같은 행을 두 번 보내지 않음, POST 전에 멈춘 시도도 셈, migration 재적용.
-- `src/cloudflare/worker.db.test.ts`: 예산에 막힌 연결을 Queue와 Cron이 다시 넣지 않음, 같은 연결의 수동 답장과 팔로우 응답은 보냄, 100개가 넘는 연결을 Cron이 돌아가며 깨움, 발행에 실패한 연결은 기록하지 않음, Cron과 Queue를 거쳐 한 연결에 쌓인 답장 200개가 다른 연결의 첫 답장을 늦추지 않음.
+- `src/instagram/send-quota.db.test.ts`: 699회와 700회의 경계, 1시간 창이 비는 것, 다른 연결은 그대로 보냄, 재시도를 쓰지 않음, 동시 claim이 같은 행을 두 번 보내지 않음, POST 전에 멈춘 시도도 셈, migration 재적용. 이월(#189): 연결 데이터 삭제와 재연결 뒤에도 예산에 막힘과 이월이 끝나면 풀림, 사람 데이터 삭제도 셈, 두 번의 삭제가 더해지고 끝난 이월은 바뀜, 1시간이 지났거나 호출하지 않은 행은 이월하지 않음, 작업 공간 삭제가 그대로 성공함, migration 044 재적용.
+- `src/cloudflare/worker.db.test.ts`: 예산에 막힌 연결을 Queue와 Cron이 다시 넣지 않음, 지운 행의 이월에 막힌 연결도 이월이 끝날 때까지 다시 넣지 않음, 같은 연결의 수동 답장과 팔로우 응답은 보냄, 100개가 넘는 연결을 Cron이 돌아가며 깨움, 발행에 실패한 연결은 기록하지 않음, Cron과 Queue를 거쳐 한 연결에 쌓인 답장 200개가 다른 연결의 첫 답장을 늦추지 않음.

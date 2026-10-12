@@ -43,5 +43,6 @@ BEGIN;
 \ir ../db/migrations/041_instagram_subscription_check.sql
 \ir ../db/migrations/042_send_quotas.sql
 \ir ../db/migrations/043_webhook_delivery_fairness.sql
+\ir ../db/migrations/044_private_reply_budget_carry.sql
 \ir supabase-access.sql
 COMMIT;

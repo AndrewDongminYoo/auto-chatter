@@ -1120,6 +1120,34 @@ test("a connection at its private reply budget is neither claimed nor queued aga
   assert.equal((await replyState("comment-1")).status, "sent");
 });
 
+test("recent calls of deleted rows still hold the claim and the wake until their carry expires", async () => {
+  await worker.fetch(request(), env);
+  await recordProviderCalls(PRIVATE_REPLY_HOURLY_BUDGET);
+  // Only the deletion functions delete outbox rows in production; the trigger fires on any DELETE (#189).
+  await pool.query("DELETE FROM private_reply_outbox WHERE comment_id LIKE 'called-%'");
+  assert.equal(
+    (await pool.query("SELECT private_reply_carried_calls FROM instagram_connections WHERE id=$1", [connectionId]))
+      .rows[0].private_reply_carried_calls,
+    PRIVATE_REPLY_HOURLY_BUDGET,
+  );
+  published = [];
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 0);
+  assert.deepEqual(published, []);
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, []);
+  assert.equal((await replyState("comment-1")).status, "pending");
+  await pool.query(
+    "UPDATE instagram_connections SET private_reply_carried_until=now()-interval '1 second' WHERE id=$1",
+    [connectionId],
+  );
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, [{ connectionId }]);
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 1);
+  assert.equal((await replyState("comment-1")).status, "sent");
+});
+
 // Adds count connections that copy the fixture's send settings, each with one due private reply. Only the wake
 // reads them; their copied token does not open for their account.
 async function addDueConnections(count: number) {
