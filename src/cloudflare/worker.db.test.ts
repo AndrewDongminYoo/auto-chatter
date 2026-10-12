@@ -1562,6 +1562,26 @@ test("a rejected Cloudflare identity read marks the token without changing the r
   assert.deepEqual(await reauthMarker(), { reauth_reason: null, marked: false });
 });
 
+test("an accepted Cloudflare identity read keeps a refresh_rejected marker and its first time", async () => {
+  const markedAt = "2026-10-01T00:00:00.000Z";
+  await pool.query(
+    `UPDATE instagram_connections
+     SET reauth_required_at=$2,reauth_reason='refresh_rejected',reauth_token_obtained_at=token_obtained_at WHERE id=$1`,
+    [connectionId, markedAt],
+  );
+  await worker.fetch(request(), env);
+  await consume();
+  // The identity read accepted the token and the reply was sent, but that does not prove Meta will refresh it.
+  assert.equal(sends, 1);
+  const marker = await pool.query(
+    "SELECT reauth_reason,reauth_required_at,reauth_token_obtained_at=token_obtained_at AS same_token FROM instagram_connections WHERE id=$1",
+    [connectionId],
+  );
+  assert.deepEqual(marker.rows, [
+    { reauth_reason: "refresh_rejected", reauth_required_at: new Date(markedAt), same_token: true },
+  ]);
+});
+
 test("a failed reconnect marker write is logged and leaves the reply outcome unchanged", async () => {
   const providerFetch = globalThis.fetch;
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) =>
