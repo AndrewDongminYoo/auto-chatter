@@ -88,7 +88,8 @@ It classifies provider refusals only for HTTP 4xx.
 The service accepts `Retry-After` delays from zero through seven days; malformed or larger values fall back to the retry tier.
 This bound is a service policy, not a Meta-specified maximum.
 The worker checks the connection pause again before entering `transport.send()`; the check and the external POST are not atomic, and requests already admitted to `send()` can continue if a pause is recorded later.
-Cooldown is scoped to one stored connection; an app-wide quota shared by multiple connections is not coordinated yet.
+Cooldown is scoped to one stored connection.
+A proactive budget also holds a connection's private replies at 700 provider calls per rolling hour (`PRIVATE_REPLY_HOURLY_BUDGET` in `src/instagram/send-quota.ts`, counted from `provider_called_at`, which is set just before `transport.send()`): the claim and the private-reply branch of the wake skip them, leaving them `pending` without spending a retry, while manual replies and follow DMs keep sending. Meta documents no app-wide shared messaging limit, so none is coordinated ([spec](docs/specs/2026-10-12-send-quotas.md)).
 
 **Transports** (selected by `META_LOGIN_MODE`, default `facebook`; the configured Meta app uses `instagram`):
 
@@ -103,7 +104,7 @@ One Worker serves webhooks, public pages, the dashboard API and the queue/cron d
 It reuses ingestion and the single-row worker; it does not run the Node polling loop.
 Queue messages contain only a connection ID; database status remains authoritative.
 Each notification processes at most one row, then wakes remaining due work only for that connection.
-Webhook notifications are scoped to the account IDs in the received events; only cron discovers due work globally.
+Webhook notifications are scoped to the account IDs in the received events; only cron discovers due work globally, queuing at most 100 connections per run, least recently woken first (`send_woken_at`, stamped only after its message is published), so every due connection is reached in rotation ([spec](docs/specs/2026-10-12-send-quotas.md#cron-깨우기의-공평성)).
 Cron runs each minute to remove the text of kept early DMs after 15 minutes, remove expired OAuth states in batches (`oauth_state_cleanup`, [spec](docs/specs/2026-09-29-instagram-public-access.md)), recover stale sends, refresh due tokens, check due connections' webhook subscriptions (`subscription_check`, even while sending is off), link kept early DMs and then resume due delayed flow runs (both even while sending is off, and in that order so an in-time reply is linked before its wait times out), and repair missed notifications or delayed retries.
 `TOKEN_ENCRYPTION_KEY` decrypts workspace/account-bound AES-GCM credentials; a valid per-account token and `send_enabled` are required in addition to the global switch.
 The adapter prioritizes manual replies, then pending follow confirmations, and rechecks the rule, claim, connection, token version, cooldown and 24-hour window immediately before a normal DM POST.
