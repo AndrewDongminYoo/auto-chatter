@@ -453,6 +453,15 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 18개 항목 점검은 배포 전에는 바뀐 `app.js`와 `inbox.js`의 해시만 달라 16개가 통과했고, 배포 직후의 첫 점검에서는 `app.js`의 해시만 달라 17개가 통과했습니다. 10:59:30Z에 다시 받은 `app.js`는 로컬 파일과 해시가 같았고(`cf-cache-status: MISS`, `cache-control: no-store`), 11:02Z에 끝난 재점검에서는 18개가 모두 통과했습니다.
 `scheduled_steps`를 10:57:17Z, 10:58:18Z, 10:59:18Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 적용 뒤 데이터 삭제를 실행하지 않았으므로 이월 트리거는 실행되지 않았고, 로그인한 세션으로 요청하지 않았으므로 새 요청 한도의 `429`와 한도 장치가 응답하지 않을 때의 동작도 운영에서 확인하지 않았습니다.
+2026-10-12 14:07Z에는 운영자의 "045 마이그레이션 진행하고 배포해주세요" 요청에 따라 `main` 커밋 `0ce8aa1`을 적용했습니다. 이 커밋에는 PR #195(#52 1단계: 요금제 권한과 멤버 자리·연결 한도, migration 045)와 PR #197(#62 3차 점검: 테스트와 점검 기록만)이 들어 있습니다.
+적용 전 조회에서 운영 DB는 044까지 적용된 상태였고(`workspaces`의 열은 `id`, `time_zone`뿐이고 `workspaces_plan` 제약 없음, public 테이블 44개), 작업 공간 3개·제거되지 않은 멤버 2명·열린 초대 0개·연결된 계정 1개·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다. `auto_chatter_server`는 `workspaces`에 테이블 단위 SELECT·INSERT·UPDATE를 가지고 있었습니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-12-migration-045/public-pre-045.dump`(280,578바이트, SHA-256 `469372874d65149758a79ab4c732f0626b8d749fc9a66c2ba995dd9e1a9228a8`)에 저장했고, 목록 읽기에서 데이터 테이블 44개를 확인했습니다.
+같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE 144건은 모두 건너뛰기 알림이었습니다(044의 두 열을 다시 실행한 2건이 늘고, 이번에는 트리거가 있으므로 044의 트리거 삭제 알림 1건이 줄었습니다).
+적용 후 `workspaces.plan`(text, NOT NULL, 기본값 `free`)과 `workspaces_plan` CHECK(`free`, `essential`, `pro`, `business`, `advanced`)가 생겼고, 기존 작업 공간 3개는 모두 `advanced`였습니다. `auto_chatter_server`의 `workspaces` 권한은 SELECT와 열 단위 INSERT(`id`, `time_zone`), UPDATE(`time_zone`)로 좁혀졌습니다. 그래서 `plan`의 INSERT·UPDATE 권한은 없고, 행 잠금에 필요한 UPDATE 권한은 `time_zone` 하나로 남습니다. 이 프로젝트에는 `automations_app` 역할이 없습니다. 서버 역할의 테이블 DELETE·TRUNCATE 권한과 `anon`·`authenticated`의 public 테이블 권한은 계속 0개였습니다. 관리자 연결의 읽기 전용 트랜잭션에서 사용량 조회를 실행해, 세 작업 공간의 멤버·열린 초대·연결 수(1·0·0, 0·0·0, 1·0·1)가 `advanced` 한도(10, 10) 안인 것을 확인했습니다.
+이어서 Worker를 버전 `f8271e30-ad3c-40bd-8195-754a6c3fed77`로 배포했고, 14:11:37Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `294292f3-aa59-40a9-8f45-6a2c45148016`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+18개 항목 점검은 배포 전에는 바뀐 `index.html`과 `app.js`의 해시만 달라 16개가 통과했습니다. 배포 직후의 반영 지연을 피해 2분 뒤 14:13:50Z에 시작한 점검에서는 18개가 모두 통과했고, 새 파일 `plan-labels.js`도 200으로 응답하며 로컬 파일과 해시가 같았습니다.
+`scheduled_steps`를 14:15:59Z, 14:16:59Z, 14:17:59Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
+로그인한 세션으로 요청하지 않았으므로, 화면의 요금제·사용량 표시와 `seat_limit_reached`·`connection_limit_reached` 거절은 운영에서 확인하지 않았습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
