@@ -211,6 +211,13 @@ export async function appApi(
       !instagramConnectAvailable(user, env)
     )
       throw new ApiError(403, "instagram_public_access_restricted");
+    if (url.pathname === "/api/contacts/export.csv" && request.method === "GET") {
+      if (url.searchParams.size) throw new ApiError(400, "invalid_contact_export_request");
+      await spendUserAllowance(env.CONTACT_EXPORT_LIMIT, user.id, {
+        limited: "contact_export_rate_limited",
+        unavailable: "contact_export_unavailable",
+      });
+    }
     const pool = openPool(correlationId);
     try {
       // The workspace write limit reads only the caller's membership, before any route handler and before the #166
@@ -475,7 +482,6 @@ export async function appApi(
       if (inbox?.[2] && request.method === "GET")
         return json(await inboxMessages(pool, user, inbox[1]!, inbox[2], url.searchParams));
       if (url.pathname === "/api/contacts/export.csv" && request.method === "GET") {
-        if (url.searchParams.size) throw new ApiError(400, "invalid_contact_export_request");
         const exported = await exportContactCsv(pool, user);
         return new Response(exported.body, {
           headers: {

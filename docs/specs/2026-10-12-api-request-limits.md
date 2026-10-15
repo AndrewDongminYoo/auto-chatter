@@ -55,7 +55,9 @@ Worker는 `src/cloudflare/index.ts`에서 `durableLimits(env.AUTH_LIMITER)`로 �
 
 ## 한도를 두지 않는 것
 
-- `GET /api/inbox`를 뺀 GET 요청(대화 내용, 연락처, 설정, 운영 상태 등). 내보내기와 게시물 조회, 연결 상태 확인은 #166의 한도를 그대로 씁니다.
+- `GET /api/inbox`와 별도 한도가 있는 경로를 뺀 GET 요청(대화 내용, 연락처 목록, 설정, 운영 상태 등).
+  작업 공간 JSON 내보내기와 게시물 조회, 연결 상태 확인은 #166의 한도를 그대로 씁니다.
+  연락처 CSV 내보내기는 [#196의 별도 한도](2026-10-04-contact-csv-export.md#요청-횟수-한도)를 쓰며, 사용자별 1시간 고정 창 5회이고 제한기 장애 시 요청을 거절합니다.
 - Meta 웹후크(`/webhooks/instagram`), 공개 페이지, Queue 소비자와 Cron. 이것들은 `appApi`를 거치지 않습니다.
 - Node 수신기와 작업자. 대시보드 API는 Cloudflare Worker에서만 제공합니다.
 - 저장량의 절대 상한과 요금제별 한도(#52).

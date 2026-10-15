@@ -82,6 +82,7 @@ export function durableLimits(namespace: LimiterNamespace): Required<AuthRateLim
     AUTH_MAIL_IP_LIMIT: limiter("mail-ip", 10, 3_600_000),
     AUTH_MAIL_LIMIT: limiter("mail", 15, 3_600_000),
     WORKSPACE_EXPORT_LIMIT: limiter("workspace-export", 5, 3_600_000),
+    CONTACT_EXPORT_LIMIT: limiter("contact-export", 5, 3_600_000),
     INSTAGRAM_CONNECT_LIMIT: limiter("instagram-connect", 10, 3_600_000),
     API_WRITE_USER_LIMIT: limiter("api-write-user", 120, 60_000),
     API_WRITE_WORKSPACE_LIMIT: limiter("api-write-workspace", 3_000, 3_600_000),
