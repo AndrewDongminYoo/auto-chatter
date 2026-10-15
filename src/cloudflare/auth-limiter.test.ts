@@ -151,6 +151,21 @@ test("durableLimits gives the workspace export 5 and the Instagram connect 10 pe
   ]);
 });
 
+test("contact CSV exports allow five per hour independently of other users and JSON exports (#196)", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 4_000_000 });
+  const limits = durableLimits(fakeNamespace());
+  assert.ok(limits.CONTACT_EXPORT_LIMIT, "CSV exports need a dedicated allowance");
+  const results = [];
+  for (let i = 0; i < 6; i++) results.push((await limits.CONTACT_EXPORT_LIMIT.limit({ key: "user" })).success);
+  assert.deepEqual(results, [true, true, true, true, true, false]);
+  assert.equal((await limits.CONTACT_EXPORT_LIMIT.limit({ key: "other-user" })).success, true);
+  assert.equal((await limits.WORKSPACE_EXPORT_LIMIT.limit({ key: "user" })).success, true);
+  t.mock.timers.tick(3_599_999);
+  assert.equal((await limits.CONTACT_EXPORT_LIMIT.limit({ key: "user" })).success, false);
+  t.mock.timers.tick(1);
+  assert.equal((await limits.CONTACT_EXPORT_LIMIT.limit({ key: "user" })).success, true);
+});
+
 test("durableLimits gives API writes 120 per user per minute and 3,000 per workspace per hour, and the inbox list 60 per user per minute (#167)", async () => {
   const calls: { name: string; limit: number; period: number }[] = [];
   const limits = durableLimits({

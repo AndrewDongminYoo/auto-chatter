@@ -13,6 +13,8 @@ export interface AuthRateLimitEnv {
   // Per-user allowances for the whole-workspace export and for starting an Instagram OAuth connection (#166).
   WORKSPACE_EXPORT_LIMIT?: RateLimitBinding;
   INSTAGRAM_CONNECT_LIMIT?: RateLimitBinding;
+  // Independent per-user allowance for contact CSV exports (#196).
+  CONTACT_EXPORT_LIMIT?: RateLimitBinding;
   // Default request limits for signed-in API writes, per user and per workspace, and for the inbox list (#167).
   API_WRITE_USER_LIMIT?: RateLimitBinding;
   API_WRITE_WORKSPACE_LIMIT?: RateLimitBinding;

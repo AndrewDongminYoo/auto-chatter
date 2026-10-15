@@ -75,6 +75,21 @@ ID와 댓글 수도 JavaScript Number로 변환하지 않습니다.
 본문은 `text/csv; charset=utf-8`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`이며 파일명은 서버가 만든 `auto-chatter-contacts-v1-YYYY-MM-DD.csv`입니다.
 조회 중 쓰기·큐 알림·공급자 호출·셀 내용 로그를 남기지 않습니다.
 
+## 요청 횟수 한도
+
+[#196](https://github.com/AndrewDongminYoo/auto-chatter/issues/196)에 따라 `CONTACT_EXPORT_LIMIT`가 인증된 사용자별로 1시간 고정 창 5회까지 허용합니다.
+기존 `AUTH_LIMITER` Durable Object를 재사용하며, 이름은 `contact-export:<사용자 ID>`입니다.
+다른 사용자 및 작업 공간 JSON 내보내기(`WORKSPACE_EXPORT_LIMIT`)와 횟수를 공유하지 않습니다.
+첫 요청이 창을 열고, 창 경계에 요청이 몰리면 짧은 시간에 최대 10회가 통과할 수 있습니다.
+
+세션을 확인한 뒤 쿼리 매개변수가 있으면 기존 `400 invalid_contact_export_request`를 반환하며 횟수를 쓰지 않습니다.
+유효한 요청은 DB 풀을 열기 전에 한도를 검사합니다.
+한도 초과는 `429 contact_export_rate_limited`, 바인딩 누락이나 제한기 호출 실패는 `503 contact_export_unavailable`이며, 모두 DB를 읽지 않고 파일도 만들지 않습니다.
+한도를 통과한 뒤에는 기존 스냅샷 안에서 멤버십·관리자 권한을 확인합니다.
+따라서 이후 권한이나 크기·시간 한도로 실패한 요청도 횟수를 쓰며, 한도를 이미 넘은 상담원 요청은 역할 확인보다 먼저 429를 받습니다.
+대시보드는 기존 오류 표시 영역에 한국어 재시도 안내를 보여 줍니다.
+이 변경의 로컬·CI 검증은 운영 배포나 운영 제한기 상태를 증명하지 않습니다.
+
 ## 화면
 
 소유자·관리자에게만 연락처 새로고침 옆의 “전체 연락처 CSV” 버튼과 전체 범위·저장 전 수정 제외·개인정보 안내를 보여줍니다.

@@ -11,6 +11,7 @@ const config = {
   AUTH_MAIL_IP_LIMIT: { limit: async () => ({ success: true }) },
   AUTH_MAIL_LIMIT: { limit: async () => ({ success: true }) },
   WORKSPACE_EXPORT_LIMIT: { limit: async () => ({ success: true }) },
+  CONTACT_EXPORT_LIMIT: { limit: async () => ({ success: true }) },
   INSTAGRAM_CONNECT_LIMIT: { limit: async () => ({ success: true }) },
   API_WRITE_USER_LIMIT: { limit: async () => ({ success: true }) },
   API_WRITE_WORKSPACE_LIMIT: { limit: async () => ({ success: true }) },
@@ -621,6 +622,58 @@ test("workspace export and Instagram connect spend a per-user allowance before t
     }
     assert.deepEqual(refused.keys, [userId], route.binding);
   }
+});
+
+test("contact CSV export fails closed before opening the database (#196)", async () => {
+  for (const [binding, status, error] of [
+    [recordingLimit(false).binding, 429, "contact_export_rate_limited"],
+    [undefined, 503, "contact_export_unavailable"],
+    [recordingLimit("throw").binding, 503, "contact_export_unavailable"],
+  ] as const) {
+    let opened = false;
+    const response = await appApi(
+      new Request("https://app.test/api/contacts/export.csv", { headers: { cookie: "__Host-ac-access=test-session" } }),
+      { ...config, CONTACT_EXPORT_LIMIT: binding },
+      () => {
+        opened = true;
+        return untouchedPool();
+      },
+      mediaFetch(),
+    );
+    assert.equal(response.status, status);
+    assert.deepEqual(await response.json(), { error });
+    assert.equal(opened, false);
+    assert.equal(response.headers.has("content-disposition"), false);
+  }
+});
+
+test("contact CSV export validates the session and query before spending the user's allowance (#196)", async () => {
+  const limiter = recordingLimit(false);
+  const env = { ...config, CONTACT_EXPORT_LIMIT: limiter.binding };
+  const noPool = () => {
+    throw new Error("refused CSV export must not open the database");
+  };
+  const unsigned = await appApi(new Request("https://app.test/api/contacts/export.csv"), env, noPool, mediaFetch());
+  assert.equal(unsigned.status, 401);
+  const invalid = await appApi(
+    new Request("https://app.test/api/contacts/export.csv?tag=lead", {
+      headers: { cookie: "__Host-ac-access=test-session" },
+    }),
+    env,
+    noPool,
+    mediaFetch(),
+  );
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(await invalid.json(), { error: "invalid_contact_export_request" });
+  assert.deepEqual(limiter.keys, []);
+  const refused = await appApi(
+    new Request("https://app.test/api/contacts/export.csv", { headers: { cookie: "__Host-ac-access=test-session" } }),
+    env,
+    noPool,
+    mediaFetch(),
+  );
+  assert.equal(refused.status, 429);
+  assert.deepEqual(limiter.keys, [userId]);
 });
 
 test("connection health distinguishes token expiry, account access and webhook subscription", async () => {

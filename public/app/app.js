@@ -286,6 +286,8 @@ const errors = {
   invalid_contact_tags: "태그는 한 줄에 하나씩 최대 20개, 각각 40자까지 입력해 주세요.",
   invalid_contact_export_request: "전체 연락처 내보내기 요청을 확인해 주세요.",
   contact_export_too_large: "내보내기 한도(5,000명 또는 5 MiB)를 넘었습니다. 파일을 만들지 않았습니다.",
+  contact_export_rate_limited: "연락처 내보내기 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
+  contact_export_unavailable: "지금은 연락처를 내보낼 수 없습니다. 잠시 후 다시 시도해 주세요.",
   contact_export_timeout: "내보내기 처리 시간 한도를 넘었습니다. 파일을 만들지 않았습니다. 잠시 후 다시 시도해 주세요.",
   workspace_export_too_large:
     "작업 공간 내보내기 한도(데이터 50,000건 또는 20 MiB)를 넘었습니다. 파일을 만들지 않았습니다. 서비스 운영자에게 문의해 주세요.",

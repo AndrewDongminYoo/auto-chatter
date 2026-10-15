@@ -70,7 +70,11 @@ after(async () => pool.end());
 async function request(actor = owner, suffix = "") {
   return appApi(
     new Request(`https://app.test/api/contacts/export.csv${suffix}`, { headers: { cookie: "__Host-ac-access=test" } }),
-    { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" },
+    {
+      SUPABASE_URL: "https://project.supabase.co",
+      SUPABASE_SECRET_KEY: "sb_secret_test",
+      CONTACT_EXPORT_LIMIT: { limit: async () => ({ success: true }) },
+    },
     tracked,
     (async (input) => {
       assert.equal(new URL(String(input)).hostname, "project.supabase.co");

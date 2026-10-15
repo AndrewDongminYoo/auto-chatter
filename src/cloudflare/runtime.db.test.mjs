@@ -974,6 +974,19 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.equal(deniedCsv.status, 403);
     assert.equal(deniedCsv.headers.has("content-disposition"), false);
     await pool.query("UPDATE workspace_members SET role='owner' WHERE user_id=$1", [user]);
+    // The successful export and the role refusal spent two of this user's five CSV requests (#196).
+    for (let i = 0; i < 3; i++) {
+      const allowedCsv = await runtime.dispatchFetch("https://app.test/api/contacts/export.csv", { headers });
+      assert.equal(allowedCsv.status, 200);
+      await allowedCsv.arrayBuffer();
+    }
+    const limitedCsv = await runtime.dispatchFetch("https://app.test/api/contacts/export.csv", { headers });
+    assert.equal(limitedCsv.status, 429);
+    assert.deepEqual(await limitedCsv.json(), { error: "contact_export_rate_limited" });
+    assert.equal(limitedCsv.headers.has("content-disposition"), false);
+    const independentExport = await runtime.dispatchFetch("https://app.test/api/workspace/export", { headers });
+    assert.equal(independentExport.status, 200);
+    await independentExport.arrayBuffer();
     const foreignField = await runtime.dispatchFetch(valuePath, {
       method: "PUT",
       headers: { ...headers, cookie: "__Host-ac-access=foreign" },
