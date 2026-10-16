@@ -833,13 +833,23 @@
             </form>
             <details class="segment-save">
               <summary>현재 조건을 필터로 저장</summary>
+              <p class="hint">
+                저장 전 현재 조건에 맞는 연락처를 확인하세요. 최대 50명을 조회하고 아래에 5명까지 예시로 표시합니다.
+                목록에서 편집 중인 내용은 저장 전까지 반영되지 않습니다.
+              </p>
+              <button id="segment-preview" type="button" class="secondary">현재 조건 미리보기</button>
+              <p id="segment-preview-status" class="hint" role="status" aria-live="polite"></p>
+              <ul id="segment-preview-list" class="hint"></ul>
               <form id="segment-save" class="contacts-filter">
                 <label
                   >필터 이름<input name="name" required maxlength="60" placeholder="예: 자료를 요청한 사람"
                 /></label>
                 <button type="submit" class="secondary" data-loading-label="저장 중…">필터 저장</button>
               </form>
-              <p class="hint">계정·태그·추가 정보 조건을 저장합니다. 연락처는 조회할 때 갱신됩니다. 최대 50개.</p>
+              <p class="hint">
+                계정·태그·추가 정보 조건을 저장합니다. 저장된 필터는 최대 50개이며 대상은 조회할 때 다시 계산합니다.
+                미리보기는 조회 시점의 참고 결과로, 대상을 고정하거나 발송 동의를 확인한 것이 아닙니다.
+              </p>
             </details>
             <p id="contacts-status" class="hint" role="status" aria-live="polite"></p>
             <div id="contacts-list" class="contacts-list"></div>
