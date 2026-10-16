@@ -834,11 +834,12 @@
             <details class="segment-save">
               <summary>현재 조건을 필터로 저장</summary>
               <p class="hint">
-                저장 전 현재 조건에 맞는 전체 연락처 수를 확인하세요. 아래에 최대 5명을 예시로 표시합니다. 목록에서 편집
-                중인 내용은 저장 전까지 반영되지 않습니다.
+                저장 전 현재 조건에 맞는 연락처 수와 태그·추가 정보 때문에 제외된 이유를 확인하세요. 아래에 최대 5명을
+                예시로 표시합니다. 목록에서 편집 중인 내용은 저장 전까지 반영되지 않습니다.
               </p>
               <button id="segment-preview" type="button" class="secondary">현재 조건 미리보기</button>
               <p id="segment-preview-status" class="hint" role="status" aria-live="polite"></p>
+              <ul id="segment-preview-exclusions" class="hint" aria-label="필터 제외 사유"></ul>
               <ul id="segment-preview-list" class="hint"></ul>
               <form id="segment-save" class="contacts-filter">
                 <label

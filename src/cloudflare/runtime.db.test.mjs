@@ -806,13 +806,35 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.equal("total" in listBody, false);
     const preview = await runtime.dispatchFetch("https://app.test/api/contacts?preview=true", { headers });
     assert.equal(preview.status, 200);
-    assert.deepEqual(await preview.json(), { ...listBody, total: "1" });
+    assert.deepEqual(await preview.json(), {
+      ...listBody,
+      total: "1",
+      evaluated: "1",
+      excluded: { tag: "0", field: "0", both: "0" },
+    });
+    const excludedPreview = await runtime.dispatchFetch("https://app.test/api/contacts?preview=true&tag=missing", {
+      headers,
+    });
+    assert.equal(excludedPreview.status, 200);
+    assert.deepEqual(await excludedPreview.json(), {
+      contacts: [],
+      total: "0",
+      evaluated: "1",
+      excluded: { tag: "1", field: "0", both: "0" },
+      after: null,
+    });
     const foreignPreview = await runtime.dispatchFetch(
       `https://app.test/api/contacts?preview=true&connection_id=${connection}`,
       { headers: { ...headers, cookie: "__Host-ac-access=foreign" } },
     );
     assert.equal(foreignPreview.status, 200);
-    assert.deepEqual(await foreignPreview.json(), { contacts: [], total: "0", after: null });
+    assert.deepEqual(await foreignPreview.json(), {
+      contacts: [],
+      total: "0",
+      evaluated: "0",
+      excluded: { tag: "0", field: "0", both: "0" },
+      after: null,
+    });
     assert.equal(
       (await runtime.dispatchFetch("https://app.test/api/contacts?preview=true&after=", { headers })).status,
       400,

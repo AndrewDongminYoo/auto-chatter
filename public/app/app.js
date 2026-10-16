@@ -2525,6 +2525,7 @@ function invalidateSegmentPreview() {
   byId("segment-preview").removeAttribute("aria-disabled");
   byId("segment-preview").removeAttribute("aria-busy");
   byId("segment-preview-status").textContent = "";
+  byId("segment-preview-exclusions").replaceChildren();
   byId("segment-preview-list").replaceChildren();
 }
 byId("segment-preview").addEventListener("click", async () => {
@@ -2544,11 +2545,23 @@ byId("segment-preview").addEventListener("click", async () => {
     status.textContent = "현재 조건에 맞는 연락처를 확인하고 있습니다…";
     const page = await api(`/api/contacts?${query}`);
     if (!current()) return;
-    if (typeof page.total !== "string" || !/^(0|[1-9][0-9]*)$/.test(page.total))
-      throw new Error("전체 대상 수를 확인할 수 없습니다.");
+    const counts = [page.total, page.evaluated, page.excluded?.tag, page.excluded?.field, page.excluded?.both];
+    if (counts.some((value) => typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)))
+      throw new Error("대상 수와 제외 사유를 확인할 수 없습니다.");
+    const excludedTotal = BigInt(page.excluded.tag) + BigInt(page.excluded.field) + BigInt(page.excluded.both);
+    if (BigInt(page.evaluated) !== BigInt(page.total) + excludedTotal)
+      throw new Error("대상 수와 제외 사유를 확인할 수 없습니다.");
     status.textContent =
-      `조회 시점의 대상은 총 ${page.total}명입니다.` +
+      `조회 시점의 대상은 총 ${page.total}명입니다. 선택 계정 범위 ${page.evaluated}명 중 ${excludedTotal}명이 조건과 맞지 않습니다.` +
       (page.total === "0" ? " 조건에 맞는 연락처가 없습니다." : " 아래에 최대 5명의 예시를 표시합니다.");
+    for (const [reason, label] of [
+      ["tag", "태그 조건만 불일치"],
+      ["field", "추가 정보 조건만 불일치"],
+      ["both", "태그·추가 정보 조건 모두 불일치"],
+    ]) {
+      if (page.excluded[reason] !== "0")
+        byId("segment-preview-exclusions").append(node("li", `${label}: ${page.excluded[reason]}명`));
+    }
     for (const contact of page.contacts.slice(0, 5)) {
       const item = node("li");
       item.append(

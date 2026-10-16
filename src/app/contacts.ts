@@ -125,45 +125,94 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
     operator = parseConditionOperator(saved.condition_operator, filterTag, Boolean(condition));
   }
   await validateFieldCondition(pool, workspaceId, condition);
-  const result = await pool.query<Contact & { preview_total?: string }>(
-    `SELECT e.connection_id,e.sender_id,c.username,min(e.created_at) AS first_comment_at,
- max(e.created_at) AS last_comment_at,count(*)::text AS comment_count,coalesce((automation.paused OR automation.handoff_paused),false) AS automation_paused,coalesce(t.tags,'{}'::text[]) AS tags,
- coalesce((SELECT jsonb_object_agg(v.field_id::text,v.value) FROM instagram_contact_field_values v
- JOIN instagram_contact_fields f ON f.id=v.field_id AND f.workspace_id=v.workspace_id AND NOT f.archived
- WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.value IS NOT NULL),'{}'::jsonb) AS fields${preview ? ",count(*) OVER()::text AS preview_total" : ""}
- FROM instagram_comment_events e JOIN instagram_connections c ON c.id=e.connection_id AND c.workspace_id=e.workspace_id
- LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=e.workspace_id AND automation.connection_id=e.connection_id AND automation.sender_id=e.sender_id
- LEFT JOIN instagram_contact_tags t ON t.workspace_id=e.workspace_id AND t.connection_id=e.connection_id AND t.sender_id=e.sender_id
- WHERE e.workspace_id=$1 AND ($2::uuid IS NULL OR e.connection_id=$2)
- AND ($9::text='or' OR $3::text IS NULL OR $3=ANY(t.tags))
- AND ($4::uuid IS NULL OR (e.connection_id,e.sender_id)>($4::uuid,$5::text))
- AND (($9::text='or' AND $3=ANY(t.tags)) OR ($6::uuid IS NULL OR CASE WHEN $7::text='is_unset' THEN NOT EXISTS(
+  const fieldMatches = `($6::uuid IS NULL OR CASE WHEN $7::text='is_unset' THEN NOT EXISTS(
    SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=$6 AND v.value IS NOT NULL)
  ELSE EXISTS(SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=$6 AND v.value IS NOT NULL
    AND ($7='is_set' OR (jsonb_typeof(v.value)=jsonb_typeof($8::jsonb) AND CASE $7
      WHEN 'eq' THEN v.value=$8::jsonb WHEN 'gt' THEN v.value>$8::jsonb WHEN 'gte' THEN v.value>=$8::jsonb
-     WHEN 'lt' THEN v.value<$8::jsonb WHEN 'lte' THEN v.value<=$8::jsonb ELSE false END))) END))
- GROUP BY e.workspace_id,e.connection_id,e.sender_id,c.username,t.tags,(automation.paused OR automation.handoff_paused) ORDER BY e.connection_id,e.sender_id LIMIT 51`,
-    [
-      workspaceId,
-      connectionId,
-      filterTag,
-      after?.connection_id ?? null,
-      after?.sender_id ?? null,
-      condition?.field_id ?? null,
-      condition?.field_operator ?? null,
-      condition && fieldConditionNeedsValue(condition.field_operator) ? JSON.stringify(condition.field_value) : null,
-      operator,
-    ],
-  );
-  // The window counts grouped contacts before LIMIT, in the same statement as the samples. Preview has no cursor,
-  // so an empty result means no matches. Keep the bigint text exact and out of individual contact records.
-  const total = result.rows[0]?.preview_total ?? "0";
-  const contacts = result.rows.slice(0, 50).map(({ preview_total, ...contact }) => contact);
+     WHEN 'lt' THEN v.value<$8::jsonb WHEN 'lte' THEN v.value<=$8::jsonb ELSE false END))) END)`;
+  const contactScope = `FROM instagram_comment_events e JOIN instagram_connections c ON c.id=e.connection_id AND c.workspace_id=e.workspace_id
+ LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=e.workspace_id AND automation.connection_id=e.connection_id AND automation.sender_id=e.sender_id
+ LEFT JOIN instagram_contact_tags t ON t.workspace_id=e.workspace_id AND t.connection_id=e.connection_id AND t.sender_id=e.sender_id
+ WHERE e.workspace_id=$1 AND ($2::uuid IS NULL OR e.connection_id=$2)`;
+  const contactQuery = `SELECT e.connection_id,e.sender_id,c.username,min(e.created_at) AS first_comment_at,
+ max(e.created_at) AS last_comment_at,count(*)::text AS comment_count,coalesce((automation.paused OR automation.handoff_paused),false) AS automation_paused,coalesce(t.tags,'{}'::text[]) AS tags,
+ coalesce((SELECT jsonb_object_agg(v.field_id::text,v.value) FROM instagram_contact_field_values v
+ JOIN instagram_contact_fields f ON f.id=v.field_id AND f.workspace_id=v.workspace_id AND NOT f.archived
+ WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.value IS NOT NULL),'{}'::jsonb) AS fields
+ ${contactScope}
+ AND ($9::text='or' OR $3::text IS NULL OR $3=ANY(t.tags))
+ AND ($4::uuid IS NULL OR (e.connection_id,e.sender_id)>($4::uuid,$5::text))
+ AND (($9::text='or' AND $3=ANY(t.tags)) OR ${fieldMatches})
+ GROUP BY e.workspace_id,e.connection_id,e.sender_id,c.username,t.tags,(automation.paused OR automation.handoff_paused) ORDER BY e.connection_id,e.sender_id LIMIT 51`;
+  // Aggregate independently of matching samples so even zero matches retain their exclusion summary.
+  // Materialize only identities and predicate outcomes, not every contact's displayed field JSON.
+  const query = preview
+    ? `WITH contact_filters AS MATERIALIZED (
+ SELECT e.connection_id,e.sender_id,coalesce($3::text IS NULL OR $3=ANY(t.tags),false) AS tag_matches,
+ ${fieldMatches} AS field_matches
+ ${contactScope}
+ GROUP BY e.workspace_id,e.connection_id,e.sender_id,t.tags
+), outcomes AS (
+ SELECT *,CASE WHEN $9::text='or' THEN tag_matches OR field_matches ELSE tag_matches AND field_matches END AS matched
+ FROM contact_filters
+), summary AS (
+ SELECT count(*)::text AS preview_evaluated,
+ (count(*) FILTER (WHERE matched))::text AS preview_total,
+ (count(*) FILTER (WHERE NOT matched AND NOT tag_matches AND field_matches))::text AS preview_excluded_tag,
+ (count(*) FILTER (WHERE NOT matched AND tag_matches AND NOT field_matches))::text AS preview_excluded_field,
+ (count(*) FILTER (WHERE NOT matched AND NOT tag_matches AND NOT field_matches))::text AS preview_excluded_both
+ FROM outcomes
+)
+ SELECT page.*,summary.* FROM summary LEFT JOIN LATERAL (${contactQuery}) page ON true
+ ORDER BY page.connection_id,page.sender_id`
+    : contactQuery;
+  const result = await pool.query<
+    (Contact | { [Key in keyof Contact]: null }) & {
+      preview_total?: string;
+      preview_evaluated?: string;
+      preview_excluded_tag?: string;
+      preview_excluded_field?: string;
+      preview_excluded_both?: string;
+    }
+  >(query, [
+    workspaceId,
+    connectionId,
+    filterTag,
+    after?.connection_id ?? null,
+    after?.sender_id ?? null,
+    condition?.field_id ?? null,
+    condition?.field_operator ?? null,
+    condition && fieldConditionNeedsValue(condition.field_operator) ? JSON.stringify(condition.field_value) : null,
+    operator,
+  ]);
+  const summary = result.rows[0];
+  const contacts = result.rows
+    .slice(0, 50)
+    .flatMap(
+      ({
+        preview_total,
+        preview_evaluated,
+        preview_excluded_tag,
+        preview_excluded_field,
+        preview_excluded_both,
+        ...contact
+      }) => (contact.connection_id === null ? [] : [contact]),
+    );
   const last = contacts.at(-1);
   return {
     contacts,
-    ...(preview ? { total } : {}),
+    ...(preview
+      ? {
+          total: summary?.preview_total ?? "0",
+          evaluated: summary?.preview_evaluated ?? "0",
+          excluded: {
+            tag: summary?.preview_excluded_tag ?? "0",
+            field: summary?.preview_excluded_field ?? "0",
+            both: summary?.preview_excluded_both ?? "0",
+          },
+        }
+      : {}),
     after:
       result.rows.length > 50 && last
         ? Buffer.from(JSON.stringify({ connection_id: last.connection_id, sender_id: last.sender_id })).toString(

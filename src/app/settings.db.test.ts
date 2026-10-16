@@ -928,6 +928,8 @@ test("contact preview counts all matches at zero and either side of the page bou
     assert.equal(response.status, 200);
     const preview = await response.json();
     assert.equal(preview.total, String(count));
+    assert.equal(preview.evaluated, String(count));
+    assert.deepEqual(preview.excluded, { tag: "0", field: "0", both: "0" });
     assert.equal(preview.contacts.length, Math.min(count, 50));
     assert.equal(Boolean(preview.after), count > 50);
     assert.equal(
@@ -988,22 +990,47 @@ test("contact preview counts grouped identities with current filters and workspa
     field_operator: "gte",
     field_value: "0",
   });
-  const preview = async (expected: string) => {
+  const preview = async (
+    expected: string,
+    evaluated: string,
+    excluded: { tag: string; field: string; both: string },
+  ) => {
     const response = await fieldRequest("GET", `/api/contacts?${query}`);
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.total, expected);
+    assert.equal(body.evaluated, evaluated);
+    assert.deepEqual(body.excluded, excluded);
     assert.equal(body.contacts.length, Number(expected));
   };
-  await preview("1");
+  await preview("1", "4", { tag: "1", field: "1", both: "1" });
   query.set("condition_operator", "or");
-  await preview("3");
+  await preview("3", "4", { tag: "0", field: "0", both: "1" });
   query.delete("connection_id");
-  await preview("4");
+  await preview("4", "5", { tag: "0", field: "0", both: "1" });
   query.set("connection_id", foreign);
-  await preview("0");
+  await preview("0", "0", { tag: "0", field: "0", both: "0" });
   query.delete("connection_id");
   assert.equal((await fieldRequest("GET", `/api/contacts?${query}`, undefined, b)).status, 404);
+  for (const [filters, expected] of [
+    ["", { total: "5", evaluated: "5", excluded: { tag: "0", field: "0", both: "0" } }],
+    ["&tag=lead", { total: "3", evaluated: "5", excluded: { tag: "2", field: "0", both: "0" } }],
+    [
+      `&field_id=${field.id}&field_operator=gte&field_value=0`,
+      { total: "2", evaluated: "5", excluded: { tag: "0", field: "3", both: "0" } },
+    ],
+    [
+      `&tag=absent&field_id=${field.id}&field_operator=gte&field_value=100`,
+      { total: "0", evaluated: "5", excluded: { tag: "0", field: "0", both: "5" } },
+    ],
+  ] as const) {
+    const response = await fieldRequest("GET", `/api/contacts?preview=true${filters}`);
+    assert.equal(response.status, 200);
+    const { contacts, after, ...summary } = await response.json();
+    assert.deepEqual(summary, expected);
+    assert.equal(contacts.length, Number(expected.total));
+    assert.equal(after, null);
+  }
   const segment = await createContactSegment(pool, a, {
     name: "Preview saved",
     tag: "lead",
@@ -1015,7 +1042,10 @@ test("contact preview counts grouped identities with current filters and workspa
   const savedPath = `/api/contacts?preview=true&segment_id=${segment.id}`;
   assert.equal((await (await fieldRequest("GET", savedPath)).json()).total, "4");
   await saveContactTags(pool, a, connectionId, "tag-only", { tags: [] });
-  assert.equal((await (await fieldRequest("GET", savedPath)).json()).total, "3");
+  const changed = await (await fieldRequest("GET", savedPath)).json();
+  assert.equal(changed.total, "3");
+  assert.equal(changed.evaluated, "5");
+  assert.deepEqual(changed.excluded, { tag: "0", field: "0", both: "2" });
   assert.equal((await fieldRequest("GET", savedPath, undefined, b)).status, 404);
   await archiveContactSegment(pool, a, segment.id);
   assert.equal((await fieldRequest("GET", savedPath)).status, 404);
