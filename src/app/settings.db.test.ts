@@ -1051,6 +1051,230 @@ test("contact preview counts grouped identities with current filters and workspa
   assert.equal((await fieldRequest("GET", savedPath)).status, 404);
 });
 
+test("contact activity uses the latest stored comment and partitions exclusions before tag-field filters", async () => {
+  const workspace = await ensureWorkspace(pool, a),
+    foreignWorkspace = await ensureWorkspace(pool, b);
+  const field = await createField("Activity score", "number");
+  const from = "2026-10-10T00:00:00.000Z",
+    before = "2026-10-12T00:00:00.000Z";
+  const rows = [
+    ["both", from, 0, ["lead"]],
+    ["field-only", "2026-10-11T23:59:59.999Z", 0, []],
+    ["tag-only", "2026-10-11T00:00:00.000Z", -1, ["lead"]],
+    ["neither", "2026-10-11T00:00:00.000Z", -1, []],
+    ["before", "2026-10-09T23:59:59.999Z", 0, ["lead"]],
+    ["end", before, 0, ["lead"]],
+    ["after", "2026-10-13T00:00:00.000Z", -1, []],
+    ["latest-outside", before, -1, []],
+  ] as const;
+  for (const [sender, time, value, tags] of rows) {
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$3,'private',$4)",
+      [workspace, connectionId, sender, time],
+    );
+    await fieldRequest("PUT", fieldValuePath(field.id, sender), { value });
+    await saveContactTags(pool, a, connectionId, sender, { tags });
+  }
+  // An older in-range event must not admit latest-outside; an older out-of-range event must not exclude tag-only.
+  for (const [sender, time] of [
+    ["latest-outside", from],
+    ["tag-only", "2026-10-01T00:00:00.000Z"],
+  ])
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3||'-old','media',$3,'private',$4)",
+      [workspace, connectionId, sender, time],
+    );
+  const other = "77777777-7777-4777-8777-777777777777",
+    foreign = "88888888-8888-4888-8888-888888888888";
+  for (const [id, owner] of [
+    [other, workspace],
+    [foreign, foreignWorkspace],
+  ]) {
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,$1::uuid::text)", [
+      id,
+      owner,
+    ]);
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,'other','media','both','private',$3)",
+      [owner, id, from],
+    );
+  }
+  const range = { last_comment_from: from, last_comment_before: before };
+  const query = new URLSearchParams({ ...range, connection_id: connectionId });
+  const ordinary = await fieldRequest("GET", `/api/contacts?${query}`);
+  assert.equal(ordinary.status, 200);
+  const page = await ordinary.json();
+  assert.deepEqual(
+    page.contacts.map((c: { sender_id: string }) => c.sender_id),
+    ["both", "field-only", "neither", "tag-only"],
+  );
+  assert.equal(page.contacts.find((c: { sender_id: string }) => c.sender_id === "tag-only").comment_count, "2");
+  assert.equal("excluded" in page, false);
+  query.set("preview", "true");
+  const check = async (total: string, evaluated: string, excluded: Record<string, string>) => {
+    const response = await fieldRequest("GET", `/api/contacts?${query}`);
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.total, total);
+    assert.equal(body.evaluated, evaluated);
+    assert.deepEqual(body.excluded, excluded);
+    assert.equal(body.contacts.length, Number(total));
+    return body;
+  };
+  assert.deepEqual((await check("4", "8", { activity: "4", tag: "0", field: "0", both: "0" })).contacts, page.contacts);
+  query.delete("connection_id");
+  await check("5", "9", { activity: "4", tag: "0", field: "0", both: "0" });
+  query.set("connection_id", foreign);
+  await check("0", "0", { activity: "0", tag: "0", field: "0", both: "0" });
+  query.set("connection_id", connectionId);
+  query.set("tag", "lead");
+  query.set("field_id", field.id);
+  query.set("field_operator", "gte");
+  query.set("field_value", "0");
+  await check("1", "8", { activity: "4", tag: "1", field: "1", both: "1" });
+  query.set("condition_operator", "or");
+  await check("3", "8", { activity: "4", tag: "0", field: "0", both: "1" });
+  query.set("last_comment_from", "2025-01-01T00:00:00.000Z");
+  query.set("last_comment_before", "2025-01-02T00:00:00.000Z");
+  await check("0", "8", { activity: "8", tag: "0", field: "0", both: "0" });
+  const saved = await createContactSegment(pool, a, {
+    name: "Activity",
+    connection_id: connectionId,
+    tag: "lead",
+    field_id: field.id,
+    field_operator: "gte",
+    field_value: 0,
+    condition_operator: "or",
+    ...range,
+  });
+  assert.equal(saved.last_comment_from, from);
+  assert.equal(saved.last_comment_before, before);
+  assert.deepEqual(
+    (await listContactSegments(pool, a)).find((s) => s.id === saved.id),
+    saved,
+  );
+  const savedPath = `/api/contacts?preview=true&segment_id=${saved.id}`;
+  assert.equal((await (await fieldRequest("GET", savedPath)).json()).total, "3");
+  await pool.query(
+    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,'later','media','both','private',$3)",
+    [workspace, connectionId, before],
+  );
+  const updated = await (await fieldRequest("GET", savedPath)).json();
+  assert.equal(updated.total, "2");
+  assert.deepEqual(updated.excluded, { activity: "5", tag: "0", field: "0", both: "1" });
+  assert.equal((await fieldRequest("GET", savedPath, undefined, b)).status, 404);
+  await archiveContactSegment(pool, a, saved.id);
+  assert.equal((await fieldRequest("GET", savedPath)).status, 404);
+});
+
+test("contact activity retains stable pagination and does not trim comment counts to the time window", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  await pool.query(
+    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) SELECT $1,$2,n::text||'-'||r,'media',lpad(n::text,3,'0'),'private',CASE WHEN r=1 THEN '2026-10-01T00:00:00Z'::timestamptz ELSE '2026-10-11T00:00:00Z'::timestamptz END FROM generate_series(1,55)n CROSS JOIN generate_series(1,2)r",
+    [workspace, connectionId],
+  );
+  const query = new URLSearchParams({
+    last_comment_from: "2026-10-10T00:00:00.000Z",
+    last_comment_before: "2026-10-12T00:00:00.000Z",
+  });
+  const first = await listContacts(pool, a, query);
+  assert.equal(first.contacts.length, 50);
+  assert.ok(first.after);
+  query.set("after", first.after);
+  const second = await listContacts(pool, a, query);
+  assert.equal(second.after, null);
+  assert.deepEqual(
+    [...first.contacts, ...second.contacts].map((c) => c.sender_id),
+    Array.from({ length: 55 }, (_, i) => String(i + 1).padStart(3, "0")),
+  );
+  assert.ok([...first.contacts, ...second.contacts].every((c) => c.comment_count === "2"));
+  assert.ok(
+    [...first.contacts, ...second.contacts].every(
+      (c) => c.first_comment_at.toISOString() === "2026-10-01T00:00:00.000Z",
+    ),
+  );
+  query.delete("after");
+  query.set("preview", "true");
+  const preview = await listContacts(pool, a, query);
+  assert.equal(preview.total, "55");
+  assert.equal(preview.evaluated, "55");
+  assert.deepEqual(preview.excluded, { activity: "0", tag: "0", field: "0", both: "0" });
+});
+
+test("saved activity ranges reject invalid bounds and preserve the shape of legacy segments", async () => {
+  const legacy = await createContactSegment(pool, a, {
+    name: "Legacy",
+    last_comment_from: null,
+    last_comment_before: null,
+  });
+  assert.equal("last_comment_from" in legacy, false);
+  assert.equal("last_comment_before" in legacy, false);
+  const before = "2026-10-12T00:00:00.000Z";
+  for (const invalid of [
+    { last_comment_from: before },
+    { last_comment_before: before },
+    { last_comment_from: 12, last_comment_before: before },
+    { last_comment_from: "2026-02-30T00:00:00.000Z", last_comment_before: before },
+    { last_comment_from: before, last_comment_before: before },
+    { last_comment_from: "2027-01-01T00:00:00.000Z", last_comment_before: before },
+  ])
+    await assert.rejects(
+      createContactSegment(pool, a, { name: "Invalid", ...invalid }),
+      (error: unknown) => error instanceof ApiError && error.status === 400,
+    );
+  assert.equal((await listContactSegments(pool, a)).length, 1);
+});
+
+test("activity migration preserves legacy segments and enforces paired finite ordered timestamps on replay", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "ALTER TABLE instagram_contact_segments DROP COLUMN last_comment_from, DROP COLUMN last_comment_before",
+    );
+    await client.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'Legacy')", [workspace]);
+    const migration = await readFile(
+      new URL("../../db/migrations/046_contact_segment_activity.sql", import.meta.url),
+      "utf8",
+    );
+    await client.query(migration);
+    await client.query(migration);
+    assert.deepEqual(
+      (await client.query("SELECT last_comment_from,last_comment_before FROM instagram_contact_segments")).rows,
+      [{ last_comment_from: null, last_comment_before: null }],
+    );
+    await client.query(
+      "UPDATE instagram_contact_segments SET last_comment_from='2026-10-10T00:00:00Z',last_comment_before='2026-10-12T00:00:00Z'",
+    );
+    await client.query(migration);
+    assert.equal(
+      (
+        await client.query("SELECT last_comment_from FROM instagram_contact_segments")
+      ).rows[0].last_comment_from.toISOString(),
+      "2026-10-10T00:00:00.000Z",
+    );
+    for (const change of [
+      "last_comment_from=NULL",
+      "last_comment_before=NULL",
+      "last_comment_before=last_comment_from",
+      "last_comment_from='2026-10-13T00:00:00Z'",
+      "last_comment_from='-infinity'",
+      "last_comment_before='infinity'",
+    ]) {
+      await client.query("SAVEPOINT invalid_activity");
+      await assert.rejects(
+        client.query(`UPDATE instagram_contact_segments SET ${change}`),
+        (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "23514",
+      );
+      await client.query("ROLLBACK TO SAVEPOINT invalid_activity");
+    }
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+});
+
 test("ordered field filters compare numbers numerically and dates at each boundary", async () => {
   await fieldContact();
   for (const [type, low, equal, high] of [

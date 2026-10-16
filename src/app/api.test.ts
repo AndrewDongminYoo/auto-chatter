@@ -1138,6 +1138,73 @@ test("contact preview returns an exact total string without changing the ordinar
   assert.equal(statements[2]!.includes("preview_evaluated"), false);
 });
 
+test("contact activity validates canonical UTC bounds and preserves an exact exclusion count", async () => {
+  let values: unknown[] = [];
+  let queried = false;
+  const pool = {
+    query: async (sql: string, parameters: unknown[]) => {
+      queried = true;
+      if (sql.includes("workspace_members")) return { rows: [{ workspace_id: workspaceId, role: "owner" }] };
+      values = parameters;
+      return {
+        rows: [
+          {
+            connection_id: null,
+            preview_total: "0",
+            preview_evaluated: "9007199254740993",
+            preview_excluded_activity: "9007199254740993",
+            preview_excluded_tag: "0",
+            preview_excluded_field: "0",
+            preview_excluded_both: "0",
+          },
+        ],
+      };
+    },
+    end: async () => {},
+  } as unknown as Pool;
+  const request = (query: URLSearchParams) =>
+    appApi(
+      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
+      config,
+      () => pool,
+      mediaFetch(),
+    );
+  const from = "2026-10-10T00:00:00.000Z",
+    before = "2026-10-12T00:00:00.000Z";
+  const query = new URLSearchParams({ preview: "true", last_comment_from: from, last_comment_before: before });
+  const response = await request(query);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    contacts: [],
+    after: null,
+    total: "0",
+    evaluated: "9007199254740993",
+    excluded: { activity: "9007199254740993", tag: "0", field: "0", both: "0" },
+  });
+  assert.deepEqual(values.slice(-2), [from, before]);
+  for (const invalid of [
+    { last_comment_from: from },
+    { last_comment_before: before },
+    { last_comment_from: "", last_comment_before: before },
+    { last_comment_from: "2026-02-30T00:00:00.000Z", last_comment_before: before },
+    { last_comment_from: "2026-10-10T00:00:00.000+00:00", last_comment_before: before },
+    { last_comment_from: "0000-01-01T00:00:00.000Z", last_comment_before: before },
+    { last_comment_from: "2026-10-10T24:00:00.000Z", last_comment_before: before },
+    { last_comment_from: "2026-10-10", last_comment_before: before },
+    { last_comment_from: before, last_comment_before: before },
+    { last_comment_from: before, last_comment_before: from },
+    { last_comment_from: from, last_comment_before: before, segment_id: "44444444-4444-4444-8444-444444444444" },
+  ]) {
+    queried = false;
+    assert.equal((await request(new URLSearchParams(Object.entries(invalid)))).status, 400);
+    assert.equal(queried, false, "invalid activity must fail before database access");
+  }
+  query.append("last_comment_from", from);
+  queried = false;
+  assert.equal((await request(query)).status, 400);
+  assert.equal(queried, false);
+});
+
 test("contact preview rejects malformed flags and every cursor before querying contacts", async () => {
   let queried = false;
   const pool = {

@@ -45,5 +45,6 @@ BEGIN;
 \ir ../db/migrations/043_webhook_delivery_fairness.sql
 \ir ../db/migrations/044_private_reply_budget_carry.sql
 \ir ../db/migrations/045_workspace_plans.sql
+\ir ../db/migrations/046_contact_segment_activity.sql
 \ir supabase-access.sql
 COMMIT;

@@ -330,6 +330,7 @@ const errors = {
   invalid_field_value: "선택한 종류에 맞는 값을 입력해 주세요. 텍스트는 최대 1000자입니다.",
   invalid_field_condition: "추가 정보의 필드·조건·찾을 값을 확인해 주세요.",
   invalid_contact_condition: "OR 결합에는 태그와 추가 정보 조건이 모두 필요합니다.",
+  invalid_contact_activity: "UTC 기간의 시작과 종료를 함께 입력하고, 종료를 시작보다 늦게 지정해 주세요.",
   field_not_found: "접근할 수 없거나 보관된 필드입니다. 필드를 다시 불러와 주세요.",
   field_in_use: "저장된 필터에서 사용하는 필드입니다. 해당 필터를 먼저 보관해 주세요.",
   field_name_exists: "보관된 필드를 포함해 같은 이름이 있습니다. 다른 이름을 사용해 주세요.",
@@ -2437,13 +2438,34 @@ function clearContactResults() {
   byId("contacts-list").replaceChildren();
   byId("contacts-more").hidden = true;
 }
+function contactActivityWindow() {
+  const fields = byId("contacts-filter").elements;
+  const from = fields.last_comment_from.value,
+    before = fields.last_comment_before.value;
+  if (!from && !before) return null;
+  const start = new Date(`${from}Z`),
+    end = new Date(`${before}Z`);
+  if (
+    !from ||
+    !before ||
+    !fields.last_comment_from.validity.valid ||
+    !fields.last_comment_before.validity.valid ||
+    !Number.isFinite(start.getTime()) ||
+    !Number.isFinite(end.getTime()) ||
+    start >= end
+  )
+    throw new Error(errors.invalid_contact_activity);
+  return { last_comment_from: start.toISOString(), last_comment_before: end.toISOString() };
+}
 function contactDraftQuery() {
   const fields = byId("contacts-filter").elements;
   const condition = contactFieldCondition();
+  const activity = contactActivityWindow();
   const query = new URLSearchParams();
   if (fields.connection_id.value) query.set("connection_id", fields.connection_id.value);
   if (fields.tag.value.trim()) query.set("tag", fields.tag.value.trim());
   if (fields.condition_operator.value === "or") query.set("condition_operator", "or");
+  if (activity) for (const [key, value] of Object.entries(activity)) query.set(key, value);
   if (condition) {
     query.set("field_id", condition.field_id);
     query.set("field_operator", condition.field_operator);
@@ -2545,22 +2567,31 @@ byId("segment-preview").addEventListener("click", async () => {
     status.textContent = "현재 조건에 맞는 연락처를 확인하고 있습니다…";
     const page = await api(`/api/contacts?${query}`);
     if (!current()) return;
-    const counts = [page.total, page.evaluated, page.excluded?.tag, page.excluded?.field, page.excluded?.both];
+    const activityCount = query.has("last_comment_from") ? page.excluded?.activity : "0";
+    const counts = [
+      page.total,
+      page.evaluated,
+      page.excluded?.tag,
+      page.excluded?.field,
+      page.excluded?.both,
+      activityCount,
+    ];
     if (counts.some((value) => typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)))
       throw new Error("대상 수와 제외 사유를 확인할 수 없습니다.");
-    const excludedTotal = BigInt(page.excluded.tag) + BigInt(page.excluded.field) + BigInt(page.excluded.both);
+    const excludedTotal =
+      BigInt(activityCount) + BigInt(page.excluded.tag) + BigInt(page.excluded.field) + BigInt(page.excluded.both);
     if (BigInt(page.evaluated) !== BigInt(page.total) + excludedTotal)
       throw new Error("대상 수와 제외 사유를 확인할 수 없습니다.");
     status.textContent =
       `조회 시점의 대상은 총 ${page.total}명입니다. 선택 계정 범위 ${page.evaluated}명 중 ${excludedTotal}명이 조건과 맞지 않습니다.` +
       (page.total === "0" ? " 조건에 맞는 연락처가 없습니다." : " 아래에 최대 5명의 예시를 표시합니다.");
-    for (const [reason, label] of [
-      ["tag", "태그 조건만 불일치"],
-      ["field", "추가 정보 조건만 불일치"],
-      ["both", "태그·추가 정보 조건 모두 불일치"],
+    for (const [count, label] of [
+      [activityCount, "활동 기간 밖 (먼저 제외)"],
+      [page.excluded.tag, "태그 조건만 불일치"],
+      [page.excluded.field, "추가 정보 조건만 불일치"],
+      [page.excluded.both, "태그·추가 정보 조건 모두 불일치"],
     ]) {
-      if (page.excluded[reason] !== "0")
-        byId("segment-preview-exclusions").append(node("li", `${label}: ${page.excluded[reason]}명`));
+      if (count !== "0") byId("segment-preview-exclusions").append(node("li", `${label}: ${count}명`));
     }
     for (const contact of page.contacts.slice(0, 5)) {
       const item = node("li");
@@ -2630,6 +2661,8 @@ byId("contact-segment").addEventListener("change", (event) => {
   fields.field_id.value = segment?.field_id || "";
   fields.field_operator.value = segment?.field_operator || "eq";
   fields.condition_operator.value = segment?.condition_operator || "and";
+  fields.last_comment_from.value = segment?.last_comment_from?.slice(0, -1) || "";
+  fields.last_comment_before.value = segment?.last_comment_before?.slice(0, -1) || "";
   fieldFilterControls();
   fields.field_value.value = fieldConditionNeedsValue(segment?.field_operator) ? String(segment.field_value) : "";
   fields.field_boolean.value = segment?.field_value === false ? "false" : "true";
@@ -2649,6 +2682,7 @@ byId("segment-save").addEventListener("submit", (event) => {
   if (fields.condition_operator.value === "or") payload.condition_operator = "or";
   try {
     Object.assign(payload, contactFieldCondition());
+    Object.assign(payload, contactActivityWindow());
   } catch (error) {
     notice(error.message, true);
     return;
@@ -2693,6 +2727,10 @@ byId("segment-archive").addEventListener("click", (event) => {
         if (segment.connection_id) query.set("connection_id", segment.connection_id);
         if (segment.tag) query.set("tag", segment.tag);
         if (segment.condition_operator === "or") query.set("condition_operator", "or");
+        if (segment.last_comment_from) {
+          query.set("last_comment_from", segment.last_comment_from);
+          query.set("last_comment_before", segment.last_comment_before);
+        }
         if (segment.field_id) {
           query.set("field_id", segment.field_id);
           query.set("field_operator", segment.field_operator);
