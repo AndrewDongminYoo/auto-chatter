@@ -1,4 +1,5 @@
 const byId = (id) => document.getElementById(id);
+const manualReports = createManualReplyReports({ api, node });
 const form = byId("rule-form");
 let connections = [];
 let contactsGeneration = 0;
@@ -154,6 +155,7 @@ window.addEventListener("beforeunload", (event) => {
   }
 });
 function resetSession() {
+  manualReports.reset();
   invalidateContactExport();
   byId("contacts-export").hidden = true;
   byId("contacts-export-help").hidden = true;
@@ -1118,6 +1120,7 @@ function renderGettingStarted(rules, globalSendEnabled, connectAvailable) {
 }
 
 async function loadWorkspace() {
+  manualReports.reset();
   invalidateContactExport();
   const generation = segmentsGeneration;
   const me = await api("/api/me");
@@ -1148,6 +1151,7 @@ async function loadWorkspace() {
   const [accounts, settings] = await Promise.all([api("/api/connections"), api("/api/rules")]);
   if (generation !== segmentsGeneration) return;
   connections = accounts.connections;
+  manualReports.configure(currentRole, workspaceTimeZone, connections);
   const selectedConnection = form.elements.connection_id.value;
   byId("startup").hidden = true;
   byId("retry-load").hidden = true;
@@ -1788,7 +1792,10 @@ byId("time-zone-form").addEventListener("submit", (event) => {
     const changed = saved.time_zone !== workspaceTimeZone;
     workspaceTimeZone = saved.time_zone;
     // Reminder due times on screen are wall-clock values in the previous zone.
-    if (changed) inbox.timeZoneChanged();
+    if (changed) {
+      inbox.timeZoneChanged();
+      manualReports.configure(currentRole, workspaceTimeZone, connections);
+    }
     notice(`시간대를 저장했습니다(${saved.time_zone}). 지금부터 정한 시각까지 기다리기 시작하는 실행에 적용됩니다.`);
   });
 });

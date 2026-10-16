@@ -7,6 +7,7 @@
     <link rel="icon" href="../icons/auto-chatter.png" type="image/png" />
     <link rel="stylesheet" href="./styles.css" />
     <script src="./reply-templates.js" defer></script>
+    <script src="./manual-reply-reports.js" defer></script>
     <script src="./inbox.js" defer></script>
     <script src="./webhook-labels.js" defer></script>
     <script src="./plan-labels.js" defer></script>
@@ -180,6 +181,30 @@
             </div>
             <p class="hint">최근 50건입니다. 결과가 불명확한 메시지는 자동으로 다시 보내지 않습니다.</p>
             <div id="activity"></div>
+          </section>
+          <section id="manual-reports-section" class="card" aria-labelledby="manual-reports-title" hidden>
+            <div class="section-heading">
+              <h2 id="manual-reports-title">수동 답장 현황</h2>
+              <button id="manual-report-download" type="button" class="secondary" disabled>조회 결과 CSV</button>
+            </div>
+            <p class="hint">선택 기간에 접수한 수동 답장의 현재 상태입니다. 별도로 요청한 재시도는 각각 계산합니다.</p>
+            <form id="manual-report-form" class="filter-form">
+              <label>시작일<input name="from" type="date" required /></label>
+              <label>종료일(미포함)<input name="before" type="date" required /></label>
+              <label
+                >계정<select name="connection_id">
+                  <option value="">모든 계정</option>
+                </select></label
+              >
+              <button type="submit">조회</button>
+            </form>
+            <p id="manual-report-zone" class="hint"></p>
+            <p id="manual-report-summary" class="hint" role="status" aria-live="polite"></p>
+            <dl id="manual-report-counts" class="manual-report-counts"></dl>
+            <p class="hint">
+              ‘Meta 접수’는 전달·읽음·전환 성공을 뜻하지 않습니다. ‘미확인·정리 완료’는 결과를 확인하지 못한 요청을 다시
+              보내지 않기로 정리한 상태입니다. 삭제된 데이터는 집계에서 제외됩니다.
+            </p>
           </section>
         </div>
         <div id="view-accounts" class="view" data-view="accounts" role="region" aria-label="계정" tabindex="-1" hidden>
