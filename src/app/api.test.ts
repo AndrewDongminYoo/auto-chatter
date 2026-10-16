@@ -1103,21 +1103,39 @@ test("contact preview returns an exact total string without changing the ordinar
     );
   const empty = await request("?preview=true");
   assert.equal(empty.status, 200);
-  assert.deepEqual(await empty.json(), { contacts: [], after: null, total: "0" });
-  matches = [{ connection_id: connectionId, sender_id: "sender", preview_total: "9007199254740993" }];
+  assert.deepEqual(await empty.json(), {
+    contacts: [],
+    after: null,
+    total: "0",
+    evaluated: "0",
+    excluded: { tag: "0", field: "0", both: "0" },
+  });
+  matches = [
+    {
+      connection_id: connectionId,
+      sender_id: "sender",
+      preview_total: "9007199254740993",
+      preview_evaluated: "9007199254741000",
+      preview_excluded_tag: "2",
+      preview_excluded_field: "3",
+      preview_excluded_both: "2",
+    },
+  ];
   const counted = await request("?preview=true");
   assert.equal(counted.status, 200);
   assert.deepEqual(await counted.json(), {
     contacts: [{ connection_id: connectionId, sender_id: "sender" }],
     after: null,
     total: "9007199254740993",
+    evaluated: "9007199254741000",
+    excluded: { tag: "2", field: "3", both: "2" },
   });
   matches = [];
   const ordinary = await request();
   assert.deepEqual(await ordinary.json(), { contacts: [], after: null });
   assert.equal(statements.length, 3);
-  assert.match(statements[0]!, /count\(\*\) OVER\(\)/);
-  assert.equal(statements[2]!.includes("OVER()"), false);
+  assert.match(statements[0]!, /preview_evaluated/);
+  assert.equal(statements[2]!.includes("preview_evaluated"), false);
 });
 
 test("contact preview rejects malformed flags and every cursor before querying contacts", async () => {
