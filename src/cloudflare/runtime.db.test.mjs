@@ -801,7 +801,22 @@ test("workerd contact API uses restricted server privileges and verified workspa
     );
     const list = await runtime.dispatchFetch("https://app.test/api/contacts", { headers });
     assert.equal(list.status, 200);
-    assert.equal((await list.json()).contacts[0].sender_id, "sender-1");
+    const listBody = await list.json();
+    assert.equal(listBody.contacts[0].sender_id, "sender-1");
+    assert.equal("total" in listBody, false);
+    const preview = await runtime.dispatchFetch("https://app.test/api/contacts?preview=true", { headers });
+    assert.equal(preview.status, 200);
+    assert.deepEqual(await preview.json(), { ...listBody, total: "1" });
+    const foreignPreview = await runtime.dispatchFetch(
+      `https://app.test/api/contacts?preview=true&connection_id=${connection}`,
+      { headers: { ...headers, cookie: "__Host-ac-access=foreign" } },
+    );
+    assert.equal(foreignPreview.status, 200);
+    assert.deepEqual(await foreignPreview.json(), { contacts: [], total: "0", after: null });
+    assert.equal(
+      (await runtime.dispatchFetch("https://app.test/api/contacts?preview=true&after=", { headers })).status,
+      400,
+    );
     const automationPath = `https://app.test/api/connections/${connection}/contacts/sender-1/automation`;
     const pause = await runtime.dispatchFetch(automationPath, {
       method: "PUT",

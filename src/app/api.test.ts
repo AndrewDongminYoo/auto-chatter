@@ -1083,6 +1083,82 @@ test("contacts API is authenticated and returns only the workspace list", async 
   assert.deepEqual(await response.json(), { contacts: [], after: null });
 });
 
+test("contact preview returns an exact total string without changing the ordinary list response", async () => {
+  const statements: string[] = [];
+  let matches: Record<string, unknown>[] = [];
+  const pool = {
+    query: async (sql: string) => {
+      if (sql.includes("workspace_members")) return { rows: [{ workspace_id: workspaceId, role: "owner" }] };
+      statements.push(sql);
+      return { rows: matches };
+    },
+    end: async () => {},
+  } as unknown as Pool;
+  const request = (query = "") =>
+    appApi(
+      new Request(`https://app.test/api/contacts${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
+      config,
+      () => pool,
+      mediaFetch(),
+    );
+  const empty = await request("?preview=true");
+  assert.equal(empty.status, 200);
+  assert.deepEqual(await empty.json(), { contacts: [], after: null, total: "0" });
+  matches = [{ connection_id: connectionId, sender_id: "sender", preview_total: "9007199254740993" }];
+  const counted = await request("?preview=true");
+  assert.equal(counted.status, 200);
+  assert.deepEqual(await counted.json(), {
+    contacts: [{ connection_id: connectionId, sender_id: "sender" }],
+    after: null,
+    total: "9007199254740993",
+  });
+  matches = [];
+  const ordinary = await request();
+  assert.deepEqual(await ordinary.json(), { contacts: [], after: null });
+  assert.equal(statements.length, 3);
+  assert.match(statements[0]!, /count\(\*\) OVER\(\)/);
+  assert.equal(statements[2]!.includes("OVER()"), false);
+});
+
+test("contact preview rejects malformed flags and every cursor before querying contacts", async () => {
+  let queried = false;
+  const pool = {
+    query: async () => {
+      queried = true;
+      throw new Error("Invalid preview must not query the database");
+    },
+    end: async () => {},
+  } as unknown as Pool;
+  for (const query of [
+    "preview=",
+    "preview=false",
+    "preview=TRUE",
+    "preview=1",
+    "preview=true&preview=true",
+    "preview=true&after=",
+    "preview=true&after=cursor",
+  ]) {
+    const response = await appApi(
+      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
+      config,
+      () => pool,
+      mediaFetch(),
+    );
+    assert.equal(response.status, 400, query);
+    assert.deepEqual(await response.json(), { error: "invalid_contact_request" });
+  }
+  assert.equal(queried, false);
+  const unsigned = await appApi(
+    new Request("https://app.test/api/contacts?preview=true"),
+    config,
+    () => {
+      throw new Error("Unauthenticated preview must not open the database");
+    },
+    mediaFetch(),
+  );
+  assert.equal(unsigned.status, 401);
+});
+
 test("saved segment list is authenticated and workspace scoped", async () => {
   const pool = {
     query: async (sql: string) => ({
