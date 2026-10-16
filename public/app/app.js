@@ -17,6 +17,7 @@ let segmentsRequest = 0;
 let segmentBusy = false;
 let activeSegmentId = "";
 let segmentNameDirty = false;
+let segmentPreviewRequest = 0;
 let contactFields = [];
 let fieldsGeneration = 0;
 let fieldsRequest = 0;
@@ -532,6 +533,7 @@ function deletionRecord(record) {
 
 // Removes the deleted connection's contacts, inbox drafts and activity from the screen, then reloads those views.
 function forgetDeletedConnection(connectionId) {
+  invalidateSegmentPreview();
   invalidateContactExport(
     "연락처 기록이 삭제되어 진행 중인 내보내기를 취소했습니다. 다시 요청하면 현재 저장된 정보로 만듭니다.",
   );
@@ -2105,6 +2107,7 @@ async function loadActivity() {
 byId("refresh-activity").addEventListener("click", (event) => action(event.currentTarget, loadActivity));
 
 function initializeContacts() {
+  invalidateSegmentPreview();
   const select = byId("contacts-filter").elements.connection_id;
   const previous = select.value;
   select.replaceChildren(new Option("모든 계정", ""));
@@ -2434,12 +2437,27 @@ function clearContactResults() {
   byId("contacts-list").replaceChildren();
   byId("contacts-more").hidden = true;
 }
+function contactDraftQuery() {
+  const fields = byId("contacts-filter").elements;
+  const condition = contactFieldCondition();
+  const query = new URLSearchParams();
+  if (fields.connection_id.value) query.set("connection_id", fields.connection_id.value);
+  if (fields.tag.value.trim()) query.set("tag", fields.tag.value.trim());
+  if (fields.condition_operator.value === "or") query.set("condition_operator", "or");
+  if (condition) {
+    query.set("field_id", condition.field_id);
+    query.set("field_operator", condition.field_operator);
+    if (fieldConditionNeedsValue(condition.field_operator))
+      query.set("field_value", JSON.stringify(condition.field_value));
+  }
+  return query;
+}
 async function loadContacts(more = false) {
   if (contactsSaving || (more && (contactsBusy || !contactsAfter))) return;
-  let fieldCondition;
-  if (!more && !activeSegmentId) {
+  let query;
+  if (!more) {
     try {
-      fieldCondition = contactFieldCondition();
+      query = activeSegmentId ? new URLSearchParams({ segment_id: activeSegmentId }) : contactDraftQuery();
     } catch (error) {
       if (!contactFields.some((field) => field.id === byId("contacts-filter").elements.field_id.value)) {
         clearContactResults();
@@ -2453,21 +2471,6 @@ async function loadContacts(more = false) {
     contactsDirty.clear();
     purgedContactConnections.clear();
     contactsAfter = null;
-    const fields = byId("contacts-filter").elements;
-    const query = new URLSearchParams();
-    if (activeSegmentId) query.set("segment_id", activeSegmentId);
-    else {
-      if (fields.connection_id.value) query.set("connection_id", fields.connection_id.value);
-      if (fields.tag.value.trim()) query.set("tag", fields.tag.value.trim());
-      if (fields.condition_operator.value === "or") query.set("condition_operator", "or");
-      const condition = fieldCondition;
-      if (condition) {
-        query.set("field_id", condition.field_id);
-        query.set("field_operator", condition.field_operator);
-        if (fieldConditionNeedsValue(condition.field_operator))
-          query.set("field_value", JSON.stringify(condition.field_value));
-      }
-    }
     contactsQuery = query.toString();
     byId("contacts-list").replaceChildren();
     byId("contacts-more").hidden = true;
@@ -2476,7 +2479,7 @@ async function loadContacts(more = false) {
   contactsBusy = true;
   byId("contacts-more").disabled = true;
   byId("contacts-status").textContent = "연락처를 불러오고 있습니다…";
-  const query = new URLSearchParams(contactsQuery);
+  query = new URLSearchParams(contactsQuery);
   if (more) query.set("after", contactsAfter);
   try {
     const page = await api(`/api/contacts?${query}`);
@@ -2517,6 +2520,52 @@ byId("contacts-more").addEventListener("click", () => {
   void loadContacts(true);
 });
 
+function invalidateSegmentPreview() {
+  segmentPreviewRequest++;
+  byId("segment-preview").removeAttribute("aria-disabled");
+  byId("segment-preview").removeAttribute("aria-busy");
+  byId("segment-preview-status").textContent = "";
+  byId("segment-preview-list").replaceChildren();
+}
+byId("segment-preview").addEventListener("click", async () => {
+  const button = byId("segment-preview");
+  if (button.getAttribute("aria-disabled") === "true") return;
+  invalidateSegmentPreview();
+  const request = segmentPreviewRequest;
+  const generation = segmentsGeneration;
+  const current = () => request === segmentPreviewRequest && generation === segmentsGeneration;
+  const status = byId("segment-preview-status");
+  // Keep keyboard focus while preventing duplicate requests.
+  button.setAttribute("aria-disabled", "true");
+  button.setAttribute("aria-busy", "true");
+  try {
+    const query = contactDraftQuery();
+    status.textContent = "현재 조건에 맞는 연락처를 확인하고 있습니다…";
+    const page = await api(`/api/contacts?${query}`);
+    if (!current()) return;
+    status.textContent = page.contacts.length
+      ? `이번 조회에서 ${page.contacts.length}명을 확인했습니다.${page.after ? " 다음 페이지에 대상이 더 있습니다. 전체 인원수가 아닙니다." : ""}`
+      : "이번 조회에서 조건에 맞는 연락처가 없습니다.";
+    for (const contact of page.contacts.slice(0, 5)) {
+      const item = node("li");
+      item.append(
+        node(
+          "p",
+          `참여자 ${contact.sender_id} · 연결 계정 ${contact.username ? `@${contact.username}` : "이름 확인 전"}`,
+        ),
+      );
+      byId("segment-preview-list").append(item);
+    }
+  } catch (error) {
+    if (current()) status.textContent = `${error.message} 조건을 확인하고 다시 미리보기해 주세요.`;
+  } finally {
+    if (current()) {
+      button.removeAttribute("aria-disabled");
+      button.removeAttribute("aria-busy");
+    }
+  }
+});
+
 function segmentControls() {
   byId("contact-segment").disabled = segmentBusy;
   byId("segment-archive").disabled = segmentBusy || !activeSegmentId;
@@ -2546,6 +2595,7 @@ async function loadContactSegments(force = false) {
   }
 }
 byId("contacts-filter").addEventListener("input", (event) => {
+  invalidateSegmentPreview();
   activeSegmentId = "";
   byId("contact-segment").value = "";
   if (event.target.name === "tag") fieldFilterControls();
@@ -2676,6 +2726,7 @@ function configureFieldInput(input, field) {
         : "";
 }
 function fieldFilterControls() {
+  invalidateSegmentPreview();
   const fields = byId("contacts-filter").elements;
   const selected = Boolean(fields.field_id.value);
   fields.condition_operator.disabled = !selected || !fields.tag.value.trim();
