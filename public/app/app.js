@@ -2540,12 +2540,15 @@ byId("segment-preview").addEventListener("click", async () => {
   button.setAttribute("aria-busy", "true");
   try {
     const query = contactDraftQuery();
+    query.set("preview", "true");
     status.textContent = "현재 조건에 맞는 연락처를 확인하고 있습니다…";
     const page = await api(`/api/contacts?${query}`);
     if (!current()) return;
-    status.textContent = page.contacts.length
-      ? `이번 조회에서 ${page.contacts.length}명을 확인했습니다.${page.after ? " 다음 페이지에 대상이 더 있습니다. 전체 인원수가 아닙니다." : ""}`
-      : "이번 조회에서 조건에 맞는 연락처가 없습니다.";
+    if (typeof page.total !== "string" || !/^(0|[1-9][0-9]*)$/.test(page.total))
+      throw new Error("전체 대상 수를 확인할 수 없습니다.");
+    status.textContent =
+      `조회 시점의 대상은 총 ${page.total}명입니다.` +
+      (page.total === "0" ? " 조건에 맞는 연락처가 없습니다." : " 아래에 최대 5명의 예시를 표시합니다.");
     for (const contact of page.contacts.slice(0, 5)) {
       const item = node("li");
       item.append(

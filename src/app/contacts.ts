@@ -65,10 +65,14 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
         "field_operator",
         "field_value",
         "condition_operator",
+        "preview",
       ].includes(key) ||
       options.getAll(key).length !== 1
     )
       throw new ApiError(400, "invalid_contact_request");
+  const preview = options.has("preview");
+  if (preview && (options.get("preview") !== "true" || options.has("after")))
+    throw new ApiError(400, "invalid_contact_request");
   let connectionId = options.get("connection_id");
   if (connectionId !== null && !isUuid(connectionId)) throw new ApiError(400, "invalid_contact_request");
   let filterTag = options.has("tag") ? tag(options.get("tag")) : null;
@@ -121,12 +125,12 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
     operator = parseConditionOperator(saved.condition_operator, filterTag, Boolean(condition));
   }
   await validateFieldCondition(pool, workspaceId, condition);
-  const result = await pool.query<Contact>(
+  const result = await pool.query<Contact & { preview_total?: string }>(
     `SELECT e.connection_id,e.sender_id,c.username,min(e.created_at) AS first_comment_at,
  max(e.created_at) AS last_comment_at,count(*)::text AS comment_count,coalesce((automation.paused OR automation.handoff_paused),false) AS automation_paused,coalesce(t.tags,'{}'::text[]) AS tags,
  coalesce((SELECT jsonb_object_agg(v.field_id::text,v.value) FROM instagram_contact_field_values v
  JOIN instagram_contact_fields f ON f.id=v.field_id AND f.workspace_id=v.workspace_id AND NOT f.archived
- WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.value IS NOT NULL),'{}'::jsonb) AS fields
+ WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.value IS NOT NULL),'{}'::jsonb) AS fields${preview ? ",count(*) OVER()::text AS preview_total" : ""}
  FROM instagram_comment_events e JOIN instagram_connections c ON c.id=e.connection_id AND c.workspace_id=e.workspace_id
  LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=e.workspace_id AND automation.connection_id=e.connection_id AND automation.sender_id=e.sender_id
  LEFT JOIN instagram_contact_tags t ON t.workspace_id=e.workspace_id AND t.connection_id=e.connection_id AND t.sender_id=e.sender_id
@@ -152,10 +156,14 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       operator,
     ],
   );
-  const contacts = result.rows.slice(0, 50);
+  // The window counts grouped contacts before LIMIT, in the same statement as the samples. Preview has no cursor,
+  // so an empty result means no matches. Keep the bigint text exact and out of individual contact records.
+  const total = result.rows[0]?.preview_total ?? "0";
+  const contacts = result.rows.slice(0, 50).map(({ preview_total, ...contact }) => contact);
   const last = contacts.at(-1);
   return {
     contacts,
+    ...(preview ? { total } : {}),
     after:
       result.rows.length > 50 && last
         ? Buffer.from(JSON.stringify({ connection_id: last.connection_id, sender_id: last.sender_id })).toString(

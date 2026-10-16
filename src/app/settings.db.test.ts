@@ -915,6 +915,112 @@ test("combined OR contacts retain the stable cursor and never duplicate dual mat
   );
 });
 
+test("contact preview counts all matches at zero and either side of the page boundary", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  let previous = 0;
+  for (const count of [0, 1, 50, 51, 55]) {
+    if (count > previous)
+      await pool.query(
+        "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,'preview-'||n,'media',lpad(n::text,3,'0'),'private' FROM generate_series($3::int,$4::int) n",
+        [workspace, connectionId, previous + 1, count],
+      );
+    const response = await fieldRequest("GET", "/api/contacts?preview=true");
+    assert.equal(response.status, 200);
+    const preview = await response.json();
+    assert.equal(preview.total, String(count));
+    assert.equal(preview.contacts.length, Math.min(count, 50));
+    assert.equal(Boolean(preview.after), count > 50);
+    assert.equal(
+      preview.contacts.some((contact: Record<string, unknown>) => "preview_total" in contact),
+      false,
+    );
+    const ordinary = await (await fieldRequest("GET", "/api/contacts")).json();
+    assert.equal(Object.hasOwn(ordinary, "total"), false);
+    assert.deepEqual(preview.contacts, ordinary.contacts);
+    if (preview.after)
+      assert.equal((await fieldRequest("GET", `/api/contacts?preview=true&after=${preview.after}`)).status, 400);
+    previous = count;
+  }
+});
+
+test("contact preview counts grouped identities with current filters and workspace isolation", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const foreignWorkspace = await ensureWorkspace(pool, b);
+  const field = await createField("Preview score", "number");
+  for (const [sender, value, tags] of [
+    ["both", 0, ["lead"]],
+    ["field-only", 10, []],
+    ["neither", -1, []],
+    ["tag-only", -1, ["lead"]],
+  ] as const) {
+    // Repeated comments still describe one contact in this connection.
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,$3||n,'media',$3,'private' FROM generate_series(1,3) n",
+      [workspace, connectionId, sender],
+    );
+    await fieldRequest("PUT", fieldValuePath(field.id, sender), { value });
+    await saveContactTags(pool, a, connectionId, sender, { tags });
+  }
+  const other = "77777777-7777-4777-8777-777777777777";
+  const foreign = "88888888-8888-4888-8888-888888888888";
+  for (const [id, owner] of [
+    [other, workspace],
+    [foreign, foreignWorkspace],
+  ]) {
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,$1::uuid::text)", [
+      id,
+      owner,
+    ]);
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'preview-scope','media','both','private')",
+      [owner, id],
+    );
+    await pool.query(
+      "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'both','{lead}')",
+      [owner, id],
+    );
+  }
+  const query = new URLSearchParams({
+    preview: "true",
+    connection_id: connectionId,
+    tag: "lead",
+    field_id: field.id,
+    field_operator: "gte",
+    field_value: "0",
+  });
+  const preview = async (expected: string) => {
+    const response = await fieldRequest("GET", `/api/contacts?${query}`);
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.total, expected);
+    assert.equal(body.contacts.length, Number(expected));
+  };
+  await preview("1");
+  query.set("condition_operator", "or");
+  await preview("3");
+  query.delete("connection_id");
+  await preview("4");
+  query.set("connection_id", foreign);
+  await preview("0");
+  query.delete("connection_id");
+  assert.equal((await fieldRequest("GET", `/api/contacts?${query}`, undefined, b)).status, 404);
+  const segment = await createContactSegment(pool, a, {
+    name: "Preview saved",
+    tag: "lead",
+    field_id: field.id,
+    field_operator: "gte",
+    field_value: 0,
+    condition_operator: "or",
+  });
+  const savedPath = `/api/contacts?preview=true&segment_id=${segment.id}`;
+  assert.equal((await (await fieldRequest("GET", savedPath)).json()).total, "4");
+  await saveContactTags(pool, a, connectionId, "tag-only", { tags: [] });
+  assert.equal((await (await fieldRequest("GET", savedPath)).json()).total, "3");
+  assert.equal((await fieldRequest("GET", savedPath, undefined, b)).status, 404);
+  await archiveContactSegment(pool, a, segment.id);
+  assert.equal((await fieldRequest("GET", savedPath)).status, 404);
+});
+
 test("ordered field filters compare numbers numerically and dates at each boundary", async () => {
   await fieldContact();
   for (const [type, low, equal, high] of [
