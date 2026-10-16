@@ -1,7 +1,8 @@
 import { sealSecret } from "../app/secrets.ts";
 import { signingKeyContext } from "../app/webhook-delivery.ts";
+import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 import assert from "node:assert/strict";
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { Pool } from "pg";
@@ -1137,6 +1138,71 @@ test("workerd contact API uses restricted server privileges and verified workspa
     );
     assert.equal(activityArchived.status, 200);
     assert.equal((await runtime.dispatchFetch(activityPath, { headers })).status, 404);
+    const consentCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        name: "Recorded consent",
+        connection_id: connection,
+        consent_purpose: "marketing",
+        consent_state: "granted",
+      }),
+    });
+    assert.equal(consentCreated.status, 201);
+    const consentSegment = await consentCreated.json();
+    assert.equal(consentSegment.consent_purpose, "marketing");
+    assert.equal(consentSegment.consent_state, "granted");
+    const consentListed = await (
+      await runtime.dispatchFetch("https://app.test/api/contact-segments", { headers })
+    ).json();
+    assert.deepEqual(
+      consentListed.segments.find((s) => s.id === consentSegment.id),
+      consentSegment,
+    );
+    const consentPath = `https://app.test/api/contacts?preview=true&segment_id=${consentSegment.id}`;
+    const consentMissing = await (await runtime.dispatchFetch(consentPath, { headers })).json();
+    assert.equal(consentMissing.total, "0");
+    assert.deepEqual(consentMissing.excluded, { consent: "1", tag: "0", field: "0", both: "0" });
+    for (const decision of ["grant", "revoke"]) {
+      await recordChannelConsentEvent(pool, {
+        requestKey: randomUUID(),
+        workspaceId: workspace,
+        connectionId: connection,
+        channel: "instagram",
+        identityKind: "comment_sender",
+        identityValue: "sender-1",
+        purpose: "marketing",
+        decision,
+        evidenceKind: "explicit",
+        evidenceReference: "runtime fixture",
+        occurredAt: new Date("2026-10-10T00:00:00Z"),
+        actorId: user,
+      });
+      const response = await runtime.dispatchFetch(consentPath, { headers });
+      assert.equal(response.status, 200);
+      const page = await response.json();
+      assert.equal(page.total, decision === "grant" ? "1" : "0");
+      assert.deepEqual(page.excluded, { consent: decision === "grant" ? "0" : "1", tag: "0", field: "0", both: "0" });
+    }
+    assert.equal(
+      (await runtime.dispatchFetch(consentPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } }))
+        .status,
+      404,
+    );
+    assert.equal(
+      (await runtime.dispatchFetch("https://app.test/api/contacts?consent_purpose=marketing", { headers })).status,
+      400,
+    );
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`https://app.test/api/contact-segments/${consentSegment.id}`, {
+          method: "DELETE",
+          headers,
+        })
+      ).status,
+      200,
+    );
+    assert.equal((await runtime.dispatchFetch(consentPath, { headers })).status, 404);
     const other = await runtime.dispatchFetch(`https://app.test/api/connections/${connection}/contacts/sender-1`, {
       method: "PATCH",
       headers: { ...headers, cookie: "__Host-ac-access=foreign" },
