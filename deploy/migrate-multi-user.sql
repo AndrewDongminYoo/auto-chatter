@@ -49,5 +49,6 @@ BEGIN;
 \ir ../db/migrations/047_contact_segment_consent.sql
 \ir ../db/migrations/048_workspace_reply_templates.sql
 \ir ../db/migrations/049_inbox_scheduled_replies.sql
+\ir ../db/migrations/050_manual_reply_report_period.sql
 \ir supabase-access.sql
 COMMIT;

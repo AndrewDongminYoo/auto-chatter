@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { before, beforeEach, after, test } from "node:test";
 import { Pool } from "pg";
 import { appApi } from "./api.ts";
+import { manualReplyReport } from "./manual-reply-reports.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
@@ -206,5 +207,46 @@ test("manual report rejects ambiguous, invalid, unbounded or unsupported query i
     const response = await request(query);
     assert.equal(response.status, 400, query);
     assert.equal((await response.json()).error, "invalid_report_query", query);
+  }
+});
+
+test("manual report bounds index reads by creation period with and without a connection filter", async () => {
+  await pool.query(
+    `INSERT INTO instagram_manual_replies(workspace_id,connection_id,recipient_id,request_key,created_by,text,handoff_version,status,created_at)
+     SELECT $1,$2,'123',gen_random_uuid(),$3,'historical request',1,'sent',
+       '2020-01-01'::timestamptz + n * interval '1 minute' FROM generate_series(1,12000) n`,
+    [workspace, connection, owner],
+  );
+  await seed("sent");
+  await pool.query("ANALYZE instagram_manual_replies");
+  for (const suffix of ["", `&connection_id=${connection}`]) {
+    const plans: string[] = [];
+    const explainedPool = {
+      query: async (sql: string, values: unknown[]) => {
+        if (sql.startsWith("WITH context")) {
+          const result = await pool.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${sql}`, values);
+          plans.push(JSON.stringify(result.rows[0]["QUERY PLAN"]));
+        }
+        return pool.query(sql, values);
+      },
+    } as unknown as Pool;
+    const result = await manualReplyReport(
+      explainedPool,
+      { id: owner, email: "owner@example.test" },
+      new URLSearchParams(params + suffix),
+    );
+    assert.equal(result.counts.total, "1");
+    assert.equal(plans.length, 1);
+    const scans: Record<string, unknown>[] = [];
+    function walk(node: Record<string, unknown>) {
+      if (node["Index Name"] === "instagram_manual_replies_report_period_idx") scans.push(node);
+      for (const child of (node.Plans ?? []) as Record<string, unknown>[]) walk(child);
+    }
+    walk(JSON.parse(plans[0])[0].Plan);
+    assert.equal(scans.length, 1, "report must use the creation-period index");
+    assert.match(String(scans[0]["Index Cond"]), /workspace_id =/);
+    assert.match(String(scans[0]["Index Cond"]), /created_at >=/);
+    assert.match(String(scans[0]["Index Cond"]), /created_at </);
+    assert.equal(scans[0]["Actual Rows"], 1);
   }
 });
