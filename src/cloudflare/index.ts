@@ -75,8 +75,11 @@ async function wakeDueReplies(
      WHERE ($1::uuid IS NULL OR c.id=$1) AND ($2::text[] IS NULL OR c.account_id=ANY($2))
        AND (c.send_paused_until IS NULL OR c.send_paused_until<=now())
        AND (EXISTS(SELECT 1 FROM instagram_manual_replies manual WHERE manual.connection_id=c.id AND manual.status='pending' AND manual.next_attempt_at<=now()
+         AND (manual.scheduled_at IS NULL OR manual.scheduled_at<=now())
          AND NOT EXISTS(SELECT 1 FROM instagram_manual_replies earlier WHERE earlier.workspace_id=manual.workspace_id AND earlier.connection_id=manual.connection_id AND earlier.recipient_id=manual.recipient_id
-           AND (earlier.created_at,earlier.id)<(manual.created_at,manual.id) AND (earlier.status IN ('pending','sending') OR (earlier.status='unknown' AND earlier.resolved_at IS NULL))))
+           AND (earlier.created_at,earlier.id)<(manual.created_at,manual.id) AND (earlier.status='sending'
+             OR (earlier.status='pending' AND (earlier.scheduled_at IS NULL OR earlier.scheduled_at<=now()))
+             OR (earlier.status='unknown' AND earlier.resolved_at IS NULL))))
        OR (c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>now()
        AND ((EXISTS(SELECT 1 FROM private_reply_outbox reply WHERE reply.connection_id=c.id AND reply.status='pending' AND reply.next_attempt_at<=now()
          AND NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id

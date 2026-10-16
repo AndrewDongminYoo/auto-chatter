@@ -93,6 +93,36 @@ beforeEach(async () => {
 
 after(async () => pool.end());
 
+test("scheduled manual reply latency skips future reservations without hiding due immediate replies", async () => {
+  await reply(connectionId, "456", "sent");
+  await pool.query(
+    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id) VALUES($1,$2,'456')",
+    [workspaceId, connectionId],
+  );
+  await pool.query(
+    `INSERT INTO instagram_inbox_handoffs(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,updated_by)
+     SELECT workspace_id,connection_id,'123',sender_id,id,true,1,$2 FROM private_reply_outbox WHERE connection_id=$1`,
+    [connectionId, adminId],
+  );
+  await pool.query(
+    `INSERT INTO instagram_manual_replies(workspace_id,connection_id,recipient_id,request_key,created_by,text,handoff_version,
+      created_at,next_attempt_at,scheduled_at,schedule_time_zone)
+     VALUES($1,$2,'123',gen_random_uuid(),$3,'future',1,now()-interval '30 minutes',now()-interval '25 minutes',now()+interval '1 hour','Asia/Seoul')`,
+    [workspaceId, connectionId, adminId],
+  );
+  let body = await (await health()).json();
+  assert.equal(body.connections[0].oldest_due_pending_seconds, null);
+  await pool.query(
+    `INSERT INTO instagram_manual_replies(workspace_id,connection_id,recipient_id,request_key,created_by,text,handoff_version,
+      created_at,next_attempt_at)
+     VALUES($1,$2,'123',gen_random_uuid(),$3,'immediate',1,now()-interval '20 minutes',now()-interval '20 minutes')`,
+    [workspaceId, connectionId, adminId],
+  );
+  body = await (await health()).json();
+  assert.ok(body.connections[0].oldest_due_pending_seconds >= 1200);
+  assert.ok(body.connections[0].oldest_due_pending_seconds < 1260);
+});
+
 function health(actorId = adminId, env: Record<string, string> = apiEnv) {
   return appApi(
     new Request("https://app.test/api/workspace/health", {

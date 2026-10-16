@@ -55,10 +55,13 @@ WITH metrics AS (
       END,
       (SELECT min(greatest(manual.next_attempt_at,c.send_paused_until)) FROM instagram_manual_replies manual
        WHERE manual.connection_id=c.id AND manual.status='pending' AND manual.next_attempt_at<=now()
+         AND (manual.scheduled_at IS NULL OR manual.scheduled_at<=now())
          AND NOT EXISTS(SELECT 1 FROM instagram_manual_replies earlier WHERE earlier.workspace_id=manual.workspace_id
            AND earlier.connection_id=manual.connection_id AND earlier.recipient_id=manual.recipient_id
            AND (earlier.created_at,earlier.id)<(manual.created_at,manual.id)
-           AND (earlier.status IN ('pending','sending') OR (earlier.status='unknown' AND earlier.resolved_at IS NULL))))
+           AND (earlier.status='sending'
+             OR (earlier.status='pending' AND (earlier.scheduled_at IS NULL OR earlier.scheduled_at<=now()))
+             OR (earlier.status='unknown' AND earlier.resolved_at IS NULL))))
     ) END AS oldest_due_at,
     (SELECT min(sending.attempt_started_at) FROM (
        SELECT attempt_started_at FROM private_reply_outbox WHERE connection_id=c.id AND status='sending'

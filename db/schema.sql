@@ -482,12 +482,15 @@ CREATE TABLE IF NOT EXISTS instagram_manual_replies (
   handoff_version integer NOT NULL CHECK(handoff_version>0),
   retry_of uuid,
   retry_reason text,
-  status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sending','sent','failed','unknown')),
+  status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sending','sent','failed','unknown','cancelled')),
   failure_code text,
   safe_to_retry boolean NOT NULL DEFAULT false,
   attempt_id uuid,
   attempt_started_at timestamptz,
   next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  scheduled_at timestamptz,
+  schedule_time_zone text,
+  schedule_version integer NOT NULL DEFAULT 1 CHECK(schedule_version>0),
   provider_message_id text,
   sent_at timestamptz,
   resolved_at timestamptz,
@@ -499,7 +502,9 @@ CREATE TABLE IF NOT EXISTS instagram_manual_replies (
   FOREIGN KEY(workspace_id,connection_id,recipient_id,retry_of) REFERENCES instagram_manual_replies(workspace_id,connection_id,recipient_id,id),
   CHECK((retry_of IS NULL AND retry_reason IS NULL) OR (retry_of IS NOT NULL AND length(btrim(retry_reason)) BETWEEN 1 AND 500)),
   CHECK(NOT safe_to_retry OR status='failed'),
-  CHECK(resolved_at IS NULL OR status='unknown')
+  CHECK(resolved_at IS NULL OR status='unknown'),
+  CONSTRAINT instagram_manual_replies_schedule_pair CHECK((scheduled_at IS NULL)=(schedule_time_zone IS NULL)),
+  CONSTRAINT instagram_manual_replies_cancelled_schedule CHECK(status<>'cancelled' OR scheduled_at IS NOT NULL)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS instagram_manual_replies_sending_idx ON instagram_manual_replies(workspace_id,connection_id,recipient_id) WHERE status='sending';
 CREATE INDEX IF NOT EXISTS instagram_manual_replies_order_idx ON instagram_manual_replies(connection_id,recipient_id,created_at,id);
@@ -510,16 +515,19 @@ CREATE TABLE IF NOT EXISTS instagram_manual_reply_events (
   connection_id uuid NOT NULL,
   recipient_id text NOT NULL,
   reply_id uuid NOT NULL,
-  kind text NOT NULL CHECK(kind IN ('queued','retry_requested','sending','sent','failed','deferred','unknown','no_retry')),
+  kind text NOT NULL CHECK(kind IN ('queued','retry_requested','sending','sent','failed','deferred','unknown','no_retry','rescheduled','cancelled')),
   attempt_id uuid,
   actor_id uuid,
   request_key uuid,
+  request_fingerprint text CHECK(request_fingerprint ~ '^[a-f0-9]{64}$'),
+  scheduled_at timestamptz,
+  schedule_version integer CHECK(schedule_version>0),
   reason text CHECK(reason IS NULL OR length(reason)<=500),
   failure_code text,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   UNIQUE(workspace_id,connection_id,recipient_id,request_key),
   FOREIGN KEY(workspace_id,connection_id,recipient_id,reply_id) REFERENCES instagram_manual_replies(workspace_id,connection_id,recipient_id,id),
-  CHECK((kind IN ('queued','retry_requested','no_retry') AND actor_id IS NOT NULL) OR (kind NOT IN ('queued','retry_requested','no_retry') AND actor_id IS NULL))
+  CHECK((kind IN ('queued','retry_requested','no_retry','rescheduled','cancelled') AND actor_id IS NOT NULL) OR (kind NOT IN ('queued','retry_requested','no_retry','rescheduled','cancelled') AND actor_id IS NULL))
 );
 CREATE INDEX IF NOT EXISTS instagram_manual_reply_events_reply_idx ON instagram_manual_reply_events(reply_id,created_at,id);
 -- Triage state of one DM conversation (#22), keyed like the inbox and handoffs. A conversation without

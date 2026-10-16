@@ -767,6 +767,68 @@ test("workerd contact API uses restricted server privileges and verified workspa
     });
     assert.equal(resolution.status, 200);
     assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_reply_events")).rows[0].count, "2");
+    const schedule = (
+      await pool.query(
+        `SELECT to_char((now()+interval '1 hour') AT TIME ZONE time_zone,'YYYY-MM-DD"T"HH24:MI') AS schedule_local,time_zone AS expected_time_zone FROM workspaces WHERE id=$1`,
+        [workspace],
+      )
+    ).rows[0];
+    const scheduledResponse = await runtime.dispatchFetch(manualPath, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ ...manualBody, ...schedule, request_key: randomUUID() }),
+    });
+    assert.equal(scheduledResponse.status, 202);
+    const scheduled = await scheduledResponse.json();
+    const editSchedule = {
+      ...schedule,
+      request_key: randomUUID(),
+      expected_version: 1,
+      text: "Revised runtime schedule",
+    };
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`${manualPath}/${scheduled.id}/schedule`, {
+          method: "PATCH",
+          headers: { ...headers, origin: "https://evil.test" },
+          body: JSON.stringify(editSchedule),
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`${manualPath}/${scheduled.id}/schedule`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify(editSchedule),
+        })
+      ).status,
+      200,
+    );
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`${manualPath}/${scheduled.id}/schedule`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ ...editSchedule, request_key: randomUUID() }),
+        })
+      ).status,
+      409,
+    );
+    const cancelSchedule = { request_key: randomUUID(), expected_version: 2 };
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`${manualPath}/${scheduled.id}/cancel`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(cancelSchedule),
+        })
+      ).status,
+      200,
+    );
+    const scheduledHistory = await (await runtime.dispatchFetch(manualPath, { headers })).json();
+    assert.equal(scheduledHistory.replies.find((reply) => reply.id === scheduled.id).status, "cancelled");
     const endHandoff = await runtime.dispatchFetch(handoffPath, {
       method: "PUT",
       headers,

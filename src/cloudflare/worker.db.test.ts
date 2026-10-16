@@ -2126,7 +2126,7 @@ test("Cloudflare handoff committed after follow permissions prevents final POST"
   );
 });
 
-async function manualFixture() {
+async function manualFixture(scheduled = false) {
   const user = { id: "44444444-4444-4444-8444-444444444444", email: "operator@example.test" };
   await pool.query(
     "INSERT INTO workspace_members(user_id,workspace_id) VALUES($1,'11111111-1111-4111-8111-111111111111')",
@@ -2148,13 +2148,25 @@ async function manualFixture() {
   const { saveInboxHandoff } = await import("../app/inbox-handoff.ts");
   await saveInboxHandoff(pool, user, connectionId, "456", new URLSearchParams(), { active: true, expected_version: 0 });
   const { queueManualReply } = await import("../app/manual-replies.ts");
+  const schedule = scheduled
+    ? (
+        await pool.query(
+          `SELECT to_char((now()+interval '1 hour') AT TIME ZONE time_zone,'YYYY-MM-DD"T"HH24:MI') AS schedule_local,time_zone AS expected_time_zone FROM workspaces WHERE id='11111111-1111-4111-8111-111111111111'`,
+        )
+      ).rows[0]
+    : {};
   const reply = await queueManualReply(
     pool,
     user,
     connectionId,
     "456",
     new URLSearchParams(),
-    { request_key: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", text: "Manual response", expected_handoff_version: 1 },
+    {
+      request_key: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      text: "Manual response",
+      expected_handoff_version: 1,
+      ...schedule,
+    },
     true,
   );
   return { user, reply };
@@ -2372,6 +2384,74 @@ test("Cloudflare consent read failures defer private follow and manual before PO
   assert.deepEqual(
     (await pool.query("SELECT status,failure_code,safe_to_retry FROM instagram_manual_replies")).rows[0],
     { status: "pending", failure_code: "consent_unavailable", safe_to_retry: false },
+  );
+});
+
+test("scheduled manual replies wake only when due and leave later immediate replies runnable", async () => {
+  const { user, reply } = await manualFixture(true);
+  published = [];
+  await worker.scheduled(null, env);
+  assert.deepEqual(published, []);
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 0);
+  const { queueManualReply } = await import("../app/manual-replies.ts");
+  const immediate = await queueManualReply(
+    pool,
+    user,
+    connectionId,
+    "456",
+    new URLSearchParams(),
+    { request_key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", text: "Immediate response", expected_handoff_version: 1 },
+    true,
+  );
+  published = [];
+  await worker.scheduled(null, env);
+  assert.deepEqual(published, [{ connectionId }]);
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 1);
+  assert.equal(
+    (await pool.query("SELECT status FROM instagram_manual_replies WHERE id=$1", [immediate.id])).rows[0].status,
+    "sent",
+  );
+  assert.equal(
+    (await pool.query("SELECT status FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0].status,
+    "pending",
+  );
+  await pool.query(
+    "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
+    [reply.id],
+  );
+  published = [];
+  await worker.scheduled(null, env);
+  assert.deepEqual(published, [{ connectionId }]);
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 2);
+});
+
+test("scheduled manual reply rejects a removed creator in the Cloudflare provider guard", async () => {
+  const { user, reply } = await manualFixture(true);
+  await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [user.id]);
+  await pool.query(
+    "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
+    [reply.id],
+  );
+  let posts = 0;
+  mock.method(globalThis, "fetch", async (_input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      posts++;
+      return Response.json({ message_id: "must-not-send" });
+    }
+    await pool.query(
+      "UPDATE workspace_members SET removed_at=now(),removed_by='99999999-9999-4999-8999-999999999999' WHERE user_id=$1",
+      [user.id],
+    );
+    return Response.json({ user_id: "123" });
+  });
+  assert.equal(await consume(), "ack");
+  assert.equal(posts, 0);
+  assert.deepEqual(
+    (await pool.query("SELECT status,failure_code FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0],
+    { status: "failed", failure_code: "scheduled_actor_unavailable" },
   );
 });
 

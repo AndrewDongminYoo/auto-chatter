@@ -1,6 +1,12 @@
 import { contactDetails } from "./contact-details.ts";
 import { exportContactCsv } from "./contact-csv.ts";
-import { queueManualReply, listManualReplies, resolveManualReply, readManualReplyStatus } from "./manual-replies.ts";
+import {
+  queueManualReply,
+  listManualReplies,
+  resolveManualReply,
+  readManualReplyStatus,
+  changeManualReplySchedule,
+} from "./manual-replies.ts";
 import { inboxHandoff, saveInboxHandoff } from "./inbox-handoff.ts";
 import { listAssignees, saveConversationState } from "./inbox-conversations.ts";
 import { markInboxRead } from "./inbox-read.ts";
@@ -443,6 +449,31 @@ export async function appApi(
             env.SEND_ENABLED === "true",
           ),
         );
+      const schedule =
+        /^\/api\/connections\/([a-f0-9-]+)\/inbox\/(\d+)\/replies\/([a-f0-9-]+)\/(schedule|cancel)$/.exec(url.pathname);
+      if (
+        schedule &&
+        ((schedule[4] === "schedule" && request.method === "PATCH") ||
+          (schedule[4] === "cancel" && request.method === "POST"))
+      ) {
+        const reply = await changeManualReplySchedule(
+          pool,
+          user,
+          schedule[1]!,
+          schedule[2]!,
+          schedule[3]!,
+          url.searchParams,
+          await readJson(request),
+          env.SEND_ENABLED === "true",
+          schedule[4] === "cancel",
+        );
+        try {
+          await notifyReply?.(schedule[1]!);
+        } catch {
+          logManualNotificationFailure(correlationId, schedule[1]!);
+        }
+        return json(reply);
+      }
       const manual =
         /^\/api\/connections\/([a-f0-9-]+)\/inbox\/(\d+)\/replies(?:\/([a-f0-9-]+)\/(retry|resolution))?$/.exec(
           url.pathname,
