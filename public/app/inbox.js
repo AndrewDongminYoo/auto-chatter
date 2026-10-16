@@ -1048,8 +1048,25 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     }
   }
 
+  const replyTemplates = createReplyTemplates({
+    api,
+    node,
+    getRole,
+    getComposer: () => selected,
+    appendToDraft(text) {
+      if (!selected || selected.busy || selected.loading || selected.operation) return false;
+      const draft = selected.draft ? `${selected.draft}\n${text}` : text;
+      if (draft.length > 1000) return false;
+      selected.draft = draft;
+      selected.notice = "";
+      controls();
+      return true;
+    },
+  });
+
   function controls() {
     const state = selected;
+    replyTemplates.controls();
     conversationControls();
     labelControls();
     reminderControls();
@@ -1404,6 +1421,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         reminderNotice: "",
         reminderWrites: 0,
       });
+    replyTemplates.conversationChanged();
     selected = states.get(key);
     byId("inbox-conversation-title").textContent = `@${row.username || "연결 계정"} · DM 사용자 ${row.recipient_id}`;
     byId("inbox-thread-refresh").hidden = false;
@@ -1486,9 +1504,11 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
 
   function reset() {
     epoch++;
+    replyTemplates.reset();
     listRequest++;
     states.clear();
     selected = null;
+    replyTemplates.conversationChanged();
     after = null;
     listBusy = false;
     assignees = [];
@@ -1601,6 +1621,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   });
   byId("inbox-account").addEventListener("change", () => {
     selected = null;
+    replyTemplates.conversationChanged();
     byId("inbox-messages").replaceChildren();
     byId("inbox-conversation-title").textContent = "대화를 선택하세요";
     byId("inbox-thread-refresh").hidden = true;
@@ -1609,6 +1630,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     void loadList();
   });
   byId("inbox-refresh").addEventListener("click", () => {
+    void replyTemplates.load();
     void loadLabels();
     void loadList();
     if (selected) {
@@ -1741,6 +1763,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       for (const key of states.keys()) if (key.startsWith(`${connectionId}:`)) states.delete(key);
       if (selected?.row.connection_id === connectionId) {
         selected = null;
+        replyTemplates.conversationChanged();
         byId("inbox-messages").replaceChildren();
         byId("inbox-conversation-title").textContent = "대화를 선택하세요";
         byId("inbox-thread-refresh").hidden = true;
@@ -1770,6 +1793,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       if (listed.size) void loadList();
     },
     hasDrafts: () =>
+      replyTemplates.hasDrafts() ||
       [...states.values()].some(
         (state) =>
           state.draft ||
@@ -1780,6 +1804,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
           [...state.notes.values()].some(Boolean),
       ),
     initialize() {
+      void replyTemplates.load();
       const select = byId("inbox-account"),
         previous = select.value;
       select.replaceChildren(new Option("모든 계정", ""));

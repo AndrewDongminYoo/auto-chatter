@@ -612,6 +612,22 @@ CREATE TABLE IF NOT EXISTS instagram_inbox_conversation_labels (
   PRIMARY KEY(workspace_id,connection_id,recipient_id),
   FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id)
 );
+-- Workspace reply snippets for the manual inbox composer. Archive instead of deleting.
+CREATE TABLE IF NOT EXISTS workspace_reply_templates (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  name text NOT NULL CHECK(length(btrim(name)) BETWEEN 1 AND 60),
+  body text NOT NULL CHECK(length(btrim(body)) BETWEEN 1 AND 1000),
+  version integer NOT NULL DEFAULT 1 CHECK(version>0),
+  archived boolean NOT NULL DEFAULT false,
+  created_by uuid NOT NULL,
+  updated_by uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS workspace_reply_templates_active_name_idx
+  ON workspace_reply_templates(workspace_id,lower(name)) WHERE NOT archived;
+
 -- Keyword auto-labeling rules (#132). A rule belongs to the workspace (no connection scope) and adds one of the
 -- workspace's labels to an inbox conversation when a newly stored text DM matches its keywords. Rules are only
 -- archived, never deleted by the API; only delete_workspace_data removes them.
@@ -1605,6 +1621,9 @@ BEGIN
   DELETE FROM public.instagram_inbox_reminders WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_inbox_reminders', affected);
+  DELETE FROM public.workspace_reply_templates WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('workspace_reply_templates', affected);
   -- Keyword rules follow the label events that name them and precede the labels they add.
   DELETE FROM public.instagram_inbox_label_rules WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;

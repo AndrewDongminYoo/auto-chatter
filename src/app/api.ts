@@ -12,6 +12,13 @@ import {
   saveConversationLabels,
 } from "./inbox-labels.ts";
 import { addInboxNote, listInboxNotes } from "./inbox-notes.ts";
+import {
+  archiveReplyTemplate,
+  createReplyTemplate,
+  listReplyTemplates,
+  previewReplyTemplate,
+  updateReplyTemplate,
+} from "./reply-templates.ts";
 import { archiveLabelRule, createLabelRule, listLabelRules, updateLabelRule } from "./inbox-label-rules.ts";
 import { changeReminder, closeReminder, createReminder, listReminders } from "./inbox-reminders.ts";
 import type { Pool } from "pg";
@@ -328,6 +335,18 @@ export async function appApi(
       if (inboxLabel && request.method === "PATCH")
         return json(await renameInboxLabel(pool, user, inboxLabel[1]!, await readJson(request)));
       if (inboxLabel && request.method === "DELETE") return json(await archiveInboxLabel(pool, user, inboxLabel[1]!));
+      if (url.pathname === "/api/inbox/reply-templates" && request.method === "GET")
+        return json({ templates: await listReplyTemplates(pool, user) });
+      if (url.pathname === "/api/inbox/reply-templates" && request.method === "POST")
+        return json(await createReplyTemplate(pool, user, await readJson(request)), 201);
+      const replyTemplate = /^\/api\/inbox\/reply-templates\/([a-f0-9-]+)$/.exec(url.pathname);
+      if (replyTemplate && request.method === "PATCH")
+        return json(await updateReplyTemplate(pool, user, replyTemplate[1]!, await readJson(request)));
+      if (replyTemplate && request.method === "DELETE")
+        return json(await archiveReplyTemplate(pool, user, replyTemplate[1]!));
+      const templatePreview = /^\/api\/inbox\/reply-templates\/([a-f0-9-]+)\/preview$/.exec(url.pathname);
+      if (templatePreview && request.method === "POST")
+        return json(await previewReplyTemplate(pool, user, templatePreview[1]!, await readJson(request)));
       if (url.pathname === "/api/inbox/label-rules" && request.method === "GET")
         return json({ rules: await listLabelRules(pool, user) });
       if (url.pathname === "/api/inbox/label-rules" && request.method === "POST")

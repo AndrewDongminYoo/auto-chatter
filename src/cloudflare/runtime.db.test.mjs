@@ -206,7 +206,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
   });
   try {
     await pool.query(
-      "DROP TABLE IF EXISTS webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_reminder_events, instagram_inbox_reminders, instagram_inbox_notes, instagram_inbox_label_events, instagram_inbox_label_rules, instagram_inbox_conversation_labels, instagram_inbox_labels, instagram_inbox_read_state, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS workspace_reply_templates, webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_reminder_events, instagram_inbox_reminders, instagram_inbox_notes, instagram_inbox_label_events, instagram_inbox_label_rules, instagram_inbox_conversation_labels, instagram_inbox_labels, instagram_inbox_read_state, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
@@ -989,11 +989,53 @@ test("workerd contact API uses restricted server privileges and verified workspa
       200,
     );
     // The restricted server role can read every exported table, and the export omits token ciphertext.
+    const templateRoot = "https://app.test/api/inbox/reply-templates";
+    const templateCreated = await runtime.dispatchFetch(templateRoot, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Greeting", body: "Hello {{name}}" }),
+    });
+    assert.equal(templateCreated.status, 201);
+    const template = await templateCreated.json();
+    assert.deepEqual(template.variables, ["name"]);
+    const templatePreview = await runtime.dispatchFetch(`${templateRoot}/${template.id}/preview`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ expected_version: 1, values: { name: "{{literal}}" } }),
+    });
+    assert.equal(templatePreview.status, 200);
+    assert.deepEqual(await templatePreview.json(), { text: "Hello {{literal}}", version: 1 });
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`${templateRoot}/${template.id}`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ name: "Greeting", body: "Hi {{name}}", expected_version: 1 }),
+        })
+      ).status,
+      200,
+    );
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`${templateRoot}/${template.id}/preview`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ expected_version: 1, values: { name: "stale" } }),
+        })
+      ).status,
+      409,
+    );
+    assert.equal(
+      (await runtime.dispatchFetch(`${templateRoot}/${template.id}`, { method: "DELETE", headers })).status,
+      200,
+    );
+    assert.deepEqual((await (await runtime.dispatchFetch(templateRoot, { headers })).json()).templates, []);
     const exported = await runtime.dispatchFetch("https://app.test/api/workspace/export", { headers });
     assert.equal(exported.status, 200);
     assert.match(exported.headers.get("content-disposition") ?? "", /^attachment; filename="auto-chatter-export-/);
     const exportBody = await exported.json();
     assert.equal(exportBody.tables.instagram_contact_field_values[0].value, 0);
+    assert.equal(exportBody.tables.workspace_reply_templates[0].id, template.id);
     assert.ok(exportBody.tables.instagram_connections.length > 0);
     assert.ok(exportBody.tables.instagram_connections.every((row) => !("access_token_encrypted" in row)));
     const csvExport = await runtime.dispatchFetch("https://app.test/api/contacts/export.csv", { headers });

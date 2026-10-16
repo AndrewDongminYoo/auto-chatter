@@ -5,6 +5,10 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
   await pool.query("INSERT INTO workspaces(id) VALUES($1)", [workspace]);
   await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2)", [workspace, user]);
   await pool.query(
+    "INSERT INTO workspace_reply_templates(workspace_id,name,body,created_by,updated_by) VALUES($1,'Greeting','Hello {{name}}',$2,$2)",
+    [workspace, user],
+  );
+  await pool.query(
     `INSERT INTO workspace_invites(workspace_id,email,role,token_hash,created_by,expires_at)
      VALUES($1,$2,'agent',encode(sha256(convert_to($2,'UTF8')),'hex'),$3,now()+interval '7 days')`,
     [workspace, `agent-${account}@example.test`, user],
