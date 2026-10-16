@@ -1081,6 +1081,62 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.equal(archived.status, 200);
     const removed = await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${segment.id}`, { headers });
     assert.equal(removed.status, 404);
+    const activity = { last_comment_from: "2026-10-10T00:00:00.000Z", last_comment_before: "2026-10-12T00:00:00.000Z" };
+    await pool.query("UPDATE instagram_comment_events SET created_at=$2 WHERE connection_id=$1", [
+      connection,
+      activity.last_comment_from,
+    ]);
+    const activityCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Activity", connection_id: connection, tag: "lead", ...activity }),
+    });
+    assert.equal(activityCreated.status, 201);
+    const activitySegment = await activityCreated.json();
+    assert.equal(activitySegment.last_comment_from, activity.last_comment_from);
+    assert.equal(activitySegment.last_comment_before, activity.last_comment_before);
+    const activityListed = await (
+      await runtime.dispatchFetch("https://app.test/api/contact-segments", { headers })
+    ).json();
+    assert.deepEqual(
+      activityListed.segments.find((s) => s.id === activitySegment.id),
+      activitySegment,
+    );
+    const activityPath = `https://app.test/api/contacts?preview=true&segment_id=${activitySegment.id}`;
+    const activityMatched = await (await runtime.dispatchFetch(activityPath, { headers })).json();
+    assert.equal(activityMatched.total, "1");
+    assert.deepEqual(activityMatched.excluded, { activity: "0", tag: "0", field: "0", both: "0" });
+    await pool.query("UPDATE instagram_comment_events SET created_at=$2 WHERE connection_id=$1", [
+      connection,
+      activity.last_comment_before,
+    ]);
+    const activityExcluded = await (await runtime.dispatchFetch(activityPath, { headers })).json();
+    assert.deepEqual(activityExcluded, {
+      contacts: [],
+      after: null,
+      total: "0",
+      evaluated: "1",
+      excluded: { activity: "1", tag: "0", field: "0", both: "0" },
+    });
+    assert.equal(
+      (await runtime.dispatchFetch(activityPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } }))
+        .status,
+      404,
+    );
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`https://app.test/api/contacts?last_comment_from=${activity.last_comment_from}`, {
+          headers,
+        })
+      ).status,
+      400,
+    );
+    const activityArchived = await runtime.dispatchFetch(
+      `https://app.test/api/contact-segments/${activitySegment.id}`,
+      { method: "DELETE", headers },
+    );
+    assert.equal(activityArchived.status, 200);
+    assert.equal((await runtime.dispatchFetch(activityPath, { headers })).status, 404);
     const other = await runtime.dispatchFetch(`https://app.test/api/connections/${connection}/contacts/sender-1`, {
       method: "PATCH",
       headers: { ...headers, cookie: "__Host-ac-access=foreign" },

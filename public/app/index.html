@@ -829,13 +829,36 @@
                   <option value="or">하나 이상 (OR)</option>
                 </select></label
               >
+              <label
+                >마지막 댓글 저장 시작 (UTC)<input
+                  name="last_comment_from"
+                  type="datetime-local"
+                  step="0.001"
+                  min="0001-01-01T00:00"
+                  max="9999-12-31T23:59:59.999"
+                  aria-describedby="contact-activity-help"
+              /></label>
+              <label
+                >마지막 댓글 저장 종료 (UTC)<input
+                  name="last_comment_before"
+                  type="datetime-local"
+                  step="0.001"
+                  min="0001-01-01T00:00"
+                  max="9999-12-31T23:59:59.999"
+                  aria-describedby="contact-activity-help"
+              /></label>
               <button type="submit" class="secondary">필터 적용</button>
             </form>
+            <p id="contact-activity-help" class="hint">
+              기간은 두 값을 함께 입력하며 UTC 기준으로 시작을 포함하고 종료를 제외합니다. 댓글 작성 시각이 아닌 마지막
+              저장 시각을 확인합니다.
+            </p>
             <details class="segment-save">
               <summary>현재 조건을 필터로 저장</summary>
               <p class="hint">
-                저장 전 현재 조건에 맞는 연락처 수와 태그·추가 정보 때문에 제외된 이유를 확인하세요. 아래에 최대 5명을
-                예시로 표시합니다. 목록에서 편집 중인 내용은 저장 전까지 반영되지 않습니다.
+                저장 전 현재 조건에 맞는 연락처 수를 확인하세요. 기간 밖을 먼저 제외한 뒤 태그·추가 정보의 제외 사유를
+                표시합니다. 아래에 최대 5명을 예시로 표시합니다. 목록에서 편집 중인 내용은 저장 전까지 반영되지
+                않습니다.
               </p>
               <button id="segment-preview" type="button" class="secondary">현재 조건 미리보기</button>
               <p id="segment-preview-status" class="hint" role="status" aria-live="polite"></p>
@@ -848,8 +871,8 @@
                 <button type="submit" class="secondary" data-loading-label="저장 중…">필터 저장</button>
               </form>
               <p class="hint">
-                계정·태그·추가 정보 조건을 저장합니다. 저장된 필터는 최대 50개이며 대상은 조회할 때 다시 계산합니다.
-                미리보기는 조회 시점의 참고 결과로, 대상을 고정하거나 발송 동의를 확인한 것이 아닙니다.
+                계정·태그·추가 정보·활동 기간 조건을 저장합니다. 저장된 필터는 최대 50개이며 대상은 조회할 때 다시
+                계산합니다. 미리보기는 조회 시점의 참고 결과로, 대상을 고정하거나 발송 동의를 확인한 것이 아닙니다.
               </p>
             </details>
             <p id="contacts-status" class="hint" role="status" aria-live="polite"></p>
