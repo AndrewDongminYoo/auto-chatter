@@ -1179,6 +1179,25 @@ select:disabled {
   border-radius: var(--radius-control);
   padding: 12px;
 }
+.reply-decision form,
+.reply-schedule-picker {
+  display: grid;
+  gap: 8px;
+}
+.reply-schedule-picker {
+  margin: 16px 0;
+}
+.reply-decision input,
+.reply-schedule-picker input {
+  width: 100%;
+  min-width: 0;
+}
+.reply-decision summary {
+  cursor: pointer;
+}
+.reply-decision[open] summary {
+  margin-bottom: 12px;
+}
 .reply-audit {
   margin-top: 8px;
 }

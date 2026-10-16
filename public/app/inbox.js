@@ -60,6 +60,16 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     handoff_identity_unverified: "이 대화와 댓글 사용자의 연결을 확인할 수 없습니다.",
     handoff_conflict: "다른 요청으로 상담 상태가 바뀌었습니다. 새로고침해 주세요.",
     reply_window_closed: "최근 텍스트 DM으로 열린 답장 가능 시간이 끝났거나 확인되지 않습니다.",
+    recipient_opted_out: "수신 거부가 기록되어 메시지를 보내지 않았습니다.",
+    consent_unavailable: "수신 동의를 확인하지 못해 발송을 보류했습니다. 잠시 후 다시 검사합니다.",
+    scheduled_actor_unavailable: "예약한 멤버에게 현재 작업 공간의 답장 권한이 없어 발송을 차단했습니다.",
+    scheduled_not_due: "예약한 시각을 기다리고 있습니다.",
+    invalid_reply_schedule: "예약 날짜와 시각을 확인해 주세요.",
+    reply_schedule_out_of_range: "현재보다 1분 이상 뒤이며 답장 가능 시간이 끝나기 전인 시각을 선택해 주세요.",
+    reply_schedule_timezone_changed: "작업 공간 시간대가 바뀌었습니다. 표시된 시간대로 예약 시각을 다시 선택해 주세요.",
+    reply_schedule_conflict: "다른 요청으로 예약이 바뀌었습니다. 입력은 보존했으니 최신 예약을 확인해 주세요.",
+    reply_schedule_not_pending: "이미 처리 중이거나 끝난 예약입니다. 발신 이력을 확인해 주세요.",
+    reply_schedule_forbidden: "직접 만든 예약 또는 관리자 권한이 있는 예약만 수정·취소할 수 있습니다.",
     invalid_recipient: "이 사용자에게 답장을 보낼 수 없습니다.",
     reply_not_retryable: "안전하게 다시 예약할 수 없거나 이미 재예약한 메시지입니다.",
     reply_not_unresolved: "이미 검토를 마쳤거나 검토 대상이 아닌 메시지입니다.",
@@ -1080,10 +1090,30 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     const textarea = byId("inbox-reply-text");
     if (textarea.value !== state.draft) textarea.value = state.draft;
     textarea.disabled = state.busy || Boolean(state.operation);
+    const timing = byId("inbox-send-timing"),
+      schedule = byId("inbox-schedule-local");
+    timing.value = state.scheduleEnabled ? "later" : "now";
+    timing.disabled = state.busy || Boolean(state.operation);
+    byId("inbox-schedule-fields").hidden = !state.scheduleEnabled;
+    if (schedule.value !== state.scheduleLocal) schedule.value = state.scheduleLocal;
+    schedule.required = state.scheduleEnabled;
+    schedule.disabled = !state.scheduleEnabled || state.busy || Boolean(state.operation);
+    byId("inbox-schedule-help").textContent =
+      `${state.scheduleZone || getTimeZone()} 기준 · 1분 이후부터 답장 가능 시간이 끝나기 전까지 선택하세요. 예약 시각에도 발송 조건을 다시 확인합니다.`;
     byId("inbox-reply-count").textContent = `${state.draft.length} / 1,000`;
     byId("inbox-send").disabled =
-      state.busy || state.loading || Boolean(state.operation) || blocked || !state.draft.trim();
-    byId("inbox-send").textContent = state.busy && state.operation?.kind === "create" ? "접수 중…" : "답장 예약";
+      state.busy ||
+      state.loading ||
+      Boolean(state.operation) ||
+      blocked ||
+      !state.draft.trim() ||
+      (state.scheduleEnabled && !state.scheduleLocal);
+    byId("inbox-send").textContent =
+      state.busy && state.operation?.kind === "create"
+        ? "접수 중…"
+        : state.scheduleEnabled
+          ? "시각 지정 예약"
+          : "지금 보내기";
     byId("inbox-composer").setAttribute("aria-busy", String(state.busy));
     byId("inbox-reply-status").textContent =
       state.notice || (state.draft ? "작성 중 · 초안은 이 대화에 보관됩니다." : "문구를 작성한 뒤 답장을 예약하세요.");
@@ -1119,7 +1149,11 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     byId("inbox-older").disabled = state.loading;
     byId("inbox-older").hidden = !state.beforeMessages && !state.beforeReplies;
     for (const button of byId("inbox-messages").querySelectorAll("button[data-mutation]"))
-      button.disabled = state.busy || Boolean(state.operation) || (button.dataset.mutation === "retry" && blocked);
+      button.disabled =
+        button.dataset.unavailable === "true" ||
+        state.busy ||
+        Boolean(state.operation) ||
+        (["retry", "reschedule"].includes(button.dataset.mutation) && blocked);
     for (const item of byId("inbox-messages").querySelectorAll("[data-reply-id]"))
       for (const input of item.querySelectorAll("textarea, input"))
         input.disabled = state.operation?.replyId === item.dataset.replyId;
@@ -1129,11 +1163,12 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     const item = node("article", "", "inbox-message outgoing-message");
     item.dataset.replyId = reply.id;
     const labels = {
-      pending: "예약됨",
+      pending: reply.scheduled_at ? "예약 대기" : "발송 대기",
       sending: "발송 중",
       sent: "발송 완료",
       failed: "발송 거부",
       unknown: "확인 필요",
+      cancelled: "예약 취소",
     };
     const label =
       reply.status === "unknown" && reply.resolved_at
@@ -1147,6 +1182,16 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         `hint ${["failed", "unknown"].includes(reply.status) ? "reply-warning" : ""}`,
       ),
     );
+    if (reply.scheduled_at) {
+      item.append(
+        node(
+          "p",
+          `예정 · ${reminderLabel(wallClock(Date.parse(reply.scheduled_at), reply.schedule_time_zone))} (${reply.schedule_time_zone})`,
+          "hint",
+        ),
+      );
+      scheduledReplyActions(state, reply, item);
+    }
     if (reply.failure_code) item.append(node("p", failure(reply.failure_code), "hint"));
     if (reply.status === "unknown" && !reply.resolved_at)
       item.append(
@@ -1221,18 +1266,137 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         deferred: "검사 지연",
         unknown: "결과 확인 필요",
         no_retry: "재전송 없이 검토 완료",
+        rescheduled: "예약 수정",
+        cancelled: "예약 취소",
       };
       for (const event of reply.events)
         details.append(
           node(
             "p",
-            `${date(event.created_at)} · ${titles[event.kind] || "처리 기록"}${event.reason ? ` · ${event.reason}` : ""}`,
+            `${date(event.created_at)} · ${titles[event.kind] || "처리 기록"}${event.scheduled_at ? ` · 예정 ${date(event.scheduled_at)}` : ""}${event.reason ? ` · ${event.reason}` : ""}`,
             "hint",
           ),
         );
       item.append(details);
     }
     return item;
+  }
+
+  function scheduledReplyActions(state, reply, item) {
+    const session = epoch;
+    const allowed = isAdmin() || reply.created_by === getUserId();
+    const saved = state.scheduleEdits.get(reply.id);
+    if ((!allowed || reply.status !== "pending") && !saved) return;
+    const zone = getTimeZone() || "Asia/Seoul";
+    const draft = saved || {
+      text: reply.text,
+      local: wallClock(Date.parse(reply.scheduled_at), zone),
+      zone,
+      version: reply.schedule_version,
+    };
+    const unavailable =
+      !allowed || reply.status !== "pending" || draft.version !== reply.schedule_version || draft.zone !== zone;
+    const details = node("details", "", "reply-decision");
+    details.open = Boolean(saved);
+    details.append(node("summary", "예약 수정·취소"));
+    details.addEventListener("toggle", () => {
+      if (details.isConnected && current(state, session) && details.open && !state.scheduleEdits.has(reply.id))
+        state.scheduleEdits.set(reply.id, draft);
+    });
+    const form = node("form");
+    const text = node("textarea"),
+      local = node("input");
+    text.id = `schedule-text-${reply.id}`;
+    text.rows = 3;
+    text.maxLength = 1000;
+    text.required = true;
+    text.value = draft.text;
+    local.id = `schedule-time-${reply.id}`;
+    local.type = "datetime-local";
+    local.required = true;
+    local.value = draft.local;
+    const textLabel = node("label", "예약 메시지"),
+      timeLabel = node("label", `예약 시각 · ${draft.zone}`);
+    textLabel.htmlFor = text.id;
+    timeLabel.htmlFor = local.id;
+    const remember = () => {
+      draft.text = text.value;
+      draft.local = local.value;
+      state.scheduleEdits.set(reply.id, draft);
+    };
+    text.addEventListener("input", remember);
+    local.addEventListener("input", remember);
+    local.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") event.preventDefault();
+    });
+    form.append(textLabel, text, timeLabel, local);
+    if (unavailable)
+      form.append(
+        node(
+          "p",
+          "예약 상태나 시간대가 바뀌었습니다. 입력은 보존했습니다. 최신 예약을 다시 확인한 뒤 편집해 주세요.",
+          "hint reply-warning",
+        ),
+      );
+    const actions = node("div", "", "composer-actions");
+    const save = node("button", "예약 수정", "secondary"),
+      cancel = node("button", "예약 취소", "secondary"),
+      reset = node("button", "최신 예약으로 다시 편집", "secondary");
+    save.type = "submit";
+    save.dataset.mutation = "reschedule";
+    save.dataset.unavailable = String(unavailable);
+    cancel.type = "button";
+    cancel.dataset.mutation = "cancel";
+    cancel.dataset.unavailable = String(unavailable);
+    reset.type = "button";
+    reset.dataset.mutation = "schedule-reset";
+    reset.addEventListener("click", () => {
+      if (selected !== state || state.busy || state.operation) return;
+      state.scheduleEdits.delete(reply.id);
+      timeline(state);
+      controls();
+    });
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (
+        selected !== state ||
+        state.busy ||
+        state.operation ||
+        save.disabled ||
+        !form.reportValidity() ||
+        !text.value.trim()
+      )
+        return;
+      remember();
+      void submitOperation(state, {
+        kind: "reschedule",
+        path: `${base(state)}/replies/${reply.id}/schedule`,
+        method: "PATCH",
+        replyId: reply.id,
+        body: {
+          request_key: crypto.randomUUID(),
+          expected_version: draft.version,
+          text: draft.text,
+          schedule_local: draft.local,
+          expected_time_zone: draft.zone,
+        },
+      });
+    });
+    cancel.addEventListener("click", () => {
+      if (selected !== state || state.busy || state.operation || cancel.disabled) return;
+      remember();
+      void submitOperation(state, {
+        kind: "cancel",
+        path: `${base(state)}/replies/${reply.id}/cancel`,
+        method: "POST",
+        replyId: reply.id,
+        body: { request_key: crypto.randomUUID(), expected_version: draft.version },
+      });
+    });
+    actions.append(save, cancel, reset);
+    form.append(actions);
+    details.append(form);
+    item.append(details);
   }
 
   function timeline(state) {
@@ -1344,14 +1508,24 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       await api(operation.path, operation.method, operation.body);
       if (epoch !== session) return;
       state.operation = null;
-      if (operation.kind === "create") state.draft = "";
+      if (operation.kind === "create") {
+        state.draft = "";
+        state.scheduleEnabled = false;
+        state.scheduleLocal = "";
+      }
       if (operation.replyId) state.notes.delete(operation.replyId);
+      if (operation.replyId && ["reschedule", "cancel"].includes(operation.kind))
+        state.scheduleEdits.delete(operation.replyId);
       state.notice =
-        operation.kind === "resolution"
-          ? "검토 결과를 기록했습니다. 메시지는 다시 보내지 않습니다."
-          : operation.kind === "handoff"
-            ? "상담 상태를 변경했습니다."
-            : "예약을 접수했습니다. 발송 완료는 이력에서 확인해 주세요.";
+        operation.kind === "cancel"
+          ? "예약을 취소했습니다. 이 메시지는 보내지 않습니다."
+          : operation.kind === "reschedule"
+            ? "예약을 수정했습니다. 새 예정 시각을 이력에서 확인해 주세요."
+            : operation.kind === "resolution"
+              ? "검토 결과를 기록했습니다. 메시지는 다시 보내지 않습니다."
+              : operation.kind === "handoff"
+                ? "상담 상태를 변경했습니다."
+                : "예약을 접수했습니다. 발송 완료는 이력에서 확인해 주세요.";
     } catch (error) {
       if (epoch !== session) return;
       if (error.status >= 400 && error.status < 500) {
@@ -1362,6 +1536,10 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     } finally {
       if (epoch === session) {
         state.busy = false;
+        if (!state.operation && state.scheduleZone !== getTimeZone()) {
+          state.scheduleLocal = "";
+          state.scheduleZone = getTimeZone();
+        }
         if (selected === state) {
           controls();
           if (!state.operation) await loadConversation();
@@ -1381,6 +1559,10 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       states.set(key, {
         row,
         draft: "",
+        scheduleEnabled: false,
+        scheduleLocal: "",
+        scheduleZone: getTimeZone() || "Asia/Seoul",
+        scheduleEdits: new Map(),
         notes: new Map(),
         messages: new Map(),
         replies: new Map(),
@@ -1559,6 +1741,9 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     ])
       byId(id).textContent = "";
     byId("inbox-reply-text").value = "";
+    byId("inbox-send-timing").value = "now";
+    byId("inbox-schedule-local").value = "";
+    byId("inbox-schedule-fields").hidden = true;
     byId("inbox-note-text").value = "";
     byId("inbox-reminder-editor").reset();
     byId("inbox-reminder-status").textContent = "";
@@ -1687,6 +1872,22 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     stopRuleEdit();
     byId("inbox-label-rules-status").textContent = "";
   });
+  byId("inbox-send-timing").addEventListener("change", (event) => {
+    if (!selected || selected.operation || selected.busy) return;
+    selected.scheduleEnabled = event.target.value === "later";
+    if (selected.scheduleZone !== getTimeZone()) selected.scheduleLocal = "";
+    selected.scheduleZone = getTimeZone();
+    controls();
+  });
+  byId("inbox-schedule-local").addEventListener("input", (event) => {
+    if (!selected || selected.operation || selected.busy) return;
+    selected.scheduleLocal = event.target.value;
+    selected.scheduleZone = getTimeZone();
+    controls();
+  });
+  byId("inbox-schedule-local").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") event.preventDefault();
+  });
   byId("inbox-reply-text").addEventListener("input", (event) => {
     if (selected && !selected.operation && !selected.busy) {
       selected.draft = event.target.value;
@@ -1739,6 +1940,9 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         expected_handoff_version: state.status.handoff_version,
         text: state.draft,
         content_type: "text",
+        ...(state.scheduleEnabled
+          ? { schedule_local: state.scheduleLocal, expected_time_zone: state.scheduleZone }
+          : {}),
       },
     });
   });
@@ -1780,6 +1984,12 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     timeZoneChanged() {
       zoneChanges++;
       for (const state of states.values()) {
+        if (!state.operation) {
+          if (state.scheduleLocal)
+            state.notice = "작업 공간 시간대가 바뀌었습니다. 문구는 보존했으니 예약 시각을 다시 선택해 주세요.";
+          state.scheduleLocal = "";
+          state.scheduleZone = getTimeZone();
+        }
         if (reminderDirty(state))
           state.reminderNotice =
             "작업 공간 시간대가 바뀌어 편집하던 리마인더를 지웠습니다. 새 시간대로 다시 정해 주세요.";
@@ -1797,6 +2007,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       [...states.values()].some(
         (state) =>
           state.draft ||
+          state.scheduleLocal ||
+          state.scheduleEdits.size ||
           state.operation ||
           state.memoDraft.trim() ||
           state.labelDraft ||

@@ -481,6 +481,9 @@ test("handoff migration replays with active state and resume survives deleted DM
   const migration = await readFile(new URL("../../db/migrations/013_inbox_handoffs.sql", import.meta.url), "utf8");
   await pool.query(migration);
   await pool.query(await readFile(new URL("../../db/migrations/014_manual_replies.sql", import.meta.url), "utf8"));
+  await pool.query(
+    await readFile(new URL("../../db/migrations/049_inbox_scheduled_replies.sql", import.meta.url), "utf8"),
+  );
   await readyHandoff();
   assert.equal((await setHandoff(true, 0)).status, 200);
   await pool.query(migration);
@@ -2408,6 +2411,559 @@ async function readyManual() {
   assert.equal((await setHandoff(true, 0)).status, 200);
   await pool.query("UPDATE instagram_connections SET send_enabled=true WHERE id=$1", [connectionId]);
 }
+
+async function scheduleLocal(minutes = 60) {
+  return (
+    await pool.query(
+      `SELECT to_char((clock_timestamp()+$2::int*interval '1 minute') AT TIME ZONE w.time_zone,'YYYY-MM-DD"T"HH24:MI') AS local
+       FROM workspaces w JOIN instagram_connections c ON c.workspace_id=w.id WHERE c.id=$1`,
+      [connectionId, minutes],
+    )
+  ).rows[0].local as string;
+}
+
+test("scheduled manual reply preserves its instant and does not block a later immediate reply", async () => {
+  const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
+  await readyManual();
+  const body = { ...manualBody, expected_time_zone: "Asia/Seoul", schedule_local: await scheduleLocal() };
+  const responses = await Promise.all([manualRequest("POST", "", body), manualRequest("POST", "", body)]);
+  assert.deepEqual(
+    responses.map((r) => r.status),
+    [202, 202],
+  );
+  const [first, duplicate] = await Promise.all(responses.map((r) => r.json()));
+  assert.equal(first.id, duplicate.id);
+  assert.equal(first.schedule_time_zone, "Asia/Seoul");
+  assert.equal(first.schedule_version, 1);
+  assert.ok(Date.parse(first.scheduled_at) > Date.now());
+  await pool.query(
+    "UPDATE workspaces SET time_zone='America/New_York' WHERE id=(SELECT workspace_id FROM instagram_connections WHERE id=$1)",
+    [connectionId],
+  );
+  assert.equal((await (await manualRequest("POST", "", body)).json()).scheduled_at, first.scheduled_at);
+  const changedZone = await manualRequest("POST", "", { ...body, request_key: randomUUID() });
+  assert.equal(changedZone.status, 409);
+  assert.equal((await changedZone.json()).error, "reply_schedule_timezone_changed");
+  const sent: string[] = [];
+  const transport = {
+    verifyAccount: async () => true,
+    send: async (_r: string, text: string) => {
+      sent.push(text);
+      return { messageId: "scheduled-test" };
+    },
+  };
+  assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), false);
+  assert.equal(
+    (await manualRequest("POST", "", { ...manualBody, request_key: randomUUID(), text: "Immediate" })).status,
+    202,
+  );
+  assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), true);
+  assert.deepEqual(sent, ["Immediate"]);
+  await pool.query("UPDATE instagram_manual_replies SET next_attempt_at=now()-interval '1 minute' WHERE id=$1", [
+    first.id,
+  ]);
+  assert.equal(
+    await processNextManualReply(pool, connectionId, transport, "encrypted-test"),
+    false,
+    "retry time cannot bypass the scheduled instant",
+  );
+  await pool.query("UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute' WHERE id=$1", [
+    first.id,
+  ]);
+  assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), true);
+  assert.deepEqual(sent, ["Immediate", manualBody.text]);
+});
+
+test("scheduled manual reply waits for a later bypassing unknown reply to be resolved", async () => {
+  const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
+  await readyManual();
+  const scheduled = await (
+    await manualRequest("POST", "", {
+      ...manualBody,
+      expected_time_zone: "Asia/Seoul",
+      schedule_local: await scheduleLocal(),
+    })
+  ).json();
+  const immediate = await (
+    await manualRequest("POST", "", { ...manualBody, request_key: randomUUID(), text: "Immediate" })
+  ).json();
+  const attempted: string[] = [];
+  const transport = {
+    verifyAccount: async () => true,
+    send: async (_recipient: string, text: string) => {
+      attempted.push(text);
+      if (text === "Immediate") throw new Error("ambiguous provider response");
+      return { messageId: "scheduled-after-resolution" };
+    },
+  };
+  assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), true);
+  assert.equal(
+    (await pool.query("SELECT status FROM instagram_manual_replies WHERE id=$1", [immediate.id])).rows[0].status,
+    "unknown",
+  );
+  await pool.query(
+    "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
+    [scheduled.id],
+  );
+  assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), false);
+  assert.deepEqual(attempted, ["Immediate"]);
+  assert.equal(
+    (
+      await manualRequest("POST", `/${immediate.id}/resolution`, {
+        request_key: randomUUID(),
+        decision: "no_retry",
+        reason: "Reviewed the ambiguous immediate send",
+      })
+    ).status,
+    200,
+  );
+  assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), true);
+  assert.deepEqual(attempted, ["Immediate", manualBody.text]);
+});
+
+test("scheduled manual reply rejects invalid wall times and times outside the current reply window", async () => {
+  await readyManual();
+  for (const schedule_local of [
+    null,
+    42,
+    "",
+    "2026-02-30T12:00",
+    "2026-10-16T24:00",
+    "2026-10-16T12:00Z",
+    await scheduleLocal(0),
+    await scheduleLocal(1441),
+  ]) {
+    assert.equal(
+      (await manualRequest("POST", "", { ...manualBody, schedule_local, expected_time_zone: "Asia/Seoul" })).status,
+      400,
+      String(schedule_local),
+    );
+  }
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_replies")).rows[0].count, "0");
+  const body = { ...manualBody, expected_time_zone: "Asia/Seoul", schedule_local: await scheduleLocal() };
+  assert.equal((await manualRequest("POST", "", body, b)).status, 404);
+  assert.equal((await manualRequest("POST", "", body, a, "false")).status, 409);
+  await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours'");
+  assert.equal((await manualRequest("POST", "", body)).status, 409);
+});
+
+test("scheduled manual reply changes are versioned idempotent scoped and cancelled without a send", async () => {
+  const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
+  await readyManual();
+  const reply = await (
+    await manualRequest("POST", "", {
+      ...manualBody,
+      expected_time_zone: "Asia/Seoul",
+      schedule_local: await scheduleLocal(),
+    })
+  ).json();
+  const edit = {
+    request_key: randomUUID(),
+    expected_version: 1,
+    text: "Revised",
+    expected_time_zone: "Asia/Seoul",
+    schedule_local: await scheduleLocal(90),
+  };
+  const agent = { id: "44444444-4444-4444-8444-444444444444", email: "agent@example.test" };
+  await pool.query(
+    "INSERT INTO workspace_members(user_id,workspace_id,role) SELECT $1,workspace_id,'agent' FROM instagram_connections WHERE id=$2",
+    [agent.id, connectionId],
+  );
+  assert.equal((await manualRequest("PATCH", `/${reply.id}/schedule`, edit, agent)).status, 403);
+  assert.equal((await manualRequest("PATCH", `/${reply.id}/schedule`, edit, b)).status, 404);
+  const edited = await manualRequest("PATCH", `/${reply.id}/schedule`, edit);
+  assert.equal(edited.status, 200);
+  assert.equal((await edited.json()).schedule_version, 2);
+  assert.equal((await manualRequest("PATCH", `/${reply.id}/schedule`, edit)).status, 200);
+  assert.equal((await manualRequest("PATCH", `/${reply.id}/schedule`, { ...edit, text: "Key reuse" })).status, 409);
+  assert.equal(
+    (await manualRequest("PATCH", `/${reply.id}/schedule`, { ...edit, request_key: randomUUID() })).status,
+    409,
+  );
+  const cancel = { request_key: randomUUID(), expected_version: 2 };
+  await pool.query("UPDATE instagram_connections SET send_enabled=false WHERE id=$1", [connectionId]);
+  const cancelled = await manualRequest("POST", `/${reply.id}/cancel`, cancel, a, "false");
+  assert.equal(cancelled.status, 200);
+  assert.equal((await cancelled.json()).status, "cancelled");
+  assert.equal((await manualRequest("POST", `/${reply.id}/cancel`, cancel)).status, 200);
+  assert.equal(
+    (await manualRequest("PATCH", `/${reply.id}/schedule`, { ...edit, request_key: randomUUID(), expected_version: 3 }))
+      .status,
+    409,
+  );
+  assert.deepEqual(
+    (await pool.query("SELECT kind FROM instagram_manual_reply_events ORDER BY created_at,id")).rows.map((r) => r.kind),
+    ["queued", "rescheduled", "cancelled"],
+  );
+  assert.equal(
+    await processNextManualReply(
+      pool,
+      connectionId,
+      {
+        verifyAccount: async () => {
+          assert.fail("cancelled row verified");
+        },
+        send: async () => {
+          assert.fail("cancelled row sent");
+        },
+      },
+      "encrypted-test",
+    ),
+    false,
+  );
+  const history = await (await manualRequest("GET")).json();
+  assert.equal(history.replies[0].schedule_version, 3);
+  assert.equal(history.replies[0].events.at(-1).kind, "cancelled");
+});
+
+test("scheduled manual reply creation replay survives a later edit and cancellation", async () => {
+  await readyManual();
+  const original = { ...manualBody, schedule_local: await scheduleLocal(), expected_time_zone: "Asia/Seoul" };
+  const created = await (await manualRequest("POST", "", original)).json();
+  assert.equal(
+    (
+      await manualRequest("PATCH", `/${created.id}/schedule`, {
+        request_key: randomUUID(),
+        expected_version: 1,
+        text: "Changed after acceptance",
+        schedule_local: await scheduleLocal(10),
+        expected_time_zone: "Asia/Seoul",
+      })
+    ).status,
+    200,
+  );
+  const replay = await manualRequest("POST", "", original);
+  assert.equal(replay.status, 202);
+  assert.equal((await replay.json()).text, "Changed after acceptance");
+  assert.equal((await manualRequest("POST", "", { ...original, text: "Changed after acceptance" })).status, 409);
+  assert.equal(
+    (await manualRequest("POST", `/${created.id}/cancel`, { request_key: randomUUID(), expected_version: 2 })).status,
+    200,
+  );
+  await pool.query(
+    "UPDATE workspaces SET time_zone='UTC' WHERE id=(SELECT workspace_id FROM instagram_connections WHERE id=$1)",
+    [connectionId],
+  );
+  const cancelledReplay = await manualRequest("POST", "", original);
+  assert.equal(cancelledReplay.status, 202);
+  assert.equal((await cancelledReplay.json()).status, "cancelled");
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_manual_replies")).rows[0].count, 1);
+});
+
+test("scheduled manual reply rechecks removed creators at the final provider guard", async () => {
+  const { processNextManualReply, assertManualReplyAllowed } = await import("../instagram/manual-reply-worker.ts");
+  await readyManual();
+  const creator = { id: "44444444-4444-4444-8444-444444444444", email: "creator@example.test" };
+  await pool.query(
+    "INSERT INTO workspace_members(user_id,workspace_id,role) SELECT $1,workspace_id,'agent' FROM instagram_connections WHERE id=$2",
+    [creator.id, connectionId],
+  );
+  const response = await manualRequest(
+    "POST",
+    "",
+    { ...manualBody, expected_time_zone: "Asia/Seoul", schedule_local: await scheduleLocal() },
+    creator,
+  );
+  assert.equal(response.status, 202);
+  const reply = await response.json();
+  await pool.query(
+    "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
+    [reply.id],
+  );
+  let posts = 0;
+  assert.equal(
+    await processNextManualReply(
+      pool,
+      connectionId,
+      {
+        verifyAccount: async () => true,
+        async send(_recipient, _text, context) {
+          await pool.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [
+            creator.id,
+            a.id,
+          ]);
+          await assertManualReplyAllowed(pool, context!.replyId, context!.attemptId, connectionId, "encrypted-test");
+          posts++;
+          return { messageId: "must-not-send" };
+        },
+      },
+      "encrypted-test",
+    ),
+    true,
+  );
+  assert.equal(posts, 0);
+  assert.deepEqual(
+    (await pool.query("SELECT status,failure_code FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0],
+    { status: "failed", failure_code: "scheduled_actor_unavailable" },
+  );
+  assert.equal(await processNextManualReply(pool, connectionId, null, "encrypted-test"), false);
+});
+
+test("scheduled manual reply claim prevents edit or cancellation while provider verification is in flight", async () => {
+  const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
+  await readyManual();
+  const reply = await (
+    await manualRequest("POST", "", {
+      ...manualBody,
+      expected_time_zone: "Asia/Seoul",
+      schedule_local: await scheduleLocal(),
+    })
+  ).json();
+  await pool.query(
+    "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
+    [reply.id],
+  );
+  let entered!: () => void, release!: () => void;
+  const admission = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let posts = 0;
+  const worker = processNextManualReply(
+    pool,
+    connectionId,
+    {
+      async verifyAccount() {
+        entered();
+        await gate;
+        return true;
+      },
+      async send() {
+        posts++;
+        return { messageId: "already-claimed" };
+      },
+    },
+    "encrypted-test",
+  );
+  try {
+    assert.equal(await Promise.race([admission.then(() => true), worker.then(() => false)]), true);
+    assert.equal(
+      (await manualRequest("POST", `/${reply.id}/cancel`, { request_key: randomUUID(), expected_version: 1 })).status,
+      409,
+    );
+    assert.equal(
+      (
+        await manualRequest("PATCH", `/${reply.id}/schedule`, {
+          request_key: randomUUID(),
+          expected_version: 1,
+          text: "Changed",
+          expected_time_zone: "Asia/Seoul",
+          schedule_local: await scheduleLocal(),
+        })
+      ).status,
+      409,
+    );
+  } finally {
+    release();
+    await worker;
+  }
+  assert.equal(posts, 1);
+  assert.equal(
+    (await pool.query("SELECT text FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0].text,
+    manualBody.text,
+  );
+});
+
+for (const failureCode of ["reply_window_closed", "handoff_changed", "recipient_opted_out"]) {
+  test(`scheduled manual reply blocks ${failureCode} after verification without a provider POST`, async () => {
+    const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
+    await readyManual();
+    const response = await manualRequest("POST", "", {
+      ...manualBody,
+      expected_time_zone: "Asia/Seoul",
+      schedule_local: await scheduleLocal(),
+    });
+    assert.equal(response.status, 202);
+    const reply = await response.json();
+    await pool.query(
+      "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
+      [reply.id],
+    );
+    let posts = 0;
+    await processNextManualReply(
+      pool,
+      connectionId,
+      {
+        async verifyAccount() {
+          if (failureCode === "reply_window_closed")
+            await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours'");
+          else if (failureCode === "handoff_changed") assert.equal((await setHandoff(false, 1)).status, 200);
+          else
+            await recordChannelConsentEvent(pool, {
+              requestKey: randomUUID(),
+              workspaceId: await ensureWorkspace(pool, a),
+              connectionId,
+              channel: "instagram",
+              identityKind: "dm_recipient",
+              identityValue: "456",
+              purpose: "service_reply",
+              decision: "revoke",
+              evidenceKind: "explicit",
+              evidenceReference: "scheduled test opt-out",
+              occurredAt: new Date(),
+              actorId: a.id,
+            });
+          return true;
+        },
+        async send() {
+          posts++;
+          return { messageId: "must-not-send" };
+        },
+      },
+      "encrypted-test",
+    );
+    assert.equal(posts, 0);
+    assert.deepEqual(
+      (await pool.query("SELECT status,failure_code FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0],
+      { status: "failed", failure_code: failureCode },
+    );
+    assert.equal(await processNextManualReply(pool, connectionId, null, "encrypted-test"), false);
+  });
+}
+
+test("scheduled manual reply permits its creator and administrators and keeps valid agent permission", async () => {
+  const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
+  await readyManual();
+  const creator = { id: "44444444-4444-4444-8444-444444444444", email: "creator@example.test" };
+  await pool.query(
+    "INSERT INTO workspace_members(user_id,workspace_id,role) SELECT $1,workspace_id,'admin' FROM instagram_connections WHERE id=$2",
+    [creator.id, connectionId],
+  );
+  const reply = await (
+    await manualRequest(
+      "POST",
+      "",
+      { ...manualBody, expected_time_zone: "Asia/Seoul", schedule_local: await scheduleLocal() },
+      creator,
+    )
+  ).json();
+  const body = {
+    request_key: randomUUID(),
+    expected_version: 1,
+    text: "Creator edit",
+    expected_time_zone: "Asia/Seoul",
+    schedule_local: await scheduleLocal(90),
+  };
+  assert.equal((await manualRequest("PATCH", `/${reply.id}/schedule`, body, creator)).status, 200);
+  assert.equal(
+    (
+      await manualRequest("PATCH", `/${reply.id}/schedule`, {
+        ...body,
+        request_key: randomUUID(),
+        expected_version: 2,
+        text: "Admin edit",
+      })
+    ).status,
+    200,
+  );
+  await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [creator.id]);
+  await pool.query(
+    "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
+    [reply.id],
+  );
+  let posts = 0;
+  assert.equal(
+    await processNextManualReply(
+      pool,
+      connectionId,
+      {
+        verifyAccount: async () => true,
+        send: async (_recipient, text) => {
+          posts++;
+          assert.equal(text, "Admin edit");
+          return { messageId: "agent-still-authorized" };
+        },
+      },
+      "encrypted-test",
+    ),
+    true,
+  );
+  assert.equal(posts, 1);
+});
+
+test("scheduled manual reply edit and cancel race has one version winner", async () => {
+  await readyManual();
+  const reply = await (
+    await manualRequest("POST", "", {
+      ...manualBody,
+      expected_time_zone: "Asia/Seoul",
+      schedule_local: await scheduleLocal(),
+    })
+  ).json();
+  const edit = {
+    request_key: randomUUID(),
+    expected_version: 1,
+    text: "Concurrent edit",
+    expected_time_zone: "Asia/Seoul",
+    schedule_local: await scheduleLocal(90),
+  };
+  const results = await Promise.all([
+    manualRequest("PATCH", `/${reply.id}/schedule`, edit),
+    manualRequest("POST", `/${reply.id}/cancel`, { request_key: randomUUID(), expected_version: 1 }),
+  ]);
+  assert.deepEqual(results.map((r) => r.status).sort(), [200, 409]);
+  assert.equal(
+    (await pool.query("SELECT schedule_version FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0]
+      .schedule_version,
+    2,
+  );
+  assert.equal(
+    (await pool.query("SELECT count(*)::int AS count FROM instagram_manual_reply_events WHERE reply_id=$1", [reply.id]))
+      .rows[0].count,
+    2,
+  );
+});
+
+test("scheduled manual reply migration export and workspace deletion preserve the complete lifecycle", async () => {
+  const { exportWorkspace } = await import("./workspace-export.ts");
+  await readyManual();
+  const reply = await (
+    await manualRequest("POST", "", {
+      ...manualBody,
+      expected_time_zone: "Asia/Seoul",
+      schedule_local: await scheduleLocal(),
+    })
+  ).json();
+  assert.equal(
+    (await manualRequest("POST", `/${reply.id}/cancel`, { request_key: randomUUID(), expected_version: 1 })).status,
+    200,
+  );
+  const before = (await pool.query("SELECT * FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0];
+  const migration = await readFile(
+    new URL("../../db/migrations/049_inbox_scheduled_replies.sql", import.meta.url),
+    "utf8",
+  );
+  await pool.query(migration);
+  await pool.query(migration);
+  assert.deepEqual(
+    (await pool.query("SELECT * FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0],
+    before,
+  );
+  const exported = JSON.parse((await exportWorkspace(pool, a)).body);
+  assert.equal(exported.tables.instagram_manual_replies[0].status, "cancelled");
+  assert.equal(exported.tables.instagram_manual_replies[0].schedule_time_zone, "Asia/Seoul");
+  assert.ok(
+    exported.tables.instagram_manual_reply_events.some((event: { kind: string }) => event.kind === "cancelled"),
+  );
+  const workspace = await ensureWorkspace(pool, a);
+  await pool.query(
+    "UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1",
+    [connectionId],
+  );
+  const deleted = (await pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [workspace, a.id])).rows[0]
+    .result;
+  assert.equal(deleted.deleted_counts.instagram_manual_replies, 1);
+  assert.equal(
+    (
+      await pool.query("SELECT count(*)::int AS count FROM instagram_manual_reply_events WHERE workspace_id=$1", [
+        workspace,
+      ])
+    ).rows[0].count,
+    0,
+  );
+});
 
 test("manual reply capabilities describe support without overriding current eligibility", async () => {
   await readyManual();

@@ -103,6 +103,9 @@ export async function assertManualReplyAllowed(
 ): Promise<void> {
   const result = await pool.query(
     `SELECT r.workspace_id,r.connection_id,r.recipient_id,r.handoff_version,
+      (r.scheduled_at IS NULL OR EXISTS(SELECT 1 FROM workspace_members member WHERE member.workspace_id=r.workspace_id
+        AND member.user_id=r.created_by AND member.removed_at IS NULL AND member.role IN ('owner','admin','agent'))) AS actor_allowed,
+      (r.scheduled_at IS NULL OR r.scheduled_at<=clock_timestamp()) AS schedule_due,
       c.access_token_encrypted IS DISTINCT FROM $4::text AS token_changed,
       c.active AND c.send_enabled AND c.token_expires_at>clock_timestamp() AS token_rotation_retryable
     FROM instagram_manual_replies r JOIN instagram_connections c ON c.id=r.connection_id AND c.workspace_id=r.workspace_id
@@ -111,6 +114,8 @@ export async function assertManualReplyAllowed(
   );
   const row = result.rows[0];
   if (!row) throw new PreSendVerificationError("block", "delivery_changed");
+  if (!row.actor_allowed) throw new PreSendVerificationError("block", "scheduled_actor_unavailable");
+  if (!row.schedule_due) throw new PreSendVerificationError("retry", "scheduled_not_due");
   if (row.token_changed)
     throw row.token_rotation_retryable
       ? new PreSendVerificationError("retry", "token_rotated")
@@ -136,9 +141,13 @@ export async function processNextManualReply(
     const result = await client.query(
       `SELECT r.* FROM instagram_manual_replies r JOIN instagram_connections c ON c.id=r.connection_id AND c.workspace_id=r.workspace_id
       WHERE r.connection_id=$1 AND r.status='pending' AND r.next_attempt_at<=clock_timestamp()
+        AND (r.scheduled_at IS NULL OR r.scheduled_at<=clock_timestamp())
         AND (c.send_paused_until IS NULL OR c.send_paused_until<=clock_timestamp())
         AND NOT EXISTS(SELECT 1 FROM instagram_manual_replies earlier WHERE earlier.workspace_id=r.workspace_id AND earlier.connection_id=r.connection_id AND earlier.recipient_id=r.recipient_id
-          AND (earlier.created_at,earlier.id)<(r.created_at,r.id) AND (earlier.status IN ('pending','sending') OR (earlier.status='unknown' AND earlier.resolved_at IS NULL)))
+          AND (earlier.status='sending'
+            OR (earlier.status='pending' AND (earlier.created_at,earlier.id)<(r.created_at,r.id)
+              AND (earlier.scheduled_at IS NULL OR earlier.scheduled_at<=clock_timestamp()))
+            OR (earlier.status='unknown' AND earlier.resolved_at IS NULL)))
       ORDER BY r.created_at,r.id FOR UPDATE OF r SKIP LOCKED LIMIT 1`,
       [connection],
     );

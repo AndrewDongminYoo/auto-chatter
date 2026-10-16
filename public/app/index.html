@@ -708,15 +708,27 @@
                     텍스트 답장만 지원합니다. 첨부 파일과 승인 템플릿은 아직 지원하지 않습니다.
                   </p>
                   <div class="composer-footer">
-                    <p id="inbox-reply-help" class="hint">Enter로 줄바꿈 · Ctrl/⌘ + Enter로 예약</p>
+                    <p id="inbox-reply-help" class="hint">Enter로 줄바꿈 · Ctrl/⌘ + Enter로 접수</p>
                     <span id="inbox-reply-count" class="hint">0 / 1,000</span>
+                  </div>
+                  <div class="reply-schedule-picker">
+                    <label for="inbox-send-timing">보낼 시각</label>
+                    <select id="inbox-send-timing">
+                      <option value="now">지금 보내기</option>
+                      <option value="later">시각 지정</option>
+                    </select>
+                    <div id="inbox-schedule-fields" hidden>
+                      <label for="inbox-schedule-local">예약 날짜와 시각</label>
+                      <input id="inbox-schedule-local" type="datetime-local" aria-describedby="inbox-schedule-help" />
+                      <p id="inbox-schedule-help" class="hint"></p>
+                    </div>
                   </div>
                   <p id="inbox-reply-status" class="hint" role="status" aria-live="polite"></p>
                   <div class="composer-actions">
                     <button id="inbox-request-check" type="button" class="secondary" hidden>
                       같은 요청의 접수 확인
                     </button>
-                    <button id="inbox-send" type="submit" disabled>답장 예약</button>
+                    <button id="inbox-send" type="submit" disabled>지금 보내기</button>
                   </div>
                 </form>
                 <section id="inbox-notes" class="inbox-notes" aria-labelledby="inbox-notes-title" hidden>
