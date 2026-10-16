@@ -471,6 +471,8 @@ CREATE TABLE IF NOT EXISTS instagram_inbox_handoff_events (
   FOREIGN KEY(evidence_reply_id,connection_id,workspace_id) REFERENCES private_reply_outbox(id,connection_id,workspace_id),
   CHECK((active AND reason='handoff_started') OR (NOT active AND reason='handoff_resumed'))
 );
+CREATE INDEX IF NOT EXISTS inbox_handoff_events_report_period_idx
+  ON instagram_inbox_handoff_events(workspace_id,created_at,connection_id);
 CREATE TABLE IF NOT EXISTS instagram_manual_replies (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL,

@@ -1926,7 +1926,8 @@ section {
 }
 
 #manual-report-form,
-#flow-report-form {
+#flow-report-form,
+#handoff-report-form {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   align-items: end;
