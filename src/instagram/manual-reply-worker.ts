@@ -144,8 +144,9 @@ export async function processNextManualReply(
         AND (r.scheduled_at IS NULL OR r.scheduled_at<=clock_timestamp())
         AND (c.send_paused_until IS NULL OR c.send_paused_until<=clock_timestamp())
         AND NOT EXISTS(SELECT 1 FROM instagram_manual_replies earlier WHERE earlier.workspace_id=r.workspace_id AND earlier.connection_id=r.connection_id AND earlier.recipient_id=r.recipient_id
-          AND (earlier.created_at,earlier.id)<(r.created_at,r.id) AND (earlier.status='sending'
-            OR (earlier.status='pending' AND (earlier.scheduled_at IS NULL OR earlier.scheduled_at<=clock_timestamp()))
+          AND (earlier.status='sending'
+            OR (earlier.status='pending' AND (earlier.created_at,earlier.id)<(r.created_at,r.id)
+              AND (earlier.scheduled_at IS NULL OR earlier.scheduled_at<=clock_timestamp()))
             OR (earlier.status='unknown' AND earlier.resolved_at IS NULL)))
       ORDER BY r.created_at,r.id FOR UPDATE OF r SKIP LOCKED LIMIT 1`,
       [connection],

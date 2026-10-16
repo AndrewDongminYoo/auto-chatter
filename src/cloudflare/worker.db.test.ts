@@ -2428,6 +2428,55 @@ test("scheduled manual replies wake only when due and leave later immediate repl
   assert.equal(sends, 2);
 });
 
+test("scheduled manual replies wait behind later sending or unknown replies across cron and queue", async () => {
+  const { user, reply } = await manualFixture(true);
+  const { queueManualReply, resolveManualReply } = await import("../app/manual-replies.ts");
+  const immediate = await queueManualReply(
+    pool,
+    user,
+    connectionId,
+    "456",
+    new URLSearchParams(),
+    { request_key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", text: "Immediate response", expected_handoff_version: 1 },
+    true,
+  );
+  let posts = 0;
+  mock.method(globalThis, "fetch", async (_input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method !== "POST") return Response.json({ user_id: "123" });
+    posts++;
+    if (posts === 1) throw new Error("ambiguous provider response");
+    return Response.json({ message_id: "scheduled-after-resolution" });
+  });
+  assert.equal(await consume(), "ack");
+  assert.equal(posts, 1);
+  assert.equal(
+    (await pool.query("SELECT status FROM instagram_manual_replies WHERE id=$1", [immediate.id])).rows[0].status,
+    "unknown",
+  );
+  await pool.query(
+    "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
+    [reply.id],
+  );
+  for (const status of ["sending", "unknown"]) {
+    await pool.query("UPDATE instagram_manual_replies SET status=$2 WHERE id=$1", [immediate.id, status]);
+    published = [];
+    await worker.scheduled(null, env);
+    assert.deepEqual(published, [], status);
+    assert.equal(await consume(), "ack");
+    assert.equal(posts, 1);
+  }
+  await resolveManualReply(pool, user, connectionId, "456", immediate.id, new URLSearchParams(), {
+    request_key: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    decision: "no_retry",
+    reason: "Reviewed the ambiguous send",
+  });
+  published = [];
+  await worker.scheduled(null, env);
+  assert.deepEqual(published, [{ connectionId }]);
+  assert.equal(await consume(), "ack");
+  assert.equal(posts, 2);
+});
+
 test("scheduled manual reply rejects a removed creator in the Cloudflare provider guard", async () => {
   const { user, reply } = await manualFixture(true);
   await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [user.id]);

@@ -27,12 +27,12 @@ Node 환경 변수 토큰 워커, 첨부 파일, Human Agent 확장 창, 미확�
 ## 워커와 결과
 
 발신 행과 예약 감사 기록은 하나의 트랜잭션으로 작성합니다.
-같은 대화의 가장 오래된 미해결 행만 claim합니다.
-앞선 발송 시각이 된 pending·sending·미해결 unknown은 뒤 행을 막으며 다른 대화는 계속 처리합니다.
+같은 대화에서 발송 시각이 된 pending은 생성 순서대로 claim합니다.
+sending·미해결 unknown은 생성 순서와 관계없이 같은 대화의 다른 행을 막으며 다른 대화는 계속 처리합니다.
 미래 시각의 예약 pending은 뒤에 접수한 즉시 답장을 막지 않습니다.
 [일회성 예약 답장](2026-10-16-inbox-scheduled-replies.md)은 현재 API에 `schedule_local`·`expected_time_zone`을 함께 추가하며, 예정 시각 전에는 claim하지 않습니다.
 생성자 또는 owner/admin만 pending 예약을 버전 검사 후 수정·취소할 수 있고, 워커는 예약 생성자의 현재 멤버십도 실제 POST 직전에 다시 검사합니다.
-`FOR UPDATE SKIP LOCKED`와 앞선 행 존재 조건을 함께 사용하며 대화당 sending 행 하나를 DB 고유 인덱스로 제한합니다.
+`FOR UPDATE SKIP LOCKED`와 대화별 차단 조건을 함께 사용하며 대화당 sending 행 하나를 DB 고유 인덱스로 제한합니다.
 정책을 먼저 검사해 만료된 작업이 실패한 조회를 계속 반복하지 않게 합니다.
 발송 전에 토큰의 `/me?fields=user_id`가 저장된 Instagram 계정과 일치하는지 확인합니다.
 실제 POST 직전 claim·현재 상담 버전·파생 중지·식별자 근거·수신 창·연결·동일 암호화 토큰·만료·cooldown을 다시 확인합니다.
@@ -71,7 +71,7 @@ failed이면서 미전송이 확실한 행만 새로운 발신 행으로 연결�
 unknown은 재시도할 수 없습니다.
 
 `POST .../replies/:id/resolution`은 `{request_key, decision:"no_retry", reason}`으로 미해결 unknown의 운영자 결정을 기록합니다.
-상태는 unknown으로 유지하며 resolved_at만 기록해 대화의 뒤 행을 해제합니다.
+상태는 unknown으로 유지하며 resolved_at만 기록해 대화의 대기 행을 해제합니다.
 이는 발송 성공·미전송 증명이나 기존 메시지 재전송 승인이 아닙니다.
 이 기준선에는 공급자 미전송 증명 또는 공급자 idempotency 검증을 통한 unknown 재전송 경로가 없습니다.
 

@@ -58,9 +58,9 @@ WITH metrics AS (
          AND (manual.scheduled_at IS NULL OR manual.scheduled_at<=now())
          AND NOT EXISTS(SELECT 1 FROM instagram_manual_replies earlier WHERE earlier.workspace_id=manual.workspace_id
            AND earlier.connection_id=manual.connection_id AND earlier.recipient_id=manual.recipient_id
-           AND (earlier.created_at,earlier.id)<(manual.created_at,manual.id)
            AND (earlier.status='sending'
-             OR (earlier.status='pending' AND (earlier.scheduled_at IS NULL OR earlier.scheduled_at<=now()))
+             OR (earlier.status='pending' AND (earlier.created_at,earlier.id)<(manual.created_at,manual.id)
+               AND (earlier.scheduled_at IS NULL OR earlier.scheduled_at<=now()))
              OR (earlier.status='unknown' AND earlier.resolved_at IS NULL))))
     ) END AS oldest_due_at,
     (SELECT min(sending.attempt_started_at) FROM (

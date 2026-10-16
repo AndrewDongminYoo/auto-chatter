@@ -121,6 +121,15 @@ test("scheduled manual reply latency skips future reservations without hiding du
   body = await (await health()).json();
   assert.ok(body.connections[0].oldest_due_pending_seconds >= 1200);
   assert.ok(body.connections[0].oldest_due_pending_seconds < 1260);
+  await pool.query("UPDATE instagram_manual_replies SET scheduled_at=now()-interval '25 minutes' WHERE text='future'");
+  for (const status of ["sending", "unknown"]) {
+    await pool.query("UPDATE instagram_manual_replies SET status=$1 WHERE text='immediate'", [status]);
+    body = await (await health()).json();
+    assert.equal(body.connections[0].oldest_due_pending_seconds, null, status);
+  }
+  await pool.query("UPDATE instagram_manual_replies SET resolved_at=now() WHERE text='immediate'");
+  body = await (await health()).json();
+  assert.ok(body.connections[0].oldest_due_pending_seconds >= 1500);
 });
 
 function health(actorId = adminId, env: Record<string, string> = apiEnv) {

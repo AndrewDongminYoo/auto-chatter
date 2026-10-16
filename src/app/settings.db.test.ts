@@ -2474,6 +2474,53 @@ test("scheduled manual reply preserves its instant and does not block a later im
   assert.deepEqual(sent, ["Immediate", manualBody.text]);
 });
 
+test("scheduled manual reply waits for a later bypassing unknown reply to be resolved", async () => {
+  const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
+  await readyManual();
+  const scheduled = await (
+    await manualRequest("POST", "", {
+      ...manualBody,
+      expected_time_zone: "Asia/Seoul",
+      schedule_local: await scheduleLocal(),
+    })
+  ).json();
+  const immediate = await (
+    await manualRequest("POST", "", { ...manualBody, request_key: randomUUID(), text: "Immediate" })
+  ).json();
+  const attempted: string[] = [];
+  const transport = {
+    verifyAccount: async () => true,
+    send: async (_recipient: string, text: string) => {
+      attempted.push(text);
+      if (text === "Immediate") throw new Error("ambiguous provider response");
+      return { messageId: "scheduled-after-resolution" };
+    },
+  };
+  assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), true);
+  assert.equal(
+    (await pool.query("SELECT status FROM instagram_manual_replies WHERE id=$1", [immediate.id])).rows[0].status,
+    "unknown",
+  );
+  await pool.query(
+    "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
+    [scheduled.id],
+  );
+  assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), false);
+  assert.deepEqual(attempted, ["Immediate"]);
+  assert.equal(
+    (
+      await manualRequest("POST", `/${immediate.id}/resolution`, {
+        request_key: randomUUID(),
+        decision: "no_retry",
+        reason: "Reviewed the ambiguous immediate send",
+      })
+    ).status,
+    200,
+  );
+  assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), true);
+  assert.deepEqual(attempted, ["Immediate", manualBody.text]);
+});
+
 test("scheduled manual reply rejects invalid wall times and times outside the current reply window", async () => {
   await readyManual();
   for (const schedule_local of [
