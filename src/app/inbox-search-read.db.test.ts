@@ -573,7 +573,7 @@ test("person deletion removes only that DM recipient's read rows, for every memb
   assert.deepEqual(await readRows(), []);
 });
 
-test("migration 032 replays (with 033 to 035 after it), every deletion function removes read rows, and the export lists the table", async () => {
+test("migration 032 replays (with later deletion migrations), every deletion function removes read rows, and the export lists the table", async () => {
   const functions = async () =>
     (
       await pool.query(
@@ -599,6 +599,10 @@ test("migration 032 replays (with 033 to 035 after it), every deletion function 
     await pool.query(migration);
     for (const sql of later) await pool.query(sql);
   }
+  // Migration 048 is the latest workspace deletion body in the full runner.
+  await pool.query(
+    await readFile(new URL("../../db/migrations/048_workspace_reply_templates.sql", import.meta.url), "utf8"),
+  );
   assert.deepEqual(await functions(), current);
   assert.deepEqual(EXPORTED_TABLES.instagram_inbox_read_state, { scope: "workspace" });
   const foreignKeys = await pool.query(

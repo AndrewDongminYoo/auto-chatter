@@ -14,7 +14,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
   const client = await pool.connect();
   try {
     await client.query(
-      "DROP TABLE IF EXISTS webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_reminder_events, instagram_inbox_reminders, instagram_inbox_notes, instagram_inbox_label_events, instagram_inbox_label_rules, instagram_inbox_conversation_labels, instagram_inbox_labels, instagram_inbox_read_state, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_reminder_events, instagram_inbox_reminders, instagram_inbox_notes, instagram_inbox_label_events, workspace_reply_templates, instagram_inbox_label_rules, instagram_inbox_conversation_labels, instagram_inbox_labels, instagram_inbox_read_state, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await client.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await client.query(
@@ -55,6 +55,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("UPDATE instagram_inbox_label_events SET version=version"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_label_events"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_label_rules"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM workspace_reply_templates"), { code: "42501" });
     await assert.rejects(client.query("UPDATE instagram_inbox_notes SET body=body"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_notes"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_reminders"), { code: "42501" });
@@ -110,6 +111,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
         "instagram_inbox_read_state",
         "instagram_inbox_labels",
         "instagram_inbox_label_rules",
+        "workspace_reply_templates",
         "instagram_inbox_conversation_labels",
         "instagram_inbox_label_events",
         "instagram_inbox_notes",
@@ -220,6 +222,14 @@ test("Supabase roles cannot read product data; the server role has DML without D
       1,
     );
     assert.equal((await client.query("SELECT count(*) FROM channel_consent_state")).rows[0].count, "1");
+    await client.query(
+      "INSERT INTO workspace_reply_templates(workspace_id,name,body,created_by,updated_by) VALUES('11111111-1111-4111-8111-111111111111','Greeting','Hi {{name}}','33333333-3333-4333-8333-333333333333','33333333-3333-4333-8333-333333333333')",
+    );
+    assert.equal(
+      (await client.query("UPDATE workspace_reply_templates SET archived=true,version=version+1")).rowCount,
+      1,
+    );
+    assert.equal((await client.query("SELECT body FROM workspace_reply_templates")).rows[0].body, "Hi {{name}}");
     // The server role writes labels, a label set (whose CHECK calls inbox_label_ids_valid), its audit and a note,
     // and updates the label and the set; the audit and the note stay append-only (checked below).
     await client.query(
@@ -276,6 +286,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("UPDATE instagram_inbox_label_events SET version=version"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_label_events"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_label_rules"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM workspace_reply_templates"), { code: "42501" });
     await assert.rejects(client.query("UPDATE instagram_inbox_notes SET body=body"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_notes"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_reminders"), { code: "42501" });
@@ -419,6 +430,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("UPDATE instagram_inbox_label_events SET version=version"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_label_events"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_label_rules"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM workspace_reply_templates"), { code: "42501" });
     await assert.rejects(client.query("UPDATE instagram_inbox_notes SET body=body"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_notes"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_reminders"), { code: "42501" });
@@ -479,6 +491,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
       "instagram_inbox_read_state",
       "instagram_inbox_labels",
       "instagram_inbox_label_rules",
+      "workspace_reply_templates",
       "instagram_inbox_conversation_labels",
       "instagram_inbox_label_events",
       "instagram_inbox_notes",
@@ -497,9 +510,9 @@ test("Supabase roles cannot read product data; the server role has DML without D
       await client.query(`SELECT * FROM ${table}`);
     await client.query("RESET ROLE");
     const protectedTables = await client.query(
-      "SELECT relname FROM pg_class WHERE relnamespace='public'::regnamespace AND relrowsecurity AND relname IN ('webhook_endpoints','webhook_signing_keys','webhook_deliveries','webhook_redelivery_events','scheduled_steps','workspace_invites','data_deletion_records','flows','flow_versions','flow_runs','flow_step_runs','channel_consent_state','channel_consent_events','instagram_manual_replies','instagram_manual_reply_events','instagram_inbox_handoffs','instagram_inbox_handoff_events','instagram_inbox_conversations','instagram_inbox_conversation_events','instagram_inbox_read_state','instagram_inbox_labels','instagram_inbox_label_rules','instagram_inbox_conversation_labels','instagram_inbox_label_events','instagram_inbox_notes','instagram_inbox_reminders','instagram_inbox_reminder_events','instagram_inbox_messages','instagram_unmatched_replies','instagram_contact_automation','instagram_contact_fields','instagram_contact_field_values','workspaces','workspace_members','instagram_oauth_states','instagram_follow_conversations','instagram_message_receipts','instagram_connections','instagram_comment_rules','instagram_comment_events','private_reply_outbox')",
+      "SELECT relname FROM pg_class WHERE relnamespace='public'::regnamespace AND relrowsecurity AND relname IN ('webhook_endpoints','webhook_signing_keys','webhook_deliveries','webhook_redelivery_events','scheduled_steps','workspace_invites','data_deletion_records','flows','flow_versions','flow_runs','flow_step_runs','channel_consent_state','channel_consent_events','instagram_manual_replies','instagram_manual_reply_events','instagram_inbox_handoffs','instagram_inbox_handoff_events','instagram_inbox_conversations','instagram_inbox_conversation_events','instagram_inbox_read_state','instagram_inbox_labels','instagram_inbox_label_rules','workspace_reply_templates','instagram_inbox_conversation_labels','instagram_inbox_label_events','instagram_inbox_notes','instagram_inbox_reminders','instagram_inbox_reminder_events','instagram_inbox_messages','instagram_unmatched_replies','instagram_contact_automation','instagram_contact_fields','instagram_contact_field_values','workspaces','workspace_members','instagram_oauth_states','instagram_follow_conversations','instagram_message_receipts','instagram_connections','instagram_comment_rules','instagram_comment_events','private_reply_outbox')",
     );
-    assert.equal(protectedTables.rowCount, 41);
+    assert.equal(protectedTables.rowCount, 42);
     // The lists above are written by hand; this reads every public table from the catalog, so a table added to
     // the schema but left out of deploy/supabase-access.sql fails here even if no list above names it.
     const catalog = await client.query<{

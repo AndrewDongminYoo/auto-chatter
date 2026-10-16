@@ -765,7 +765,7 @@ test("person deletion removes only that DM recipient's label sets, audit and not
   assert.equal(await noteCount(), 0);
 });
 
-test("migration 033 replays (with 034 and 035 after it), every deletion function removes label and note rows, and the export lists the tables", async () => {
+test("migration 033 replays (with later deletion migrations), every deletion function removes label and note rows, and the export lists the tables", async () => {
   const functions = async () =>
     (
       await pool.query(
@@ -794,6 +794,10 @@ test("migration 033 replays (with 034 and 035 after it), every deletion function
     await pool.query(migration);
     for (const sql of later) await pool.query(sql);
   }
+  // Migration 048 is the latest workspace deletion body in the full runner.
+  await pool.query(
+    await readFile(new URL("../../db/migrations/048_workspace_reply_templates.sql", import.meta.url), "utf8"),
+  );
   assert.deepEqual(await functions(), current);
   for (const table of [
     "instagram_inbox_labels",
