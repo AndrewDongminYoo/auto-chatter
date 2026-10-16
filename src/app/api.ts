@@ -80,6 +80,7 @@ import { exportWorkspace } from "./workspace-export.ts";
 import { failureCode, logOperation } from "./operations-log.ts";
 import { operationsHealth } from "./operations-health.ts";
 import { manualReplyReport } from "./manual-reply-reports.ts";
+import { flowRunReport } from "./flow-run-reports.ts";
 import {
   FLOW_REQUEST_BYTES,
   archiveFlow,
@@ -302,6 +303,8 @@ export async function appApi(
         return json(await operationsHealth(pool, user, env.SEND_ENABLED === "true"));
       if (url.pathname === "/api/reports/manual-replies" && request.method === "GET")
         return json(await manualReplyReport(pool, user, url.searchParams));
+      if (url.pathname === "/api/reports/flow-runs" && request.method === "GET")
+        return json(await flowRunReport(pool, user, url.searchParams));
       if (url.pathname === "/api/connections" && request.method === "GET")
         return json({ connections: await listConnections(pool, user) });
       const consentEvent = /^\/api\/connections\/([^/]+)\/channel-consent-events$/.exec(url.pathname);
