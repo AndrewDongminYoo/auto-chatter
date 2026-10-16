@@ -1181,7 +1181,7 @@ test("contact activity validates canonical UTC bounds and preserves an exact exc
     evaluated: "9007199254740993",
     excluded: { activity: "9007199254740993", tag: "0", field: "0", both: "0" },
   });
-  assert.deepEqual(values.slice(-2), [from, before]);
+  assert.deepEqual(values.slice(9, 11), [from, before]);
   for (const invalid of [
     { last_comment_from: from },
     { last_comment_before: before },
@@ -1203,6 +1203,78 @@ test("contact activity validates canonical UTC bounds and preserves an exact exc
   queried = false;
   assert.equal((await request(query)).status, 400);
   assert.equal(queried, false);
+});
+
+test("contact consent filters validate an exact purpose-state pair before database access", async () => {
+  let values: unknown[] = [];
+  let queried = false;
+  const pool = {
+    query: async (sql: string, parameters: unknown[]) => {
+      queried = true;
+      if (sql.includes("workspace_members")) return { rows: [{ workspace_id: workspaceId, role: "owner" }] };
+      values = parameters;
+      return {
+        rows: [
+          {
+            connection_id: null,
+            preview_total: "0",
+            preview_evaluated: "9007199254740993",
+            preview_excluded_consent: "9007199254740993",
+            preview_excluded_activity: "0",
+            preview_excluded_tag: "0",
+            preview_excluded_field: "0",
+            preview_excluded_both: "0",
+          },
+        ],
+      };
+    },
+    end: async () => {},
+  } as unknown as Pool;
+  const request = (query: URLSearchParams) =>
+    appApi(
+      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
+      config,
+      () => pool,
+      mediaFetch(),
+    );
+  for (const purpose of ["service_reply", "marketing"]) {
+    for (const state of ["granted", "revoked", "no_record"]) {
+      const response = await request(
+        new URLSearchParams({ preview: "true", consent_purpose: purpose, consent_state: state }),
+      );
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        contacts: [],
+        after: null,
+        total: "0",
+        evaluated: "9007199254740993",
+        excluded: { consent: "9007199254740993", tag: "0", field: "0", both: "0" },
+      });
+      assert.deepEqual(values.slice(-2), [purpose, state]);
+    }
+  }
+  for (const invalid of [
+    { consent_purpose: "marketing" },
+    { consent_state: "granted" },
+    { consent_purpose: "", consent_state: "granted" },
+    { consent_purpose: "marketing", consent_state: "" },
+    { consent_purpose: "all", consent_state: "revoked" },
+    { consent_purpose: "marketing", consent_state: "eligible" },
+    { consent_purpose: "marketing", consent_state: "grant" },
+    { consent_purpose: "MARKETING", consent_state: "granted" },
+    { consent_purpose: "marketing", consent_state: "granted", segment_id: "44444444-4444-4444-8444-444444444444" },
+  ]) {
+    queried = false;
+    assert.equal((await request(new URLSearchParams(Object.entries(invalid)))).status, 400);
+    assert.equal(queried, false);
+  }
+  for (const duplicate of ["consent_purpose", "consent_state"]) {
+    const query = new URLSearchParams({ consent_purpose: "marketing", consent_state: "granted" });
+    query.append(duplicate, query.get(duplicate)!);
+    queried = false;
+    assert.equal((await request(query)).status, 400);
+    assert.equal(queried, false);
+  }
 });
 
 test("contact preview rejects malformed flags and every cursor before querying contacts", async () => {

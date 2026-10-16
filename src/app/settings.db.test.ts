@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
@@ -24,6 +25,7 @@ import { sealSecret } from "./secrets.ts";
 import { appApi } from "./api.ts";
 import { ingestMessages } from "../instagram/follow-flow.ts";
 import { parseMessageEvents } from "../instagram/message-events.ts";
+import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 
 const url = new URL(process.env.TEST_DATABASE_URL ?? "http://invalid");
 if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
@@ -1268,6 +1270,273 @@ test("activity migration preserves legacy segments and enforces paired finite or
         (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "23514",
       );
       await client.query("ROLLBACK TO SAVEPOINT invalid_activity");
+    }
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+});
+
+test("contact consent filters keep identity scope and classify after activity before tag-field conditions", async () => {
+  const workspace = await ensureWorkspace(pool, a),
+    foreignWorkspace = await ensureWorkspace(pool, b);
+  const field = await createField("Consent score", "number");
+  const from = "2026-10-10T00:00:00.000Z",
+    before = "2026-10-12T00:00:00.000Z";
+  const rows = [
+    ["grant-both", 0, ["lead"]],
+    ["grant-field", 0, []],
+    ["grant-tag", -1, ["lead"]],
+    ["grant-neither", -1, []],
+    ["revoked", 0, ["lead"]],
+    ["none", 0, ["lead"]],
+    ["dm-only", 0, ["lead"]],
+    ["other-purpose", 0, ["lead"]],
+    ["outside", -1, []],
+  ] as const;
+  for (const [sender, value, tags] of rows) {
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$3,'private',$4)",
+      [workspace, connectionId, sender, sender === "outside" ? before : from],
+    );
+    await fieldRequest("PUT", fieldValuePath(field.id, sender), { value });
+    await saveContactTags(pool, a, connectionId, sender, { tags });
+  }
+  const consent = (
+    sender: string,
+    decision: "grant" | "revoke",
+    purpose: "marketing" | "service_reply" | "all" = "marketing",
+    kind: "comment_sender" | "dm_recipient" = "comment_sender",
+    connection = connectionId,
+    owner = workspace,
+    occurredAt = new Date("2026-10-10T00:00:00Z"),
+  ) =>
+    recordChannelConsentEvent(pool, {
+      requestKey: randomUUID(),
+      workspaceId: owner,
+      connectionId: connection,
+      channel: "instagram",
+      identityKind: kind,
+      identityValue: sender,
+      purpose,
+      decision,
+      evidenceKind: sender === "grant-field" ? "import" : "explicit",
+      evidenceReference: "test evidence",
+      occurredAt,
+      actorId: a.id,
+    });
+  for (const sender of ["grant-both", "grant-field", "grant-tag", "grant-neither"]) await consent(sender, "grant");
+  await consent("grant-both", "revoke", "service_reply");
+  await consent("revoked", "revoke");
+  await consent("outside", "revoke");
+  await consent("dm-only", "grant", "marketing", "dm_recipient");
+  await consent("other-purpose", "grant", "service_reply");
+  const other = "77777777-7777-4777-8777-777777777777",
+    foreign = "88888888-8888-4888-8888-888888888888";
+  for (const [id, owner] of [
+    [other, workspace],
+    [foreign, foreignWorkspace],
+  ]) {
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,$1::uuid::text)", [
+      id,
+      owner,
+    ]);
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,'other','media','grant-both','private',$3)",
+      [owner, id, from],
+    );
+    await consent("grant-both", id === other ? "revoke" : "grant", "marketing", "comment_sender", id, owner);
+  }
+  const query = new URLSearchParams({
+    connection_id: connectionId,
+    consent_purpose: "marketing",
+    consent_state: "granted",
+  });
+  const ordinary = await listContacts(pool, a, query);
+  assert.deepEqual(
+    ordinary.contacts.map((c) => c.sender_id),
+    ["grant-both", "grant-field", "grant-neither", "grant-tag"],
+  );
+  assert.equal("excluded" in ordinary, false);
+  query.set("preview", "true");
+  const check = async (total: string, evaluated: string, excluded: Record<string, string>) => {
+    const page = await listContacts(pool, a, query);
+    assert.equal(page.total, total);
+    assert.equal(page.evaluated, evaluated);
+    assert.deepEqual(page.excluded, excluded);
+    assert.equal(page.contacts.length, Number(total));
+    return page;
+  };
+  assert.deepEqual(
+    (await check("4", "9", { consent: "5", tag: "0", field: "0", both: "0" })).contacts,
+    ordinary.contacts,
+  );
+  query.delete("connection_id");
+  await check("4", "10", { consent: "6", tag: "0", field: "0", both: "0" });
+  query.set("connection_id", foreign);
+  await check("0", "0", { consent: "0", tag: "0", field: "0", both: "0" });
+  query.set("connection_id", connectionId);
+  query.set("last_comment_from", from);
+  query.set("last_comment_before", before);
+  await check("4", "9", { activity: "1", consent: "4", tag: "0", field: "0", both: "0" });
+  query.set("consent_state", "revoked");
+  await check("1", "9", { activity: "1", consent: "7", tag: "0", field: "0", both: "0" });
+  query.set("consent_state", "no_record");
+  assert.deepEqual(
+    (await check("3", "9", { activity: "1", consent: "5", tag: "0", field: "0", both: "0" })).contacts.map(
+      (c) => c.sender_id,
+    ),
+    ["dm-only", "none", "other-purpose"],
+  );
+  query.set("consent_purpose", "service_reply");
+  query.set("consent_state", "granted");
+  assert.deepEqual(
+    (await check("1", "9", { activity: "1", consent: "7", tag: "0", field: "0", both: "0" })).contacts.map(
+      (c) => c.sender_id,
+    ),
+    ["other-purpose"],
+  );
+  query.set("consent_purpose", "marketing");
+  query.set("tag", "lead");
+  query.set("field_id", field.id);
+  query.set("field_operator", "gte");
+  query.set("field_value", "0");
+  await check("1", "9", { activity: "1", consent: "4", tag: "1", field: "1", both: "1" });
+  query.set("condition_operator", "or");
+  await check("3", "9", { activity: "1", consent: "4", tag: "0", field: "0", both: "1" });
+  query.set("tag", "absent");
+  query.set("field_value", "99");
+  await check("0", "9", { activity: "1", consent: "4", tag: "0", field: "0", both: "4" });
+  const saved = await createContactSegment(pool, a, {
+    name: "Consent",
+    connection_id: connectionId,
+    tag: "lead",
+    field_id: field.id,
+    field_operator: "gte",
+    field_value: 0,
+    condition_operator: "or",
+    last_comment_from: from,
+    last_comment_before: before,
+    consent_purpose: "marketing",
+    consent_state: "granted",
+  });
+  assert.equal(saved.consent_purpose, "marketing");
+  assert.equal(saved.consent_state, "granted");
+  assert.deepEqual(
+    (await listContactSegments(pool, a)).find((s) => s.id === saved.id),
+    saved,
+  );
+  const savedQuery = new URLSearchParams({ segment_id: saved.id, preview: "true" });
+  assert.equal((await listContacts(pool, a, savedQuery)).total, "3");
+  await consent("grant-both", "revoke", "all");
+  assert.equal((await listContacts(pool, a, savedQuery)).total, "2");
+  await consent(
+    "grant-both",
+    "grant",
+    "marketing",
+    "comment_sender",
+    connectionId,
+    workspace,
+    new Date("2020-01-01T00:00:00Z"),
+  );
+  assert.equal((await listContacts(pool, a, savedQuery)).total, "3", "newest server projection wins over occurred_at");
+  await assert.rejects(listContacts(pool, b, savedQuery), (e: unknown) => e instanceof ApiError && e.status === 404);
+  const eventsBefore = (await pool.query("SELECT count(*)::text AS count FROM channel_consent_events")).rows[0].count;
+  await listContacts(pool, a, savedQuery);
+  assert.equal(
+    (await pool.query("SELECT count(*)::text AS count FROM channel_consent_events")).rows[0].count,
+    eventsBefore,
+  );
+  await archiveContactSegment(pool, a, saved.id);
+  await assert.rejects(listContacts(pool, a, savedQuery), (e: unknown) => e instanceof ApiError && e.status === 404);
+});
+
+test("contact consent no-record filters retain stable pages for all matching contacts", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  await pool.query(
+    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,n::text||'-'||r,'media',lpad(n::text,3,'0'),'private' FROM generate_series(1,55)n CROSS JOIN generate_series(1,2)r",
+    [workspace, connectionId],
+  );
+  const query = new URLSearchParams({ consent_purpose: "marketing", consent_state: "no_record" });
+  const first = await listContacts(pool, a, query);
+  assert.equal(first.contacts.length, 50);
+  assert.ok(first.after);
+  query.set("after", first.after);
+  const second = await listContacts(pool, a, query);
+  assert.equal(second.after, null);
+  assert.deepEqual(
+    [...first.contacts, ...second.contacts].map((c) => c.sender_id),
+    Array.from({ length: 55 }, (_, i) => String(i + 1).padStart(3, "0")),
+  );
+  assert.ok([...first.contacts, ...second.contacts].every((c) => c.comment_count === "2"));
+  query.delete("after");
+  query.set("preview", "true");
+  const page = await listContacts(pool, a, query);
+  assert.equal(page.total, "55");
+  assert.equal(page.evaluated, "55");
+  assert.deepEqual(page.excluded, { consent: "0", tag: "0", field: "0", both: "0" });
+});
+
+test("saved consent filters reject invalid pairs and omit legacy response keys", async () => {
+  const legacy = await createContactSegment(pool, a, {
+    name: "Legacy consent",
+    consent_purpose: null,
+    consent_state: null,
+  });
+  assert.equal("consent_purpose" in legacy, false);
+  assert.equal("consent_state" in legacy, false);
+  for (const invalid of [
+    { consent_purpose: "marketing" },
+    { consent_state: "granted" },
+    { consent_purpose: "", consent_state: "no_record" },
+    { consent_purpose: "all", consent_state: "revoked" },
+    { consent_purpose: "service_reply", consent_state: "eligible" },
+    { consent_purpose: false, consent_state: "granted" },
+  ])
+    await assert.rejects(
+      createContactSegment(pool, a, { name: "Invalid consent", ...invalid }),
+      (e: unknown) => e instanceof ApiError && e.status === 400,
+    );
+  assert.equal((await listContactSegments(pool, a)).length, 1);
+});
+
+test("consent segment migration preserves legacy rows and validates paired enums on replay", async () => {
+  const workspace = await ensureWorkspace(pool, a),
+    client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN consent_purpose, DROP COLUMN consent_state");
+    await client.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'Legacy')", [workspace]);
+    const migration = await readFile(
+      new URL("../../db/migrations/047_contact_segment_consent.sql", import.meta.url),
+      "utf8",
+    );
+    await client.query(migration);
+    await client.query(migration);
+    assert.deepEqual(
+      (await client.query("SELECT consent_purpose,consent_state FROM instagram_contact_segments")).rows,
+      [{ consent_purpose: null, consent_state: null }],
+    );
+    await client.query("UPDATE instagram_contact_segments SET consent_purpose='marketing',consent_state='no_record'");
+    await client.query(migration);
+    assert.deepEqual(
+      (await client.query("SELECT consent_purpose,consent_state FROM instagram_contact_segments")).rows,
+      [{ consent_purpose: "marketing", consent_state: "no_record" }],
+    );
+    for (const change of [
+      "consent_purpose=NULL",
+      "consent_state=NULL",
+      "consent_purpose='all'",
+      "consent_state='eligible'",
+      "consent_purpose=''",
+      "consent_state=''",
+    ]) {
+      await client.query("SAVEPOINT invalid_consent");
+      await assert.rejects(
+        client.query(`UPDATE instagram_contact_segments SET ${change}`),
+        (e: unknown) => typeof e === "object" && e !== null && "code" in e && e.code === "23514",
+      );
+      await client.query("ROLLBACK TO SAVEPOINT invalid_consent");
     }
   } finally {
     await client.query("ROLLBACK");
