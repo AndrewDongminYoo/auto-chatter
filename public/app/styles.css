@@ -1924,3 +1924,29 @@ section {
   overflow-wrap: anywhere;
   min-width: 0;
 }
+
+#manual-report-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  align-items: end;
+  gap: 1rem;
+}
+.manual-report-counts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1rem;
+}
+.manual-report-counts > div {
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+}
+.manual-report-counts dt {
+  font-size: 0.875rem;
+}
+.manual-report-counts dd {
+  margin: 0.5rem 0 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}

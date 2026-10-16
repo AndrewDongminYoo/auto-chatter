@@ -509,6 +509,7 @@ CREATE TABLE IF NOT EXISTS instagram_manual_replies (
 CREATE UNIQUE INDEX IF NOT EXISTS instagram_manual_replies_sending_idx ON instagram_manual_replies(workspace_id,connection_id,recipient_id) WHERE status='sending';
 CREATE INDEX IF NOT EXISTS instagram_manual_replies_order_idx ON instagram_manual_replies(connection_id,recipient_id,created_at,id);
 CREATE INDEX IF NOT EXISTS instagram_manual_replies_due_idx ON instagram_manual_replies(connection_id,next_attempt_at) WHERE status='pending';
+CREATE INDEX IF NOT EXISTS instagram_manual_replies_report_period_idx ON instagram_manual_replies(workspace_id,created_at,connection_id);
 CREATE TABLE IF NOT EXISTS instagram_manual_reply_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL,
