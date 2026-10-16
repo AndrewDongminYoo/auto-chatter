@@ -824,6 +824,7 @@ CREATE TABLE IF NOT EXISTS flow_runs (
 );
 CREATE INDEX IF NOT EXISTS flow_runs_history_idx ON flow_runs(flow_id,created_at DESC,id DESC);
 CREATE INDEX IF NOT EXISTS flow_runs_connection_idx ON flow_runs(workspace_id,connection_id);
+CREATE INDEX IF NOT EXISTS flow_runs_report_period_idx ON flow_runs(workspace_id,created_at,connection_id,flow_id);
 -- A run can stop at a delay node (#32) and resume later. resume_at is stored as timestamptz (UTC)
 -- and resume_node_id names the delay it stopped at; both are set exactly while the run is waiting.
 -- A run whose flow or connection is off when it comes due ends as cancelled with a failure code.

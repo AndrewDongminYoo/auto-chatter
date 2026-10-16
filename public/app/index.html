@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="./styles.css" />
     <script src="./reply-templates.js" defer></script>
     <script src="./manual-reply-reports.js" defer></script>
+    <script src="./flow-run-reports.js" defer></script>
     <script src="./inbox.js" defer></script>
     <script src="./webhook-labels.js" defer></script>
     <script src="./plan-labels.js" defer></script>
@@ -204,6 +205,39 @@
             <p class="hint">
               ‘Meta 접수’는 전달·읽음·전환 성공을 뜻하지 않습니다. ‘미확인·정리 완료’는 결과를 확인하지 못한 요청을 다시
               보내지 않기로 정리한 상태입니다. 삭제된 데이터는 집계에서 제외됩니다.
+            </p>
+          </section>
+          <section id="flow-reports-section" class="card" aria-labelledby="flow-reports-title" hidden>
+            <div class="section-heading">
+              <h2 id="flow-reports-title">플로 실행 현황</h2>
+              <button id="flow-report-download" type="button" class="secondary" disabled>조회 결과 CSV</button>
+            </div>
+            <p class="hint">선택 기간에 생성된 실행과 연결된 첫 답장의 현재 상태를 각각 보여 줍니다.</p>
+            <form id="flow-report-form" class="filter-form">
+              <label>시작일<input name="from" type="date" required /></label>
+              <label>종료일(미포함)<input name="before" type="date" required /></label>
+              <label
+                >계정<select name="connection_id">
+                  <option value="">모든 계정</option>
+                </select></label
+              >
+              <label
+                >플로<select name="flow_id">
+                  <option value="">모든 플로(보관 포함)</option>
+                </select></label
+              >
+              <button type="submit">조회</button>
+            </form>
+            <p id="flow-report-zone" class="hint"></p>
+            <p id="flow-report-options-status" class="hint"></p>
+            <p id="flow-report-summary" class="hint" role="status" aria-live="polite"></p>
+            <h3>실행 상태</h3>
+            <dl id="flow-report-run-counts" class="manual-report-counts"></dl>
+            <h3>첫 답장 상태</h3>
+            <dl id="flow-report-reply-counts" class="manual-report-counts"></dl>
+            <p class="hint">
+              ‘경로 종료’와 ‘Meta 접수’는 전달·읽음·전환 성공을 뜻하지 않습니다. 각 영역의 상태별 합계는 실행 합계와
+              같습니다. 삭제된 데이터는 제외됩니다.
             </p>
           </section>
         </div>

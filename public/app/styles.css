@@ -1925,7 +1925,8 @@ section {
   min-width: 0;
 }
 
-#manual-report-form {
+#manual-report-form,
+#flow-report-form {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   align-items: end;
