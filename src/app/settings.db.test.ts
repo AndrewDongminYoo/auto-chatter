@@ -3618,3 +3618,220 @@ test("manual reply transient DB guard failure defers before even verifying the a
     { status: "pending", failure_code: "verification_unavailable", delayed: true },
   );
 });
+
+// Freeze only the database clock in the real aggregate for exact microsecond boundaries.
+function relativeClock(asOf: string, source = pool): Pool {
+  return {
+    query: async (sql: string, values: unknown[] = []) => {
+      if (sql.includes("statement_timestamp()")) {
+        assert.equal(sql.match(/statement_timestamp\(\)/g)?.length, 1, "one evaluation clock per lookup");
+        return source.query(sql.replace("statement_timestamp()", `$${values.length + 1}::timestamptz`), [
+          ...values,
+          asOf,
+        ]);
+      }
+      return source.query(sql, values);
+    },
+  } as unknown as Pool;
+}
+
+test("relative comment activity uses one half-open 24-hour window for counts, samples and latest-event semantics", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const asOf = "2026-03-09T04:00:00.000000Z";
+  const rows = [
+    ["cutoff", "2026-03-08T04:00:00.000000Z"],
+    ["before", "2026-03-08T03:59:59.999999Z"],
+    ["last", "2026-03-09T03:59:59.999999Z"],
+    ["end", asOf],
+    ["future", "2026-03-09T04:00:00.000001Z"],
+    ["latest-outside", asOf],
+    ["latest-outside", "2026-03-08T12:00:00.000000Z"],
+  ];
+  for (const [i, [sender, at]] of rows.entries())
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$4,'private',$5)",
+      [workspace, connectionId, `relative-${i}`, sender, at],
+    );
+  const q = new URLSearchParams({ last_comment_days: "1", preview: "true" });
+  const clock = relativeClock(asOf);
+  const result = await listContacts(clock, a, q);
+  assert.equal(result.total, "2");
+  assert.equal(result.evaluated, "6");
+  assert.deepEqual(result.excluded, { activity: "4", tag: "0", field: "0", both: "0" });
+  assert.deepEqual(
+    result.contacts.map((c) => c.sender_id),
+    ["cutoff", "last"],
+  );
+  assert.deepEqual((result as unknown as { activity_window: unknown }).activity_window, {
+    from: "2026-03-08T04:00:00.000000Z",
+    before: asOf,
+  });
+  q.delete("preview");
+  assert.deepEqual((await listContacts(clock, a, q)).contacts, result.contacts);
+  const later = await listContacts(relativeClock("2026-03-10T04:00:00.000002Z"), a, q);
+  assert.equal(later.contacts.length, 0);
+  assert.ok((later as unknown as { activity_window: unknown }).activity_window);
+  const foreign = await listContacts(clock, b, new URLSearchParams({ last_comment_days: "1", preview: "true" }));
+  assert.equal(foreign.evaluated, "0");
+  assert.equal(foreign.total, "0");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL TIME ZONE 'America/New_York'");
+    const dst = await listContacts(relativeClock(asOf, { query: client.query.bind(client) } as unknown as Pool), a, q);
+    assert.deepEqual(dst.contacts, result.contacts);
+    assert.deepEqual(
+      (dst as unknown as { activity_window: unknown }).activity_window,
+      (result as unknown as { activity_window: unknown }).activity_window,
+    );
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+});
+
+test("relative comment activity saves days, preserves old shapes, validates input and enforces database constraints", async () => {
+  const created = await fieldRequest("POST", "/api/contact-segments", { name: "Recent", last_comment_days: 7 });
+  assert.equal(created.status, 201);
+  const saved = await created.json();
+  assert.equal(saved.last_comment_days, 7);
+  assert.equal("last_comment_from" in saved, false);
+  assert.deepEqual(
+    (await listContactSegments(pool, a)).find((s) => s.id === saved.id),
+    saved,
+  );
+  const liveBefore = Date.now();
+  const response = await fieldRequest("GET", `/api/contacts?preview=true&segment_id=${saved.id}`);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.total, "0");
+  assert.match(body.activity_window.before, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/);
+  assert.ok(
+    Date.parse(body.activity_window.before) >= liveBefore && Date.parse(body.activity_window.before) <= Date.now(),
+  );
+  assert.equal(Date.parse(body.activity_window.before) - Date.parse(body.activity_window.from), 7 * 86400000);
+  const next = await (await fieldRequest("GET", `/api/contacts?segment_id=${saved.id}`)).json();
+  assert.ok(next.activity_window.before > body.activity_window.before, "each request evaluates a new clock");
+  assert.equal(Date.parse(next.activity_window.before) - Date.parse(next.activity_window.from), 7 * 86400000);
+  assert.equal((await fieldRequest("GET", `/api/contacts?segment_id=${saved.id}&last_comment_days=7`)).status, 400);
+  assert.equal((await fieldRequest("GET", `/api/contacts?segment_id=${saved.id}`, undefined, b)).status, 404);
+  for (const days of [0, -1, 367, 1.5, "7", true, {}, []])
+    assert.equal(
+      (await fieldRequest("POST", "/api/contact-segments", { name: "Bad", last_comment_days: days })).status,
+      400,
+    );
+  for (const days of ["", "0", "-1", "367", "1.5", "1e1", "01", " 1", "NaN", "true"])
+    assert.equal(
+      (await fieldRequest("GET", `/api/contacts?last_comment_days=${encodeURIComponent(days)}`)).status,
+      400,
+    );
+  const fixed = { last_comment_from: "2026-10-01T00:00:00.000Z", last_comment_before: "2026-10-02T00:00:00.000Z" };
+  assert.equal(
+    (await fieldRequest("POST", "/api/contact-segments", { name: "Mixed", last_comment_days: 7, ...fixed })).status,
+    400,
+  );
+  assert.equal(
+    (await fieldRequest("GET", `/api/contacts?${new URLSearchParams({ last_comment_days: "7", ...fixed })}`)).status,
+    400,
+  );
+  assert.equal((await fieldRequest("GET", "/api/contacts?last_comment_days=7&last_comment_days=8")).status, 400);
+  const legacy = await createContactSegment(pool, a, { name: "Legacy", last_comment_days: null });
+  assert.equal("last_comment_days" in legacy, false);
+  const ordinary = await listContacts(pool, a);
+  assert.equal("activity_window" in ordinary, false);
+  const bounded = await createContactSegment(pool, a, { name: "Fixed", ...fixed });
+  assert.equal("last_comment_days" in bounded, false);
+  for (const value of ["0", "367", "-1"])
+    await assert.rejects(
+      pool.query(`UPDATE instagram_contact_segments SET last_comment_days=${value} WHERE id=$1`, [saved.id]),
+      { code: "23514" },
+    );
+  await assert.rejects(
+    pool.query(
+      "UPDATE instagram_contact_segments SET last_comment_from=now(),last_comment_before=now()+interval '1 hour' WHERE id=$1",
+      [saved.id],
+    ),
+    { code: "23514" },
+  );
+  await archiveContactSegment(pool, a, saved.id);
+  assert.equal((await fieldRequest("GET", `/api/contacts?segment_id=${saved.id}`)).status, 404);
+});
+
+test("relative comment activity combines with tag OR field and consent, and paginates without trimming history", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const field = await createField("Score", "number");
+  await pool.query(
+    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) SELECT $1,$2,n::text||'-'||r,'media',lpad(n::text,3,'0'),'private',CASE WHEN r=1 THEN '2020-01-01T00:00:00Z'::timestamptz ELSE '2026-10-15T12:00:00Z'::timestamptz END FROM generate_series(1,55)n CROSS JOIN generate_series(1,2)r",
+    [workspace, connectionId],
+  );
+  const clock = relativeClock("2026-10-16T00:00:00.000000Z");
+  const q = new URLSearchParams({ last_comment_days: "1" });
+  const first = await listContacts(clock, a, q);
+  assert.equal(first.contacts.length, 50);
+  assert.ok(first.after);
+  q.set("after", first.after);
+  const second = await listContacts(clock, a, q);
+  assert.equal(second.contacts.length, 5);
+  assert.equal(second.after, null);
+  assert.equal(new Set([...first.contacts, ...second.contacts].map((c) => c.sender_id)).size, 55);
+  assert.ok(
+    [...first.contacts, ...second.contacts].every(
+      (c) => c.comment_count === "2" && c.first_comment_at.toISOString() === "2020-01-01T00:00:00.000Z",
+    ),
+  );
+  await saveContactTags(pool, a, connectionId, "001", { tags: ["lead"] });
+  await fieldRequest("PUT", fieldValuePath(field.id, "002"), { value: 1 });
+  q.delete("after");
+  q.set("preview", "true");
+  q.set("tag", "lead");
+  q.set("field_id", field.id);
+  q.set("field_operator", "eq");
+  q.set("field_value", "1");
+  q.set("condition_operator", "or");
+  q.set("consent_purpose", "marketing");
+  q.set("consent_state", "no_record");
+  const result = await listContacts(clock, a, q);
+  assert.equal(result.total, "2");
+  assert.equal(result.evaluated, "55");
+  assert.deepEqual(result.excluded, { activity: "0", consent: "0", tag: "0", field: "0", both: "53" });
+  q.set("consent_state", "granted");
+  const excluded = await listContacts(clock, a, q);
+  assert.equal(excluded.total, "0");
+  assert.deepEqual(excluded.excluded, { activity: "0", consent: "55", tag: "0", field: "0", both: "0" });
+});
+
+test("relative comment activity migration preserves legacy windows and can be applied repeatedly", async () => {
+  const fixed = await createContactSegment(pool, a, {
+    name: "Fixed migration",
+    last_comment_from: "2026-10-01T00:00:00.000Z",
+    last_comment_before: "2026-10-02T00:00:00.000Z",
+  });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN last_comment_days");
+    const migration = await readFile(
+      new URL("../../db/migrations/053_segment_relative_activity.sql", import.meta.url),
+      "utf8",
+    );
+    await client.query(migration);
+    assert.equal(
+      (await client.query("SELECT last_comment_days FROM instagram_contact_segments WHERE id=$1", [fixed.id])).rows[0]
+        .last_comment_days,
+      null,
+    );
+    await client.query(
+      "UPDATE instagram_contact_segments SET last_comment_from=NULL,last_comment_before=NULL,last_comment_days=366 WHERE id=$1",
+      [fixed.id],
+    );
+    await client.query(migration);
+    assert.equal(
+      (await client.query("SELECT last_comment_days FROM instagram_contact_segments WHERE id=$1", [fixed.id])).rows[0]
+        .last_comment_days,
+      366,
+    );
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+});

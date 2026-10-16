@@ -955,6 +955,24 @@
                 </select></label
               >
               <label
+                >댓글 활동 기간<select name="activity_mode" aria-describedby="contact-activity-help">
+                  <option value="fixed">고정 UTC 기간 (선택)</option>
+                  <option value="relative">최근 N일</option>
+                </select></label
+              >
+              <label id="contact-activity-days" hidden
+                >최근 일수<input
+                  name="last_comment_days"
+                  type="number"
+                  min="1"
+                  max="366"
+                  step="1"
+                  value="7"
+                  disabled
+                  aria-describedby="contact-activity-help"
+                />
+              </label>
+              <label id="contact-activity-from"
                 >마지막 댓글 저장 시작 (UTC)<input
                   name="last_comment_from"
                   type="datetime-local"
@@ -963,7 +981,7 @@
                   max="9999-12-31T23:59:59.999"
                   aria-describedby="contact-activity-help"
               /></label>
-              <label
+              <label id="contact-activity-before"
                 >마지막 댓글 저장 종료 (UTC)<input
                   name="last_comment_before"
                   type="datetime-local"
@@ -990,8 +1008,9 @@
               <button type="submit" class="secondary">필터 적용</button>
             </form>
             <p id="contact-activity-help" class="hint">
-              기간은 두 값을 함께 입력하며 UTC 기준으로 시작을 포함하고 종료를 제외합니다. 댓글 작성 시각이 아닌 마지막
-              저장 시각을 확인합니다.
+              고정 기간은 두 값을 함께 입력하며 UTC 기준으로 시작을 포함하고 종료를 제외합니다. 최근 N일은 조회 시각
+              직전 N×24시간이며 1~366일을 지정합니다. 조회와 다음 페이지마다 다시 계산하므로 고정 대상이 아닙니다. 댓글
+              작성 시각이 아닌 마지막 저장 시각을 확인합니다.
             </p>
             <p id="contact-consent-help" class="hint">
               동의 조건은 댓글 연락처에 직접 기록된 목적별 상태만 확인합니다. DM 동의나 발송 가능 여부를 뜻하지
