@@ -1585,6 +1585,125 @@ test("segment definitions take a calendar period as an exact string and refuse m
   );
 });
 
+test("contact tag filters repeat tag up to five times with one mode and refuse other shapes before database access", async () => {
+  let values: unknown[] = [];
+  let statement = "";
+  let queried = false;
+  const pool = {
+    query: async (sql: string, parameters: unknown[]) => {
+      queried = true;
+      if (sql.includes("workspace_members")) return { rows: [{ workspace_id: workspaceId, role: "owner" }] };
+      values = parameters;
+      statement = sql;
+      return { rows: [] };
+    },
+    end: async () => {},
+  } as unknown as Pool;
+  const request = (query: string) =>
+    appApi(
+      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
+      config,
+      () => pool,
+      mediaFetch(),
+    );
+  const all = /coalesce\(t\.tags,'\{\}'::text\[\]\) @> \$3::text\[\]/;
+  const any = /coalesce\(t\.tags,'\{\}'::text\[\]\) && \$3::text\[\]/;
+  // One tag without a mode keeps the response, the parameter positions and the containment predicate.
+  const single = await request("tag=%20Lead%20");
+  assert.equal(single.status, 200);
+  assert.deepEqual(await single.json(), { contacts: [], after: null });
+  assert.equal(values.length, 15);
+  assert.deepEqual(values[2], ["lead"]);
+  assert.match(statement, all);
+  assert.doesNotMatch(statement, any);
+  for (const [query, tags, predicate] of [
+    ["tag=b&tag=A", ["a", "b"], all],
+    ["tag=b&tag=A&tag_mode=all", ["a", "b"], all],
+    ["tag=b&tag=A&tag_mode=any", ["a", "b"], any],
+    ["tag=e&tag=d&tag=c&tag=b&tag=a&tag_mode=any", ["a", "b", "c", "d", "e"], any],
+    // Values that normalize equal collapse; one remaining tag is the single-tag condition whatever the mode.
+    ["tag=Lead&tag=%20lead&tag_mode=any", ["lead"], all],
+    ["tag=lead&tag_mode=any", ["lead"], all],
+  ] as const) {
+    const response = await request(query);
+    assert.equal(response.status, 200, query);
+    assert.deepEqual(values[2], tags, query);
+    assert.match(statement, predicate, query);
+  }
+  await request("");
+  assert.equal(values[2], null);
+  for (const [query, error] of [
+    ["tag=a&tag=b&tag=c&tag=d&tag=e&tag=f", "invalid_contact_tags"],
+    ["tag=a&tag=a&tag=a&tag=a&tag=a&tag=a", "invalid_contact_tags"],
+    ["tag=a&tag=", "invalid_contact_tags"],
+    [`tag=a&tag=${"x".repeat(41)}`, "invalid_contact_tags"],
+    ["tag=a&tag=b&tag_mode=none", "invalid_contact_tags"],
+    ["tag=a&tag=b&tag_mode=ANY", "invalid_contact_tags"],
+    ["tag=a&tag=b&tag_mode=", "invalid_contact_tags"],
+    ["tag_mode=all", "invalid_contact_condition"],
+    ["tag_mode=", "invalid_contact_condition"],
+    ["tag=a&tag=b&tag_mode=all&tag_mode=any", "invalid_contact_request"],
+    ["tag=a&connection_id=x&connection_id=y", "invalid_contact_request"],
+    ["tag=a&tag=b&condition_operator=or", "invalid_contact_condition"],
+    // A tag value is validated before the segment_id mixing check, as with the single tag before this change.
+    [`segment_id=${segmentId}&tag=`, "invalid_contact_tags"],
+    [`segment_id=${segmentId}&tag=${"x".repeat(41)}`, "invalid_contact_tags"],
+    [`segment_id=${segmentId}&tag=a`, "invalid_contact_request"],
+    [`segment_id=${segmentId}&tag=a&tag=b`, "invalid_contact_request"],
+    [`segment_id=${segmentId}&tag_mode=any`, "invalid_contact_request"],
+  ] as const) {
+    queried = false;
+    const response = await request(query);
+    assert.equal(response.status, 400, query);
+    assert.deepEqual(await response.json(), { error }, query);
+    assert.equal(queried, false, `${query} must fail before database access`);
+  }
+});
+
+test("segment definitions take a legacy tag or a set of one to five tags with a mode", async () => {
+  const tags = (definition: Record<string, unknown>) => parseSegmentDefinition({ name: "Leads", ...definition });
+  assert.equal(tags({}).tagCondition, null);
+  assert.equal(tags({ tag: null, tags: null }).tagCondition, null);
+  assert.deepEqual(tags({ tag: " Lead " }).tagCondition, { tags: ["lead"], mode: "all" });
+  assert.deepEqual(tags({ tags: ["b", "A"] }).tagCondition, { tags: ["a", "b"], mode: "all" });
+  assert.deepEqual(tags({ tags: ["b", "A"], tag_mode: "any" }).tagCondition, { tags: ["a", "b"], mode: "any" });
+  assert.deepEqual(tags({ tags: ["e", "d", "c", "b", "a"], tag_mode: "all" }).tagCondition, {
+    tags: ["a", "b", "c", "d", "e"],
+    mode: "all",
+  });
+  // A set that collapses to one tag is the single-tag condition, whatever the mode.
+  assert.deepEqual(tags({ tags: ["Lead", " lead"], tag_mode: "any" }).tagCondition, { tags: ["lead"], mode: "all" });
+  assert.deepEqual(tags({ tag: "lead", tag_mode: "any" }).tagCondition, { tags: ["lead"], mode: "all" });
+  // An empty legacy tag counts as no tag, so it can go with a set.
+  assert.deepEqual(tags({ tag: "", tags: ["a", "b"] }).tagCondition, { tags: ["a", "b"], mode: "all" });
+  for (const [body, code] of [
+    [{ tag: "a", tags: ["b", "c"] }, "invalid_segment"],
+    [{ tag: "a", tags: ["a"] }, "invalid_segment"],
+    [{ tags: [] }, "invalid_contact_tags"],
+    [{ tags: "a" }, "invalid_contact_tags"],
+    [{ tags: ["a", "b", "c", "d", "e", "f"] }, "invalid_contact_tags"],
+    [{ tags: ["a", "a", "a", "a", "a", "a"] }, "invalid_contact_tags"],
+    [{ tags: ["a", null] }, "invalid_contact_tags"],
+    [{ tags: ["a", ""] }, "invalid_contact_tags"],
+    [{ tags: ["a", "x".repeat(41)] }, "invalid_contact_tags"],
+    [{ tags: ["a", "b"], tag_mode: "none" }, "invalid_contact_tags"],
+    [{ tags: ["a", "b"], tag_mode: 1 }, "invalid_contact_tags"],
+    [{ tag_mode: "all" }, "invalid_contact_condition"],
+    [{ tags: ["a", "b"], condition_operator: "or" }, "invalid_contact_condition"],
+  ] as const) {
+    assert.throws(() => tags(body), refused(code), JSON.stringify(body));
+    await assert.rejects(createContactSegment(segmentPool, segmentUser, { name: "Leads", ...body }), refused(code));
+    await assert.rejects(
+      updateContactSegment(segmentPool, segmentUser, segmentId, { name: "Leads", ...body, expected_version: 1 }),
+      refused(code),
+    );
+  }
+  await assert.rejects(
+    createContactSegment(segmentPool, segmentUser, { name: "Leads", tags: ["a", "b"], tag_mode: "any" }),
+    reachedDatabase,
+  );
+});
+
 test("contact mutations reject cross-origin writes and invalid tags before a write", async () => {
   const path = `https://app.test/api/connections/${connectionId}/contacts/888`;
   const open = () => {

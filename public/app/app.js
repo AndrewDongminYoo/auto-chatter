@@ -38,6 +38,8 @@ let segmentPreviewRequest = 0;
 let editingSegment = null;
 // Counts operator edits of the filter conditions, so an edit can tell whether they changed since it started.
 let segmentConditionInputs = 0;
+// The contact filter's tag inputs: one input per tag, so a tag may contain a comma. The server accepts at most five.
+const contactTagInputNames = ["tag", "tag_2", "tag_3", "tag_4", "tag_5"];
 // True when the operator changed a condition or the name since the edit started or since the saved values were last
 // loaded. The name is compared with the loaded one, because segmentNameDirty is false for an emptied name field.
 function segmentEditChanged() {
@@ -247,6 +249,7 @@ function resetSession() {
   segmentControls();
   byId("contacts-list").replaceChildren();
   byId("contacts-filter").reset();
+  contactTagControls();
   fieldFilterControls();
   contactActivityControls();
   contactConsentControls();
@@ -2587,6 +2590,34 @@ function calendarActivitySummary(window, period) {
     " 조회와 다음 페이지마다 작업 공간 시간대로 다시 계산합니다."
   );
 }
+function contactTagInputs() {
+  const fields = byId("contacts-filter").elements;
+  return contactTagInputNames.map((name) => fields[name]);
+}
+// The distinct tags on screen, compared the way the server normalizes them; the first spelling is kept.
+function contactFilterTags() {
+  const seen = new Set();
+  const tags = [];
+  for (const input of contactTagInputs()) {
+    const value = input.value.trim();
+    const key = value.normalize("NFC").toLowerCase();
+    if (value && !seen.has(key)) {
+      seen.add(key);
+      tags.push(value);
+    }
+  }
+  return tags;
+}
+// Shows the next tag input once the one before it has a value, and the mode only for two or more tags.
+function contactTagControls() {
+  const inputs = contactTagInputs();
+  inputs.forEach((input, index) => {
+    input.closest("label").hidden = index > 0 && !input.value.trim() && !inputs[index - 1].value.trim();
+  });
+  const fields = byId("contacts-filter").elements;
+  fields.tag_mode.disabled = contactFilterTags().length < 2;
+  if (fields.tag_mode.disabled) fields.tag_mode.value = "all";
+}
 function contactConsentControls() {
   const fields = byId("contacts-filter").elements;
   fields.consent_state.disabled = !fields.consent_purpose.value;
@@ -2608,7 +2639,9 @@ function contactDraftQuery() {
   const consent = contactConsentCondition();
   const query = new URLSearchParams();
   if (fields.connection_id.value) query.set("connection_id", fields.connection_id.value);
-  if (fields.tag.value.trim()) query.set("tag", fields.tag.value.trim());
+  const tags = contactFilterTags();
+  for (const value of tags) query.append("tag", value);
+  if (tags.length > 1) query.set("tag_mode", fields.tag_mode.value);
   if (fields.condition_operator.value === "or") query.set("condition_operator", "or");
   if (activity) for (const [key, value] of Object.entries(activity)) query.set(key, value);
   if (consent) for (const [key, value] of Object.entries(consent)) query.set(key, value);
@@ -2815,7 +2848,12 @@ function leaveSegmentEdit({ discard = false } = {}) {
 function fillSegmentConditions(segment) {
   const fields = byId("contacts-filter").elements;
   fields.connection_id.value = segment?.connection_id || "";
-  fields.tag.value = segment?.tag || "";
+  const savedTags = segment?.tags ?? (segment?.tag ? [segment.tag] : []);
+  contactTagInputs().forEach((input, index) => {
+    input.value = savedTags[index] ?? "";
+  });
+  fields.tag_mode.value = segment?.tag_mode || "all";
+  contactTagControls();
   fields.field_id.value = segment?.field_id || "";
   fields.field_operator.value = segment?.field_operator || "eq";
   fields.condition_operator.value = segment?.condition_operator || "and";
@@ -2847,7 +2885,9 @@ function segmentSummary(segment) {
   const parts = [
     `이름 ${segment.name}`,
     `계정 ${segment.connection_id ? account?.username || account?.account_id || "확인할 수 없는 계정" : "모든 계정"}`,
-    `태그 ${segment.tag || "조건 없음"}`,
+    segment.tags
+      ? `태그 ${segment.tags.join(", ")} (${segment.tag_mode === "any" ? "하나 이상 포함" : "모두 포함"})`
+      : `태그 ${segment.tag || "조건 없음"}`,
   ];
   if (segment.field_id)
     parts.push(
@@ -2899,7 +2939,10 @@ byId("contacts-filter").addEventListener("input", (event) => {
   invalidateSegmentPreview();
   activeSegmentId = "";
   byId("contact-segment").value = "";
-  if (event.target.name === "tag") fieldFilterControls();
+  if (contactTagInputNames.includes(event.target.name)) {
+    contactTagControls();
+    fieldFilterControls();
+  }
   if (event.target.name === "activity_mode") contactActivityControls();
   if (event.target.name === "consent_purpose") contactConsentControls();
   segmentControls();
@@ -3010,7 +3053,11 @@ byId("segment-save").addEventListener("submit", (event) => {
   const editing = editingSegment;
   const fields = byId("contacts-filter").elements;
   const name = byId("segment-save").elements.name.value;
-  const payload = { name, connection_id: fields.connection_id.value || null, tag: fields.tag.value.trim() || null };
+  const tags = contactFilterTags();
+  const payload = { name, connection_id: fields.connection_id.value || null };
+  // One tag keeps the legacy shape; two or more go as a set with the chosen mode.
+  if (tags.length > 1) Object.assign(payload, { tags, tag_mode: fields.tag_mode.value });
+  else payload.tag = tags[0] ?? null;
   if (fields.condition_operator.value === "or") payload.condition_operator = "or";
   try {
     Object.assign(payload, contactFieldCondition());
@@ -3059,7 +3106,8 @@ byId("segment-archive").addEventListener("click", (event) => {
       if (segment && new URLSearchParams(contactsQuery).get("segment_id") === id) {
         const query = new URLSearchParams();
         if (segment.connection_id) query.set("connection_id", segment.connection_id);
-        if (segment.tag) query.set("tag", segment.tag);
+        for (const value of segment.tags ?? (segment.tag ? [segment.tag] : [])) query.append("tag", value);
+        if (segment.tags) query.set("tag_mode", segment.tag_mode);
         if (segment.condition_operator === "or") query.set("condition_operator", "or");
         if (segment.last_comment_from) {
           query.set("last_comment_from", segment.last_comment_from);
@@ -3125,7 +3173,7 @@ function fieldFilterControls() {
   invalidateSegmentPreview();
   const fields = byId("contacts-filter").elements;
   const selected = Boolean(fields.field_id.value);
-  fields.condition_operator.disabled = !selected || !fields.tag.value.trim();
+  fields.condition_operator.disabled = !selected || !contactFilterTags().length;
   if (fields.condition_operator.disabled) fields.condition_operator.value = "and";
   byId("field-filter-operator").hidden = !selected;
   const field = contactFields.find((field) => field.id === fields.field_id.value);
