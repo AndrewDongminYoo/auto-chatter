@@ -482,6 +482,16 @@ Worker를 버전 `bd9ed6d9-daea-4d84-a47a-226ebfdafdbd`로 배포했고, 15:59:3
 `scheduled_steps`를 10:34:59Z, 10:36:25Z, 10:38:00Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 같은 세 번의 조회에서 `stale_recovery`, `wake`, `webhook_delivery`는 발송이 꺼져 있어 실행되지 않았고, 마지막 성공 시각은 배포 전인 00:43:49Z 그대로였습니다. 그래서 049가 예약 답장을 걸러 내도록 바꾼 claim·wake 질의는 운영에서 아직 실행되지 않았으며, 발송을 켜는 첫 실행에서 확인해야 합니다.
 로그인한 세션으로 요청하지 않았으므로 이번에 배포한 세그먼트 수정·답장 템플릿·예약 답장·리포트·CSV 사전 검사와 적용 화면과 API는 운영에서 실행하지 않았습니다.
+
+2026-10-17 13:07Z에는 운영자의 "운영 적용 배포해주세요" 요청에 따라 `main` 커밋 `098c513`을 적용했습니다. 이 커밋에는 PR #219(앞 기록, 문서만)와 PR #220(#26 일부: 작업 공간 시간대 기준 달력 활동 기간, migration 055)이 들어 있습니다.
+적용 전 조회에서 운영 DB는 054까지 적용된 상태였고(`instagram_contact_segments.version` 있음, `last_comment_period` 열과 `contact_segment_calendar_period` 제약 없음, public 테이블 45개), 작업 공간 3개·세그먼트 0개·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-17-migration-055/public-pre-055.dump`(289,152바이트, SHA-256 `8b6ef019db821f18098b24d11073d1b7f5b731228545026b28f578b8f303e71e`)에 저장했고, 목록 읽기에서 데이터 테이블 45개를 확인했습니다.
+앞과 같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE는 162건이었습니다.
+적용 후 `last_comment_period`(text, nullable)와 `contact_segment_calendar_period` CHECK(네 기간 값만 허용하고 고정 기간·최근 일수와 함께 쓰지 못함)가 생겼습니다. `auto_chatter_server`는 이 열에 SELECT·INSERT·UPDATE를 가졌고, `anon`·`authenticated`의 열 권한은 없었습니다. 서버 역할의 테이블 DELETE·TRUNCATE 권한, API 역할의 public 테이블 권한, RLS가 꺼진 public 테이블은 모두 0개였습니다.
+이어서 Worker를 버전 `bc04b8bf-f2f0-45e0-b126-523c42b7f555`로 배포했고, 13:08:55Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `6697d52f-e9ec-42bd-b9ac-f9c48309aa35`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+21개 항목의 공개 점검은 배포 전에는 바뀐 `index.html`과 `app.js`의 해시만 달라 19개가 통과했고, 배포 2분 뒤 13:11:11Z의 점검에서는 21개가 모두 통과했습니다.
+`scheduled_steps`를 13:11:11Z, 13:12:29Z, 13:13:43Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. `stale_recovery`, `wake`, `webhook_delivery`는 발송이 꺼져 있어 이번에도 실행되지 않았습니다.
+로그인한 세션으로 요청하지 않았으므로 달력 활동 기간의 화면과 API는 운영에서 실행하지 않았습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
