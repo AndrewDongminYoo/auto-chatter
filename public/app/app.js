@@ -32,14 +32,20 @@ let segmentBusy = false;
 let activeSegmentId = "";
 let segmentNameDirty = false;
 let segmentPreviewRequest = 0;
-// The saved segment being edited: its ID, the version the edit is based on, and the segment as last read from the
-// server. It is kept apart from activeSegmentId, because changing a condition clears the selection.
+// The saved segment being edited: its ID, the version the edit is based on, the segment as last read from the
+// server, and the name put in the name field when the edit started or the saved values were last loaded. It is kept
+// apart from activeSegmentId, because changing a condition clears the selection.
 let editingSegment = null;
 // Counts operator edits of the filter conditions, so a segment save can tell whether they changed while it ran.
 let segmentConditionInputs = 0;
-// True when the operator changed a condition since the edit started or since the saved values were last loaded.
+// True when the operator changed a condition or the name since the edit started or since the saved values were last
+// loaded. The name is compared with the loaded one, because segmentNameDirty is false for an emptied name field.
 function segmentEditChanged() {
-  return Boolean(editingSegment) && segmentConditionInputs !== editingSegment.inputs;
+  return (
+    Boolean(editingSegment) &&
+    (segmentConditionInputs !== editingSegment.inputs ||
+      byId("segment-save").elements.name.value !== editingSegment.loadedName)
+  );
 }
 let contactFields = [];
 let fieldsGeneration = 0;
@@ -2865,7 +2871,13 @@ byId("segment-edit").addEventListener("click", () => {
   if (!segment || segmentBusy || editingSegment || (currentRole !== "owner" && currentRole !== "admin")) return;
   // Editing replaces the name field with the saved name, so a name typed for a new filter needs a confirmation.
   if (segmentNameDirty && !confirm("입력한 새 필터 이름을 버리고 저장된 필터를 수정할까요?")) return;
-  editingSegment = { id: segment.id, version: segment.version, saved: segment, inputs: segmentConditionInputs };
+  editingSegment = {
+    id: segment.id,
+    version: segment.version,
+    saved: segment,
+    inputs: segmentConditionInputs,
+    loadedName: segment.name,
+  };
   invalidateSegmentPreview();
   fillSegmentConditions(segment);
   byId("segment-save").elements.name.value = segment.name;
@@ -2888,6 +2900,7 @@ byId("segment-edit-reload").addEventListener("click", () => {
   const saved = editingSegment.saved;
   editingSegment.version = saved.version;
   editingSegment.inputs = segmentConditionInputs;
+  editingSegment.loadedName = saved.name;
   invalidateSegmentPreview();
   fillSegmentConditions(saved);
   byId("segment-save").elements.name.value = saved.name;
