@@ -36,7 +36,7 @@ let segmentPreviewRequest = 0;
 // server, and the name put in the name field when the edit started or the saved values were last loaded. It is kept
 // apart from activeSegmentId, because changing a condition clears the selection.
 let editingSegment = null;
-// Counts operator edits of the filter conditions, so a segment save can tell whether they changed while it ran.
+// Counts operator edits of the filter conditions, so an edit can tell whether they changed since it started.
 let segmentConditionInputs = 0;
 // True when the operator changed a condition or the name since the edit started or since the saved values were last
 // loaded. The name is compared with the loaded one, because segmentNameDirty is false for an emptied name field.
@@ -2760,6 +2760,9 @@ function segmentControls() {
   byId("segment-edit-cancel").hidden = !editingSegment;
   byId("segment-edit-cancel").disabled = segmentBusy;
   byId("segment-edit-reload").disabled = segmentBusy;
+  // A segment request sends the conditions on screen; holding them until it ends keeps the saved and shown values equal.
+  // The fieldset leaves each control's own disabled state alone, so conditional states come back unchanged.
+  byId("contacts-filter-fields").disabled = segmentBusy;
 }
 // Leaves edit mode. The filter form keeps its conditions; the name field is cleared unless keepName is set.
 // A kept draft that the operator changed stays marked unsaved, because segmentEditChanged() ends with edit mode.
@@ -2914,7 +2917,6 @@ byId("segment-edit-reload").addEventListener("click", () => {
   segmentControls();
 });
 async function saveSegmentEdit(editing, payload, generation) {
-  const inputs = segmentConditionInputs;
   try {
     const saved = await api(`/api/contact-segments/${editing.id}`, "PUT", {
       ...payload,
@@ -2922,13 +2924,6 @@ async function saveSegmentEdit(editing, payload, generation) {
     });
     if (generation !== segmentsGeneration || editingSegment !== editing) return;
     leaveSegmentEdit();
-    // Conditions typed while the request ran are not in the saved definition; keep them instead of overwriting.
-    if (segmentConditionInputs !== inputs) {
-      await loadContactSegments(true);
-      if (generation !== segmentsGeneration) return;
-      notice("필터 변경을 저장했습니다. 저장하는 동안 바꾼 조건은 저장되지 않았고 화면에 그대로 두었습니다.", true);
-      return;
-    }
     activeSegmentId = saved.id;
     await loadContactSegments(true);
     if (generation !== segmentsGeneration) return;
