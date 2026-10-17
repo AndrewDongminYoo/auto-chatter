@@ -32,9 +32,23 @@ export function normalizeContactTags(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > CONTACT_TAG_LIMIT) throw new ApiError(400, "invalid_contact_tags");
   return [...new Set(value.map(tag))].sort();
 }
-function parseConditionOperator(value: unknown, filterTag: string | null, hasField: boolean): "and" | "or" {
+// A tag condition names 1 to 5 tags: all of them must be present (all) or at least one (any).
+// A set that collapses to one tag is the single-tag condition, whatever the mode.
+export const SEGMENT_TAG_LIMIT = 5;
+type TagCondition = { tags: string[]; mode: "all" | "any" };
+function parseTagCondition(values: readonly unknown[], mode: unknown): TagCondition | null {
+  if (!values.length) {
+    if (mode != null) throw new ApiError(400, "invalid_contact_condition");
+    return null;
+  }
+  if (values.length > SEGMENT_TAG_LIMIT || (mode != null && mode !== "all" && mode !== "any"))
+    throw new ApiError(400, "invalid_contact_tags");
+  const tags = [...new Set(values.map(tag))].sort();
+  return { tags, mode: tags.length > 1 && mode === "any" ? "any" : "all" };
+}
+function parseConditionOperator(value: unknown, hasTag: boolean, hasField: boolean): "and" | "or" {
   if (value === undefined) return "and";
-  if ((value !== "and" && value !== "or") || (value === "or" && (!filterTag || !hasField)))
+  if ((value !== "and" && value !== "or") || (value === "or" && (!hasTag || !hasField)))
     throw new ApiError(400, "invalid_contact_condition");
   return value;
 }
@@ -125,6 +139,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       ![
         "connection_id",
         "tag",
+        "tag_mode",
         "after",
         "segment_id",
         "field_id",
@@ -139,7 +154,8 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
         "consent_state",
         "preview",
       ].includes(key) ||
-      options.getAll(key).length !== 1
+      // Only tag may repeat; parseTagCondition refuses more than five values.
+      (key !== "tag" && options.getAll(key).length !== 1)
     )
       throw new ApiError(400, "invalid_contact_request");
   const preview = options.has("preview");
@@ -147,7 +163,8 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
     throw new ApiError(400, "invalid_contact_request");
   let connectionId = options.get("connection_id");
   if (connectionId !== null && !isUuid(connectionId)) throw new ApiError(400, "invalid_contact_request");
-  let filterTag = options.has("tag") ? tag(options.get("tag")) : null;
+  // Tag values are validated before the segment_id mixing check, as the single tag was; the count and mode after it.
+  const tagValues = options.getAll("tag").map(tag);
   const segmentId = options.get("segment_id");
   if (
     segmentId !== null &&
@@ -155,6 +172,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       [
         "connection_id",
         "tag",
+        "tag_mode",
         "field_id",
         "field_operator",
         "field_value",
@@ -168,6 +186,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       ].some((key) => options.has(key)))
   )
     throw new ApiError(400, "invalid_contact_request");
+  let tagCondition = parseTagCondition(tagValues, options.get("tag_mode"));
   const fieldInput: Record<string, unknown> = {};
   for (const key of ["field_id", "field_operator", "field_value"])
     if (options.has(key)) fieldInput[key] = options.get(key);
@@ -192,13 +211,19 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
     consent_purpose: options.get("consent_purpose"),
     consent_state: options.get("consent_state"),
   });
-  let operator = parseConditionOperator(options.get("condition_operator") ?? undefined, filterTag, Boolean(condition));
+  let operator = parseConditionOperator(
+    options.get("condition_operator") ?? undefined,
+    Boolean(tagCondition),
+    Boolean(condition),
+  );
   const after = cursor(options.get("after"));
   const workspaceId = await workspaceFor(pool, user, "agent");
   if (segmentId !== null) {
     const segment = await pool.query<{
       connection_id: string | null;
       tag: string | null;
+      tags: string[] | null;
+      tag_mode: string | null;
       field_id: string | null;
       field_operator: string;
       field_value: unknown;
@@ -210,13 +235,15 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       consent_purpose: string | null;
       consent_state: string | null;
     }>(
-      "SELECT connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
+      "SELECT connection_id,tag,tags,tag_mode,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
       [workspaceId, segmentId],
     );
     if (!segment.rows[0]) throw new ApiError(404, "segment_not_found");
     connectionId = segment.rows[0].connection_id;
-    filterTag = segment.rows[0].tag;
     const saved = segment.rows[0];
+    tagCondition = saved.tags
+      ? parseTagCondition(saved.tags, saved.tag_mode)
+      : parseTagCondition(saved.tag === null ? [] : [saved.tag], null);
     consent = parseConsentCondition(saved);
     activity = parseActivityWindow({
       last_comment_from: saved.last_comment_from?.toISOString(),
@@ -231,7 +258,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
           ...(fieldConditionNeedsValue(saved.field_operator) ? { field_value: saved.field_value } : {}),
         }
       : null;
-    operator = parseConditionOperator(saved.condition_operator, filterTag, Boolean(condition));
+    operator = parseConditionOperator(saved.condition_operator, Boolean(tagCondition), Boolean(condition));
   }
   await validateFieldCondition(pool, workspaceId, condition);
   // One statement clock for the page and preview, using elapsed hours even across DST.
@@ -272,6 +299,9 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
    AND ($7='is_set' OR (jsonb_typeof(v.value)=jsonb_typeof($8::jsonb) AND CASE $7
      WHEN 'eq' THEN v.value=$8::jsonb WHEN 'gt' THEN v.value>$8::jsonb WHEN 'gte' THEN v.value>=$8::jsonb
      WHEN 'lt' THEN v.value<$8::jsonb WHEN 'lte' THEN v.value<=$8::jsonb ELSE false END))) END)`;
+  // The one tag predicate of the list, the preview and a saved segment: $3 is the sorted tag set or NULL.
+  // A contact without a tag row has no tags. The operator is chosen from the validated mode, never from input text.
+  const tagMatches = `($3::text[] IS NULL OR coalesce(t.tags,'{}'::text[]) ${tagCondition?.mode === "any" ? "&&" : "@>"} $3::text[])`;
   const contactScope = `FROM instagram_comment_events e JOIN instagram_connections c ON c.id=e.connection_id AND c.workspace_id=e.workspace_id
  LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=e.workspace_id AND automation.connection_id=e.connection_id AND automation.sender_id=e.sender_id
  LEFT JOIN instagram_contact_tags t ON t.workspace_id=e.workspace_id AND t.connection_id=e.connection_id AND t.sender_id=e.sender_id
@@ -282,9 +312,9 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
  JOIN instagram_contact_fields f ON f.id=v.field_id AND f.workspace_id=v.workspace_id AND NOT f.archived
  WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.value IS NOT NULL),'{}'::jsonb) AS fields
  ${contactScope}
- AND ($9::text='or' OR $3::text IS NULL OR $3=ANY(t.tags))
+ AND ($9::text='or' OR ${tagMatches})
  AND ($4::uuid IS NULL OR (e.connection_id,e.sender_id)>($4::uuid,$5::text))
- AND (($9::text='or' AND $3=ANY(t.tags)) OR ${fieldMatches})
+ AND (($9::text='or' AND ${tagMatches}) OR ${fieldMatches})
  AND ${consentMatches}
  GROUP BY e.workspace_id,e.connection_id,e.sender_id,c.username,t.tags,(automation.paused OR automation.handoff_paused)
  HAVING ${activityMatches} ORDER BY e.connection_id,e.sender_id LIMIT 51`;
@@ -292,7 +322,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   // Materialize only identities and predicate outcomes, not every contact's displayed field JSON.
   const query = preview
     ? `WITH ${evaluation}, contact_filters AS MATERIALIZED (
- SELECT e.connection_id,e.sender_id,coalesce($3::text IS NULL OR $3=ANY(t.tags),false) AS tag_matches,
+ SELECT e.connection_id,e.sender_id,${tagMatches} AS tag_matches,
  ${fieldMatches} AS field_matches,${activityMatches} AS activity_matches,${consentMatches} AS consent_matches
  ${contactScope}
  GROUP BY e.workspace_id,e.connection_id,e.sender_id,t.tags
@@ -329,7 +359,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   >(query, [
     workspaceId,
     connectionId,
-    filterTag,
+    tagCondition?.tags ?? null,
     after?.connection_id ?? null,
     after?.sender_id ?? null,
     condition?.field_id ?? null,
@@ -415,7 +445,7 @@ export async function saveContactTags(pool: Pool, user: User, connectionId: stri
 
 // The columns of a segment list item, also returned by create and edit.
 const SEGMENT_COLUMNS =
-  "id,name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state,version";
+  "id,name,connection_id,tag,tags,tag_mode,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state,version";
 
 export async function listContactSegments(pool: Pool, user: User) {
   const workspace = await workspaceFor(pool, user, "agent");
@@ -432,6 +462,8 @@ function segmentResult(row: {
   name: string;
   connection_id: string | null;
   tag: string | null;
+  tags?: string[] | null;
+  tag_mode?: string | null;
   version: number;
   field_id?: string | null;
   field_operator?: string | null;
@@ -455,10 +487,15 @@ function segmentResult(row: {
     last_comment_period,
     consent_purpose,
     consent_state,
+    tag,
+    tags,
+    tag_mode,
     ...base
   } = row;
   return {
     ...base,
+    // A multi-tag segment returns its set and mode and no tag key; a one-tag or legacy segment keeps tag.
+    ...(tags ? { tags, tag_mode } : { tag }),
     ...(last_comment_days ? { last_comment_days } : {}),
     ...(last_comment_period ? { last_comment_period } : {}),
     ...(consent_purpose && consent_state ? { consent_purpose, consent_state } : {}),
@@ -476,6 +513,8 @@ const SEGMENT_DEFINITION_KEYS = [
   "name",
   "connection_id",
   "tag",
+  "tags",
+  "tag_mode",
   "field_id",
   "field_operator",
   "field_value",
@@ -502,24 +541,34 @@ export function parseSegmentDefinition(input: unknown, extraKeys: readonly strin
   if (!name || name.length > 60 || /[\p{Cc}\p{Cf}]/u.test(name)) throw new ApiError(400, "invalid_segment");
   const connectionId = input.connection_id ?? null;
   if (connectionId !== null && !isUuid(connectionId)) throw new ApiError(400, "invalid_segment");
-  const filterTag = input.tag === undefined || input.tag === null || input.tag === "" ? null : tag(input.tag);
+  // The legacy tag (a string) or tags (an array); an absent, null or empty tag counts as no tag.
+  const legacyTag = input.tag === undefined || input.tag === null || input.tag === "" ? null : input.tag;
+  if (input.tags != null && legacyTag !== null) throw new ApiError(400, "invalid_segment");
+  if (input.tags != null && (!Array.isArray(input.tags) || !input.tags.length))
+    throw new ApiError(400, "invalid_contact_tags");
+  const tagCondition = parseTagCondition(
+    Array.isArray(input.tags) ? input.tags : legacyTag === null ? [] : [legacyTag],
+    input.tag_mode,
+  );
   const condition = parseFieldCondition(input);
   const activity = parseActivityWindow(input);
   const consent = parseConsentCondition(input);
-  const operator = parseConditionOperator(input.condition_operator, filterTag, Boolean(condition));
-  return { input, name, connectionId, filterTag, condition, activity, consent, operator };
+  const operator = parseConditionOperator(input.condition_operator, Boolean(tagCondition), Boolean(condition));
+  return { input, name, connectionId, tagCondition, condition, activity, consent, operator };
 }
 type SegmentDefinition = ReturnType<typeof parseSegmentDefinition>;
 
 // The stored columns of a definition, in the order of segmentDefinitionValues.
 const SEGMENT_DEFINITION_COLUMNS =
-  "name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state,last_comment_days,last_comment_period";
+  "name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state,last_comment_days,last_comment_period,tags,tag_mode";
 function segmentDefinitionValues(definition: SegmentDefinition) {
-  const { name, connectionId, filterTag, condition, activity, consent, operator } = definition;
+  const { name, connectionId, tagCondition, condition, activity, consent, operator } = definition;
+  // One tag is stored in the legacy tag column; two or more in tags with their mode.
+  const single = tagCondition?.tags.length === 1;
   return [
     name,
     connectionId,
-    filterTag,
+    single ? tagCondition.tags[0] : null,
     condition?.field_id ?? null,
     condition?.field_operator ?? null,
     condition && fieldConditionNeedsValue(condition.field_operator) ? JSON.stringify(condition.field_value) : null,
@@ -530,6 +579,8 @@ function segmentDefinitionValues(definition: SegmentDefinition) {
     consent?.consent_state ?? null,
     activity?.last_comment_days ?? null,
     activity?.last_comment_period ?? null,
+    tagCondition && !single ? tagCondition.tags : null,
+    tagCondition && !single ? tagCondition.mode : null,
   ];
 }
 
@@ -560,7 +611,7 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
     await validateSegmentReferences(client, workspace, definition);
     const result = await client.query(
       `INSERT INTO instagram_contact_segments(workspace_id,${SEGMENT_DEFINITION_COLUMNS})
- SELECT $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14 WHERE (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived)<50
+ SELECT $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15::text[],$16 WHERE (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived)<50
  RETURNING ${SEGMENT_COLUMNS}`,
       [workspace, ...segmentDefinitionValues(definition)],
     );
@@ -614,10 +665,10 @@ export async function updateContactSegment(
     // IS DISTINCT FROM compares in SQL, so jsonb and timestamps need no conversion; an unchanged row updates nothing.
     const updated = (
       await client.query(
-        `UPDATE instagram_contact_segments SET (${SEGMENT_DEFINITION_COLUMNS})=($3,$4,$5,$6,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text),
+        `UPDATE instagram_contact_segments SET (${SEGMENT_DEFINITION_COLUMNS})=($3,$4,$5,$6,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text,$16::text[],$17::text),
    version=version+1
  WHERE workspace_id=$1 AND id=$2
-   AND (${SEGMENT_DEFINITION_COLUMNS}) IS DISTINCT FROM ($3,$4::uuid,$5,$6::uuid,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text)
+   AND (${SEGMENT_DEFINITION_COLUMNS}) IS DISTINCT FROM ($3,$4::uuid,$5,$6::uuid,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text,$16::text[],$17::text)
  RETURNING ${SEGMENT_COLUMNS}`,
         [workspace, id, ...segmentDefinitionValues(definition)],
       )

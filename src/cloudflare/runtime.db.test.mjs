@@ -1298,6 +1298,46 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.equal(agentEdit.status, 403);
     assert.deepEqual(await agentEdit.json(), { error: "role_forbidden" });
     await pool.query("UPDATE workspace_members SET role='owner' WHERE user_id=$1", [user]);
+    // The restricted server role stores a tag set in the new columns and evaluates it through the Worker.
+    const multiCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Lead or VIP", connection_id: connection, tags: ["VIP", " lead"], tag_mode: "any" }),
+    });
+    assert.equal(multiCreated.status, 201, await multiCreated.clone().text());
+    const multiSegment = await multiCreated.json();
+    assert.deepEqual(multiSegment, {
+      id: multiSegment.id,
+      name: "Lead or VIP",
+      connection_id: connection,
+      tags: ["lead", "vip"],
+      tag_mode: "any",
+      version: 1,
+    });
+    const multiSelected = await (
+      await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${multiSegment.id}`, { headers })
+    ).json();
+    assert.deepEqual(
+      multiSelected.contacts.map((contact) => contact.sender_id),
+      ["sender-1"],
+    );
+    const bothTags = await (
+      await runtime.dispatchFetch(
+        `https://app.test/api/contacts?preview=true&connection_id=${connection}&tag=lead&tag=vip&tag_mode=all`,
+        { headers },
+      )
+    ).json();
+    assert.equal(bothTags.total, "0");
+    assert.equal(bothTags.excluded.tag, bothTags.evaluated);
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`https://app.test/api/contact-segments/${multiSegment.id}`, {
+          method: "DELETE",
+          headers,
+        })
+      ).status,
+      200,
+    );
     const restored = await runtime.dispatchFetch(segmentPath, {
       method: "PUT",
       headers,

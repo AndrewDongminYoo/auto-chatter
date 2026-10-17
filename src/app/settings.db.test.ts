@@ -2100,7 +2100,8 @@ test("contact keyset pages visit every stable identity once and reject malformed
     "after=broken",
     "after=https://evil.test",
     "tag=",
-    "tag=x&tag=y",
+    // tag may repeat up to five times since the multi-tag condition; a sixth value is refused.
+    "tag=a&tag=b&tag=c&tag=d&tag=e&tag=f",
     "connection_id=wrong",
     "extra=1",
   ])
@@ -4598,6 +4599,335 @@ test("calendar period migration adds the column and its check and can be applied
       client.query("UPDATE instagram_contact_segments SET last_comment_days=1 WHERE id=$1", [relative.id]),
       { code: "23514", constraint: "contact_segment_calendar_period" },
     );
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+});
+
+// Contacts for the tag-set tests: no tag row, an empty tag row, and none, one, some or all of a, b and c.
+async function multiTagContacts() {
+  const workspace = await ensureWorkspace(pool, a);
+  const field = await createField("Multi tag score", "number");
+  for (const [sender, tags, value] of [
+    ["all", ["a", "b", "c"], 10],
+    ["empty", [], -1],
+    ["none", null, 10],
+    ["one", ["a"], 10],
+    ["other", ["x"], null],
+    ["some", ["b", "c"], -1],
+  ] as const) {
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,$3,'media',$3,'private')",
+      [workspace, connectionId, sender],
+    );
+    if (tags) await saveContactTags(pool, a, connectionId, sender, { tags });
+    if (value !== null)
+      assert.equal((await fieldRequest("PUT", fieldValuePath(field.id, sender), { value })).status, 200);
+  }
+  assert.equal(
+    (await pool.query("SELECT count(*) FROM instagram_contact_tags WHERE sender_id='none'")).rows[0].count,
+    "0",
+  );
+  return { workspace, field };
+}
+// The list and the preview of one query select the same contacts, and the preview partitions the rest.
+async function assertTagSet(
+  query: URLSearchParams,
+  expected: string[],
+  excluded: { tag: string; field: string; both: string },
+  user = a,
+) {
+  const label = query.toString();
+  const list = await listContacts(pool, user, query);
+  assert.deepEqual(
+    list.contacts.map((c) => c.sender_id),
+    expected,
+    label,
+  );
+  const preview = await listContacts(pool, user, new URLSearchParams([...query, ["preview", "true"]]));
+  assert.deepEqual(
+    preview.contacts.map((c) => c.sender_id),
+    expected,
+    label,
+  );
+  assert.equal(preview.total, String(expected.length), label);
+  assert.equal(preview.evaluated, "6", label);
+  assert.deepEqual(preview.excluded, excluded, label);
+}
+
+test("tag sets match all or any of their tags, alone and on either side of a field AND/OR", async () => {
+  const { field } = await multiTagContacts();
+  const tags = (mode: string | null, extra: Record<string, string> = {}) => {
+    const query = new URLSearchParams([["tag", "C"], ["tag", " a "], ["tag", "b"], ...Object.entries(extra)]);
+    if (mode) query.set("tag_mode", mode);
+    return query;
+  };
+  // A contact without a tag row and one with an empty row both have no tags.
+  await assertTagSet(tags(null), ["all"], { tag: "5", field: "0", both: "0" });
+  await assertTagSet(tags("all"), ["all"], { tag: "5", field: "0", both: "0" });
+  await assertTagSet(tags("any"), ["all", "one", "some"], { tag: "3", field: "0", both: "0" });
+  // A set that collapses to one tag is the single-tag condition, whatever the mode.
+  const collapsed = new URLSearchParams([
+    ["tag", "A"],
+    ["tag", "a"],
+    ["tag_mode", "any"],
+  ]);
+  await assertTagSet(collapsed, ["all", "one"], { tag: "4", field: "0", both: "0" });
+  await assertTagSet(new URLSearchParams({ tag: "a" }), ["all", "one"], { tag: "4", field: "0", both: "0" });
+  const scored = { field_id: field.id, field_operator: "gte", field_value: "0" };
+  // Field matches: all, none, one.
+  await assertTagSet(tags("all", scored), ["all"], { tag: "2", field: "0", both: "3" });
+  await assertTagSet(tags("all", { ...scored, condition_operator: "or" }), ["all", "none", "one"], {
+    tag: "0",
+    field: "0",
+    both: "3",
+  });
+  await assertTagSet(tags("any", scored), ["all", "one"], { tag: "1", field: "1", both: "2" });
+  await assertTagSet(tags("any", { ...scored, condition_operator: "or" }), ["all", "none", "one", "some"], {
+    tag: "0",
+    field: "0",
+    both: "2",
+  });
+  // The other workspace evaluates none of these contacts.
+  const foreign = await listContacts(pool, b, new URLSearchParams([...tags("any"), ["preview", "true"]]));
+  assert.equal(foreign.evaluated, "0");
+  assert.deepEqual(foreign.contacts, []);
+  // The HTTP route reads the repeated key the same way and refuses a sixth tag.
+  const response = await fieldRequest("GET", `/api/contacts?${tags("any")}`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(
+    (await response.json()).contacts.map((c: { sender_id: string }) => c.sender_id),
+    ["all", "one", "some"],
+  );
+  const six = await fieldRequest("GET", "/api/contacts?tag=a&tag=b&tag=c&tag=d&tag=e&tag=f");
+  assert.equal(six.status, 400);
+  assert.deepEqual(await six.json(), { error: "invalid_contact_tags" });
+});
+
+test("multi-tag segments store sorted sets, keep legacy single tags and evaluate like the matching query", async () => {
+  const { field } = await multiTagContacts();
+  const created = await fieldRequest("POST", "/api/contact-segments", {
+    name: "Any of three",
+    tags: ["C", " b", "a", "A"],
+    tag_mode: "any",
+  });
+  assert.equal(created.status, 201);
+  const segment = await created.json();
+  assert.deepEqual(segment, {
+    id: segment.id,
+    name: "Any of three",
+    connection_id: null,
+    tags: ["a", "b", "c"],
+    tag_mode: "any",
+    version: 1,
+  });
+  assert.deepEqual(
+    (await listContactSegments(pool, a)).find((s) => s.id === segment.id),
+    segment,
+  );
+  assert.deepEqual(
+    (await pool.query("SELECT tag,tags,tag_mode FROM instagram_contact_segments WHERE id=$1", [segment.id])).rows[0],
+    { tag: null, tags: ["a", "b", "c"], tag_mode: "any" },
+  );
+  const bySegment = new URLSearchParams({ segment_id: segment.id });
+  await assertTagSet(bySegment, ["all", "one", "some"], { tag: "3", field: "0", both: "0" });
+  for (const mixed of ["tag=a", "tag_mode=any", "tag=a&tag=b"])
+    assert.equal((await fieldRequest("GET", `/api/contacts?${bySegment}&${mixed}`)).status, 400, mixed);
+  assert.equal((await fieldRequest("GET", `/api/contacts?${bySegment}`, undefined, b)).status, 404);
+  // The same set in another order and spelling is an unchanged definition and keeps the version.
+  const same = await updateContactSegment(pool, a, segment.id, {
+    name: "Any of three",
+    tags: ["b", "a", "C"],
+    tag_mode: "any",
+    expected_version: 1,
+  });
+  assert.deepEqual(same, { conflict: false, segment });
+  // Changing only the mode is a change.
+  const allOf = await updateContactSegment(pool, a, segment.id, {
+    name: "Any of three",
+    tags: ["a", "b", "c"],
+    tag_mode: "all",
+    expected_version: 1,
+  });
+  assert.deepEqual(allOf.segment, { ...segment, tag_mode: "all", version: 2 });
+  await assertTagSet(bySegment, ["all"], { tag: "5", field: "0", both: "0" });
+  // A set that collapses to one tag is stored and returned as the legacy tag.
+  const single = await updateContactSegment(pool, a, segment.id, {
+    name: "Any of three",
+    tags: ["A", "a"],
+    tag_mode: "any",
+    expected_version: 2,
+  });
+  assert.deepEqual(single.segment, {
+    id: segment.id,
+    name: "Any of three",
+    connection_id: null,
+    tag: "a",
+    version: 3,
+  });
+  assert.deepEqual(
+    (await pool.query("SELECT tag,tags,tag_mode FROM instagram_contact_segments WHERE id=$1", [segment.id])).rows[0],
+    { tag: "a", tags: null, tag_mode: null },
+  );
+  // The legacy tag form of the same single tag is unchanged too.
+  const legacySame = await updateContactSegment(pool, a, segment.id, {
+    name: "Any of three",
+    tag: "A",
+    expected_version: 3,
+  });
+  assert.equal(legacySame.segment.version, 3);
+  // A multi-tag OR with a field condition passes the updated condition_operator CHECK.
+  const either = await updateContactSegment(pool, a, segment.id, {
+    name: "Any of three",
+    tags: ["b", "c"],
+    tag_mode: "all",
+    field_id: field.id,
+    field_operator: "gte",
+    field_value: 0,
+    condition_operator: "or",
+    expected_version: 3,
+  });
+  assert.deepEqual(either.segment, {
+    id: segment.id,
+    name: "Any of three",
+    connection_id: null,
+    tags: ["b", "c"],
+    tag_mode: "all",
+    condition_operator: "or",
+    field_id: field.id,
+    field_operator: "gte",
+    field_value: 0,
+    version: 4,
+  });
+  await assertTagSet(bySegment, ["all", "none", "one", "some"], { tag: "0", field: "0", both: "2" });
+  // Legacy one-tag segments keep their shape.
+  const legacy = await createContactSegment(pool, a, { name: "Legacy", tag: " A " });
+  assert.deepEqual(legacy, { id: legacy.id, name: "Legacy", connection_id: null, tag: "a", version: 1 });
+  const collapsed = await createContactSegment(pool, a, { name: "Collapsed", tags: ["a", "A"], tag_mode: "any" });
+  assert.deepEqual(collapsed, { id: collapsed.id, name: "Collapsed", connection_id: null, tag: "a", version: 1 });
+  assert.equal(
+    (await fieldRequest("POST", "/api/contact-segments", { name: "Both", tag: "a", tags: ["b", "c"] })).status,
+    400,
+  );
+  // The other workspace can neither read nor edit the segment.
+  await assert.rejects(
+    updateContactSegment(pool, b, segment.id, { name: "Foreign", tags: ["a", "b"], expected_version: 4 }),
+    (e: unknown) => e instanceof ApiError && e.status === 404,
+  );
+  assert.equal(
+    (await listContactSegments(pool, b)).some((s) => s.id === segment.id),
+    false,
+  );
+  await archiveContactSegment(pool, a, segment.id);
+  assert.equal((await fieldRequest("GET", `/api/contacts?${bySegment}`)).status, 404);
+});
+
+test("the multi-tag CHECK refuses malformed sets written directly", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const field = await createField("Check score", "number");
+  const insert = (columns: string) =>
+    pool.query(
+      `INSERT INTO instagram_contact_segments(workspace_id,name,tag,tags,tag_mode) SELECT $1,'Direct',${columns}`,
+      [workspace],
+    );
+  const valid = await insert("NULL,ARRAY['a','b','c','d','e'],'any' RETURNING id");
+  await pool.query("UPDATE instagram_contact_segments SET archived=true WHERE id=$1", [valid.rows[0].id]);
+  for (const columns of [
+    "NULL,ARRAY['a'],'all'",
+    "NULL,ARRAY['a','b','c','d','e','f'],'all'",
+    "NULL,ARRAY['a',NULL],'all'",
+    "NULL,ARRAY['a',''],'all'",
+    `NULL,ARRAY['a','${"x".repeat(41)}'],'all'`,
+    "NULL,ARRAY['a','b'],'none'",
+    "NULL,ARRAY['a','b'],NULL",
+    "NULL,NULL,'all'",
+    "'a',ARRAY['b','c'],'all'",
+    "NULL,'{}'::text[],'all'",
+    "NULL,ARRAY[['a','b'],['c','d']],'all'",
+    "NULL,'[0:1]={a,b}'::text[],'all'",
+  ])
+    await assert.rejects(insert(columns), { code: "23514", constraint: "contact_segment_multi_tag" }, columns);
+  // OR still needs a tag condition and a field condition, and a tag set counts as one.
+  await assert.rejects(
+    pool.query(
+      "INSERT INTO instagram_contact_segments(workspace_id,name,field_id,field_operator,condition_operator) VALUES($1,'No tag','" +
+        field.id +
+        "','is_set','or')",
+      [workspace],
+    ),
+    { code: "23514", constraint: "contact_segment_condition_operator" },
+  );
+  await pool.query(
+    "INSERT INTO instagram_contact_segments(workspace_id,name,tags,tag_mode,field_id,field_operator,condition_operator) VALUES($1,'Set or field',ARRAY['a','b'],'any',$2,'is_set','or')",
+    [workspace, field.id],
+  );
+});
+
+test("multi-tag migration adds the columns and checks, keeps legacy rows and can be applied repeatedly", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const field = await createField("Migration multi tag", "number");
+  const legacy = await createContactSegment(pool, a, {
+    name: "Legacy or",
+    tag: "lead",
+    field_id: field.id,
+    field_operator: "is_set",
+    condition_operator: "or",
+  });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN tags, DROP COLUMN tag_mode");
+    // Dropping tags also dropped the condition_operator CHECK that reads it; the migration restores both.
+    assert.deepEqual(
+      (
+        await client.query(
+          "SELECT conname FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname IN ('contact_segment_multi_tag','contact_segment_condition_operator')",
+        )
+      ).rows,
+      [],
+    );
+    const migration = await readFile(new URL("../../db/migrations/056_segment_multi_tag.sql", import.meta.url), "utf8");
+    await client.query(migration);
+    await client.query(migration);
+    assert.deepEqual(
+      (
+        await client.query(
+          "SELECT conname FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname IN ('contact_segment_multi_tag','contact_segment_condition_operator') ORDER BY conname",
+        )
+      ).rows.map((row) => row.conname),
+      ["contact_segment_condition_operator", "contact_segment_multi_tag"],
+    );
+    assert.deepEqual(
+      (
+        await client.query("SELECT tag,tags,tag_mode,condition_operator FROM instagram_contact_segments WHERE id=$1", [
+          legacy.id,
+        ])
+      ).rows[0],
+      { tag: "lead", tags: null, tag_mode: null, condition_operator: "or" },
+    );
+    await client.query(
+      "UPDATE instagram_contact_segments SET tag=NULL,tags=ARRAY['a','b'],tag_mode='all' WHERE id=$1",
+      [legacy.id],
+    );
+    await client.query(migration);
+    assert.deepEqual(
+      (await client.query("SELECT tag,tags,tag_mode FROM instagram_contact_segments WHERE id=$1", [legacy.id])).rows[0],
+      { tag: null, tags: ["a", "b"], tag_mode: "all" },
+    );
+    for (const [change, constraint] of [
+      ["tags=ARRAY['a']", "contact_segment_multi_tag"],
+      ["tag='lead'", "contact_segment_multi_tag"],
+      ["tags=NULL,tag_mode=NULL", "contact_segment_condition_operator"],
+    ]) {
+      await client.query("SAVEPOINT invalid_multi_tag");
+      await assert.rejects(client.query(`UPDATE instagram_contact_segments SET ${change} WHERE id=$1`, [legacy.id]), {
+        code: "23514",
+        constraint,
+      });
+      await client.query("ROLLBACK TO SAVEPOINT invalid_multi_tag");
+    }
+    assert.ok(workspace);
   } finally {
     await client.query("ROLLBACK");
     client.release();

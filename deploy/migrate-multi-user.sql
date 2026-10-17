@@ -55,5 +55,6 @@ BEGIN;
 \ir ../db/migrations/053_segment_relative_activity.sql
 \ir ../db/migrations/054_segment_version.sql
 \ir ../db/migrations/055_segment_calendar_period.sql
+\ir ../db/migrations/056_segment_multi_tag.sql
 \ir supabase-access.sql
 COMMIT;
