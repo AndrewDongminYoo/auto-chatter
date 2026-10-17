@@ -19,14 +19,17 @@ type Contact = {
   tags: string[];
   fields: Record<string, unknown>;
 };
+export const CONTACT_TAG_LIMIT = 20;
+export const CONTACT_TAG_LENGTH = 40;
 function tag(value: unknown): string {
   if (typeof value !== "string" || value.length > 200) throw new ApiError(400, "invalid_contact_tags");
   const result = value.trim().normalize("NFC").toLowerCase();
-  if (!result || result.length > 40 || /[\p{Cc}\p{Cf}]/u.test(result)) throw new ApiError(400, "invalid_contact_tags");
+  if (!result || result.length > CONTACT_TAG_LENGTH || /[\p{Cc}\p{Cf}]/u.test(result))
+    throw new ApiError(400, "invalid_contact_tags");
   return result;
 }
 export function normalizeContactTags(value: unknown): string[] {
-  if (!Array.isArray(value) || value.length > 20) throw new ApiError(400, "invalid_contact_tags");
+  if (!Array.isArray(value) || value.length > CONTACT_TAG_LIMIT) throw new ApiError(400, "invalid_contact_tags");
   return [...new Set(value.map(tag))].sort();
 }
 function parseConditionOperator(value: unknown, filterTag: string | null, hasField: boolean): "and" | "or" {

@@ -6,7 +6,10 @@ import { Pool, type PoolClient, type QueryConfig } from "pg";
 import { appApi } from "./api.ts";
 import * as csv from "./contact-csv.ts";
 import { previewContactCsv } from "./contact-csv-preview.ts";
+import { applyContactCsv, CONTACT_IMPORT_APPLY_REQUEST_BYTES } from "./contact-csv-import.ts";
 import { decodeContactScalar, parseContactCsv } from "./contact-csv-test-utils.ts";
+import { lockContactConnection, saveContactTags } from "./contacts.ts";
+import { lockContact } from "./contact-fields.ts";
 import { seedWorkspace } from "./workspace-fixture.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -159,6 +162,41 @@ async function previewRequest(body: unknown, actor = owner, suffix = "", origin 
     },
   );
 }
+async function applyRequest(body: unknown, actor = owner, suffix = "", raw?: string) {
+  return appApi(
+    new Request(`https://app.test/api/contacts/import${suffix}`, {
+      method: "POST",
+      headers: { origin: "https://app.test", cookie: "__Host-ac-access=test", "content-type": "application/json" },
+      body: raw ?? JSON.stringify(body),
+    }),
+    {
+      SUPABASE_URL: "https://project.supabase.co",
+      SUPABASE_SECRET_KEY: "sb_secret_test",
+      API_WRITE_USER_LIMIT: { limit: async () => ({ success: true }) },
+      API_WRITE_WORKSPACE_LIMIT: { limit: async () => ({ success: true }) },
+    },
+    tracked,
+    (async () =>
+      Response.json({ id: actor, email: "member@example.test", email_confirmed_at: "2026-10-17" })) as typeof fetch,
+    async () => {
+      notifications++;
+    },
+  );
+}
+// The apply body a screen builds from a preview: the checked CSV plus the current tags of every changed row.
+function applyBody(csvText: string, preview: { rows: { row: number; status: string; current_tags?: string[] }[] }) {
+  return {
+    csv: csvText,
+    expected: preview.rows
+      .filter((row) => row.status === "changed")
+      .map((row) => ({ row: row.row, current_tags: row.current_tags })),
+  };
+}
+async function tagsByContact() {
+  return (
+    await pool.query("SELECT connection_id,sender_id,tags FROM instagram_contact_tags ORDER BY connection_id,sender_id")
+  ).rows;
+}
 async function databaseSnapshot() {
   const tables = (await pool.query("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename"))
     .rows;
@@ -309,6 +347,239 @@ test("CSV preview shows tag clearing and rejects invalid rows before duplicate d
   assert.deepEqual(result.rows[0]!.proposed_tags, []);
   assert.deepEqual(result.rows[1], { row: 2, status: "invalid" });
   assert.deepEqual((await pool.query("SELECT tags FROM instagram_contact_tags")).rows[0].tags, ["old"]);
+});
+
+test("CSV tag apply writes exactly the changed rows once and a repeated file changes nothing", async () => {
+  await add("00123");
+  await add("00123", second);
+  await add("90071992547409931234567890");
+  await pool.query(
+    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'00123',ARRAY['old']),($1,$3,'00123',ARRAY['kept'])",
+    [workspace, connection, second],
+  );
+  const file = previewCsv([
+    {},
+    { connection_id: second, tags_json: '["kept"]' },
+    { sender_id: "'90071992547409931234567890", tags_json: '["=formula","<script>"]' },
+  ]);
+  const before = await databaseSnapshot();
+  const preview = await previewContactCsv(pool, { id: admin, email: "admin@example.test" }, { csv: file });
+  assert.equal(preview.counts.changed, 2);
+  const response = await applyRequest(applyBody(file, preview), admin);
+  assert.equal(response.status, 200, await response.clone().text());
+  const result = await response.json();
+  assert.ok(Number.isFinite(Date.parse(result.applied_at)));
+  assert.deepEqual(result.counts, { total: 3, applied: 2, unchanged: 1 });
+  assert.deepEqual(result.rows, [
+    { row: 1, status: "applied", connection_id: connection, sender_id: "00123", previous_tags: ["old"], tags: ["new"] },
+    { row: 2, status: "unchanged", connection_id: second, sender_id: "00123", previous_tags: ["kept"], tags: ["kept"] },
+    {
+      row: 3,
+      status: "applied",
+      connection_id: connection,
+      sender_id: "90071992547409931234567890",
+      previous_tags: [],
+      tags: ["<script>", "=formula"],
+    },
+  ]);
+  assert.equal(JSON.stringify(result).includes("PRIVATE"), false);
+  assert.equal(notifications, 0);
+  const after = await databaseSnapshot();
+  assert.deepEqual(
+    Object.keys(before).filter((table) => JSON.stringify(before[table]) !== JSON.stringify(after[table])),
+    ["instagram_contact_tags"],
+  );
+  assert.deepEqual(
+    (await tagsByContact()).map((row) => [row.connection_id, row.sender_id, row.tags]),
+    [
+      [connection, "00123", ["new"]],
+      [connection, "90071992547409931234567890", ["<script>", "=formula"]],
+      [second, "00123", ["kept"]],
+    ],
+  );
+  assert.ok(statements.includes("COMMIT"));
+  statements.length = 0;
+  const again = await previewContactCsv(pool, user, { csv: file });
+  assert.equal(again.counts.changed, 0);
+  const repeat = await applyRequest(applyBody(file, again));
+  assert.equal(repeat.status, 200);
+  const repeated = await repeat.json();
+  assert.equal(repeated.counts.applied, 0);
+  assert.ok(repeated.rows.every((row: { status: string }) => row.status === "unchanged"));
+  assert.deepEqual(await databaseSnapshot(), after);
+});
+
+test("CSV tag apply refuses a file with an invalid duplicate or unavailable row and writes nothing", async () => {
+  await add("00123");
+  await add("00123", second);
+  const other = randomUUID();
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'foreign')", [
+    other,
+    foreign,
+  ]);
+  await add("00123", other, foreign);
+  const before = await databaseSnapshot();
+  for (const [bad, status] of [
+    [{ tags_json: '[""]' }, "invalid"],
+    [{ connection_id: second, tags_json: '["x"]' }, "duplicate"],
+    [{ sender_id: "'missing" }, "not_found"],
+    [{ connection_id: other }, "not_found"],
+  ] as const) {
+    const rows = [{}, { connection_id: second, tags_json: '["x"]' }, bad];
+    const file = previewCsv(rows);
+    const preview = await previewContactCsv(pool, user, { csv: file });
+    const response = await applyRequest(applyBody(file, preview));
+    assert.equal(response.status, 422, await response.clone().text());
+    const body = await response.json();
+    assert.equal(body.error, "contact_import_rejected");
+    assert.ok(Number.isFinite(Date.parse(body.checked_at)));
+    assert.equal(body.counts.total, 3);
+    assert.equal(body.rows[0].status, "changed");
+    assert.equal(body.rows[1].status, status === "duplicate" ? "duplicate" : "changed");
+    assert.equal(body.rows[2].status, status);
+    assert.equal(JSON.stringify(body).includes(other), false);
+    assert.ok(statements.includes("ROLLBACK"));
+    assert.equal(statements.includes("COMMIT"), false);
+    statements.length = 0;
+  }
+  assert.deepEqual(await databaseSnapshot(), before);
+});
+
+test("CSV tag apply refuses stale rows after an edit committed before its read or started after its locks", async () => {
+  await add("00123");
+  await add("456");
+  await pool.query(
+    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'00123',ARRAY['old'])",
+    [workspace, connection],
+  );
+  const file = previewCsv([{}, { sender_id: "'456", tags_json: '["second"]' }]);
+  const preview = await previewContactCsv(pool, user, { csv: file });
+  assert.equal(preview.counts.changed, 2);
+  const body = applyBody(file, preview);
+  // 1. The edit commits before the apply reads: it runs right after the workspace import lock.
+  afterQuery = async (_client, sql) => {
+    if (sql.includes("contact-import:")) await saveContactTags(pool, user, connection, "00123", { tags: ["edited"] });
+  };
+  const stale = await applyRequest(body);
+  assert.equal(stale.status, 409, await stale.clone().text());
+  const staleBody = await stale.json();
+  assert.equal(staleBody.error, "contact_import_stale");
+  assert.deepEqual(staleBody.rows[0].current_tags, ["edited"]);
+  assert.equal(staleBody.rows[1].status, "changed");
+  assert.deepEqual(
+    (await tagsByContact()).map((row) => row.tags),
+    [["edited"]],
+  );
+  afterQuery = undefined;
+  await pool.query("UPDATE instagram_contact_tags SET tags=ARRAY['old']");
+  // 2. A manual save holds the contact lock when the apply starts: the apply must wait before its read.
+  const waitFor = async (check: () => Promise<boolean> | boolean) => {
+    for (let i = 0; i < 200 && !(await check()); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(await check(), "condition never held");
+  };
+  const snapshotSql = "statement_timestamp() AS checked_at";
+  const holdContact = async (edit: string[] | null) => {
+    const holder = await pool.connect();
+    await holder.query("BEGIN");
+    await lockContactConnection(holder, workspace, connection);
+    await lockContact(holder, connection, "00123");
+    statements.length = 0;
+    const applying = applyContactCsv(tracked(), user, body);
+    await waitFor(
+      async () =>
+        (await pool.query("SELECT count(*)::int AS waiting FROM pg_locks WHERE locktype='advisory' AND NOT granted"))
+          .rows[0].waiting === 1,
+    );
+    assert.equal(
+      statements.some((sql) => sql.includes(snapshotSql)),
+      false,
+      "the apply must not read before it holds every contact lock",
+    );
+    if (edit) await holder.query("UPDATE instagram_contact_tags SET tags=$1 WHERE sender_id='00123'", [edit]);
+    await holder.query("COMMIT");
+    holder.release();
+    return applying;
+  };
+  const refused = await holdContact(["edited"]);
+  assert.equal(refused.status, 409);
+  assert.deepEqual(refused.body.rows[0]!.current_tags, ["edited"]);
+  assert.deepEqual(
+    (await tagsByContact()).map((row) => row.tags),
+    [["edited"]],
+  );
+  await pool.query("UPDATE instagram_contact_tags SET tags=ARRAY['old']");
+  const applied = await holdContact(null);
+  assert.equal(applied.status, 200);
+  assert.deepEqual(
+    (await tagsByContact()).map((row) => [row.sender_id, row.tags]),
+    [
+      ["00123", ["new"]],
+      ["456", ["second"]],
+    ],
+  );
+});
+
+test("CSV tag apply refuses when a changed contact disappears between its read and its write", async () => {
+  await add("00123");
+  await add("456");
+  const file = previewCsv([{}, { sender_id: "'456" }]);
+  const preview = await previewContactCsv(pool, user, { csv: file });
+  const before = await databaseSnapshot();
+  afterQuery = async (_client, sql) => {
+    if (sql.includes("statement_timestamp() AS checked_at"))
+      await pool.query("DELETE FROM instagram_comment_events WHERE sender_id='456'");
+  };
+  const response = await applyRequest(applyBody(file, preview));
+  assert.equal(response.status, 409, await response.clone().text());
+  assert.equal((await response.json()).error, "contact_import_stale");
+  assert.equal(statements.includes("COMMIT"), false);
+  const after = await databaseSnapshot();
+  assert.deepEqual(after.instagram_contact_tags, before.instagram_contact_tags);
+  assert.equal((after.instagram_comment_events as unknown[]).length, 1);
+});
+
+test("CSV tag apply enforces admin membership query shape and body limits without writes", async () => {
+  await add("00123");
+  const file = previewCsv([{}]);
+  const preview = await previewContactCsv(pool, user, { csv: file });
+  const body = applyBody(file, preview);
+  const before = await databaseSnapshot();
+  for (const actor of [agent, randomUUID()]) assert.equal((await applyRequest(body, actor)).status, 403);
+  await pool.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [admin, owner]);
+  assert.equal((await applyRequest(body, admin)).status, 403);
+  assert.equal((await applyRequest(body, owner, "?dry_run=true")).status, 400);
+  for (const input of [
+    { csv: file },
+    { ...body, apply: true },
+    { csv: file, expected: [{ row: "1", current_tags: ["old"] }] },
+    { csv: file, expected: [{ row: 1.5, current_tags: [] }] },
+    { csv: file, expected: [{ row: 2, current_tags: [] }] },
+    { csv: file, expected: [{ row: 1, current_tags: [1] }] },
+    {
+      csv: file,
+      expected: [
+        { row: 1, current_tags: [] },
+        { row: 1, current_tags: [] },
+      ],
+    },
+    { csv: file, expected: [{ row: 1, current_tags: [], extra: true }] },
+  ])
+    assert.equal((await applyRequest(input)).status, 400, JSON.stringify(input).slice(0, 80));
+  assert.equal(
+    (await applyRequest(undefined, owner, "", "x".repeat(CONTACT_IMPORT_APPLY_REQUEST_BYTES + 1))).status,
+    413,
+  );
+  // The preview recheck inside the transaction refuses a role lost after workspaceFor.
+  afterQuery = async (_client, sql) => {
+    if (sql.includes("contact-import:"))
+      await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [owner]);
+  };
+  assert.equal((await applyRequest(body)).status, 403);
+  afterQuery = undefined;
+  assert.equal(notifications, 0);
+  const after = await databaseSnapshot();
+  assert.deepEqual(after.instagram_contact_tags, before.instagram_contact_tags);
+  assert.deepEqual(after.instagram_comment_events, before.instagram_comment_events);
 });
 
 test("CSV GET returns fixed download headers and owner/admin empty files, never agent or missing/removed membership", async () => {
