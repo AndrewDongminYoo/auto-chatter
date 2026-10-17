@@ -2,6 +2,7 @@ const byId = (id) => document.getElementById(id);
 const manualReports = createManualReplyReports({ api, node });
 const flowReports = createFlowRunReports({ api, node });
 const handoffReports = createHandoffReports({ api, node });
+const contactCsvPreview = createContactCsvPreview({ api, node });
 const form = byId("rule-form");
 let connections = [];
 let contactsGeneration = 0;
@@ -157,6 +158,7 @@ window.addEventListener("beforeunload", (event) => {
   }
 });
 function resetSession() {
+  contactCsvPreview.reset();
   manualReports.reset();
   flowReports.reset();
   handoffReports.reset();
@@ -336,6 +338,9 @@ const errors = {
   conversation_closed: "완료 처리한 대화에는 리마인더를 둘 수 없습니다. 대화를 다시 연 뒤 정해 주세요.",
   invalid_contact_field: "필드 이름은 1–60자이며 값 종류를 선택해 주세요.",
   invalid_field_value: "선택한 종류에 맞는 값을 입력해 주세요. 텍스트는 최대 1000자입니다.",
+  invalid_contact_import_request: "CSV 검사 요청을 확인해 주세요.",
+  invalid_contact_import_format: "v1 CSV 헤더와 인용 형식을 확인해 주세요.",
+  contact_import_too_large: "CSV 파일은 128KiB, 500행까지 검사할 수 있습니다.",
   invalid_field_condition: "추가 정보의 필드·조건·찾을 값을 확인해 주세요.",
   invalid_contact_condition: "OR 결합에는 태그와 추가 정보 조건이 모두 필요합니다.",
   invalid_contact_activity: "UTC 시작·종료를 함께 지정하거나 최근 일수 1~366 중 하나를 선택해 주세요.",
@@ -543,6 +548,7 @@ function deletionRecord(record) {
 
 // Removes the deleted connection's contacts, inbox drafts and activity from the screen, then reloads those views.
 function forgetDeletedConnection(connectionId) {
+  contactCsvPreview.invalidate();
   invalidateSegmentPreview();
   invalidateContactExport(
     "연락처 기록이 삭제되어 진행 중인 내보내기를 취소했습니다. 다시 요청하면 현재 저장된 정보로 만듭니다.",
@@ -1125,6 +1131,7 @@ function renderGettingStarted(rules, globalSendEnabled, connectAvailable) {
 }
 
 async function loadWorkspace() {
+  contactCsvPreview.reset();
   manualReports.reset();
   flowReports.reset();
   handoffReports.reset();
@@ -1137,6 +1144,7 @@ async function loadWorkspace() {
   if (generation !== segmentsGeneration) return;
   const membership = await api("/api/workspace", "POST");
   currentRole = membership.role;
+  contactCsvPreview.configure(currentRole);
   workspaceTimeZone = membership.time_zone ?? undefined;
   workspacePlan = { plan: membership.plan, limits: membership.limits, usage: membership.usage };
   planControls();

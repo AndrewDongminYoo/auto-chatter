@@ -25,6 +25,10 @@ function tag(value: unknown): string {
   if (!result || result.length > 40 || /[\p{Cc}\p{Cf}]/u.test(result)) throw new ApiError(400, "invalid_contact_tags");
   return result;
 }
+export function normalizeContactTags(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 20) throw new ApiError(400, "invalid_contact_tags");
+  return [...new Set(value.map(tag))].sort();
+}
 function parseConditionOperator(value: unknown, filterTag: string | null, hasField: boolean): "and" | "or" {
   if (value === undefined) return "and";
   if ((value !== "and" && value !== "or") || (value === "or" && (!filterTag || !hasField)))
@@ -333,15 +337,9 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   };
 }
 export async function saveContactTags(pool: Pool, user: User, connectionId: string, senderId: string, input: unknown) {
-  if (
-    !isUuid(connectionId) ||
-    !senderIdentity(senderId) ||
-    !isRecord(input) ||
-    !Array.isArray(input.tags) ||
-    input.tags.length > 20
-  )
+  if (!isUuid(connectionId) || !senderIdentity(senderId) || !isRecord(input))
     throw new ApiError(400, "invalid_contact_tags");
-  const tags = [...new Set(input.tags.map(tag))].sort();
+  const tags = normalizeContactTags(input.tags);
   const workspaceId = await workspaceFor(pool, user, "agent");
   const client = await pool.connect();
   try {

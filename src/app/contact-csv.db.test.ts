@@ -5,6 +5,7 @@ import { before, beforeEach, after, test } from "node:test";
 import { Pool, type PoolClient, type QueryConfig } from "pg";
 import { appApi } from "./api.ts";
 import * as csv from "./contact-csv.ts";
+import { previewContactCsv } from "./contact-csv-preview.ts";
 import { decodeContactScalar, parseContactCsv } from "./contact-csv-test-utils.ts";
 import { seedWorkspace } from "./workspace-fixture.ts";
 
@@ -108,6 +109,207 @@ const records = (body: string) =>
   parseContactCsv(body)
     .slice(1)
     .map((row) => Object.fromEntries(csv.CONTACT_CSV_HEADER.map((name, i) => [name, row[i]!])));
+
+function previewCsv(rows: Partial<Record<(typeof csv.CONTACT_CSV_HEADER)[number], string>>[]) {
+  return (
+    "\ufeff" +
+    csv.contactCsvRow(csv.CONTACT_CSV_HEADER) +
+    rows
+      .map((row) => {
+        const values = {
+          format_version: "1",
+          exported_at: "ignored",
+          workspace_id: workspace,
+          channel: "instagram",
+          identity_kind: "comment_sender",
+          connection_id: connection,
+          sender_id: "'00123",
+          connection_username: "PRIVATE NAME",
+          first_comment_recorded_at: "ignored",
+          last_comment_recorded_at: "ignored",
+          comment_count: "ignored",
+          automation_paused: "ignored",
+          tags_json: '[" New ","NEW"]',
+          fields_json: "PRIVATE FIELD\n<script>bad</script>",
+          ...row,
+        };
+        return csv.contactCsvRow(csv.CONTACT_CSV_HEADER.map((key) => values[key]));
+      })
+      .join("")
+  );
+}
+async function previewRequest(body: unknown, actor = owner, suffix = "", origin = "https://app.test") {
+  return appApi(
+    new Request(`https://app.test/api/contacts/import-preview${suffix}`, {
+      method: "POST",
+      headers: { origin, cookie: "__Host-ac-access=test", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    {
+      SUPABASE_URL: "https://project.supabase.co",
+      SUPABASE_SECRET_KEY: "sb_secret_test",
+      API_WRITE_USER_LIMIT: { limit: async () => ({ success: true }) },
+      API_WRITE_WORKSPACE_LIMIT: { limit: async () => ({ success: true }) },
+    },
+    () => ({ query: pool.query.bind(pool), end: async () => {} }) as unknown as Pool,
+    (async () =>
+      Response.json({ id: actor, email: "member@example.test", email_confirmed_at: "2026-10-17" })) as typeof fetch,
+    async () => {
+      notifications++;
+    },
+  );
+}
+async function databaseSnapshot() {
+  const tables = (await pool.query("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename"))
+    .rows;
+  const snapshot: Record<string, unknown> = {};
+  for (const { tablename } of tables) {
+    assert.match(tablename, /^[a-z_]+$/);
+    snapshot[tablename] = (
+      await pool.query(
+        `SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]') AS value FROM "${tablename}" t`,
+      )
+    ).rows[0].value;
+  }
+  return snapshot;
+}
+
+test("CSV tag preview uses existing contacts and exported v1 without changing any stored table", async () => {
+  await add("00123");
+  await add("00123", second);
+  await add("90071992547409931234567890");
+  await pool.query(
+    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'00123',ARRAY['old'])",
+    [workspace, connection],
+  );
+  const before = await databaseSnapshot();
+  const exported = await csv.exportContactCsv(tracked(), user);
+  const roundtrip = await previewRequest({ csv: exported.body }, admin);
+  assert.equal(roundtrip.status, 200);
+  assert.equal((await roundtrip.json()).counts.unchanged, 3);
+  const response = await previewRequest({
+    csv: previewCsv([
+      {},
+      { connection_id: second, tags_json: "[]" },
+      { sender_id: "'90071992547409931234567890", tags_json: '["=formula","<script>"]' },
+    ]),
+  });
+  assert.equal(response.status, 200, await response.clone().text());
+  const result = await response.json();
+  assert.deepEqual(result.counts, { total: 3, changed: 2, unchanged: 1, invalid: 0, duplicate: 0, not_found: 0 });
+  assert.deepEqual(result.rows[0], {
+    row: 1,
+    status: "changed",
+    connection_id: connection,
+    sender_id: "00123",
+    current_tags: ["old"],
+    proposed_tags: ["new"],
+  });
+  assert.equal(result.rows[2].sender_id, "90071992547409931234567890");
+  assert.ok(result.checked_at);
+  assert.equal(JSON.stringify(result).includes("PRIVATE"), false);
+  assert.equal(notifications, 0);
+  assert.deepEqual(await databaseSnapshot(), before);
+});
+
+test("CSV tag preview separates all duplicate identities invalid scope and unavailable contacts", async () => {
+  await add("00123");
+  await add("00123", second);
+  const other = randomUUID();
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'foreign')", [
+    other,
+    foreign,
+  ]);
+  await add("00123", other, foreign);
+  const response = await previewRequest({
+    csv: previewCsv([
+      {},
+      {},
+      { connection_id: second },
+      { workspace_id: foreign },
+      { connection_id: other },
+      { sender_id: "'missing" },
+      { tags_json: '[""]' },
+      { sender_id: "00123" },
+      { format_version: "2" },
+      { channel: "telegram" },
+    ]),
+  });
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.deepEqual(result.counts, { total: 10, changed: 1, unchanged: 0, invalid: 5, duplicate: 2, not_found: 2 });
+  assert.deepEqual(result.rows.slice(0, 2), [
+    { row: 1, status: "duplicate" },
+    { row: 2, status: "duplicate" },
+  ]);
+  assert.deepEqual(result.rows[4], { row: 5, status: "not_found" });
+  assert.deepEqual(result.rows[5], { row: 6, status: "not_found" });
+  assert.equal(JSON.stringify(result).includes(other), false);
+});
+
+test("CSV tag preview enforces admin same-origin shape file and record limits", async () => {
+  const body = { csv: previewCsv([]) };
+  for (const actor of [agent, randomUUID()]) assert.equal((await previewRequest(body, actor)).status, 403);
+  await pool.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [admin, owner]);
+  assert.equal((await previewRequest(body, admin)).status, 403);
+  assert.equal((await previewRequest(body, owner, "", "https://other.test")).status, 403);
+  for (const input of [
+    {},
+    { csv: 3 },
+    { ...body, apply: true },
+    { csv: '"broken' },
+    { csv: "wrong,header" },
+    { csv: previewCsv([]) + "\0" },
+  ])
+    assert.equal((await previewRequest(input)).status, 400);
+  assert.equal((await previewRequest(body, owner, "?apply=true")).status, 400);
+  assert.equal((await previewRequest({ csv: "x".repeat(128 * 1024 + 1) })).status, 422);
+  assert.equal((await previewRequest({ csv: previewCsv(Array.from({ length: 501 }, () => ({}))) })).status, 422);
+  const empty = await previewRequest(body);
+  assert.equal(empty.status, 200);
+  assert.equal((await empty.json()).counts.total, 0);
+});
+
+test("CSV preview rechecks a role downgrade and contact deletion in the final read", async () => {
+  await add("00123");
+  let reads = 0;
+  const changing = (change: () => Promise<unknown>) =>
+    ({
+      query: async (sql: string, values: unknown[]) => {
+        reads++;
+        if (sql.includes("statement_timestamp()")) await change();
+        return pool.query(sql, values);
+      },
+    }) as unknown as Pool;
+  await assert.rejects(
+    previewContactCsv(
+      changing(() => pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [admin])),
+      { id: admin, email: "admin@example.test" },
+      { csv: previewCsv([{}]) },
+    ),
+    { status: 403, message: "role_forbidden" },
+  );
+  assert.equal(reads, 2);
+  const result = await previewContactCsv(
+    changing(() => pool.query("DELETE FROM instagram_comment_events WHERE connection_id=$1", [connection])),
+    user,
+    { csv: previewCsv([{}]) },
+  );
+  assert.deepEqual(result.rows, [{ row: 1, status: "not_found" }]);
+});
+
+test("CSV preview shows tag clearing and rejects invalid rows before duplicate detection", async () => {
+  await add("00123");
+  await pool.query(
+    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'00123',ARRAY['old'])",
+    [workspace, connection],
+  );
+  const result = await previewContactCsv(pool, user, { csv: previewCsv([{ tags_json: "[]" }, { tags_json: '[""]' }]) });
+  assert.equal(result.rows[0]!.status, "changed");
+  assert.deepEqual(result.rows[0]!.proposed_tags, []);
+  assert.deepEqual(result.rows[1], { row: 2, status: "invalid" });
+  assert.deepEqual((await pool.query("SELECT tags FROM instagram_contact_tags")).rows[0].tags, ["old"]);
+});
 
 test("CSV GET returns fixed download headers and owner/admin empty files, never agent or missing/removed membership", async () => {
   for (const actor of [owner, admin]) {

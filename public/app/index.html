@@ -10,6 +10,7 @@
     <script src="./manual-reply-reports.js" defer></script>
     <script src="./flow-run-reports.js" defer></script>
     <script src="./handoff-reports.js" defer></script>
+    <script src="./contact-csv-preview.js" defer></script>
     <script src="./inbox.js" defer></script>
     <script src="./webhook-labels.js" defer></script>
     <script src="./plan-labels.js" defer></script>
@@ -887,6 +888,29 @@
               </p>
             </details>
             <p id="contacts-export-status" class="hint" role="status" aria-live="polite"></p>
+            <details id="contacts-import" hidden>
+              <summary>CSV 태그 변경 사전 검사</summary>
+              <p class="hint">
+                내보낸 v1 CSV의 태그 배열(tags_json)을 수정해 기존 연락처의 예상 변경을 확인합니다. 실제 저장 기능은
+                아직 제공하지 않습니다. 다른 열의 값은 변경에 사용하지 않으며 동의·추가 정보·중지 상태도 바꾸지
+                않습니다.
+              </p>
+              <p class="hint">
+                UTF-8 CSV, 최대 128KiB·500행입니다. 식별자 앞의 작은따옴표를 유지해 주세요. 스프레드시트에서 다시 저장해
+                바뀐 값은 복원할 수 없을 수 있습니다. 파일은 검사 요청으로만 전송하며 저장하지 않습니다.
+              </p>
+              <form id="contacts-import-form" class="contacts-filter">
+                <label>검사할 CSV<input id="contacts-import-file" type="file" accept=".csv,text/csv" required /></label>
+                <button id="contacts-import-check" class="secondary" type="submit">태그 변경 검사</button>
+              </form>
+              <p id="contacts-import-status" class="hint" role="status" aria-live="polite"></p>
+              <p class="hint">
+                행 번호는 헤더 다음부터 센 CSV 레코드 번호입니다. 여러 줄 셀도 한 행으로 세며, 결과는 조회 시점의 참고
+                값입니다. 편집 중인 연락처 초안은 반영하지 않습니다.
+              </p>
+              <ul id="contacts-import-rows" class="hint"></ul>
+              <button id="contacts-import-more" class="secondary" type="button" hidden>검사 결과 더 보기</button>
+            </details>
             <p class="hint">
               저장된 댓글 참여자입니다. 계정별로 구분하며, 댓글 참여만으로 DM 수신에 동의한 것은 아닙니다.
             </p>

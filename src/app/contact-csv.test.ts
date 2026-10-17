@@ -2,6 +2,40 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CONTACT_CSV_HEADER, ContactCsvBuffer, contactCsvRow, contactCsvScalar } from "./contact-csv.ts";
 import { decodeContactScalar, parseContactCsv } from "./contact-csv-test-utils.ts";
+import { parseImportCsv, CONTACT_IMPORT_BYTES } from "./contact-csv-preview.ts";
+
+test("CSV import parser counts quoted records and preserves escapes Unicode and identifier text", () => {
+  const rows = [
+    Array.from({ length: 14 }, () => ""),
+    Array.from({ length: 14 }, (_, i) => (i === 6 ? "'0000123" : i === 7 ? '한글\r\n"quoted", 😀' : "x")),
+  ];
+  const text = "\ufeff" + contactCsvRow(CONTACT_CSV_HEADER) + rows.map(contactCsvRow).join("");
+  assert.deepEqual(parseImportCsv(text), rows);
+  assert.deepEqual(parseImportCsv(CONTACT_CSV_HEADER.join(",") + "\n"), []);
+  assert.deepEqual(parseImportCsv(text.slice(0, -2)), rows);
+  assert.deepEqual(parseImportCsv(contactCsvRow(CONTACT_CSV_HEADER) + "a,b,"), [["a", "b", ""]]);
+  for (const value of ['"unclosed', 'bad"quote', '"closed"tail', "a\rb", "\0", "\ud800"])
+    assert.throws(() => parseImportCsv(contactCsvRow(CONTACT_CSV_HEADER) + value), {
+      status: 400,
+      message: "invalid_contact_import_format",
+    });
+  assert.throws(() => parseImportCsv("\ufeff\ufeff" + contactCsvRow(CONTACT_CSV_HEADER)), { status: 400 });
+  assert.throws(() => parseImportCsv(contactCsvRow([...CONTACT_CSV_HEADER].reverse())), { status: 400 });
+});
+
+test("CSV import parser accepts exact byte and record caps and rejects one over without truncation", () => {
+  const header = contactCsvRow(CONTACT_CSV_HEADER);
+  const exact = header + '"' + "x".repeat(CONTACT_IMPORT_BYTES - Buffer.byteLength(header) - 2) + '"';
+  assert.equal(Buffer.byteLength(exact), CONTACT_IMPORT_BYTES);
+  assert.equal(parseImportCsv(exact).length, 1);
+  assert.throws(() => parseImportCsv(exact + "x"), { status: 422, message: "contact_import_too_large" });
+  const rows = header + contactCsvRow(["row"]).repeat(500);
+  assert.equal(parseImportCsv(rows).length, 500);
+  assert.throws(() => parseImportCsv(rows + contactCsvRow(["extra"])), {
+    status: 422,
+    message: "contact_import_too_large",
+  });
+});
 
 test("CSV v1 has one fixed header and every cell is quoted with doubled quotes and CRLF records", () => {
   assert.deepEqual(CONTACT_CSV_HEADER, [

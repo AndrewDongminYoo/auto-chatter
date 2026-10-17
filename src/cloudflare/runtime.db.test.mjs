@@ -1111,7 +1111,28 @@ test("workerd contact API uses restricted server privileges and verified workspa
       (await runtime.dispatchFetch("https://app.test/api/contacts/export.csv?tag=lead", { headers })).status,
       400,
     );
+    const csvPreviewBody = JSON.stringify({ csv: csvBytes.toString() });
+    const csvPreview = await runtime.dispatchFetch("https://app.test/api/contacts/import-preview", {
+      method: "POST",
+      headers,
+      body: csvPreviewBody,
+    });
+    assert.equal(csvPreview.status, 200, await csvPreview.clone().text());
+    const csvPreviewResult = await csvPreview.json();
+    assert.ok(csvPreviewResult.counts.total > 0);
+    assert.equal(csvPreviewResult.counts.unchanged, csvPreviewResult.counts.total);
+    assert.equal(csvPreviewResult.rows[0].sender_id, "sender-1");
     await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [user]);
+    assert.equal(
+      (
+        await runtime.dispatchFetch("https://app.test/api/contacts/import-preview", {
+          method: "POST",
+          headers,
+          body: csvPreviewBody,
+        })
+      ).status,
+      403,
+    );
     const deniedCsv = await runtime.dispatchFetch("https://app.test/api/contacts/export.csv", { headers });
     assert.equal(deniedCsv.status, 403);
     assert.equal(deniedCsv.headers.has("content-disposition"), false);
