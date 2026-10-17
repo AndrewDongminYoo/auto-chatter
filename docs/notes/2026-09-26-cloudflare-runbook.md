@@ -470,6 +470,18 @@ Worker를 버전 `bd9ed6d9-daea-4d84-a47a-226ebfdafdbd`로 배포했고, 15:59:3
 `scheduled_steps`를 16:02:20Z, 16:03:20Z, 16:04:21Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 브라우저가 실제로 파일을 보관했다가 다시 쓰는지는 운영자의 브라우저에서 확인하지 않았습니다.
 2026-10-16의 공개 URL 재측정과 남은 판단 한계는 [#199 네트워크 측정 기록](2026-10-16-network-routing-measurements.md)에 있습니다.
+
+2026-10-17 10:29Z에는 운영자의 "운영 적용과 배포 진행해주세요" 요청에 따라 `main` 커밋 `335968b`를 적용했습니다. 이 커밋에는 마지막 배포 커밋 `6987580` 뒤에 병합된 PR #201~#218의 18개가 들어 있으며, 그중 DB를 바꾸는 PR은 #208(046), #209(047), #210(048), #211(049), #212(050), #213(051), #214(052), #215(053), #218(054)입니다.
+적용 전 조회에서 운영 DB는 PostgreSQL 17.6이며 045까지 적용된 상태였습니다. 046~054가 만드는 열·테이블·인덱스는 하나도 없었고, public 테이블은 44개였습니다. 작업 공간 3개, 연결된 계정 1개, 세그먼트 0개, 수동 답장 0개, 발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
+관리자 연결 보조 스크립트는 scratchpad에 다시 만들었고, 앞과 같은 Session pooler를 TLS `verify-full`(Git에서 제외된 `deploy/secrets/supabase-ca.crt`)로 사용했습니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-17-migration-046-054/public-pre-046-054.dump`(281,259바이트, SHA-256 `6f5c38e4e314ce69a167c5db14e727937c13f70ee1dab45da34fe84e97392b06`)에 저장했고, 목록 읽기에서 데이터 테이블 44개를 확인했습니다.
+같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE는 153건이었습니다.
+적용 후 046~054의 확인 지점이 모두 생겼고 public 테이블은 `workspace_reply_templates`가 더해져 45개가 됐습니다. `instagram_contact_segments.version`은 NOT NULL에 기본값 1이며 `contact_segment_version` CHECK가 생겼습니다. `auto_chatter_server`의 `workspace_reply_templates` 권한은 SELECT·INSERT·UPDATE였습니다. 서버 역할의 테이블 DELETE·TRUNCATE 권한, `anon`·`authenticated`의 public 테이블 권한, RLS가 꺼진 public 테이블은 모두 0개였습니다.
+이어서 Worker를 버전 `6697d52f-e9ec-42bd-b9ac-f9c48309aa35`로 배포했고, 10:32:28Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `bd9ed6d9-daea-4d84-a47a-226ebfdafdbd`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. `wrangler.json`과 `public/_headers`는 바뀌지 않았습니다.
+공개 점검은 공개 페이지 3개, `/app/`, `/app/`으로 받은 `index.html`과 `/app/`의 스크립트·스타일 13개의 해시, 로그인하지 않은 API 3개의 401, 서명 없는 웹훅의 403으로 이루어진 21개 항목입니다. 배포 전에는 바뀐 파일 4개(`index.html`, `app.js`, `inbox.js`, `styles.css`)의 해시가 다르고 새 파일 5개(`contact-csv-preview.js`, `flow-run-reports.js`, `handoff-reports.js`, `manual-reply-reports.js`, `reply-templates.js`)가 404여서 12개가 통과했습니다. 배포 2분 뒤 10:34:59Z의 점검에서는 21개가 모두 통과했습니다.
+`scheduled_steps`를 10:34:59Z, 10:36:25Z, 10:38:00Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
+같은 세 번의 조회에서 `stale_recovery`, `wake`, `webhook_delivery`는 발송이 꺼져 있어 실행되지 않았고, 마지막 성공 시각은 배포 전인 00:43:49Z 그대로였습니다. 그래서 049가 예약 답장을 걸러 내도록 바꾼 claim·wake 질의는 운영에서 아직 실행되지 않았으며, 발송을 켜는 첫 실행에서 확인해야 합니다.
+로그인한 세션으로 요청하지 않았으므로 이번에 배포한 세그먼트 수정·답장 템플릿·예약 답장·리포트·CSV 사전 검사와 적용 화면과 API는 운영에서 실행하지 않았습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
