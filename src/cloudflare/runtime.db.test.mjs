@@ -1265,6 +1265,46 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.equal((await segments.json()).segments[0].id, segment.id);
     const selected = await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${segment.id}`, { headers });
     assert.equal((await selected.json()).contacts[0].sender_id, "sender-1");
+    // The restricted server role edits a segment through the Worker; the next contact read uses the new definition.
+    const segmentPath = `https://app.test/api/contact-segments/${segment.id}`;
+    const edited = await runtime.dispatchFetch(segmentPath, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ name: "Leads", connection_id: connection, tag: "vip", expected_version: 1 }),
+    });
+    assert.equal(edited.status, 200, await edited.clone().text());
+    assert.deepEqual(await edited.json(), { ...segment, tag: "vip", version: 2 });
+    assert.equal(
+      (
+        await (
+          await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${segment.id}`, { headers })
+        ).json()
+      ).contacts.length,
+      0,
+    );
+    const staleEdit = await runtime.dispatchFetch(segmentPath, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ name: "Leads", tag: "lead", expected_version: 1 }),
+    });
+    assert.equal(staleEdit.status, 409);
+    assert.equal((await staleEdit.json()).segment.version, 2);
+    await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [user]);
+    const agentEdit = await runtime.dispatchFetch(segmentPath, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ name: "Leads", connection_id: connection, tag: "lead", expected_version: 2 }),
+    });
+    assert.equal(agentEdit.status, 403);
+    assert.deepEqual(await agentEdit.json(), { error: "role_forbidden" });
+    await pool.query("UPDATE workspace_members SET role='owner' WHERE user_id=$1", [user]);
+    const restored = await runtime.dispatchFetch(segmentPath, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ name: "Leads", connection_id: connection, tag: "lead", expected_version: 2 }),
+    });
+    assert.equal(restored.status, 200);
+    assert.equal((await restored.json()).version, 3);
     const hidden = await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${segment.id}`, {
       headers: { ...headers, cookie: "__Host-ac-access=foreign" },
     });

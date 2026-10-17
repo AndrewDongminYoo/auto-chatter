@@ -3,6 +3,8 @@ import { test } from "node:test";
 import { appApi } from "./api.ts";
 import type { Pool } from "pg";
 import { sealSecret } from "./secrets.ts";
+import { ApiError } from "./auth.ts";
+import { createContactSegment, parseSegmentDefinition, updateContactSegment } from "./contacts.ts";
 const config = {
   SUPABASE_URL: "https://project.supabase.co",
   SUPABASE_SECRET_KEY: "sb_secret_test",
@@ -1376,6 +1378,7 @@ test("segment writes reject cross-origin requests before opening the database", 
   for (const [path, method] of [
     ["/api/contact-segments", "POST"],
     ["/api/contact-segments/123", "DELETE"],
+    ["/api/contact-segments/123", "PUT"],
   ]) {
     const response = await appApi(
       new Request(`https://app.test${path}`, { method, headers: { origin: "https://evil.test" } }),
@@ -1385,6 +1388,83 @@ test("segment writes reject cross-origin requests before opening the database", 
       },
     );
     assert.equal(response.status, 403);
+  }
+});
+
+// Validation runs before the database: a refused shape never reaches the pool, and an accepted one does.
+const segmentPool = {
+  query: async () => {
+    throw new Error("database reached");
+  },
+  connect: async () => {
+    throw new Error("database reached");
+  },
+} as unknown as Pool;
+const segmentUser = { id: userId, email: "a@example.test" };
+const segmentId = "44444444-4444-4444-8444-444444444444";
+const reachedDatabase = (error: unknown) => error instanceof Error && error.message === "database reached";
+const refused = (code: string) => (error: unknown) =>
+  error instanceof ApiError && error.status === 400 && error.message === code;
+
+test("segment edits refuse a missing or invalid expected_version, unknown keys and invalid names before the database", async () => {
+  for (const [body, code] of [
+    [{ name: "Leads" }, "invalid_segment"],
+    [{ name: "Leads", expected_version: 0 }, "invalid_segment"],
+    [{ name: "Leads", expected_version: -1 }, "invalid_segment"],
+    [{ name: "Leads", expected_version: 1.5 }, "invalid_segment"],
+    [{ name: "Leads", expected_version: "1" }, "invalid_segment"],
+    [{ name: "Leads", expected_version: null }, "invalid_segment"],
+    [{ name: "Leads", expected_version: Number.MAX_SAFE_INTEGER + 1 }, "invalid_segment"],
+    [{ name: "Leads", expected_version: 1, extra: true }, "invalid_segment"],
+    [{ name: " ", expected_version: 1 }, "invalid_segment"],
+    [{ name: "x".repeat(61), expected_version: 1 }, "invalid_segment"],
+    [{ name: "bad\nname", expected_version: 1 }, "invalid_segment"],
+    [{ expected_version: 1 }, "invalid_segment"],
+    [{ name: "Leads", expected_version: 1, field_operator: "eq" }, "invalid_field_condition"],
+    [{ name: "Leads", expected_version: 1, last_comment_days: 0 }, "invalid_contact_activity"],
+    [{ name: "Leads", expected_version: 1, consent_purpose: "marketing" }, "invalid_contact_consent"],
+    [{ name: "Leads", expected_version: 1, condition_operator: "or" }, "invalid_contact_condition"],
+  ] as const)
+    await assert.rejects(updateContactSegment(segmentPool, segmentUser, segmentId, body), refused(code));
+  await assert.rejects(
+    updateContactSegment(segmentPool, segmentUser, "not-a-uuid", { name: "Leads", expected_version: 1 }),
+    refused("invalid_segment"),
+  );
+  // Create keeps its own key set: expected_version belongs only to an edit.
+  await assert.rejects(
+    createContactSegment(segmentPool, segmentUser, { name: "Leads", expected_version: 1 }),
+    refused("invalid_segment"),
+  );
+});
+
+test("segment create and edit share one definition parser", async () => {
+  const definitions = [
+    { name: "Leads" },
+    { name: " Leads ", connection_id: connectionId, tag: " Lead " },
+    {
+      name: "Scored",
+      tag: "lead",
+      field_id: segmentId,
+      field_operator: "gte",
+      field_value: 10,
+      condition_operator: "or",
+      last_comment_days: 7,
+      consent_purpose: "marketing",
+      consent_state: "granted",
+    },
+    { name: "Window", last_comment_from: "2026-10-01T00:00:00.000Z", last_comment_before: "2026-10-02T00:00:00.000Z" },
+  ];
+  for (const definition of definitions) {
+    await assert.rejects(createContactSegment(segmentPool, segmentUser, definition), reachedDatabase);
+    await assert.rejects(
+      updateContactSegment(segmentPool, segmentUser, segmentId, { ...definition, expected_version: 1 }),
+      reachedDatabase,
+    );
+    const { input: _created, ...created } = parseSegmentDefinition(definition);
+    const { input: _edited, ...edited } = parseSegmentDefinition({ ...definition, expected_version: 3 }, [
+      "expected_version",
+    ]);
+    assert.deepEqual(edited, created);
   }
 });
 

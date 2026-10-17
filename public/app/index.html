@@ -927,6 +927,7 @@
                   <option value="">직접 조건 설정</option>
                 </select></label
               >
+              <button id="segment-edit" class="secondary" type="button" hidden disabled>필터 수정</button>
               <button id="segment-archive" class="secondary" disabled>필터 보관</button>
             </div>
             <p id="segments-status" class="hint" role="status" aria-live="polite"></p>
@@ -950,93 +951,95 @@
               <div id="field-definitions" class="field-definitions"></div>
               <p id="fields-status" class="hint" role="status" aria-live="polite"></p>
             </details>
-            <form id="contacts-filter" class="contacts-filter">
-              <label
-                >Instagram 계정<select name="connection_id">
-                  <option value="">모든 계정</option>
-                </select></label
-              >
-              <label>태그로 찾기<input name="tag" maxlength="40" placeholder="예: 관심" /></label>
-              <label
-                >추가 정보<select name="field_id">
-                  <option value="">조건 없음</option>
-                </select></label
-              >
-              <label id="field-filter-operator" hidden
-                >조건<select name="field_operator">
-                  <option value="eq">값이 같음</option>
-                  <option value="gte">이상</option>
-                  <option value="gt">초과</option>
-                  <option value="lte">이하</option>
-                  <option value="lt">미만</option>
-                  <option value="is_set">입력됨</option>
-                  <option value="is_unset">미입력</option>
-                </select></label
-              >
-              <label id="field-filter-value" hidden
-                >찾을 값<input name="field_value" maxlength="1000" /><select name="field_boolean" hidden>
-                  <option value="true">예</option>
-                  <option value="false">아니요</option>
-                </select></label
-              >
-              <label
-                >태그·정보 결합<select name="condition_operator" disabled>
-                  <option value="and">모두 만족 (AND)</option>
-                  <option value="or">하나 이상 (OR)</option>
-                </select></label
-              >
-              <label
-                >댓글 활동 기간<select name="activity_mode" aria-describedby="contact-activity-help">
-                  <option value="fixed">고정 UTC 기간 (선택)</option>
-                  <option value="relative">최근 N일</option>
-                </select></label
-              >
-              <label id="contact-activity-days" hidden
-                >최근 일수<input
-                  name="last_comment_days"
-                  type="number"
-                  min="1"
-                  max="366"
-                  step="1"
-                  value="7"
-                  disabled
-                  aria-describedby="contact-activity-help"
-                />
-              </label>
-              <label id="contact-activity-from"
-                >마지막 댓글 저장 시작 (UTC)<input
-                  name="last_comment_from"
-                  type="datetime-local"
-                  step="0.001"
-                  min="0001-01-01T00:00"
-                  max="9999-12-31T23:59:59.999"
-                  aria-describedby="contact-activity-help"
-              /></label>
-              <label id="contact-activity-before"
-                >마지막 댓글 저장 종료 (UTC)<input
-                  name="last_comment_before"
-                  type="datetime-local"
-                  step="0.001"
-                  min="0001-01-01T00:00"
-                  max="9999-12-31T23:59:59.999"
-                  aria-describedby="contact-activity-help"
-              /></label>
-              <label
-                >동의 목적<select name="consent_purpose" aria-describedby="contact-consent-help">
-                  <option value="">조건 없음</option>
-                  <option value="service_reply">서비스 답장</option>
-                  <option value="marketing">마케팅</option>
-                </select></label
-              >
-              <label
-                >동의 기록 상태<select name="consent_state" disabled aria-describedby="contact-consent-help">
-                  <option value="">상태 선택</option>
-                  <option value="granted">허용으로 기록됨</option>
-                  <option value="revoked">철회로 기록됨</option>
-                  <option value="no_record">기록 없음</option>
-                </select></label
-              >
-              <button type="submit" class="secondary">필터 적용</button>
+            <form id="contacts-filter">
+              <fieldset id="contacts-filter-fields" class="contacts-filter">
+                <label
+                  >Instagram 계정<select name="connection_id">
+                    <option value="">모든 계정</option>
+                  </select></label
+                >
+                <label>태그로 찾기<input name="tag" maxlength="40" placeholder="예: 관심" /></label>
+                <label
+                  >추가 정보<select name="field_id">
+                    <option value="">조건 없음</option>
+                  </select></label
+                >
+                <label id="field-filter-operator" hidden
+                  >조건<select name="field_operator">
+                    <option value="eq">값이 같음</option>
+                    <option value="gte">이상</option>
+                    <option value="gt">초과</option>
+                    <option value="lte">이하</option>
+                    <option value="lt">미만</option>
+                    <option value="is_set">입력됨</option>
+                    <option value="is_unset">미입력</option>
+                  </select></label
+                >
+                <label id="field-filter-value" hidden
+                  >찾을 값<input name="field_value" maxlength="1000" /><select name="field_boolean" hidden>
+                    <option value="true">예</option>
+                    <option value="false">아니요</option>
+                  </select></label
+                >
+                <label
+                  >태그·정보 결합<select name="condition_operator" disabled>
+                    <option value="and">모두 만족 (AND)</option>
+                    <option value="or">하나 이상 (OR)</option>
+                  </select></label
+                >
+                <label
+                  >댓글 활동 기간<select name="activity_mode" aria-describedby="contact-activity-help">
+                    <option value="fixed">고정 UTC 기간 (선택)</option>
+                    <option value="relative">최근 N일</option>
+                  </select></label
+                >
+                <label id="contact-activity-days" hidden
+                  >최근 일수<input
+                    name="last_comment_days"
+                    type="number"
+                    min="1"
+                    max="366"
+                    step="1"
+                    value="7"
+                    disabled
+                    aria-describedby="contact-activity-help"
+                  />
+                </label>
+                <label id="contact-activity-from"
+                  >마지막 댓글 저장 시작 (UTC)<input
+                    name="last_comment_from"
+                    type="datetime-local"
+                    step="0.001"
+                    min="0001-01-01T00:00"
+                    max="9999-12-31T23:59:59.999"
+                    aria-describedby="contact-activity-help"
+                /></label>
+                <label id="contact-activity-before"
+                  >마지막 댓글 저장 종료 (UTC)<input
+                    name="last_comment_before"
+                    type="datetime-local"
+                    step="0.001"
+                    min="0001-01-01T00:00"
+                    max="9999-12-31T23:59:59.999"
+                    aria-describedby="contact-activity-help"
+                /></label>
+                <label
+                  >동의 목적<select name="consent_purpose" aria-describedby="contact-consent-help">
+                    <option value="">조건 없음</option>
+                    <option value="service_reply">서비스 답장</option>
+                    <option value="marketing">마케팅</option>
+                  </select></label
+                >
+                <label
+                  >동의 기록 상태<select name="consent_state" disabled aria-describedby="contact-consent-help">
+                    <option value="">상태 선택</option>
+                    <option value="granted">허용으로 기록됨</option>
+                    <option value="revoked">철회로 기록됨</option>
+                    <option value="no_record">기록 없음</option>
+                  </select></label
+                >
+                <button type="submit" class="secondary">필터 적용</button>
+              </fieldset>
             </form>
             <p id="contact-activity-help" class="hint">
               고정 기간은 두 값을 함께 입력하며 UTC 기준으로 시작을 포함하고 종료를 제외합니다. 최근 N일은 조회 시각
@@ -1063,7 +1066,13 @@
                   >필터 이름<input name="name" required maxlength="60" placeholder="예: 자료를 요청한 사람"
                 /></label>
                 <button type="submit" class="secondary" data-loading-label="저장 중…">필터 저장</button>
+                <button id="segment-edit-cancel" type="button" class="secondary" hidden>수정 취소</button>
               </form>
+              <p id="segment-edit-status" class="hint" role="status" aria-live="polite"></p>
+              <div id="segment-edit-conflict" hidden>
+                <p id="segment-edit-saved" class="hint"></p>
+                <button id="segment-edit-reload" type="button" class="secondary">저장된 값 불러오기</button>
+              </div>
               <p class="hint">
                 계정·태그·추가 정보·활동 기간·동의 기록 조건을 저장합니다. 저장된 필터는 최대 50개이며 대상은 조회할 때
                 다시 계산합니다. 미리보기는 조회 시점의 참고 결과로, 대상을 고정하거나 발송 동의를 확인한 것이 아닙니다.

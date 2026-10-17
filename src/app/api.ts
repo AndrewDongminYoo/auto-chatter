@@ -71,6 +71,7 @@ import {
   listContacts,
   saveContactTags,
   saveContactAutomation,
+  updateContactSegment,
 } from "./contacts.ts";
 import { connectionMedia } from "./instagram-media.ts";
 import { connectionHealth } from "./instagram-connection-health.ts";
@@ -591,6 +592,11 @@ export async function appApi(
         return json(await createContactSegment(pool, user, await readJson(request)), 201);
       const segment = /^\/api\/contact-segments\/([a-f0-9-]+)$/.exec(url.pathname);
       if (segment && request.method === "DELETE") return json(await archiveContactSegment(pool, user, segment[1]!));
+      if (segment && request.method === "PUT") {
+        const saved = await updateContactSegment(pool, user, segment[1]!, await readJson(request));
+        // A stale expected_version answers with the current segment, like the label rule.
+        return saved.conflict ? json({ error: "segment_conflict", segment: saved.segment }, 409) : json(saved.segment);
+      }
       const automation = /^\/api\/connections\/([a-f0-9-]+)\/contacts\/([^/]+)\/automation$/.exec(url.pathname);
       if (automation && request.method === "PUT") {
         let senderId: string;

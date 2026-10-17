@@ -366,11 +366,15 @@ export async function saveContactTags(pool: Pool, user: User, connectionId: stri
   }
 }
 
+// The columns of a segment list item, also returned by create and edit.
+const SEGMENT_COLUMNS =
+  "id,name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,consent_purpose,consent_state,version";
+
 export async function listContactSegments(pool: Pool, user: User) {
   const workspace = await workspaceFor(pool, user, "agent");
   return (
     await pool.query(
-      "SELECT id,name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,consent_purpose,consent_state FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived ORDER BY name,id",
+      `SELECT ${SEGMENT_COLUMNS} FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived ORDER BY name,id`,
       [workspace],
     )
   ).rows.map(segmentResult);
@@ -381,6 +385,7 @@ function segmentResult(row: {
   name: string;
   connection_id: string | null;
   tag: string | null;
+  version: number;
   field_id?: string | null;
   field_operator?: string | null;
   field_value?: unknown;
@@ -417,26 +422,27 @@ function segmentResult(row: {
   };
 }
 
-export async function createContactSegment(pool: Pool, user: User, input: unknown) {
+const SEGMENT_DEFINITION_KEYS = [
+  "name",
+  "connection_id",
+  "tag",
+  "field_id",
+  "field_operator",
+  "field_value",
+  "condition_operator",
+  "last_comment_from",
+  "last_comment_before",
+  "last_comment_days",
+  "consent_purpose",
+  "consent_state",
+];
+
+// Create and edit share this parser, so both accept and refuse the same definitions. The body is a full
+// definition: an omitted optional condition means that condition is absent.
+export function parseSegmentDefinition(input: unknown, extraKeys: readonly string[] = []) {
   if (
     !isRecord(input) ||
-    Object.keys(input).some(
-      (key) =>
-        ![
-          "name",
-          "connection_id",
-          "tag",
-          "field_id",
-          "field_operator",
-          "field_value",
-          "condition_operator",
-          "last_comment_from",
-          "last_comment_before",
-          "last_comment_days",
-          "consent_purpose",
-          "consent_state",
-        ].includes(key),
-    ) ||
+    Object.keys(input).some((key) => !SEGMENT_DEFINITION_KEYS.includes(key) && !extraKeys.includes(key)) ||
     typeof input.name !== "string" ||
     input.name.length > 300
   )
@@ -450,46 +456,122 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
   const activity = parseActivityWindow(input);
   const consent = parseConsentCondition(input);
   const operator = parseConditionOperator(input.condition_operator, filterTag, Boolean(condition));
+  return { input, name, connectionId, filterTag, condition, activity, consent, operator };
+}
+type SegmentDefinition = ReturnType<typeof parseSegmentDefinition>;
+
+// The stored columns of a definition, in the order of segmentDefinitionValues.
+const SEGMENT_DEFINITION_COLUMNS =
+  "name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state,last_comment_days";
+function segmentDefinitionValues(definition: SegmentDefinition) {
+  const { name, connectionId, filterTag, condition, activity, consent, operator } = definition;
+  return [
+    name,
+    connectionId,
+    filterTag,
+    condition?.field_id ?? null,
+    condition?.field_operator ?? null,
+    condition && fieldConditionNeedsValue(condition.field_operator) ? JSON.stringify(condition.field_value) : null,
+    operator,
+    activity?.last_comment_from ?? null,
+    activity?.last_comment_before ?? null,
+    consent?.consent_purpose ?? null,
+    consent?.consent_state ?? null,
+    activity?.last_comment_days ?? null,
+  ];
+}
+
+// The referenced field is held FOR SHARE until commit, so archiveContactField (field FOR UPDATE, then the
+// active-segment check) either waits and sees this segment, or commits first and this refuses the field.
+async function validateSegmentReferences(client: PoolClient, workspace: string, definition: SegmentDefinition) {
+  await validateFieldCondition(client, workspace, definition.condition, true);
+  if (
+    definition.connectionId !== null &&
+    !(
+      await client.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [
+        definition.connectionId,
+        workspace,
+      ])
+    ).rows[0]
+  )
+    throw new ApiError(404, "connection_not_found");
+}
+
+export async function createContactSegment(pool: Pool, user: User, input: unknown) {
+  const definition = parseSegmentDefinition(input);
   const workspace = await workspaceFor(pool, user, "admin");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     // Serialize creations so concurrent requests cannot exceed the active-segment limit.
     await lockWorkspaceForMember(client, workspace, user, "admin");
-    await validateFieldCondition(client, workspace, condition, true);
-    if (
-      connectionId !== null &&
-      !(
-        await client.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [
-          connectionId,
-          workspace,
-        ])
-      ).rows[0]
-    )
-      throw new ApiError(404, "connection_not_found");
+    await validateSegmentReferences(client, workspace, definition);
     const result = await client.query(
-      `INSERT INTO instagram_contact_segments(workspace_id,name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state,last_comment_days)
+      `INSERT INTO instagram_contact_segments(workspace_id,${SEGMENT_DEFINITION_COLUMNS})
  SELECT $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13 WHERE (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived)<50
- RETURNING id,name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,consent_purpose,consent_state`,
-      [
-        workspace,
-        name,
-        connectionId,
-        filterTag,
-        condition?.field_id ?? null,
-        condition?.field_operator ?? null,
-        condition && fieldConditionNeedsValue(condition.field_operator) ? JSON.stringify(condition.field_value) : null,
-        operator,
-        activity?.last_comment_from ?? null,
-        activity?.last_comment_before ?? null,
-        consent?.consent_purpose ?? null,
-        consent?.consent_state ?? null,
-        activity?.last_comment_days ?? null,
-      ],
+ RETURNING ${SEGMENT_COLUMNS}`,
+      [workspace, ...segmentDefinitionValues(definition)],
     );
     if (!result.rows[0]) throw new ApiError(409, "segment_limit_reached");
     await client.query("COMMIT");
     return segmentResult(result.rows[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (isRecord(error) && error.code === "23505") throw new ApiError(409, "segment_name_exists");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export type SaveSegmentResult = { conflict: boolean; segment: ReturnType<typeof segmentResult> };
+
+// Replaces an active segment's name and conditions when expected_version matches. A stale version answers with
+// the current segment; an unchanged definition writes nothing and keeps the version. There is no edit history.
+export async function updateContactSegment(
+  pool: Pool,
+  user: User,
+  id: string,
+  input: unknown,
+): Promise<SaveSegmentResult> {
+  if (!isUuid(id)) throw new ApiError(400, "invalid_segment");
+  const definition = parseSegmentDefinition(input, ["expected_version"]);
+  const expected = definition.input.expected_version;
+  if (typeof expected !== "number" || !Number.isSafeInteger(expected) || expected < 1)
+    throw new ApiError(400, "invalid_segment");
+  const workspace = await workspaceFor(pool, user, "admin");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // The same workspace lock as create, then the segment row, then the field (validateSegmentReferences).
+    await lockWorkspaceForMember(client, workspace, user, "admin");
+    const current = (
+      await client.query(
+        `SELECT ${SEGMENT_COLUMNS},archived FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 FOR UPDATE`,
+        [workspace, id],
+      )
+    ).rows[0];
+    // An archived segment answers like a missing one, so its ID is not distinguishable.
+    if (!current || current.archived) throw new ApiError(404, "segment_not_found");
+    const { archived: _archived, ...stored } = current;
+    if (stored.version !== expected) {
+      await client.query("COMMIT");
+      return { conflict: true, segment: segmentResult(stored) };
+    }
+    await validateSegmentReferences(client, workspace, definition);
+    // IS DISTINCT FROM compares in SQL, so jsonb and timestamps need no conversion; an unchanged row updates nothing.
+    const updated = (
+      await client.query(
+        `UPDATE instagram_contact_segments SET (${SEGMENT_DEFINITION_COLUMNS})=($3,$4,$5,$6,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int),
+   version=version+1
+ WHERE workspace_id=$1 AND id=$2
+   AND (${SEGMENT_DEFINITION_COLUMNS}) IS DISTINCT FROM ($3,$4::uuid,$5,$6::uuid,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int)
+ RETURNING ${SEGMENT_COLUMNS}`,
+        [workspace, id, ...segmentDefinitionValues(definition)],
+      )
+    ).rows[0];
+    await client.query("COMMIT");
+    return { conflict: false, segment: segmentResult(updated ?? stored) };
   } catch (error) {
     await client.query("ROLLBACK");
     if (isRecord(error) && error.code === "23505") throw new ApiError(409, "segment_name_exists");
