@@ -2,7 +2,17 @@ const byId = (id) => document.getElementById(id);
 const manualReports = createManualReplyReports({ api, node });
 const flowReports = createFlowRunReports({ api, node });
 const handoffReports = createHandoffReports({ api, node });
-const contactCsvPreview = createContactCsvPreview({ api, node });
+const contactCsvPreview = createContactCsvPreview({
+  api,
+  node,
+  // An applied import reloads the list like a saved tag does, and never over an unsaved contact draft;
+  // it returns whether it reloaded so the import status can say when the list still shows old tags.
+  reloadContacts: () => {
+    if (contactsDirty.size || contactsSaving) return false;
+    void loadContacts();
+    return true;
+  },
+});
 const form = byId("rule-form");
 let connections = [];
 let contactsGeneration = 0;
@@ -341,6 +351,10 @@ const errors = {
   invalid_contact_import_request: "CSV 검사 요청을 확인해 주세요.",
   invalid_contact_import_format: "v1 CSV 헤더와 인용 형식을 확인해 주세요.",
   contact_import_too_large: "CSV 파일은 128KiB, 500행까지 검사할 수 있습니다.",
+  contact_import_rejected:
+    "오류·중복·조회 불가 행이 있어 태그를 저장하지 않았습니다. 아래 결과를 고친 뒤 다시 검사해 주세요.",
+  contact_import_stale:
+    "검사 후 태그가 바뀐 연락처가 있어 저장하지 않았습니다. 현재 결과를 확인하고 다시 검사해 주세요.",
   invalid_field_condition: "추가 정보의 필드·조건·찾을 값을 확인해 주세요.",
   invalid_contact_condition: "OR 결합에는 태그와 추가 정보 조건이 모두 필요합니다.",
   invalid_contact_activity: "UTC 시작·종료를 함께 지정하거나 최근 일수 1~366 중 하나를 선택해 주세요.",
@@ -438,6 +452,10 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
     error.errors = result.errors;
     // A reminder refusal for an existing or newer reminder carries that reminder (409).
     error.reminder = result.reminder;
+    // A rejected (422) or stale (409) CSV import carries the fresh per-row check result.
+    error.checked_at = result.checked_at;
+    error.counts = result.counts;
+    error.rows = result.rows;
     throw error;
   }
   return result;

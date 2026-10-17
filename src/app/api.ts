@@ -1,6 +1,7 @@
 import { contactDetails } from "./contact-details.ts";
 import { exportContactCsv } from "./contact-csv.ts";
 import { CONTACT_IMPORT_REQUEST_BYTES, previewContactCsv } from "./contact-csv-preview.ts";
+import { CONTACT_IMPORT_APPLY_REQUEST_BYTES, applyContactCsv } from "./contact-csv-import.ts";
 import {
   queueManualReply,
   listManualReplies,
@@ -555,6 +556,12 @@ export async function appApi(
       if (url.pathname === "/api/contacts/import-preview" && request.method === "POST") {
         if (url.searchParams.size) throw new ApiError(400, "invalid_contact_import_request");
         return json(await previewContactCsv(pool, user, await readJson(request, CONTACT_IMPORT_REQUEST_BYTES)));
+      }
+      if (url.pathname === "/api/contacts/import" && request.method === "POST") {
+        if (url.searchParams.size) throw new ApiError(400, "invalid_contact_import_request");
+        // A rejected or stale file answers with the fresh per-row result, as a stale expected_version answers with the current state.
+        const outcome = await applyContactCsv(pool, user, await readJson(request, CONTACT_IMPORT_APPLY_REQUEST_BYTES));
+        return json(outcome.body, outcome.status);
       }
       if (url.pathname === "/api/contacts" && request.method === "GET")
         return json(await listContacts(pool, user, url.searchParams));

@@ -7,16 +7,18 @@ import { workspaceFor } from "./settings.ts";
 export const CONTACT_IMPORT_BYTES = 128 * 1024;
 export const CONTACT_IMPORT_REQUEST_BYTES = 6 * CONTACT_IMPORT_BYTES + 32;
 export const CONTACT_IMPORT_ROWS = 500;
-type Status = "invalid" | "duplicate" | "not_found" | "changed" | "unchanged";
-type ParsedRow = { row: number; connection_id: string; sender_id: string; tags: string[] };
-type ResultRow = {
+export type ImportRowStatus = "invalid" | "duplicate" | "not_found" | "changed" | "unchanged";
+export type ParsedImportRow = { row: number; connection_id: string; sender_id: string; tags: string[] };
+export type ImportResultRow = {
   row: number;
-  status: Status;
+  status: ImportRowStatus;
   connection_id?: string;
   sender_id?: string;
   current_tags?: string[];
   proposed_tags?: string[];
 };
+export type ImportCounts = Record<"total" | ImportRowStatus, number>;
+type ImportSnapshot = { checked_at: Date; contacts: { row: number; tags: string[] }[] };
 
 // Parse records, not physical lines: quoted cells may contain CRLF, commas and doubled quotes.
 export function parseImportCsv(value: string): string[][] {
@@ -70,13 +72,14 @@ export function parseImportCsv(value: string): string[][] {
   return records.slice(1);
 }
 
-export async function previewContactCsv(pool: Pool, user: User, input: unknown) {
-  const workspace = await workspaceFor(pool, user, "admin");
-  if (!isRecord(input) || Object.keys(input).length !== 1 || typeof input.csv !== "string")
-    throw new ApiError(400, "invalid_contact_import_request");
-  const records = parseImportCsv(input.csv);
-  const rows: ResultRow[] = records.map((_, i) => ({ row: i + 1, status: "invalid" }));
-  const parsed: ParsedRow[] = [];
+// Row classification shared by the preview and the apply (#25): invalid rows first, then every remaining
+// duplicate connection/sender pair, so the two paths cannot drift. The lookup fills in the rest.
+export function classifyImportRecords(
+  records: string[][],
+  workspace: string,
+): { rows: ImportResultRow[]; unique: ParsedImportRow[] } {
+  const rows: ImportResultRow[] = records.map((_, i) => ({ row: i + 1, status: "invalid" }));
+  const parsed: ParsedImportRow[] = [];
   for (const [index, cells] of records.entries()) {
     if (
       cells.length !== CONTACT_CSV_HEADER.length ||
@@ -101,7 +104,7 @@ export async function previewContactCsv(pool: Pool, user: User, input: unknown) 
       /* Invalid tag JSON and values are row errors, never echoed. */
     }
   }
-  const key = (row: ParsedRow) => JSON.stringify([row.connection_id, row.sender_id]);
+  const key = (row: ParsedImportRow) => JSON.stringify([row.connection_id, row.sender_id]);
   const frequency = new Map<string, number>();
   for (const row of parsed) frequency.set(key(row), (frequency.get(key(row)) ?? 0) + 1);
   const unique = parsed.filter((row) => {
@@ -109,8 +112,17 @@ export async function previewContactCsv(pool: Pool, user: User, input: unknown) 
     rows[row.row - 1] = { row: row.row, status: "duplicate" };
     return false;
   });
-  // One read snapshot rechecks authorization and account/contact ownership. The upload never becomes stored data.
-  const result = await pool.query<{ checked_at: Date; contacts: { row: number; tags: string[] }[] }>(
+  return { rows, unique };
+}
+
+// One read snapshot rechecks authorization and account/contact ownership. The upload never becomes stored data.
+export async function readImportSnapshot(
+  db: Pick<Pool, "query">,
+  user: User,
+  workspace: string,
+  unique: ParsedImportRow[],
+): Promise<ImportSnapshot> {
+  const result = await db.query<ImportSnapshot>(
     `SELECT statement_timestamp() AS checked_at,
        coalesce(jsonb_agg(jsonb_build_object('row',input.row,'tags',coalesce(tags.tags,'{}'::text[])))
          FILTER (WHERE connection.id IS NOT NULL AND EXISTS(
@@ -129,7 +141,11 @@ export async function previewContactCsv(pool: Pool, user: User, input: unknown) 
     ],
   );
   if (!result.rows[0]) throw new ApiError(403, "role_forbidden");
-  const current = new Map(result.rows[0].contacts.map((value) => [value.row, value.tags]));
+  return result.rows[0];
+}
+
+export function applyImportSnapshot(rows: ImportResultRow[], unique: ParsedImportRow[], snapshot: ImportSnapshot) {
+  const current = new Map(snapshot.contacts.map((value) => [value.row, value.tags]));
   for (const entry of unique) {
     const tags = current.get(entry.row);
     rows[entry.row - 1] =
@@ -144,7 +160,20 @@ export async function previewContactCsv(pool: Pool, user: User, input: unknown) 
             proposed_tags: entry.tags,
           };
   }
-  const counts = { total: rows.length, changed: 0, unchanged: 0, invalid: 0, duplicate: 0, not_found: 0 };
+}
+
+export function countImportRows(rows: ImportResultRow[]): ImportCounts {
+  const counts: ImportCounts = { total: rows.length, changed: 0, unchanged: 0, invalid: 0, duplicate: 0, not_found: 0 };
   for (const row of rows) counts[row.status]++;
-  return { checked_at: result.rows[0].checked_at.toISOString(), counts, rows };
+  return counts;
+}
+
+export async function previewContactCsv(pool: Pool, user: User, input: unknown) {
+  const workspace = await workspaceFor(pool, user, "admin");
+  if (!isRecord(input) || Object.keys(input).length !== 1 || typeof input.csv !== "string")
+    throw new ApiError(400, "invalid_contact_import_request");
+  const { rows, unique } = classifyImportRecords(parseImportCsv(input.csv), workspace);
+  const snapshot = await readImportSnapshot(pool, user, workspace, unique);
+  applyImportSnapshot(rows, unique, snapshot);
+  return { checked_at: snapshot.checked_at.toISOString(), counts: countImportRows(rows), rows };
 }

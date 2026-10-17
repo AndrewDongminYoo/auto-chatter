@@ -1122,6 +1122,70 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.ok(csvPreviewResult.counts.total > 0);
     assert.equal(csvPreviewResult.counts.unchanged, csvPreviewResult.counts.total);
     assert.equal(csvPreviewResult.rows[0].sender_id, "sender-1");
+    // The restricted server role applies a checked file through INSERT/UPDATE only (#25); the file adds one tag.
+    const csvEdited = csvBytes.toString().replace('"[""lead""]"', '"[""lead"",""vip""]"');
+    assert.notEqual(csvEdited, csvBytes.toString(), "fixture must contain the exported lead tag cell");
+    const csvEditedPreview = await (
+      await runtime.dispatchFetch("https://app.test/api/contacts/import-preview", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ csv: csvEdited }),
+      })
+    ).json();
+    assert.equal(csvEditedPreview.counts.changed, 1);
+    const csvApplyBody = JSON.stringify({
+      csv: csvEdited,
+      expected: csvEditedPreview.rows
+        .filter((row) => row.status === "changed")
+        .map((row) => ({ row: row.row, current_tags: row.current_tags })),
+    });
+    const csvApply = await runtime.dispatchFetch("https://app.test/api/contacts/import", {
+      method: "POST",
+      headers,
+      body: csvApplyBody,
+    });
+    assert.equal(csvApply.status, 200, await csvApply.clone().text());
+    const csvApplyResult = await csvApply.json();
+    assert.equal(csvApplyResult.counts.applied, 1);
+    assert.deepEqual(
+      (await pool.query("SELECT tags FROM instagram_contact_tags WHERE sender_id='sender-1'")).rows.map(
+        (row) => row.tags,
+      ),
+      [["lead", "vip"]],
+    );
+    const csvApplyAgain = await runtime.dispatchFetch("https://app.test/api/contacts/import", {
+      method: "POST",
+      headers,
+      body: csvApplyBody,
+    });
+    assert.equal(csvApplyAgain.status, 200);
+    assert.equal((await csvApplyAgain.json()).counts.applied, 0);
+    // The exported file now proposes removing the added tag; applying it restores the fixture's tags.
+    const csvRestorePreview = await (
+      await runtime.dispatchFetch("https://app.test/api/contacts/import-preview", {
+        method: "POST",
+        headers,
+        body: csvPreviewBody,
+      })
+    ).json();
+    assert.equal(csvRestorePreview.counts.changed, 1);
+    const csvRestore = await runtime.dispatchFetch("https://app.test/api/contacts/import", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        csv: csvBytes.toString(),
+        expected: csvRestorePreview.rows
+          .filter((row) => row.status === "changed")
+          .map((row) => ({ row: row.row, current_tags: row.current_tags })),
+      }),
+    });
+    assert.equal(csvRestore.status, 200, await csvRestore.clone().text());
+    assert.deepEqual(
+      (await pool.query("SELECT tags FROM instagram_contact_tags WHERE sender_id='sender-1'")).rows.map(
+        (row) => row.tags,
+      ),
+      [["lead"]],
+    );
     await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [user]);
     assert.equal(
       (
@@ -1129,6 +1193,16 @@ test("workerd contact API uses restricted server privileges and verified workspa
           method: "POST",
           headers,
           body: csvPreviewBody,
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await runtime.dispatchFetch("https://app.test/api/contacts/import", {
+          method: "POST",
+          headers,
+          body: csvApplyBody,
         })
       ).status,
       403,
