@@ -18,6 +18,16 @@ function createContactCsvPreview({ api, node }) {
     allowed = false,
     rows = [],
     shown = 0;
+  let sessionChannel;
+  try {
+    sessionChannel = new BroadcastChannel("auto-chatter-session");
+    sessionChannel.addEventListener("message", () => configure(undefined));
+  } catch {
+    // Preview is unavailable when the browser cannot receive cross-tab session changes.
+  }
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) configure(undefined);
+  });
   function invalidate(clearFile = false) {
     generation++;
     rows = [];
@@ -30,7 +40,7 @@ function createContactCsvPreview({ api, node }) {
     if (clearFile) input.value = "";
   }
   function configure(role) {
-    allowed = role === "owner" || role === "admin";
+    allowed = Boolean(sessionChannel) && (role === "owner" || role === "admin");
     invalidate(true);
     section.hidden = !allowed;
     input.disabled = !allowed;
@@ -119,5 +129,13 @@ function createContactCsvPreview({ api, node }) {
       }
     }
   });
-  return { configure, reset: () => configure(undefined), invalidate: () => invalidate(true) };
+  return {
+    configure,
+    reset: () => configure(undefined),
+    invalidate: () => invalidate(true),
+    sessionChanged() {
+      configure(undefined);
+      sessionChannel?.postMessage("changed");
+    },
+  };
 }

@@ -158,7 +158,7 @@ window.addEventListener("beforeunload", (event) => {
   }
 });
 function resetSession() {
-  contactCsvPreview.reset();
+  contactCsvPreview.sessionChanged();
   manualReports.reset();
   flowReports.reset();
   handoffReports.reset();
@@ -414,6 +414,7 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
   } catch {
     throw new Error("서버에 연결하지 못했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.");
   }
+  if (response.ok && path === "/api/auth/login") contactCsvPreview.sessionChanged();
   if (response.status === 401 && retry && !path.startsWith("/api/auth/")) {
     refreshPromise ??= api("/api/auth/refresh", "POST", undefined, false).finally(() => {
       refreshPromise = undefined;
@@ -1738,6 +1739,8 @@ byId("password-reset-form").addEventListener("submit", (event) => {
         showAuthMode(error.status === 401 ? "recover" : "login");
       }
       throw error;
+    } finally {
+      contactCsvPreview.sessionChanged();
     }
     recoveryToken = null;
     reset.reset();
