@@ -229,7 +229,7 @@ function resetSession() {
   contactSegments = [];
   segmentBusy = false;
   activeSegmentId = "";
-  leaveSegmentEdit();
+  leaveSegmentEdit({ discard: true });
   segmentNameDirty = false;
   fieldsGeneration++;
   contactFields = [];
@@ -1172,7 +1172,8 @@ function renderGettingStarted(rules, globalSendEnabled, connectAvailable) {
 
 async function loadWorkspace() {
   contactCsvPreview.reset();
-  // A workspace reload ends a segment edit; the conditions stay in the filter form.
+  // A workspace reload ends a segment edit but keeps the draft: the name and conditions stay, and a changed draft
+  // stays marked unsaved.
   if (editingSegment) leaveSegmentEdit();
   segmentControls();
   manualReports.reset();
@@ -2764,15 +2765,17 @@ function segmentControls() {
   // The fieldset leaves each control's own disabled state alone, so conditional states come back unchanged.
   byId("contacts-filter-fields").disabled = segmentBusy;
 }
-// Leaves edit mode. The filter form keeps its conditions; the name field is cleared unless keepName is set.
-// A kept draft that the operator changed stays marked unsaved, because segmentEditChanged() ends with edit mode.
-function leaveSegmentEdit(keepName = false) {
-  if (keepName) segmentNameDirty = segmentNameDirty || segmentEditChanged();
+// Leaves edit mode. By default the operator's draft stays: the filter form keeps its conditions, the name field keeps
+// its value, and a changed draft stays marked unsaved, because segmentEditChanged() ends with edit mode.
+// Pass discard only where the operator chose to drop the draft (cancel, archive after its confirmation) or where
+// nothing unsaved can remain (a successful save, a session reset).
+function leaveSegmentEdit({ discard = false } = {}) {
+  segmentNameDirty = segmentNameDirty || segmentEditChanged();
   editingSegment = null;
   byId("segment-edit-status").textContent = "";
   byId("segment-edit-conflict").hidden = true;
   byId("segment-edit-saved").textContent = "";
-  if (!keepName) {
+  if (discard) {
     byId("segment-save").reset();
     segmentNameDirty = false;
   }
@@ -2837,7 +2840,7 @@ async function loadContactSegments(force = false) {
     for (const segment of contactSegments) select.add(new Option(segment.name, segment.id));
     if (!contactSegments.some((segment) => segment.id === activeSegmentId)) activeSegmentId = "";
     if (editingSegment && !contactSegments.some((segment) => segment.id === editingSegment.id)) {
-      leaveSegmentEdit(true);
+      leaveSegmentEdit();
       byId("segment-edit-status").textContent = "수정하던 필터가 보관되었거나 삭제되어 수정을 마쳤습니다.";
     }
     select.value = activeSegmentId;
@@ -2895,7 +2898,7 @@ byId("segment-edit").addEventListener("click", () => {
 });
 byId("segment-edit-cancel").addEventListener("click", () => {
   if (segmentBusy || !editingSegment) return;
-  leaveSegmentEdit();
+  leaveSegmentEdit({ discard: true });
   segmentControls();
   notice("필터 수정을 취소했습니다. 저장된 필터는 바뀌지 않았습니다.");
 });
@@ -2923,7 +2926,7 @@ async function saveSegmentEdit(editing, payload, generation) {
       expected_version: editing.version,
     });
     if (generation !== segmentsGeneration || editingSegment !== editing) return;
-    leaveSegmentEdit();
+    leaveSegmentEdit({ discard: true });
     activeSegmentId = saved.id;
     await loadContactSegments(true);
     if (generation !== segmentsGeneration) return;
@@ -2944,7 +2947,7 @@ async function saveSegmentEdit(editing, payload, generation) {
       return;
     }
     if (error.code === "segment_not_found") {
-      leaveSegmentEdit(true);
+      leaveSegmentEdit();
       if (activeSegmentId === editing.id) activeSegmentId = "";
       await loadContactSegments(true);
       notice(
@@ -3036,7 +3039,7 @@ byId("segment-archive").addEventListener("click", (event) => {
       }
       if (activeSegmentId === id) activeSegmentId = "";
       // An archive ends an edit; only the selected segment can be both edited and archived.
-      if (editingSegment) leaveSegmentEdit();
+      if (editingSegment) leaveSegmentEdit({ discard: true });
       await loadContactSegments(true);
       if (!contactsDirty.size && !contactsSaving) await loadContacts();
       notice("필터를 보관했습니다. 연락처와 태그는 유지됩니다.");
