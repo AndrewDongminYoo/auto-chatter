@@ -38,13 +38,34 @@ function parseConditionOperator(value: unknown, filterTag: string | null, hasFie
     throw new ApiError(400, "invalid_contact_condition");
   return value;
 }
+// Calendar periods of the workspace time zone; listContacts computes their boundaries in its evaluation CTE.
+const CALENDAR_PERIODS = ["today", "yesterday", "this_month", "last_month"];
 function parseActivityWindow(input: {
   last_comment_from?: unknown;
   last_comment_before?: unknown;
   last_comment_days?: unknown;
-}): { last_comment_from?: string; last_comment_before?: string; last_comment_days?: number } | null {
+  last_comment_period?: unknown;
+}): {
+  last_comment_from?: string;
+  last_comment_before?: string;
+  last_comment_days?: number;
+  last_comment_period?: string;
+} | null {
   const from = input.last_comment_from,
     before = input.last_comment_before;
+  // Checked first, so a period never disappears behind another activity form: the three forms exclude each other.
+  if (input.last_comment_period != null) {
+    const period = input.last_comment_period;
+    if (
+      typeof period !== "string" ||
+      !CALENDAR_PERIODS.includes(period) ||
+      input.last_comment_days != null ||
+      from != null ||
+      before != null
+    )
+      throw new ApiError(400, "invalid_contact_activity");
+    return { last_comment_period: period };
+  }
   if (input.last_comment_days != null) {
     const days = input.last_comment_days;
     if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > 366 || from != null || before != null)
@@ -113,6 +134,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
         "last_comment_from",
         "last_comment_before",
         "last_comment_days",
+        "last_comment_period",
         "consent_purpose",
         "consent_state",
         "preview",
@@ -140,6 +162,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
         "last_comment_from",
         "last_comment_before",
         "last_comment_days",
+        "last_comment_period",
         "consent_purpose",
         "consent_state",
       ].some((key) => options.has(key)))
@@ -162,6 +185,8 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
     last_comment_from: options.get("last_comment_from"),
     last_comment_before: options.get("last_comment_before"),
     last_comment_days: days === null ? null : Number(days),
+    // An empty query value means no calendar period.
+    last_comment_period: options.get("last_comment_period") || null,
   });
   let consent = parseConsentCondition({
     consent_purpose: options.get("consent_purpose"),
@@ -181,10 +206,11 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       last_comment_from: Date | null;
       last_comment_before: Date | null;
       last_comment_days: number | null;
+      last_comment_period: string | null;
       consent_purpose: string | null;
       consent_state: string | null;
     }>(
-      "SELECT connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,consent_purpose,consent_state FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
+      "SELECT connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
       [workspaceId, segmentId],
     );
     if (!segment.rows[0]) throw new ApiError(404, "segment_not_found");
@@ -196,6 +222,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       last_comment_from: saved.last_comment_from?.toISOString(),
       last_comment_before: saved.last_comment_before?.toISOString(),
       last_comment_days: saved.last_comment_days,
+      last_comment_period: saved.last_comment_period,
     });
     condition = saved.field_id
       ? {
@@ -208,11 +235,28 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   }
   await validateFieldCondition(pool, workspaceId, condition);
   // One statement clock for the page and preview, using elapsed hours even across DST.
-  const evaluation = `evaluation AS MATERIALIZED (SELECT statement_timestamp() AS as_of)`;
-  const relativeWindow = `(SELECT json_build_object(
-    'from',to_char((as_of - $14::int * interval '24 hours') AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
-    'before',to_char(as_of AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')) FROM evaluation)`;
-  const activityMatches = `(CASE WHEN $14::int IS NOT NULL THEN
+  // The calendar period reads the workspace time zone in the same statement. Its local boundaries are
+  // converted back with AT TIME ZONE, so PostgreSQL resolves daylight-saving gaps and overlaps.
+  const evaluation = `evaluation AS MATERIALIZED (SELECT as_of,time_zone,
+    local_from AT TIME ZONE time_zone AS period_from,local_before AT TIME ZONE time_zone AS period_before
+    FROM (SELECT statement_timestamp() AS as_of) clock
+    CROSS JOIN LATERAL (SELECT (SELECT time_zone FROM workspaces WHERE id=$1) AS time_zone) zone
+    CROSS JOIN LATERAL (SELECT date_trunc(CASE WHEN $15::text IN ('today','yesterday') THEN 'day' ELSE 'month' END,
+      as_of AT TIME ZONE time_zone) AS local_start) local_clock
+    CROSS JOIN LATERAL (SELECT CASE $15::text
+      WHEN 'today' THEN local_start WHEN 'yesterday' THEN local_start - interval '1 day'
+      WHEN 'this_month' THEN local_start WHEN 'last_month' THEN local_start - interval '1 month' END AS local_from,
+      CASE $15::text
+      WHEN 'today' THEN local_start + interval '1 day' WHEN 'yesterday' THEN local_start
+      WHEN 'this_month' THEN local_start + interval '1 month' WHEN 'last_month' THEN local_start END AS local_before) local_period)`;
+  const utc = (value: string) => `to_char(${value} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+  const activityWindow = activity?.last_comment_period
+    ? `(SELECT json_build_object('from',${utc("period_from")},'before',${utc("period_before")},'time_zone',time_zone) FROM evaluation)`
+    : `(SELECT json_build_object('from',${utc("(as_of - $14::int * interval '24 hours')")},'before',${utc("as_of")}) FROM evaluation)`;
+  const activityMatches = `(CASE WHEN $15::text IS NOT NULL THEN
+    max(e.created_at)>=(SELECT period_from FROM evaluation)
+    AND max(e.created_at)<(SELECT period_before FROM evaluation)
+    WHEN $14::int IS NOT NULL THEN
     max(e.created_at)>=(SELECT as_of - $14 * interval '24 hours' FROM evaluation)
     AND max(e.created_at)<(SELECT as_of FROM evaluation)
     ELSE ($10::timestamptz IS NULL OR (max(e.created_at)>=$10 AND max(e.created_at)<$11::timestamptz)) END)`;
@@ -265,10 +309,10 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
  (count(*) FILTER (WHERE activity_matches AND consent_matches AND NOT matched AND NOT tag_matches AND NOT field_matches))::text AS preview_excluded_both
  FROM outcomes
 )
- SELECT page.*,summary.*,${relativeWindow} AS activity_window FROM summary LEFT JOIN LATERAL (${contactQuery}) page ON true
+ SELECT page.*,summary.*,${activityWindow} AS activity_window FROM summary LEFT JOIN LATERAL (${contactQuery}) page ON true
  ORDER BY page.connection_id,page.sender_id`
-    : activity?.last_comment_days
-      ? `WITH ${evaluation} SELECT page.*,${relativeWindow} AS activity_window
+    : activity?.last_comment_days || activity?.last_comment_period
+      ? `WITH ${evaluation} SELECT page.*,${activityWindow} AS activity_window
          FROM evaluation LEFT JOIN LATERAL (${contactQuery}) page ON true ORDER BY page.connection_id,page.sender_id`
       : `WITH ${evaluation} ${contactQuery}`;
   const result = await pool.query<
@@ -280,7 +324,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       preview_excluded_both?: string;
       preview_excluded_activity?: string;
       preview_excluded_consent?: string;
-      activity_window?: { from: string; before: string };
+      activity_window?: { from: string; before: string; time_zone?: string };
     }
   >(query, [
     workspaceId,
@@ -297,6 +341,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
     consent?.consent_purpose ?? null,
     consent?.consent_state ?? null,
     activity?.last_comment_days ?? null,
+    activity?.last_comment_period ?? null,
   ]);
   const summary = result.rows[0];
   const contacts = result.rows
@@ -317,7 +362,9 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   const last = contacts.at(-1);
   return {
     contacts,
-    ...(activity?.last_comment_days ? { activity_window: summary?.activity_window } : {}),
+    ...(activity?.last_comment_days || activity?.last_comment_period
+      ? { activity_window: summary?.activity_window }
+      : {}),
     ...(preview
       ? {
           total: summary?.preview_total ?? "0",
@@ -368,7 +415,7 @@ export async function saveContactTags(pool: Pool, user: User, connectionId: stri
 
 // The columns of a segment list item, also returned by create and edit.
 const SEGMENT_COLUMNS =
-  "id,name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,consent_purpose,consent_state,version";
+  "id,name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state,version";
 
 export async function listContactSegments(pool: Pool, user: User) {
   const workspace = await workspaceFor(pool, user, "agent");
@@ -393,6 +440,7 @@ function segmentResult(row: {
   last_comment_from?: Date | null;
   last_comment_before?: Date | null;
   last_comment_days?: number | null;
+  last_comment_period?: string | null;
   consent_purpose?: string | null;
   consent_state?: string | null;
 }) {
@@ -404,6 +452,7 @@ function segmentResult(row: {
     last_comment_from,
     last_comment_before,
     last_comment_days,
+    last_comment_period,
     consent_purpose,
     consent_state,
     ...base
@@ -411,6 +460,7 @@ function segmentResult(row: {
   return {
     ...base,
     ...(last_comment_days ? { last_comment_days } : {}),
+    ...(last_comment_period ? { last_comment_period } : {}),
     ...(consent_purpose && consent_state ? { consent_purpose, consent_state } : {}),
     ...(last_comment_from && last_comment_before
       ? { last_comment_from: last_comment_from.toISOString(), last_comment_before: last_comment_before.toISOString() }
@@ -433,6 +483,7 @@ const SEGMENT_DEFINITION_KEYS = [
   "last_comment_from",
   "last_comment_before",
   "last_comment_days",
+  "last_comment_period",
   "consent_purpose",
   "consent_state",
 ];
@@ -462,7 +513,7 @@ type SegmentDefinition = ReturnType<typeof parseSegmentDefinition>;
 
 // The stored columns of a definition, in the order of segmentDefinitionValues.
 const SEGMENT_DEFINITION_COLUMNS =
-  "name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state,last_comment_days";
+  "name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state,last_comment_days,last_comment_period";
 function segmentDefinitionValues(definition: SegmentDefinition) {
   const { name, connectionId, filterTag, condition, activity, consent, operator } = definition;
   return [
@@ -478,6 +529,7 @@ function segmentDefinitionValues(definition: SegmentDefinition) {
     consent?.consent_purpose ?? null,
     consent?.consent_state ?? null,
     activity?.last_comment_days ?? null,
+    activity?.last_comment_period ?? null,
   ];
 }
 
@@ -508,7 +560,7 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
     await validateSegmentReferences(client, workspace, definition);
     const result = await client.query(
       `INSERT INTO instagram_contact_segments(workspace_id,${SEGMENT_DEFINITION_COLUMNS})
- SELECT $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13 WHERE (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived)<50
+ SELECT $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14 WHERE (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived)<50
  RETURNING ${SEGMENT_COLUMNS}`,
       [workspace, ...segmentDefinitionValues(definition)],
     );
@@ -562,10 +614,10 @@ export async function updateContactSegment(
     // IS DISTINCT FROM compares in SQL, so jsonb and timestamps need no conversion; an unchanged row updates nothing.
     const updated = (
       await client.query(
-        `UPDATE instagram_contact_segments SET (${SEGMENT_DEFINITION_COLUMNS})=($3,$4,$5,$6,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int),
+        `UPDATE instagram_contact_segments SET (${SEGMENT_DEFINITION_COLUMNS})=($3,$4,$5,$6,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text),
    version=version+1
  WHERE workspace_id=$1 AND id=$2
-   AND (${SEGMENT_DEFINITION_COLUMNS}) IS DISTINCT FROM ($3,$4::uuid,$5,$6::uuid,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int)
+   AND (${SEGMENT_DEFINITION_COLUMNS}) IS DISTINCT FROM ($3,$4::uuid,$5,$6::uuid,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text)
  RETURNING ${SEGMENT_COLUMNS}`,
         [workspace, id, ...segmentDefinitionValues(definition)],
       )

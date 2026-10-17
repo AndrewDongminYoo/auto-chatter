@@ -1279,6 +1279,91 @@ test("contact consent filters validate an exact purpose-state pair before databa
   }
 });
 
+test("contact calendar periods accept four exact values and refuse mixing before database access", async () => {
+  let values: unknown[] = [];
+  let queried = false;
+  const window = {
+    from: "2026-10-16T15:00:00.000000Z",
+    before: "2026-10-17T15:00:00.000000Z",
+    time_zone: "Asia/Seoul",
+  };
+  const pool = {
+    query: async (sql: string, parameters: unknown[]) => {
+      queried = true;
+      if (sql.includes("workspace_members")) return { rows: [{ workspace_id: workspaceId, role: "owner" }] };
+      values = parameters;
+      return {
+        rows: [
+          {
+            connection_id: null,
+            preview_total: "0",
+            preview_evaluated: "9007199254740993",
+            preview_excluded_activity: "9007199254740993",
+            preview_excluded_tag: "0",
+            preview_excluded_field: "0",
+            preview_excluded_both: "0",
+            activity_window: window,
+          },
+        ],
+      };
+    },
+    end: async () => {},
+  } as unknown as Pool;
+  const request = (query: URLSearchParams) =>
+    appApi(
+      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
+      config,
+      () => pool,
+      mediaFetch(),
+    );
+  for (const period of ["today", "yesterday", "this_month", "last_month"]) {
+    const preview = await request(new URLSearchParams({ preview: "true", last_comment_period: period }));
+    assert.equal(preview.status, 200);
+    assert.deepEqual(await preview.json(), {
+      contacts: [],
+      after: null,
+      activity_window: window,
+      total: "0",
+      evaluated: "9007199254740993",
+      excluded: { activity: "9007199254740993", tag: "0", field: "0", both: "0" },
+    });
+    // Appended last, so the earlier parameter positions stay as they were.
+    assert.equal(values.length, 15);
+    assert.deepEqual(values.slice(9, 11), [null, null]);
+    assert.equal(values[13], null);
+    assert.equal(values[14], period);
+    const list = await request(new URLSearchParams({ last_comment_period: period }));
+    assert.equal(list.status, 200);
+    assert.deepEqual((await list.json()).activity_window, window);
+  }
+  // An empty query value means no calendar period, and the response keeps its old shape.
+  const empty = await request(new URLSearchParams({ last_comment_period: "" }));
+  assert.equal(empty.status, 200);
+  assert.equal("activity_window" in (await empty.json()), false);
+  assert.equal(values[14], null);
+  const fixed = { last_comment_from: "2026-10-01T00:00:00.000Z", last_comment_before: "2026-10-02T00:00:00.000Z" };
+  for (const invalid of [
+    { last_comment_period: "TODAY" },
+    { last_comment_period: "this_week" },
+    { last_comment_period: " today" },
+    { last_comment_period: "today", last_comment_days: "7" },
+    { last_comment_period: "today", ...fixed },
+    { last_comment_period: "today", last_comment_from: fixed.last_comment_from },
+    { last_comment_period: "today", segment_id: "44444444-4444-4444-8444-444444444444" },
+    { last_comment_period: "", segment_id: "44444444-4444-4444-8444-444444444444" },
+  ]) {
+    queried = false;
+    const response = await request(new URLSearchParams(Object.entries(invalid)));
+    assert.equal(response.status, 400);
+    assert.equal(queried, false, "an invalid calendar period must fail before database access");
+  }
+  const duplicate = new URLSearchParams({ last_comment_period: "today" });
+  duplicate.append("last_comment_period", "yesterday");
+  queried = false;
+  assert.equal((await request(duplicate)).status, 400);
+  assert.equal(queried, false);
+});
+
 test("contact preview rejects malformed flags and every cursor before querying contacts", async () => {
   let queried = false;
   const pool = {
@@ -1466,6 +1551,38 @@ test("segment create and edit share one definition parser", async () => {
     ]);
     assert.deepEqual(edited, created);
   }
+});
+
+test("segment definitions take a calendar period as an exact string and refuse mixing with other activity forms", async () => {
+  for (const period of ["today", "yesterday", "this_month", "last_month"]) {
+    const { activity } = parseSegmentDefinition({ name: "Leads", last_comment_period: period });
+    assert.deepEqual(activity, { last_comment_period: period });
+  }
+  assert.equal(parseSegmentDefinition({ name: "Leads", last_comment_period: null }).activity, null);
+  assert.equal(parseSegmentDefinition({ name: "Leads" }).activity, null);
+  const fixed = { last_comment_from: "2026-10-01T00:00:00.000Z", last_comment_before: "2026-10-02T00:00:00.000Z" };
+  for (const body of [
+    { name: "Leads", last_comment_period: "" },
+    { name: "Leads", last_comment_period: "Today" },
+    { name: "Leads", last_comment_period: "last_week" },
+    { name: "Leads", last_comment_period: 1 },
+    { name: "Leads", last_comment_period: true },
+    { name: "Leads", last_comment_period: ["today"] },
+    { name: "Leads", last_comment_period: "today", last_comment_days: 7 },
+    { name: "Leads", last_comment_period: "today", ...fixed },
+    { name: "Leads", last_comment_period: "today", last_comment_before: fixed.last_comment_before },
+  ]) {
+    assert.throws(() => parseSegmentDefinition(body), refused("invalid_contact_activity"));
+    await assert.rejects(createContactSegment(segmentPool, segmentUser, body), refused("invalid_contact_activity"));
+    await assert.rejects(
+      updateContactSegment(segmentPool, segmentUser, segmentId, { ...body, expected_version: 1 }),
+      refused("invalid_contact_activity"),
+    );
+  }
+  await assert.rejects(
+    createContactSegment(segmentPool, segmentUser, { name: "Leads", last_comment_period: "this_month" }),
+    reachedDatabase,
+  );
 });
 
 test("contact mutations reject cross-origin writes and invalid tags before a write", async () => {

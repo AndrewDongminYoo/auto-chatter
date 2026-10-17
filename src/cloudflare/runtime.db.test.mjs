@@ -1414,6 +1414,49 @@ test("workerd contact API uses restricted server privileges and verified workspa
       200,
     );
     assert.equal((await runtime.dispatchFetch(relativePath, { headers })).status, 404);
+    // The first instant of last month in the workspace time zone, computed by the same PostgreSQL conversion.
+    await pool.query(
+      `UPDATE instagram_comment_events e SET created_at=(date_trunc('month',now() AT TIME ZONE w.time_zone)-interval '1 month') AT TIME ZONE w.time_zone
+       FROM workspaces w WHERE w.id=e.workspace_id AND e.connection_id=$1`,
+      [connection],
+    );
+    const calendarCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Last month", connection_id: connection, last_comment_period: "last_month" }),
+    });
+    assert.equal(calendarCreated.status, 201);
+    const calendarSegment = await calendarCreated.json();
+    assert.equal(calendarSegment.last_comment_period, "last_month");
+    const calendarPath = `https://app.test/api/contacts?preview=true&segment_id=${calendarSegment.id}`;
+    const lastMonth = await (await runtime.dispatchFetch(calendarPath, { headers })).json();
+    assert.equal(lastMonth.total, "1");
+    assert.deepEqual(lastMonth.excluded, { activity: "0", tag: "0", field: "0", both: "0" });
+    const zone = (
+      await pool.query(
+        "SELECT time_zone FROM workspaces WHERE id=(SELECT workspace_id FROM instagram_connections WHERE id=$1)",
+        [connection],
+      )
+    ).rows[0].time_zone;
+    assert.equal(lastMonth.activity_window.time_zone, zone);
+    const thisMonth = await (
+      await runtime.dispatchFetch(
+        `https://app.test/api/contacts?preview=true&connection_id=${connection}&last_comment_period=this_month`,
+        { headers },
+      )
+    ).json();
+    assert.equal(thisMonth.total, "0");
+    assert.deepEqual(thisMonth.excluded, { activity: "1", tag: "0", field: "0", both: "0" });
+    assert.equal(thisMonth.activity_window.from, lastMonth.activity_window.before);
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`https://app.test/api/contact-segments/${calendarSegment.id}`, {
+          method: "DELETE",
+          headers,
+        })
+      ).status,
+      200,
+    );
     const consentCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
       method: "POST",
       headers,

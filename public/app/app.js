@@ -376,7 +376,7 @@ const errors = {
     "검사 후 태그가 바뀐 연락처가 있어 저장하지 않았습니다. 현재 결과를 확인하고 다시 검사해 주세요.",
   invalid_field_condition: "추가 정보의 필드·조건·찾을 값을 확인해 주세요.",
   invalid_contact_condition: "OR 결합에는 태그와 추가 정보 조건이 모두 필요합니다.",
-  invalid_contact_activity: "UTC 시작·종료를 함께 지정하거나 최근 일수 1~366 중 하나를 선택해 주세요.",
+  invalid_contact_activity: "UTC 시작·종료를 함께 지정하거나 최근 일수 1~366 또는 달력 기간 중 하나를 선택해 주세요.",
   invalid_contact_consent: "동의 목적과 기록 상태를 함께 선택해 주세요.",
   field_not_found: "접근할 수 없거나 보관된 필드입니다. 필드를 다시 불러와 주세요.",
   field_in_use: "저장된 필터에서 사용하는 필드입니다. 해당 필터를 먼저 보관해 주세요.",
@@ -2514,17 +2514,27 @@ function clearContactResults() {
 }
 function contactActivityControls() {
   const fields = byId("contacts-filter").elements;
-  const relative = fields.activity_mode.value === "relative";
+  const mode = fields.activity_mode.value;
+  const relative = mode === "relative",
+    calendar = mode === "calendar";
   byId("contact-activity-days").hidden = !relative;
   fields.last_comment_days.disabled = !relative;
   fields.last_comment_days.required = relative;
+  byId("contact-activity-period").hidden = !calendar;
+  fields.last_comment_period.disabled = !calendar;
   for (const key of ["from", "before"]) {
-    byId(`contact-activity-${key}`).hidden = relative;
-    fields[`last_comment_${key}`].disabled = relative;
+    byId(`contact-activity-${key}`).hidden = mode !== "fixed";
+    fields[`last_comment_${key}`].disabled = mode !== "fixed";
   }
 }
+const calendarPeriodLabels = { today: "오늘", yesterday: "어제", this_month: "이번 달", last_month: "지난달" };
 function contactActivityWindow() {
   const fields = byId("contacts-filter").elements;
+  if (fields.activity_mode.value === "calendar") {
+    const period = fields.last_comment_period.value;
+    if (!Object.hasOwn(calendarPeriodLabels, period)) throw new Error(errors.invalid_contact_activity);
+    return { last_comment_period: period };
+  }
   if (fields.activity_mode.value === "relative") {
     const days = fields.last_comment_days.value;
     if (!/^[1-9][0-9]{0,2}$/.test(days) || !fields.last_comment_days.validity.valid || Number(days) > 366)
@@ -2559,6 +2569,23 @@ function relativeActivitySummary(window, days) {
   )
     throw new Error("최근 활동의 조회 기간을 확인할 수 없습니다.");
   return ` 이번 조회 기간(UTC): ${window.from} 이상, ${window.before} 미만. 조회와 다음 페이지마다 다시 계산합니다.`;
+}
+function calendarActivitySummary(window, period) {
+  if (!period) return "";
+  const valid = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(value);
+  if (
+    !Object.hasOwn(calendarPeriodLabels, period) ||
+    !valid(window?.from) ||
+    !valid(window?.before) ||
+    window.from >= window.before ||
+    typeof window.time_zone !== "string" ||
+    !window.time_zone
+  )
+    throw new Error("달력 기간의 조회 경계를 확인할 수 없습니다.");
+  return (
+    ` 이번 조회 기간: ${window.time_zone} 시간대의 ${calendarPeriodLabels[period]}, UTC ${window.from} 이상 ${window.before} 미만.` +
+    " 조회와 다음 페이지마다 작업 공간 시간대로 다시 계산합니다."
+  );
 }
 function contactConsentControls() {
   const fields = byId("contacts-filter").elements;
@@ -2625,10 +2652,11 @@ async function loadContacts(more = false) {
   try {
     const page = await api(`/api/contacts?${query}`);
     if (generation !== contactsGeneration) return;
-    const days =
-      query.get("last_comment_days") ||
-      contactSegments.find((s) => s.id === query.get("segment_id"))?.last_comment_days;
-    const period = relativeActivitySummary(page.activity_window, days);
+    const segment = contactSegments.find((s) => s.id === query.get("segment_id"));
+    const days = query.get("last_comment_days") || segment?.last_comment_days;
+    const calendar = query.get("last_comment_period") || segment?.last_comment_period;
+    const period =
+      relativeActivitySummary(page.activity_window, days) + calendarActivitySummary(page.activity_window, calendar);
     for (const contact of page.contacts)
       if (!purgedContactConnections.has(contact.connection_id)) byId("contacts-list").append(contactCard(contact));
     contactsAfter = page.after;
@@ -2691,9 +2719,13 @@ byId("segment-preview").addEventListener("click", async () => {
     status.textContent = "현재 조건에 맞는 연락처를 확인하고 있습니다…";
     const page = await api(`/api/contacts?${query}`);
     if (!current()) return;
-    const period = relativeActivitySummary(page.activity_window, query.get("last_comment_days"));
+    const period =
+      relativeActivitySummary(page.activity_window, query.get("last_comment_days")) +
+      calendarActivitySummary(page.activity_window, query.get("last_comment_period"));
     const activityCount =
-      query.has("last_comment_from") || query.has("last_comment_days") ? page.excluded?.activity : "0";
+      query.has("last_comment_from") || query.has("last_comment_days") || query.has("last_comment_period")
+        ? page.excluded?.activity
+        : "0";
     const consentCount = query.has("consent_purpose") ? page.excluded?.consent : "0";
     const counts = [
       page.total,
@@ -2789,8 +2821,13 @@ function fillSegmentConditions(segment) {
   fields.condition_operator.value = segment?.condition_operator || "and";
   fields.last_comment_from.value = segment?.last_comment_from?.slice(0, -1) || "";
   fields.last_comment_before.value = segment?.last_comment_before?.slice(0, -1) || "";
-  fields.activity_mode.value = segment?.last_comment_days ? "relative" : "fixed";
+  fields.activity_mode.value = segment?.last_comment_period
+    ? "calendar"
+    : segment?.last_comment_days
+      ? "relative"
+      : "fixed";
   fields.last_comment_days.value = segment?.last_comment_days || "7";
+  fields.last_comment_period.value = segment?.last_comment_period || "today";
   contactActivityControls();
   fields.consent_purpose.value = segment?.consent_purpose || "";
   fields.consent_state.value = segment?.consent_state || "";
@@ -2818,7 +2855,11 @@ function segmentSummary(segment) {
         (fieldConditionNeedsValue(segment.field_operator) ? ` ${displayFieldValue(segment.field_value)}` : ""),
     );
   if (segment.condition_operator === "or") parts.push("태그와 추가 정보 중 하나만 맞아도 포함");
-  if (segment.last_comment_days) parts.push(`최근 ${segment.last_comment_days}일 활동`);
+  if (segment.last_comment_period)
+    parts.push(
+      `달력 기간 ${calendarPeriodLabels[segment.last_comment_period] ?? segment.last_comment_period} (작업 공간 시간대)`,
+    );
+  else if (segment.last_comment_days) parts.push(`최근 ${segment.last_comment_days}일 활동`);
   else if (segment.last_comment_from)
     parts.push(`활동 기간(UTC) ${segment.last_comment_from} 이상 ${segment.last_comment_before} 미만`);
   if (segment.consent_purpose)
@@ -3025,6 +3066,7 @@ byId("segment-archive").addEventListener("click", (event) => {
           query.set("last_comment_before", segment.last_comment_before);
         }
         if (segment.last_comment_days) query.set("last_comment_days", segment.last_comment_days);
+        if (segment.last_comment_period) query.set("last_comment_period", segment.last_comment_period);
         if (segment.consent_purpose) {
           query.set("consent_purpose", segment.consent_purpose);
           query.set("consent_state", segment.consent_state);

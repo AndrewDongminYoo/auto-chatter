@@ -4215,3 +4215,391 @@ test("relative comment activity migration preserves legacy windows and can be ap
     client.release();
   }
 });
+
+type CalendarWindow = { from: string; before: string; time_zone: string };
+const calendarWindowOf = (result: unknown) => (result as { activity_window?: CalendarWindow }).activity_window;
+async function replaceComments(workspace: string, rows: [string, string][], connection = connectionId) {
+  await pool.query("DELETE FROM instagram_comment_events WHERE workspace_id=$1", [workspace]);
+  for (const [i, [sender, at]] of rows.entries())
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$4,'private',$5)",
+      [workspace, connection, `calendar-${i}`, sender, at],
+    );
+}
+// The microsecond before an exact UTC instant written as YYYY-MM-DDTHH:MM:SS.000000Z.
+function microBefore(at: string) {
+  const ms = Date.parse(at.slice(0, -4) + "Z") - 1;
+  return new Date(ms).toISOString().slice(0, -1) + "999Z";
+}
+// Checks the four edge contacts of one period: at from and just before before are in; just before from and at before are out.
+async function assertCalendarEdges(
+  workspace: string,
+  asOf: string,
+  period: string,
+  expected: CalendarWindow,
+  db: Pool = pool,
+) {
+  await replaceComments(workspace, [
+    ["a-from", expected.from],
+    ["b-before-from", microBefore(expected.from)],
+    ["c-last", microBefore(expected.before)],
+    ["d-at-before", expected.before],
+  ]);
+  const q = new URLSearchParams({ last_comment_period: period, preview: "true" });
+  const preview = await listContacts(relativeClock(asOf, db), a, q);
+  assert.equal(preview.total, "2", period);
+  assert.equal(preview.evaluated, "4", period);
+  assert.deepEqual(preview.excluded, { activity: "2", tag: "0", field: "0", both: "0" }, period);
+  assert.deepEqual(
+    preview.contacts.map((c) => c.sender_id),
+    ["a-from", "c-last"],
+    period,
+  );
+  assert.deepEqual(calendarWindowOf(preview), expected, period);
+  q.delete("preview");
+  const list = await listContacts(relativeClock(asOf, db), a, q);
+  assert.deepEqual(list.contacts, preview.contacts, period);
+  assert.deepEqual(calendarWindowOf(list), expected, period);
+}
+
+test("calendar comment activity uses half-open periods of the workspace time zone from one statement clock", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  // 12:00 on 2026-10-17 in Asia/Seoul, the default workspace time zone.
+  const asOf = "2026-10-17T03:00:00.000000Z";
+  const periods: [string, string, string][] = [
+    ["today", "2026-10-16T15:00:00.000000Z", "2026-10-17T15:00:00.000000Z"],
+    ["yesterday", "2026-10-15T15:00:00.000000Z", "2026-10-16T15:00:00.000000Z"],
+    ["this_month", "2026-09-30T15:00:00.000000Z", "2026-10-31T15:00:00.000000Z"],
+    ["last_month", "2026-08-31T15:00:00.000000Z", "2026-09-30T15:00:00.000000Z"],
+  ];
+  for (const [period, from, before] of periods)
+    await assertCalendarEdges(workspace, asOf, period, { from, before, time_zone: "Asia/Seoul" });
+  // The session time zone takes no part: the local date comes from the workspace time zone only.
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL TIME ZONE 'America/New_York'");
+    const session = { query: client.query.bind(client) } as unknown as Pool;
+    for (const [period, from, before] of periods)
+      await assertCalendarEdges(workspace, asOf, period, { from, before, time_zone: "Asia/Seoul" }, session);
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+  // Empty results keep the window, and the other workspace evaluates nothing of this one.
+  await replaceComments(workspace, []);
+  const empty = await listContacts(relativeClock(asOf), a, new URLSearchParams({ last_comment_period: "today" }));
+  assert.deepEqual(empty.contacts, []);
+  assert.deepEqual(calendarWindowOf(empty), {
+    from: periods[0]![1],
+    before: periods[0]![2],
+    time_zone: "Asia/Seoul",
+  });
+  await replaceComments(workspace, [["sender", "2026-10-17T01:00:00.000000Z"]]);
+  const foreign = await listContacts(
+    relativeClock(asOf),
+    b,
+    new URLSearchParams({ last_comment_period: "today", preview: "true" }),
+  );
+  assert.equal(foreign.evaluated, "0");
+  assert.equal(foreign.total, "0");
+  // An agent of the workspace reads the same result.
+  const agent = { id: randomUUID(), email: "agent@example.test" };
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'agent')", [
+    workspace,
+    agent.id,
+  ]);
+  const read = await listContacts(
+    relativeClock(asOf),
+    agent,
+    new URLSearchParams({ last_comment_period: "today", preview: "true" }),
+  );
+  assert.equal(read.total, "1");
+  assert.deepEqual(
+    read.contacts.map((c) => c.sender_id),
+    ["sender"],
+  );
+  // Requests without a calendar period keep their old response shape.
+  assert.equal("activity_window" in (await listContacts(relativeClock(asOf), a)), false);
+  const days = await listContacts(relativeClock(asOf), a, new URLSearchParams({ last_comment_days: "1" }));
+  assert.deepEqual(calendarWindowOf(days), { from: "2026-10-16T03:00:00.000000Z", before: asOf });
+});
+
+test("calendar comment activity follows the workspace time zone, including a later change", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const asOf = "2026-10-17T03:00:00.000000Z";
+  // 08:00Z on 10-16 is 17:00 in Seoul (yesterday there) and 01:00 in Los Angeles (today there);
+  // 08:00Z on 10-17 is 17:00 in Seoul (today there) and 01:00 on 10-17 in Los Angeles, after its as_of date.
+  await replaceComments(workspace, [
+    ["la-today", "2026-10-16T08:00:00.000000Z"],
+    ["seoul-today", "2026-10-17T08:00:00.000000Z"],
+  ]);
+  const q = new URLSearchParams({ last_comment_period: "today", preview: "true" });
+  const seoul = await listContacts(relativeClock(asOf), a, q);
+  assert.deepEqual(
+    seoul.contacts.map((c) => c.sender_id),
+    ["seoul-today"],
+  );
+  assert.deepEqual(calendarWindowOf(seoul), {
+    from: "2026-10-16T15:00:00.000000Z",
+    before: "2026-10-17T15:00:00.000000Z",
+    time_zone: "Asia/Seoul",
+  });
+  await pool.query("UPDATE workspaces SET time_zone='America/Los_Angeles' WHERE id=$1", [workspace]);
+  const la = await listContacts(relativeClock(asOf), a, q);
+  assert.deepEqual(
+    la.contacts.map((c) => c.sender_id),
+    ["la-today"],
+  );
+  assert.deepEqual(calendarWindowOf(la), {
+    from: "2026-10-16T07:00:00.000000Z",
+    before: "2026-10-17T07:00:00.000000Z",
+    time_zone: "America/Los_Angeles",
+  });
+  assert.deepEqual(la.excluded, { activity: "1", tag: "0", field: "0", both: "0" });
+});
+
+test("calendar comment activity crosses month and year ends", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  // 09:30 on 2027-01-01 in Seoul: this month is January and last month is December of the previous year.
+  await assertCalendarEdges(workspace, "2027-01-01T00:30:00.000000Z", "this_month", {
+    from: "2026-12-31T15:00:00.000000Z",
+    before: "2027-01-31T15:00:00.000000Z",
+    time_zone: "Asia/Seoul",
+  });
+  await assertCalendarEdges(workspace, "2027-01-01T00:30:00.000000Z", "last_month", {
+    from: "2026-11-30T15:00:00.000000Z",
+    before: "2026-12-31T15:00:00.000000Z",
+    time_zone: "Asia/Seoul",
+  });
+  await assertCalendarEdges(workspace, "2027-01-01T00:30:00.000000Z", "yesterday", {
+    from: "2026-12-30T15:00:00.000000Z",
+    before: "2026-12-31T15:00:00.000000Z",
+    time_zone: "Asia/Seoul",
+  });
+  // The last microsecond of 2026 in Seoul is still December.
+  await assertCalendarEdges(workspace, "2026-12-31T14:59:59.999999Z", "this_month", {
+    from: "2026-11-30T15:00:00.000000Z",
+    before: "2026-12-31T15:00:00.000000Z",
+    time_zone: "Asia/Seoul",
+  });
+  await assertCalendarEdges(workspace, "2026-12-31T14:59:59.999999Z", "today", {
+    from: "2026-12-30T15:00:00.000000Z",
+    before: "2026-12-31T15:00:00.000000Z",
+    time_zone: "Asia/Seoul",
+  });
+  await pool.query("UPDATE workspaces SET time_zone='UTC' WHERE id=$1", [workspace]);
+  await assertCalendarEdges(workspace, "2026-03-01T00:00:00.000000Z", "last_month", {
+    from: "2026-02-01T00:00:00.000000Z",
+    before: "2026-03-01T00:00:00.000000Z",
+    time_zone: "UTC",
+  });
+  await assertCalendarEdges(workspace, "2026-03-01T00:00:00.000000Z", "yesterday", {
+    from: "2026-02-28T00:00:00.000000Z",
+    before: "2026-03-01T00:00:00.000000Z",
+    time_zone: "UTC",
+  });
+});
+
+test("calendar comment activity takes PostgreSQL's daylight-saving rule for a missing midnight and a 25-hour day", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  // America/Santiago moves from -04 to -03 at local midnight on 2026-09-06, so 00:00 does not exist that day.
+  // PostgreSQL gives a nonexistent local time the offset before the change: 00:00 reads as 00:00-04, 04:00Z,
+  // which is the day's first instant (01:00-03). The day has 23 hours.
+  await pool.query("UPDATE workspaces SET time_zone='America/Santiago' WHERE id=$1", [workspace]);
+  const santiago = "2026-09-06T12:00:00.000000Z";
+  await assertCalendarEdges(workspace, santiago, "today", {
+    from: "2026-09-06T04:00:00.000000Z",
+    before: "2026-09-07T03:00:00.000000Z",
+    time_zone: "America/Santiago",
+  });
+  await assertCalendarEdges(workspace, santiago, "yesterday", {
+    from: "2026-09-05T04:00:00.000000Z",
+    before: "2026-09-06T04:00:00.000000Z",
+    time_zone: "America/Santiago",
+  });
+  await assertCalendarEdges(workspace, santiago, "this_month", {
+    from: "2026-09-01T04:00:00.000000Z",
+    before: "2026-10-01T03:00:00.000000Z",
+    time_zone: "America/Santiago",
+  });
+  // America/Los_Angeles repeats 01:00-02:00 on 2026-11-01; midnight is unambiguous and the day has 25 hours.
+  await pool.query("UPDATE workspaces SET time_zone='America/Los_Angeles' WHERE id=$1", [workspace]);
+  await assertCalendarEdges(workspace, "2026-11-01T20:00:00.000000Z", "today", {
+    from: "2026-11-01T07:00:00.000000Z",
+    before: "2026-11-02T08:00:00.000000Z",
+    time_zone: "America/Los_Angeles",
+  });
+});
+
+test("calendar comment activity judges the latest stored comment and keeps the exclusion order", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const asOf = "2026-10-17T03:00:00.000000Z";
+  await replaceComments(workspace, [
+    // An older comment inside today with a newer one after it does not match.
+    ["a-latest-outside", "2026-10-17T01:00:00.000000Z"],
+    ["a-latest-outside", "2026-10-17T15:00:00.000000Z"],
+    // An older comment before today with a newer one inside it matches.
+    ["b-latest-inside", "2026-10-01T00:00:00.000000Z"],
+    ["b-latest-inside", "2026-10-17T02:00:00.000000Z"],
+    ["c-inside", "2026-10-17T02:30:00.000000Z"],
+  ]);
+  await saveContactTags(pool, a, connectionId, "b-latest-inside", { tags: ["lead"] });
+  const q = new URLSearchParams({ last_comment_period: "today", preview: "true", tag: "lead" });
+  const result = await listContacts(relativeClock(asOf), a, q);
+  assert.equal(result.total, "1");
+  assert.equal(result.evaluated, "3");
+  assert.deepEqual(result.excluded, { activity: "1", tag: "1", field: "0", both: "0" });
+  assert.deepEqual(
+    result.contacts.map((c) => [c.sender_id, c.comment_count, c.first_comment_at.toISOString()]),
+    [["b-latest-inside", "2", "2026-10-01T00:00:00.000Z"]],
+  );
+  q.set("consent_purpose", "marketing");
+  q.set("consent_state", "granted");
+  const consent = await listContacts(relativeClock(asOf), a, q);
+  assert.equal(consent.total, "0");
+  assert.deepEqual(consent.excluded, { activity: "1", consent: "2", tag: "0", field: "0", both: "0" });
+});
+
+test("calendar comment activity saves, edits and evaluates segments and enforces one activity form in the database", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const created = await fieldRequest("POST", "/api/contact-segments", { name: "Today", last_comment_period: "today" });
+  assert.equal(created.status, 201);
+  const saved = await created.json();
+  assert.deepEqual(saved, {
+    id: saved.id,
+    name: "Today",
+    connection_id: null,
+    tag: null,
+    last_comment_period: "today",
+    version: 1,
+  });
+  assert.deepEqual(
+    (await listContactSegments(pool, a)).find((s) => s.id === saved.id),
+    saved,
+  );
+  const commented = new Date();
+  await replaceComments(workspace, [["sender", commented.toISOString()]]);
+  const path = `/api/contacts?preview=true&segment_id=${saved.id}`;
+  const liveBefore = Date.now();
+  const live = await (await fieldRequest("GET", path)).json();
+  const liveAfter = Date.now();
+  // Near Seoul midnight the comment can fall into the previous day; the count follows the returned window.
+  const inside =
+    commented.getTime() >= Date.parse(live.activity_window.from) &&
+    commented.getTime() < Date.parse(live.activity_window.before);
+  assert.equal(live.total, inside ? "1" : "0");
+  assert.equal(live.activity_window.time_zone, "Asia/Seoul");
+  assert.match(live.activity_window.from, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/);
+  // A Seoul day starts at 15:00Z, lasts 24 hours and contains an instant of the request.
+  assert.match(live.activity_window.from, /T15:00:00\.000000Z$/);
+  assert.equal(Date.parse(live.activity_window.before) - Date.parse(live.activity_window.from), 86400000);
+  assert.ok(Date.parse(live.activity_window.from) <= liveAfter && Date.parse(live.activity_window.before) > liveBefore);
+  // A later time zone change applies to the next evaluation of the saved period.
+  await pool.query("UPDATE workspaces SET time_zone='America/Los_Angeles' WHERE id=$1", [workspace]);
+  const moved = await (await fieldRequest("GET", `/api/contacts?segment_id=${saved.id}`)).json();
+  assert.equal(moved.activity_window.time_zone, "America/Los_Angeles");
+  await pool.query("UPDATE workspaces SET time_zone='Asia/Seoul' WHERE id=$1", [workspace]);
+  assert.equal((await fieldRequest("GET", `${path}&last_comment_period=today`)).status, 400);
+  assert.equal((await fieldRequest("GET", path, undefined, b)).status, 404);
+  // Edit replaces the period, keeps it on an unchanged definition, and removes it when omitted.
+  const edited = await fieldRequest("PUT", segmentPath(saved.id), {
+    name: "Last month",
+    last_comment_period: "last_month",
+    expected_version: 1,
+  });
+  assert.equal(edited.status, 200);
+  assert.deepEqual(await edited.json(), {
+    id: saved.id,
+    name: "Last month",
+    connection_id: null,
+    tag: null,
+    last_comment_period: "last_month",
+    version: 2,
+  });
+  const same = await fieldRequest("PUT", segmentPath(saved.id), {
+    name: "Last month",
+    last_comment_period: "last_month",
+    expected_version: 2,
+  });
+  assert.equal((await same.json()).version, 2);
+  const lastMonth = await (await fieldRequest("GET", path)).json();
+  assert.equal(lastMonth.total, "0");
+  assert.deepEqual(lastMonth.excluded, { activity: "1", tag: "0", field: "0", both: "0" });
+  const relative = await fieldRequest("PUT", segmentPath(saved.id), {
+    name: "Last month",
+    last_comment_days: 7,
+    expected_version: 2,
+  });
+  const relativeSaved = await relative.json();
+  assert.equal(relativeSaved.last_comment_days, 7);
+  assert.equal("last_comment_period" in relativeSaved, false);
+  assert.equal("time_zone" in (await (await fieldRequest("GET", path)).json()).activity_window, false);
+  const back = await fieldRequest("PUT", segmentPath(saved.id), {
+    name: "Last month",
+    last_comment_period: "yesterday",
+    expected_version: 3,
+  });
+  assert.equal((await back.json()).last_comment_period, "yesterday");
+  const fixed = { last_comment_from: "2026-10-01T00:00:00.000Z", last_comment_before: "2026-10-02T00:00:00.000Z" };
+  for (const body of [
+    { name: "Mixed", last_comment_period: "today", last_comment_days: 7 },
+    { name: "Mixed", last_comment_period: "today", ...fixed },
+    { name: "Mixed", last_comment_period: "this_week" },
+  ])
+    assert.equal((await fieldRequest("POST", "/api/contact-segments", body)).status, 400);
+  // Legacy segments and the other forms omit the key.
+  const legacy = await createContactSegment(pool, a, { name: "Legacy", last_comment_period: null });
+  assert.equal("last_comment_period" in legacy, false);
+  const bounded = await createContactSegment(pool, a, { name: "Fixed", ...fixed });
+  assert.equal("last_comment_period" in bounded, false);
+  // The CHECK allows no form or exactly one of the three.
+  for (const sql of [
+    "UPDATE instagram_contact_segments SET last_comment_period='this_week' WHERE id=$1",
+    "UPDATE instagram_contact_segments SET last_comment_days=7 WHERE id=$1",
+    "UPDATE instagram_contact_segments SET last_comment_from=now(),last_comment_before=now()+interval '1 hour' WHERE id=$1",
+  ])
+    await assert.rejects(pool.query(sql, [saved.id]), { code: "23514", constraint: "contact_segment_calendar_period" });
+  await assert.rejects(
+    pool.query("UPDATE instagram_contact_segments SET last_comment_period='today' WHERE id=$1", [bounded.id]),
+    { code: "23514", constraint: "contact_segment_calendar_period" },
+  );
+  await archiveContactSegment(pool, a, saved.id);
+  assert.equal((await fieldRequest("GET", path)).status, 404);
+});
+
+test("calendar period migration adds the column and its check and can be applied repeatedly", async () => {
+  const relative = await createContactSegment(pool, a, { name: "Relative migration", last_comment_days: 7 });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN last_comment_period");
+    const migration = await readFile(
+      new URL("../../db/migrations/055_segment_calendar_period.sql", import.meta.url),
+      "utf8",
+    );
+    await client.query(migration);
+    assert.equal(
+      (await client.query("SELECT last_comment_period FROM instagram_contact_segments WHERE id=$1", [relative.id]))
+        .rows[0].last_comment_period,
+      null,
+    );
+    await client.query(
+      "UPDATE instagram_contact_segments SET last_comment_days=NULL,last_comment_period='last_month' WHERE id=$1",
+      [relative.id],
+    );
+    await client.query(migration);
+    assert.equal(
+      (await client.query("SELECT last_comment_period FROM instagram_contact_segments WHERE id=$1", [relative.id]))
+        .rows[0].last_comment_period,
+      "last_month",
+    );
+    await assert.rejects(
+      client.query("UPDATE instagram_contact_segments SET last_comment_days=1 WHERE id=$1", [relative.id]),
+      { code: "23514", constraint: "contact_segment_calendar_period" },
+    );
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+});
