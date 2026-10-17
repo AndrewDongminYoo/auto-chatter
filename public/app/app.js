@@ -2762,7 +2762,9 @@ function segmentControls() {
   byId("segment-edit-reload").disabled = segmentBusy;
 }
 // Leaves edit mode. The filter form keeps its conditions; the name field is cleared unless keepName is set.
+// A kept draft that the operator changed stays marked unsaved, because segmentEditChanged() ends with edit mode.
 function leaveSegmentEdit(keepName = false) {
+  if (keepName) segmentNameDirty = segmentNameDirty || segmentEditChanged();
   editingSegment = null;
   byId("segment-edit-status").textContent = "";
   byId("segment-edit-conflict").hidden = true;
