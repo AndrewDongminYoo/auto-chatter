@@ -32,6 +32,15 @@ let segmentBusy = false;
 let activeSegmentId = "";
 let segmentNameDirty = false;
 let segmentPreviewRequest = 0;
+// The saved segment being edited: its ID, the version the edit is based on, and the segment as last read from the
+// server. It is kept apart from activeSegmentId, because changing a condition clears the selection.
+let editingSegment = null;
+// Counts operator edits of the filter conditions, so a segment save can tell whether they changed while it ran.
+let segmentConditionInputs = 0;
+// True when the operator changed a condition since the edit started or since the saved values were last loaded.
+function segmentEditChanged() {
+  return Boolean(editingSegment) && segmentConditionInputs !== editingSegment.inputs;
+}
 let contactFields = [];
 let fieldsGeneration = 0;
 let fieldsRequest = 0;
@@ -72,6 +81,7 @@ function canDiscard() {
     (!dirty &&
       !contactsDirty.size &&
       !segmentNameDirty &&
+      !segmentEditChanged() &&
       !fieldNameDirty &&
       !inbox.hasDrafts() &&
       !flowEditor.hasChanges()) ||
@@ -159,6 +169,7 @@ window.addEventListener("beforeunload", (event) => {
     dirty ||
     contactsDirty.size ||
     segmentNameDirty ||
+    segmentEditChanged() ||
     fieldNameDirty ||
     inbox.hasDrafts() ||
     flowEditor.hasChanges()
@@ -212,6 +223,7 @@ function resetSession() {
   contactSegments = [];
   segmentBusy = false;
   activeSegmentId = "";
+  leaveSegmentEdit();
   segmentNameDirty = false;
   fieldsGeneration++;
   contactFields = [];
@@ -320,6 +332,7 @@ const errors = {
   segment_not_found: "필터에 접근할 수 없습니다. 저장된 필터를 다시 불러와 주세요.",
   segment_name_exists: "같은 이름의 필터가 있습니다. 다른 이름으로 저장해 주세요.",
   segment_limit_reached: "저장된 필터는 최대 50개입니다. 사용하지 않는 필터를 보관해 주세요.",
+  segment_conflict: "다른 변경이 먼저 저장되었습니다. 저장된 값을 확인한 뒤 다시 저장해 주세요.",
   invalid_label: "라벨 이름은 1–30자로 입력하고 제어 문자는 쓰지 마세요.",
   label_name_exists: "같은 이름의 라벨이 있습니다. 다른 이름을 입력해 주세요.",
   label_limit_reached: "사용 중인 라벨은 최대 50개입니다. 쓰지 않는 라벨을 보관해 주세요.",
@@ -452,6 +465,8 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
     error.errors = result.errors;
     // A reminder refusal for an existing or newer reminder carries that reminder (409).
     error.reminder = result.reminder;
+    // A stale segment edit carries the saved segment (409).
+    error.segment = result.segment;
     // A rejected (422) or stale (409) CSV import carries the fresh per-row check result.
     error.checked_at = result.checked_at;
     error.counts = result.counts;
@@ -1151,6 +1166,9 @@ function renderGettingStarted(rules, globalSendEnabled, connectAvailable) {
 
 async function loadWorkspace() {
   contactCsvPreview.reset();
+  // A workspace reload ends a segment edit; the conditions stay in the filter form.
+  if (editingSegment) leaveSegmentEdit();
+  segmentControls();
   manualReports.reset();
   flowReports.reset();
   handoffReports.reset();
@@ -2723,49 +2741,32 @@ byId("segment-preview").addEventListener("click", async () => {
 });
 
 function segmentControls() {
-  byId("contact-segment").disabled = segmentBusy;
+  // Choosing another saved segment would overwrite the conditions being edited.
+  byId("contact-segment").disabled = segmentBusy || Boolean(editingSegment);
   byId("segment-archive").disabled = segmentBusy || !activeSegmentId;
+  byId("segment-edit").hidden = currentRole !== "owner" && currentRole !== "admin";
+  byId("segment-edit").disabled = segmentBusy || !activeSegmentId || Boolean(editingSegment);
   byId("segment-save").elements.name.disabled = segmentBusy;
   byId("segment-save").querySelector("button").disabled = segmentBusy;
+  // While a save is in flight, action() shows the loading label; the trailing segmentControls() call restores it.
+  if (!segmentBusy)
+    byId("segment-save").querySelector("button").textContent = editingSegment ? "변경 저장" : "필터 저장";
+  byId("segment-edit-cancel").hidden = !editingSegment;
+  byId("segment-edit-cancel").disabled = segmentBusy;
+  byId("segment-edit-reload").disabled = segmentBusy;
 }
-async function loadContactSegments(force = false) {
-  if (segmentBusy && !force) return;
-  const generation = segmentsGeneration;
-  const request = ++segmentsRequest;
-  try {
-    const result = await api("/api/contact-segments");
-    if (generation !== segmentsGeneration || request !== segmentsRequest) return;
-    contactSegments = result.segments;
-    const select = byId("contact-segment");
-    select.replaceChildren(new Option("직접 조건 설정", ""));
-    for (const segment of contactSegments) select.add(new Option(segment.name, segment.id));
-    if (!contactSegments.some((segment) => segment.id === activeSegmentId)) activeSegmentId = "";
-    select.value = activeSegmentId;
-    segmentControls();
-    byId("segments-status").textContent = contactSegments.length
-      ? `저장된 필터 ${contactSegments.length}개. 조건에 맞는 연락처는 조회할 때 갱신됩니다.`
-      : "자주 쓰는 계정·태그 조건을 필터로 저장해 보세요.";
-  } catch (error) {
-    if (generation === segmentsGeneration && request === segmentsRequest)
-      byId("segments-status").textContent = `${error.message} 새로고침으로 다시 시도해 주세요.`;
+// Leaves edit mode. The filter form keeps its conditions; the name field is cleared unless keepName is set.
+function leaveSegmentEdit(keepName = false) {
+  editingSegment = null;
+  byId("segment-edit-status").textContent = "";
+  byId("segment-edit-conflict").hidden = true;
+  byId("segment-edit-saved").textContent = "";
+  if (!keepName) {
+    byId("segment-save").reset();
+    segmentNameDirty = false;
   }
 }
-byId("contacts-filter").addEventListener("input", (event) => {
-  invalidateSegmentPreview();
-  activeSegmentId = "";
-  byId("contact-segment").value = "";
-  if (event.target.name === "tag") fieldFilterControls();
-  if (event.target.name === "activity_mode") contactActivityControls();
-  if (event.target.name === "consent_purpose") contactConsentControls();
-  segmentControls();
-});
-byId("contact-segment").addEventListener("change", (event) => {
-  if (!canReloadContacts()) {
-    event.currentTarget.value = activeSegmentId;
-    return;
-  }
-  const segment = contactSegments.find((value) => value.id === event.currentTarget.value);
-  activeSegmentId = segment?.id || "";
+function fillSegmentConditions(segment) {
   const fields = byId("contacts-filter").elements;
   fields.connection_id.value = segment?.connection_id || "";
   fields.tag.value = segment?.tag || "";
@@ -2783,9 +2784,168 @@ byId("contact-segment").addEventListener("change", (event) => {
   fieldFilterControls();
   fields.field_value.value = fieldConditionNeedsValue(segment?.field_operator) ? String(segment.field_value) : "";
   fields.field_boolean.value = segment?.field_value === false ? "false" : "true";
+}
+function optionLabel(select, value) {
+  return [...select.options].find((option) => option.value === value)?.textContent ?? String(value);
+}
+// The saved values of a segment as one line of text, shown after a conflicting edit.
+function segmentSummary(segment) {
+  const fields = byId("contacts-filter").elements;
+  const account = connections.find((connection) => connection.id === segment.connection_id);
+  const field = contactFields.find((value) => value.id === segment.field_id);
+  const parts = [
+    `이름 ${segment.name}`,
+    `계정 ${segment.connection_id ? account?.username || account?.account_id || "확인할 수 없는 계정" : "모든 계정"}`,
+    `태그 ${segment.tag || "조건 없음"}`,
+  ];
+  if (segment.field_id)
+    parts.push(
+      `추가 정보 ${field?.name || "확인할 수 없는 필드"} ${optionLabel(fields.field_operator, segment.field_operator)}` +
+        (fieldConditionNeedsValue(segment.field_operator) ? ` ${displayFieldValue(segment.field_value)}` : ""),
+    );
+  if (segment.condition_operator === "or") parts.push("태그와 추가 정보 중 하나만 맞아도 포함");
+  if (segment.last_comment_days) parts.push(`최근 ${segment.last_comment_days}일 활동`);
+  else if (segment.last_comment_from)
+    parts.push(`활동 기간(UTC) ${segment.last_comment_from} 이상 ${segment.last_comment_before} 미만`);
+  if (segment.consent_purpose)
+    parts.push(
+      `동의 기록 ${optionLabel(fields.consent_purpose, segment.consent_purpose)} ${optionLabel(fields.consent_state, segment.consent_state)}`,
+    );
+  return parts.join(" · ");
+}
+async function loadContactSegments(force = false) {
+  if (segmentBusy && !force) return;
+  const generation = segmentsGeneration;
+  const request = ++segmentsRequest;
+  try {
+    const result = await api("/api/contact-segments");
+    if (generation !== segmentsGeneration || request !== segmentsRequest) return;
+    contactSegments = result.segments;
+    const select = byId("contact-segment");
+    select.replaceChildren(new Option("직접 조건 설정", ""));
+    for (const segment of contactSegments) select.add(new Option(segment.name, segment.id));
+    if (!contactSegments.some((segment) => segment.id === activeSegmentId)) activeSegmentId = "";
+    if (editingSegment && !contactSegments.some((segment) => segment.id === editingSegment.id)) {
+      leaveSegmentEdit(true);
+      byId("segment-edit-status").textContent = "수정하던 필터가 보관되었거나 삭제되어 수정을 마쳤습니다.";
+    }
+    select.value = activeSegmentId;
+    segmentControls();
+    byId("segments-status").textContent = contactSegments.length
+      ? `저장된 필터 ${contactSegments.length}개. 조건에 맞는 연락처는 조회할 때 갱신됩니다.`
+      : "자주 쓰는 계정·태그 조건을 필터로 저장해 보세요.";
+  } catch (error) {
+    if (generation === segmentsGeneration && request === segmentsRequest)
+      byId("segments-status").textContent = `${error.message} 새로고침으로 다시 시도해 주세요.`;
+  }
+}
+byId("contacts-filter").addEventListener("input", (event) => {
+  segmentConditionInputs++;
+  invalidateSegmentPreview();
+  activeSegmentId = "";
+  byId("contact-segment").value = "";
+  if (event.target.name === "tag") fieldFilterControls();
+  if (event.target.name === "activity_mode") contactActivityControls();
+  if (event.target.name === "consent_purpose") contactConsentControls();
+  segmentControls();
+});
+byId("contact-segment").addEventListener("change", (event) => {
+  if (!canReloadContacts()) {
+    event.currentTarget.value = activeSegmentId;
+    return;
+  }
+  const segment = contactSegments.find((value) => value.id === event.currentTarget.value);
+  activeSegmentId = segment?.id || "";
+  fillSegmentConditions(segment);
   segmentControls();
   void loadContacts();
 });
+byId("segment-edit").addEventListener("click", () => {
+  const segment = contactSegments.find((value) => value.id === activeSegmentId);
+  if (!segment || segmentBusy || editingSegment || (currentRole !== "owner" && currentRole !== "admin")) return;
+  // Editing replaces the name field with the saved name, so a name typed for a new filter needs a confirmation.
+  if (segmentNameDirty && !confirm("입력한 새 필터 이름을 버리고 저장된 필터를 수정할까요?")) return;
+  editingSegment = { id: segment.id, version: segment.version, saved: segment, inputs: segmentConditionInputs };
+  invalidateSegmentPreview();
+  fillSegmentConditions(segment);
+  byId("segment-save").elements.name.value = segment.name;
+  segmentNameDirty = false;
+  byId("segment-save").closest("details").open = true;
+  byId("segment-edit-status").textContent =
+    `"${segment.name}" 필터를 수정하고 있습니다. 위 조건과 이름을 바꾼 뒤 변경 저장을 눌러 주세요.`;
+  segmentControls();
+  byId("segment-save").elements.name.focus();
+});
+byId("segment-edit-cancel").addEventListener("click", () => {
+  if (segmentBusy || !editingSegment) return;
+  leaveSegmentEdit();
+  segmentControls();
+  notice("필터 수정을 취소했습니다. 저장된 필터는 바뀌지 않았습니다.");
+});
+// After a conflict, only this control takes the saved values and their version; until then a save stays stale.
+byId("segment-edit-reload").addEventListener("click", () => {
+  if (segmentBusy || !editingSegment) return;
+  const saved = editingSegment.saved;
+  editingSegment.version = saved.version;
+  editingSegment.inputs = segmentConditionInputs;
+  invalidateSegmentPreview();
+  fillSegmentConditions(saved);
+  byId("segment-save").elements.name.value = saved.name;
+  segmentNameDirty = false;
+  byId("segment-edit-conflict").hidden = true;
+  byId("segment-edit-saved").textContent = "";
+  byId("segment-edit-status").textContent =
+    `저장된 "${saved.name}" 필터 값을 불러왔습니다. 필요한 부분을 다시 바꾼 뒤 변경 저장을 눌러 주세요.`;
+  segmentControls();
+});
+async function saveSegmentEdit(editing, payload, generation) {
+  const inputs = segmentConditionInputs;
+  try {
+    const saved = await api(`/api/contact-segments/${editing.id}`, "PUT", {
+      ...payload,
+      expected_version: editing.version,
+    });
+    if (generation !== segmentsGeneration || editingSegment !== editing) return;
+    leaveSegmentEdit();
+    // Conditions typed while the request ran are not in the saved definition; keep them instead of overwriting.
+    if (segmentConditionInputs !== inputs) {
+      await loadContactSegments(true);
+      if (generation !== segmentsGeneration) return;
+      notice("필터 변경을 저장했습니다. 저장하는 동안 바꾼 조건은 저장되지 않았고 화면에 그대로 두었습니다.", true);
+      return;
+    }
+    activeSegmentId = saved.id;
+    await loadContactSegments(true);
+    if (generation !== segmentsGeneration) return;
+    if (activeSegmentId === saved.id) {
+      fillSegmentConditions(saved);
+      if (!contactsDirty.size && !contactsSaving) void loadContacts();
+    }
+    notice("필터 변경을 저장했습니다. 이 필터로 조회하는 연락처는 다음 조회부터 바뀐 조건으로 계산합니다.");
+  } catch (error) {
+    if (generation !== segmentsGeneration || editingSegment !== editing) return;
+    if (error.code === "segment_conflict" && error.segment) {
+      // Keep the operator's values and the old version, so saving again cannot overwrite the newer change.
+      editing.saved = error.segment;
+      byId("segment-edit-saved").textContent = `지금 저장된 값: ${segmentSummary(error.segment)}`;
+      byId("segment-edit-conflict").hidden = false;
+      byId("segment-edit-status").textContent =
+        "다른 변경이 먼저 저장되었습니다. 입력한 값은 그대로 두었습니다. 저장된 값을 확인하고 불러온 뒤 다시 저장해 주세요.";
+      return;
+    }
+    if (error.code === "segment_not_found") {
+      leaveSegmentEdit(true);
+      if (activeSegmentId === editing.id) activeSegmentId = "";
+      await loadContactSegments(true);
+      notice(
+        "수정하던 필터가 보관되었거나 삭제되었습니다. 입력한 이름과 조건은 남아 있으니 새 필터로 저장할 수 있습니다.",
+        true,
+      );
+      return;
+    }
+    throw error;
+  }
+}
 byId("segment-save").addEventListener("input", () => {
   segmentNameDirty = Boolean(byId("segment-save").elements.name.value);
 });
@@ -2793,6 +2953,7 @@ byId("segment-save").addEventListener("submit", (event) => {
   event.preventDefault();
   if (segmentBusy) return;
   const generation = segmentsGeneration;
+  const editing = editingSegment;
   const fields = byId("contacts-filter").elements;
   const name = byId("segment-save").elements.name.value;
   const payload = { name, connection_id: fields.connection_id.value || null, tag: fields.tag.value.trim() || null };
@@ -2809,6 +2970,7 @@ byId("segment-save").addEventListener("submit", (event) => {
     segmentBusy = true;
     segmentControls();
     try {
+      if (editing) return await saveSegmentEdit(editing, payload, generation);
       await api("/api/contact-segments", "POST", payload);
       if (generation !== segmentsGeneration) return;
       byId("segment-save").reset();
@@ -2863,6 +3025,8 @@ byId("segment-archive").addEventListener("click", (event) => {
         contactsQuery = query.toString();
       }
       if (activeSegmentId === id) activeSegmentId = "";
+      // An archive ends an edit; only the selected segment can be both edited and archived.
+      if (editingSegment) leaveSegmentEdit();
       await loadContactSegments(true);
       if (!contactsDirty.size && !contactsSaving) await loadContacts();
       notice("필터를 보관했습니다. 연락처와 태그는 유지됩니다.");

@@ -927,6 +927,7 @@
                   <option value="">직접 조건 설정</option>
                 </select></label
               >
+              <button id="segment-edit" class="secondary" type="button" hidden disabled>필터 수정</button>
               <button id="segment-archive" class="secondary" disabled>필터 보관</button>
             </div>
             <p id="segments-status" class="hint" role="status" aria-live="polite"></p>
@@ -1063,7 +1064,13 @@
                   >필터 이름<input name="name" required maxlength="60" placeholder="예: 자료를 요청한 사람"
                 /></label>
                 <button type="submit" class="secondary" data-loading-label="저장 중…">필터 저장</button>
+                <button id="segment-edit-cancel" type="button" class="secondary" hidden>수정 취소</button>
               </form>
+              <p id="segment-edit-status" class="hint" role="status" aria-live="polite"></p>
+              <div id="segment-edit-conflict" hidden>
+                <p id="segment-edit-saved" class="hint"></p>
+                <button id="segment-edit-reload" type="button" class="secondary">저장된 값 불러오기</button>
+              </div>
               <p class="hint">
                 계정·태그·추가 정보·활동 기간·동의 기록 조건을 저장합니다. 저장된 필터는 최대 50개이며 대상은 조회할 때
                 다시 계산합니다. 미리보기는 조회 시점의 참고 결과로, 대상을 고정하거나 발송 동의를 확인한 것이 아닙니다.

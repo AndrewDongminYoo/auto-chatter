@@ -18,6 +18,7 @@ import {
   listContactSegments,
   listContacts,
   saveContactTags,
+  updateContactSegment,
 } from "./contacts.ts";
 import { connectionMedia } from "./instagram-media.ts";
 import { connectionHealth } from "./instagram-connection-health.ts";
@@ -2176,7 +2177,7 @@ test("saved segments isolate workspace and evaluate current tags", async () => {
     [workspace, connectionId],
   );
   const segment = await createContactSegment(pool, a, { name: " Leads ", connection_id: connectionId, tag: " Lead " });
-  assert.deepEqual(segment, { id: segment.id, name: "Leads", connection_id: connectionId, tag: "lead" });
+  assert.deepEqual(segment, { id: segment.id, name: "Leads", connection_id: connectionId, tag: "lead", version: 1 });
   assert.equal((await listContactSegments(pool, a)).length, 1);
   assert.deepEqual(await listContactSegments(pool, b), []);
   const query = new URLSearchParams({ segment_id: segment.id });
@@ -2252,6 +2253,385 @@ test("concurrent segment creations cannot exceed fifty active records", async ()
   await archiveContactSegment(pool, a, first.id);
   assert.ok((await createContactSegment(pool, a, { name: "replacement" })).id);
   assert.equal((await listContactSegments(pool, a)).length, 50);
+});
+
+const segmentPath = (id: string) => `/api/contact-segments/${id}`;
+async function segmentRows() {
+  return (await pool.query("SELECT to_jsonb(s) AS row FROM instagram_contact_segments s ORDER BY id")).rows;
+}
+// Waits until `count` sessions of this database wait on a lock, or until `settled` says the awaited request ended.
+async function lockWaiters(count: number, settled: () => boolean = () => false) {
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    const waiting = Number(
+      (
+        await pool.query(
+          "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'",
+        )
+      ).rows[0].count,
+    );
+    if (waiting >= count || settled()) return;
+    if (Date.now() > deadline) throw new Error(`expected ${count} lock waiters, saw ${waiting}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+test("segment edits replace the whole definition, increment the version and change what the segment evaluates", async () => {
+  await fieldContact();
+  const field = await createField("Edit score", "number");
+  await fieldRequest("PUT", fieldValuePath(field.id), { value: 10 });
+  const created = await createContactSegment(pool, a, { name: "Leads", connection_id: connectionId, tag: "lead" });
+  assert.equal(created.version, 1);
+  assert.deepEqual(await listContactSegments(pool, a), [created]);
+  const query = new URLSearchParams({ segment_id: created.id });
+  assert.equal((await listContacts(pool, a, query)).contacts.length, 0);
+  const steps: [Record<string, unknown>, Record<string, unknown>][] = [
+    [
+      {
+        name: " Scored ",
+        connection_id: connectionId,
+        tag: " Lead ",
+        field_id: field.id,
+        field_operator: "gte",
+        field_value: 5,
+        condition_operator: "or",
+        last_comment_days: 30,
+        consent_purpose: "marketing",
+        consent_state: "no_record",
+      },
+      {
+        name: "Scored",
+        connection_id: connectionId,
+        tag: "lead",
+        field_id: field.id,
+        field_operator: "gte",
+        field_value: 5,
+        condition_operator: "or",
+        last_comment_days: 30,
+        consent_purpose: "marketing",
+        consent_state: "no_record",
+      },
+    ],
+    [
+      {
+        name: "Window",
+        field_id: field.id,
+        field_operator: "is_set",
+        last_comment_from: "2000-01-01T00:00:00.000Z",
+        last_comment_before: "2100-01-01T00:00:00.000Z",
+      },
+      {
+        name: "Window",
+        connection_id: null,
+        tag: null,
+        field_id: field.id,
+        field_operator: "is_set",
+        last_comment_from: "2000-01-01T00:00:00.000Z",
+        last_comment_before: "2100-01-01T00:00:00.000Z",
+      },
+    ],
+    // Omitted optional keys remove those conditions.
+    [{ name: "Everyone" }, { name: "Everyone", connection_id: null, tag: null }],
+  ];
+  let version = 1;
+  for (const [body, expected] of steps) {
+    const response = await fieldRequest("PUT", segmentPath(created.id), { ...body, expected_version: version });
+    assert.equal(response.status, 200);
+    version++;
+    const saved = await response.json();
+    assert.deepEqual(saved, { id: created.id, ...expected, version });
+    assert.deepEqual(await listContactSegments(pool, a), [saved]);
+    // The next contact read uses the stored definition.
+    assert.equal((await listContacts(pool, a, query)).contacts.length, 1);
+  }
+  const stored = (
+    await pool.query(
+      "SELECT connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,consent_purpose,consent_state,version,archived FROM instagram_contact_segments",
+    )
+  ).rows;
+  assert.deepEqual(stored, [
+    {
+      connection_id: null,
+      tag: null,
+      field_id: null,
+      field_operator: null,
+      field_value: null,
+      condition_operator: "and",
+      last_comment_from: null,
+      last_comment_before: null,
+      last_comment_days: null,
+      consent_purpose: null,
+      consent_state: null,
+      version: 4,
+      archived: false,
+    },
+  ]);
+  // An unchanged definition, even in another spelling, writes nothing and keeps the version.
+  const renamed = await fieldRequest("PUT", segmentPath(created.id), {
+    name: "Scored",
+    connection_id: connectionId,
+    tag: "lead",
+    expected_version: 4,
+  });
+  assert.equal(renamed.status, 200);
+  assert.equal((await renamed.json()).version, 5);
+  const before = await segmentRows();
+  const unchanged = await fieldRequest("PUT", segmentPath(created.id), {
+    name: " Scored ",
+    connection_id: connectionId,
+    tag: " LEAD ",
+    condition_operator: "and",
+    last_comment_days: null,
+    expected_version: 5,
+  });
+  assert.equal(unchanged.status, 200);
+  assert.deepEqual(await unchanged.json(), {
+    id: created.id,
+    name: "Scored",
+    connection_id: connectionId,
+    tag: "lead",
+    version: 5,
+  });
+  assert.deepEqual(await segmentRows(), before);
+  assert.equal((await listContacts(pool, a, query)).contacts.length, 0);
+  await saveContactTags(pool, a, connectionId, "sender", { tags: ["lead"] });
+  assert.equal((await listContacts(pool, a, query)).contacts.length, 1);
+  // The jsonb value, the timestamps and the day count compare as unchanged too, not only the text columns.
+  let current = 5;
+  for (const definition of [
+    {
+      name: "Full",
+      connection_id: connectionId,
+      tag: "lead",
+      field_id: field.id,
+      field_operator: "gte",
+      field_value: 5,
+      condition_operator: "or",
+      last_comment_days: 30,
+      consent_purpose: "marketing",
+      consent_state: "granted",
+    },
+    {
+      name: "Fixed",
+      field_id: field.id,
+      field_operator: "eq",
+      field_value: 10,
+      last_comment_from: "2000-01-01T00:00:00.000Z",
+      last_comment_before: "2100-01-01T00:00:00.000Z",
+    },
+  ]) {
+    const changed = await fieldRequest("PUT", segmentPath(created.id), { ...definition, expected_version: current });
+    assert.equal(changed.status, 200);
+    current++;
+    assert.equal((await changed.json()).version, current);
+    const rows = await segmentRows();
+    const same = await fieldRequest("PUT", segmentPath(created.id), { ...definition, expected_version: current });
+    assert.equal(same.status, 200);
+    assert.equal((await same.json()).version, current);
+    assert.deepEqual(await segmentRows(), rows);
+  }
+});
+
+test("stale, archived, missing and foreign segment edits write nothing", async () => {
+  const segment = await createContactSegment(pool, a, { name: "Original" });
+  const edited = await (
+    await fieldRequest("PUT", segmentPath(segment.id), { name: "Edited", tag: "vip", expected_version: 1 })
+  ).json();
+  assert.equal(edited.version, 2);
+  const before = await segmentRows();
+  const stale = await fieldRequest("PUT", segmentPath(segment.id), { name: "Overwrite", expected_version: 1 });
+  assert.equal(stale.status, 409);
+  assert.deepEqual(await stale.json(), { error: "segment_conflict", segment: edited });
+  const foreign = await fieldRequest("PUT", segmentPath(segment.id), { name: "Foreign", expected_version: 2 }, b);
+  assert.equal(foreign.status, 404);
+  assert.deepEqual(await foreign.json(), { error: "segment_not_found" });
+  const missing = await fieldRequest("PUT", segmentPath(randomUUID()), { name: "Missing", expected_version: 1 });
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await missing.json(), { error: "segment_not_found" });
+  assert.deepEqual(await segmentRows(), before);
+  await archiveContactSegment(pool, a, segment.id);
+  const archivedRows = await segmentRows();
+  const archived = await fieldRequest("PUT", segmentPath(segment.id), { name: "Revived", expected_version: 2 });
+  assert.equal(archived.status, 404);
+  assert.deepEqual(await archived.json(), { error: "segment_not_found" });
+  assert.deepEqual(await segmentRows(), archivedRows);
+});
+
+test("segment edits keep active names unique, need an active admin and refuse foreign references", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const first = await createContactSegment(pool, a, { name: "First" });
+  const second = await createContactSegment(pool, a, { name: "Second" });
+  const old = await createContactSegment(pool, a, { name: "Old" });
+  await archiveContactSegment(pool, a, old.id);
+  const taken = await fieldRequest("PUT", segmentPath(second.id), { name: " First ", expected_version: 1 });
+  assert.equal(taken.status, 409);
+  assert.deepEqual(await taken.json(), { error: "segment_name_exists" });
+  const reused = await fieldRequest("PUT", segmentPath(second.id), { name: "Old", expected_version: 1 });
+  assert.equal(reused.status, 200);
+  assert.equal((await reused.json()).name, "Old");
+  const agent = { id: "55555555-5555-4555-8555-555555555555", email: "agent@example.test" };
+  const removed = { id: "66666666-6666-4666-8666-666666666666", email: "removed@example.test" };
+  await pool.query(
+    "INSERT INTO workspace_members(workspace_id,user_id,role,removed_at,removed_by) VALUES($1,$2,'agent',NULL,NULL),($1,$3,'admin',now(),$4)",
+    [workspace, agent.id, removed.id, a.id],
+  );
+  const before = await segmentRows();
+  for (const [user, code] of [
+    [agent, "role_forbidden"],
+    [removed, "workspace_required"],
+  ] as const) {
+    const response = await fieldRequest("PUT", segmentPath(first.id), { name: "Takeover", expected_version: 1 }, user);
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: code });
+  }
+  const archivedField = await createField("Archived edit field", "text");
+  assert.equal((await fieldRequest("DELETE", `/api/contact-fields/${archivedField.id}`)).status, 200);
+  const foreignField = await createField("Foreign edit field", "text").then(async (field) => {
+    await pool.query("UPDATE instagram_contact_fields SET workspace_id=$1 WHERE id=$2", [
+      await ensureWorkspace(pool, b),
+      field.id,
+    ]);
+    return field;
+  });
+  const foreignConnection = "88888888-8888-4888-8888-888888888888";
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'foreign-edit')", [
+    foreignConnection,
+    await ensureWorkspace(pool, b),
+  ]);
+  for (const [body, code] of [
+    [{ field_id: archivedField.id, field_operator: "is_set" }, "field_not_found"],
+    [{ field_id: foreignField.id, field_operator: "is_set" }, "field_not_found"],
+    [{ connection_id: foreignConnection }, "connection_not_found"],
+  ] as const) {
+    const response = await fieldRequest("PUT", segmentPath(first.id), { name: "First", ...body, expected_version: 1 });
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), { error: code });
+  }
+  assert.deepEqual(await segmentRows(), before);
+});
+
+test("an edit that adds a field holds it, so a concurrent field archive waits and answers field_in_use", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const field = await createField("Race edit field", "text");
+  const segment = await createContactSegment(pool, a, { name: "Race edit" });
+  const other = "99999999-9999-4999-8999-999999999999";
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'race-edit')", [
+    other,
+    workspace,
+  ]);
+  // The blocker holds the new connection, so the edit's foreign-key check waits after it locked the field.
+  const blocker = await pool.connect();
+  try {
+    await blocker.query("BEGIN");
+    await blocker.query("SELECT id FROM instagram_connections WHERE id=$1 FOR UPDATE", [other]);
+    const edit = fieldRequest("PUT", segmentPath(segment.id), {
+      name: "Race edit",
+      connection_id: other,
+      field_id: field.id,
+      field_operator: "is_set",
+      expected_version: 1,
+    });
+    await lockWaiters(1);
+    let archiveSettled = false;
+    const archive = fieldRequest("DELETE", `/api/contact-fields/${field.id}`).finally(() => {
+      archiveSettled = true;
+    });
+    await lockWaiters(2, () => archiveSettled);
+    await blocker.query("COMMIT");
+    const [edited, archived] = await Promise.all([edit, archive]);
+    assert.equal(edited.status, 200);
+    assert.equal(archived.status, 409);
+    assert.deepEqual(await archived.json(), { error: "field_in_use" });
+  } finally {
+    await blocker.query("ROLLBACK").catch(() => undefined);
+    blocker.release();
+  }
+  assert.equal(
+    (await pool.query("SELECT archived FROM instagram_contact_fields WHERE id=$1", [field.id])).rows[0].archived,
+    false,
+  );
+  assert.equal((await listContactSegments(pool, a))[0]?.field_id, field.id);
+});
+
+test("a field archive that commits before the edit reads the field makes the edit answer field_not_found", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const field = await createField("Archived first", "text");
+  const segment = await createContactSegment(pool, a, { name: "Archive first" });
+  const before = await segmentRows();
+  // The blocker holds the workspace row, so the edit waits at its first lock while the archive commits.
+  const blocker = await pool.connect();
+  try {
+    await blocker.query("BEGIN");
+    await blocker.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [workspace]);
+    const edit = fieldRequest("PUT", segmentPath(segment.id), {
+      name: "Archive first",
+      field_id: field.id,
+      field_operator: "is_set",
+      expected_version: 1,
+    });
+    await lockWaiters(1);
+    assert.equal((await fieldRequest("DELETE", `/api/contact-fields/${field.id}`)).status, 200);
+    await blocker.query("COMMIT");
+    const edited = await edit;
+    assert.equal(edited.status, 404);
+    assert.deepEqual(await edited.json(), { error: "field_not_found" });
+  } finally {
+    await blocker.query("ROLLBACK").catch(() => undefined);
+    blocker.release();
+  }
+  assert.deepEqual(await segmentRows(), before);
+});
+
+test("two edits of the same version store exactly one and refuse the other with the current segment", async () => {
+  const segment = await createContactSegment(pool, a, { name: "Contested" });
+  const responses = await Promise.all(
+    ["One", "Two"].map((name) => fieldRequest("PUT", segmentPath(segment.id), { name, expected_version: 1 })),
+  );
+  assert.deepEqual(responses.map((response) => response.status).sort(), [200, 409]);
+  const winner = await responses.find((response) => response.status === 200)!.json();
+  assert.equal(winner.version, 2);
+  assert.deepEqual(await responses.find((response) => response.status === 409)!.json(), {
+    error: "segment_conflict",
+    segment: winner,
+  });
+  assert.deepEqual(await listContactSegments(pool, a), [winner]);
+  // The function returns the conflict instead of throwing, for the route to answer 409.
+  const direct = await updateContactSegment(pool, a, segment.id, { name: "Three", expected_version: 1 });
+  assert.deepEqual(direct, { conflict: true, segment: winner });
+});
+
+test("segment version migration starts existing rows at 1 and enforces a positive version on replay", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN version");
+    await client.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'Legacy')", [workspace]);
+    const migration = await readFile(new URL("../../db/migrations/054_segment_version.sql", import.meta.url), "utf8");
+    await client.query(migration);
+    await client.query(migration);
+    assert.deepEqual((await client.query("SELECT name,version FROM instagram_contact_segments")).rows, [
+      { name: "Legacy", version: 1 },
+    ]);
+    await client.query("UPDATE instagram_contact_segments SET version=3");
+    await client.query(migration);
+    assert.equal((await client.query("SELECT version FROM instagram_contact_segments")).rows[0].version, 3);
+    for (const change of ["version=0", "version=NULL"]) {
+      await client.query("SAVEPOINT invalid_version");
+      await assert.rejects(
+        client.query(`UPDATE instagram_contact_segments SET ${change}`),
+        (error: unknown) =>
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          ["23514", "23502"].includes(String(error.code)),
+      );
+      await client.query("ROLLBACK TO SAVEPOINT invalid_version");
+    }
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
 });
 
 test("tag field operator migration defaults existing filters to AND and preserves OR on replay", async () => {

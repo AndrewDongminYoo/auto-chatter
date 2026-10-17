@@ -440,6 +440,12 @@ DO $$ BEGIN
     );
   END IF;
 END $$;
+ALTER TABLE instagram_contact_segments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname='contact_segment_version') THEN
+    ALTER TABLE instagram_contact_segments ADD CONSTRAINT contact_segment_version CHECK(version >= 1);
+  END IF;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS private_reply_outbox_identity_idx
   ON private_reply_outbox(id,connection_id,workspace_id);
 CREATE TABLE IF NOT EXISTS instagram_inbox_handoffs (

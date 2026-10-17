@@ -109,6 +109,7 @@ test("agents are refused the administrative routes that admins can reach", async
     ["DELETE", `/api/contact-fields/${fieldId}`],
     ["POST", "/api/contact-segments", { name: "vips", connection_id: connectionId }],
     ["DELETE", `/api/contact-segments/${missingId}`],
+    ["PUT", `/api/contact-segments/${missingId}`, { name: "vips", expected_version: 1 }],
     ["POST", "/api/flows", { name: "new" }],
     ["PUT", `/api/flows/${draft}`, { expected_revision: 0, draft: { schema_version: 1, nodes: [], edges: [] } }],
     ["POST", `/api/flows/${draft}/publish`, { expected_revision: 1 }],
