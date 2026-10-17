@@ -51,7 +51,10 @@ export function parseFieldCondition(input: Record<string, unknown>): FieldCondit
     throw new ApiError(400, "invalid_field_condition");
   if (
     fieldConditionNeedsValue(input.field_operator)
-      ? !Object.hasOwn(input, "field_value") || input.field_value === null
+      ? !Object.hasOwn(input, "field_value") ||
+        input.field_value === null ||
+        // A lone surrogate survives JSON.parse but not PostgreSQL's jsonb input.
+        (typeof input.field_value === "string" && /\p{Cs}/u.test(input.field_value))
       : Object.hasOwn(input, "field_value")
   )
     throw new ApiError(400, "invalid_field_condition");
@@ -163,7 +166,9 @@ export async function archiveContactField(pool: Pool, user: User, id: string) {
     if (
       (
         await client.query(
-          "SELECT id FROM instagram_contact_segments WHERE workspace_id=$1 AND field_id=$2 AND NOT archived LIMIT 1",
+          // A field set stores lowercase IDs, which $2::uuid::text matches. No index: at most 50 active segments per workspace.
+          `SELECT id FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived
+           AND (field_id=$2 OR field_conditions @> jsonb_build_array(jsonb_build_object('field_id',$2::uuid::text))) LIMIT 1`,
           [workspace, id],
         )
       ).rows[0]

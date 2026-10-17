@@ -40,6 +40,9 @@ let editingSegment = null;
 let segmentConditionInputs = 0;
 // The contact filter's tag inputs: one input per tag, so a tag may contain a comma. The server accepts at most five.
 const contactTagInputNames = ["tag", "tag_2", "tag_3", "tag_4", "tag_5"];
+// The rows of the field condition: the first keeps the original control names, rows 2 and 3 add a suffix.
+// The server accepts at most three conditions on distinct fields; one row sends the legacy keys.
+const fieldRowSuffixes = ["", "_2", "_3"];
 // True when the operator changed a condition or the name since the edit started or since the saved values were last
 // loaded. The name is compared with the loaded one, because segmentNameDirty is false for an emptied name field.
 function segmentEditChanged() {
@@ -240,7 +243,7 @@ function resetSession() {
   byId("field-create").reset();
   byId("field-definitions").replaceChildren();
   byId("fields-status").textContent = "";
-  byId("contacts-filter").elements.field_id.replaceChildren(new Option("조건 없음", ""));
+  for (const row of fieldFilterRows()) row.field.replaceChildren(new Option("조건 없음", ""));
   fieldControls();
   byId("contact-segment").replaceChildren(new Option("직접 조건 설정", ""));
   byId("segment-archive").disabled = true;
@@ -250,6 +253,7 @@ function resetSession() {
   byId("contacts-list").replaceChildren();
   byId("contacts-filter").reset();
   contactTagControls();
+  showFieldRows(1);
   fieldFilterControls();
   contactActivityControls();
   contactConsentControls();
@@ -2634,7 +2638,7 @@ function contactConsentCondition() {
 }
 function contactDraftQuery() {
   const fields = byId("contacts-filter").elements;
-  const condition = contactFieldCondition();
+  const fieldKeys = contactFieldConditionKeys();
   const activity = contactActivityWindow();
   const consent = contactConsentCondition();
   const query = new URLSearchParams();
@@ -2645,12 +2649,8 @@ function contactDraftQuery() {
   if (fields.condition_operator.value === "or") query.set("condition_operator", "or");
   if (activity) for (const [key, value] of Object.entries(activity)) query.set(key, value);
   if (consent) for (const [key, value] of Object.entries(consent)) query.set(key, value);
-  if (condition) {
-    query.set("field_id", condition.field_id);
-    query.set("field_operator", condition.field_operator);
-    if (fieldConditionNeedsValue(condition.field_operator))
-      query.set("field_value", JSON.stringify(condition.field_value));
-  }
+  for (const [key, value] of Object.entries(fieldKeys))
+    query.set(key, key === "field_value" || key === "field_conditions" ? JSON.stringify(value) : value);
   return query;
 }
 async function loadContacts(more = false) {
@@ -2660,7 +2660,12 @@ async function loadContacts(more = false) {
     try {
       query = activeSegmentId ? new URLSearchParams({ segment_id: activeSegmentId }) : contactDraftQuery();
     } catch (error) {
-      if (!contactFields.some((field) => field.id === byId("contacts-filter").elements.field_id.value)) {
+      // As before the field rows, an empty or unknown first field clears the list; a later row clears it only for an unknown field.
+      const rows = fieldFilterRows();
+      if (
+        !contactFields.some((field) => field.id === rows[0].field.value) ||
+        rows.some((row) => row.shown && row.field.value && !contactFields.some((field) => field.id === row.field.value))
+      ) {
         clearContactResults();
       }
       byId("contacts-status").textContent = error.message;
@@ -2854,8 +2859,14 @@ function fillSegmentConditions(segment) {
   });
   fields.tag_mode.value = segment?.tag_mode || "all";
   contactTagControls();
-  fields.field_id.value = segment?.field_id || "";
-  fields.field_operator.value = segment?.field_operator || "eq";
+  const savedFields = segmentFieldConditions(segment);
+  showFieldRows(Math.max(1, savedFields.length));
+  const rows = fieldFilterRows();
+  rows.forEach((row, index) => {
+    row.field.value = savedFields[index]?.field_id || "";
+    row.operator.value = savedFields[index]?.field_operator || "eq";
+  });
+  fields.field_mode.value = segment?.field_mode || "all";
   fields.condition_operator.value = segment?.condition_operator || "and";
   fields.last_comment_from.value = segment?.last_comment_from?.slice(0, -1) || "";
   fields.last_comment_before.value = segment?.last_comment_before?.slice(0, -1) || "";
@@ -2871,8 +2882,18 @@ function fillSegmentConditions(segment) {
   fields.consent_state.value = segment?.consent_state || "";
   contactConsentControls();
   fieldFilterControls();
-  fields.field_value.value = fieldConditionNeedsValue(segment?.field_operator) ? String(segment.field_value) : "";
-  fields.field_boolean.value = segment?.field_value === false ? "false" : "true";
+  rows.forEach((row, index) => {
+    const saved = savedFields[index];
+    row.value.value = fieldConditionNeedsValue(saved?.field_operator) ? String(saved.field_value) : "";
+    row.boolean.value = saved?.field_value === false ? "false" : "true";
+  });
+}
+// A segment's field conditions as a list: its set, its one legacy condition, or none.
+function segmentFieldConditions(segment) {
+  if (segment?.field_conditions) return segment.field_conditions;
+  return segment?.field_id
+    ? [{ field_id: segment.field_id, field_operator: segment.field_operator, field_value: segment.field_value }]
+    : [];
 }
 function optionLabel(select, value) {
   return [...select.options].find((option) => option.value === value)?.textContent ?? String(value);
@@ -2881,7 +2902,6 @@ function optionLabel(select, value) {
 function segmentSummary(segment) {
   const fields = byId("contacts-filter").elements;
   const account = connections.find((connection) => connection.id === segment.connection_id);
-  const field = contactFields.find((value) => value.id === segment.field_id);
   const parts = [
     `이름 ${segment.name}`,
     `계정 ${segment.connection_id ? account?.username || account?.account_id || "확인할 수 없는 계정" : "모든 계정"}`,
@@ -2889,11 +2909,18 @@ function segmentSummary(segment) {
       ? `태그 ${segment.tags.join(", ")} (${segment.tag_mode === "any" ? "하나 이상 포함" : "모두 포함"})`
       : `태그 ${segment.tag || "조건 없음"}`,
   ];
-  if (segment.field_id)
-    parts.push(
-      `추가 정보 ${field?.name || "확인할 수 없는 필드"} ${optionLabel(fields.field_operator, segment.field_operator)}` +
-        (fieldConditionNeedsValue(segment.field_operator) ? ` ${displayFieldValue(segment.field_value)}` : ""),
+  const savedFields = segmentFieldConditions(segment).map((condition) => {
+    const field = contactFields.find((value) => value.id === condition.field_id);
+    return (
+      `${field?.name || "확인할 수 없는 필드"} ${orderedOperatorLabels(field?.type)[condition.field_operator] ?? optionLabel(fields.field_operator, condition.field_operator)}` +
+      (fieldConditionNeedsValue(condition.field_operator) ? ` ${displayFieldValue(condition.field_value)}` : "")
     );
+  });
+  if (savedFields.length > 1)
+    parts.push(
+      `추가 정보 ${savedFields.join(", ")} (${segment.field_mode === "any" ? "하나 이상 만족" : "모두 만족"})`,
+    );
+  else if (savedFields.length) parts.push(`추가 정보 ${savedFields[0]}`);
   if (segment.condition_operator === "or") parts.push("태그와 추가 정보 중 하나만 맞아도 포함");
   if (segment.last_comment_period)
     parts.push(
@@ -3060,7 +3087,7 @@ byId("segment-save").addEventListener("submit", (event) => {
   else payload.tag = tags[0] ?? null;
   if (fields.condition_operator.value === "or") payload.condition_operator = "or";
   try {
-    Object.assign(payload, contactFieldCondition());
+    Object.assign(payload, contactFieldConditionKeys());
     Object.assign(payload, contactActivityWindow());
     Object.assign(payload, contactConsentCondition());
   } catch (error) {
@@ -3119,7 +3146,10 @@ byId("segment-archive").addEventListener("click", (event) => {
           query.set("consent_purpose", segment.consent_purpose);
           query.set("consent_state", segment.consent_state);
         }
-        if (segment.field_id) {
+        if (segment.field_conditions) {
+          query.set("field_conditions", JSON.stringify(segment.field_conditions));
+          query.set("field_mode", segment.field_mode);
+        } else if (segment.field_id) {
           query.set("field_id", segment.field_id);
           query.set("field_operator", segment.field_operator);
           if (fieldConditionNeedsValue(segment.field_operator))
@@ -3169,52 +3199,130 @@ function configureFieldInput(input, field) {
         ? "빈 텍스트도 저장할 수 있습니다"
         : "";
 }
+function fieldFilterRows() {
+  const fields = byId("contacts-filter").elements;
+  return fieldRowSuffixes.map((suffix, index) => {
+    const id = index ? `-${index + 1}` : "";
+    return {
+      field: fields[`field_id${suffix}`],
+      operator: fields[`field_operator${suffix}`],
+      value: fields[`field_value${suffix}`],
+      boolean: fields[`field_boolean${suffix}`],
+      operatorLabel: byId(`field-filter-operator${id}`),
+      valueLabel: byId(`field-filter-value${id}`),
+      shown: index === 0 || !byId(`field-filter-field${id}`).hidden,
+    };
+  });
+}
+// Shows the first count rows and clears and hides the others.
+function showFieldRows(count) {
+  fieldFilterRows().forEach((row, index) => {
+    if (!index) return;
+    const shown = index < count;
+    byId(`field-filter-field-${index + 1}`).hidden = !shown;
+    byId(`field-filter-remove-${index + 1}`).hidden = !shown;
+    if (!shown) {
+      row.field.value = "";
+      row.operator.value = "eq";
+      row.value.value = "";
+      row.boolean.value = "true";
+    }
+  });
+}
 function fieldFilterControls() {
   invalidateSegmentPreview();
   const fields = byId("contacts-filter").elements;
-  const selected = Boolean(fields.field_id.value);
-  fields.condition_operator.disabled = !selected || !contactFilterTags().length;
+  const rows = fieldFilterRows();
+  const selectedRows = rows.filter((row) => row.shown && row.field.value).length;
+  fields.condition_operator.disabled = !selectedRows || !contactFilterTags().length;
   if (fields.condition_operator.disabled) fields.condition_operator.value = "and";
-  byId("field-filter-operator").hidden = !selected;
-  const field = contactFields.find((field) => field.id === fields.field_id.value);
-  const orderedLabels =
-    field?.type === "date"
-      ? { gte: "당일 포함 이후", gt: "당일 제외 이후", lte: "당일 포함 이전", lt: "당일 제외 이전" }
-      : { gte: "이상", gt: "초과", lte: "이하", lt: "미만" };
-  for (const option of fields.field_operator.options) {
-    if (!["gt", "gte", "lt", "lte"].includes(option.value)) continue;
-    option.textContent = orderedLabels[option.value];
-    option.hidden = option.disabled = !["number", "date"].includes(field?.type);
+  fields.field_mode.disabled = selectedRows < 2;
+  if (fields.field_mode.disabled) fields.field_mode.value = "all";
+  const shownRows = rows.filter((row) => row.shown).length;
+  byId("field-filter-add").hidden = shownRows >= rows.length || !rows[shownRows - 1].field.value;
+  for (const row of rows) {
+    const selected = row.shown && Boolean(row.field.value);
+    row.operatorLabel.hidden = !selected;
+    const field = contactFields.find((field) => field.id === row.field.value);
+    const orderedLabels = orderedOperatorLabels(field?.type);
+    for (const option of row.operator.options) {
+      if (!["gt", "gte", "lt", "lte"].includes(option.value)) continue;
+      option.textContent = orderedLabels[option.value];
+      option.hidden = option.disabled = !["number", "date"].includes(field?.type);
+    }
+    if (row.operator.selectedOptions[0]?.disabled) row.operator.value = "eq";
+    const needsValue = fieldConditionNeedsValue(row.operator.value);
+    row.valueLabel.hidden = !selected || !needsValue;
+    configureFieldInput(row.value, field);
+    row.value.required = selected && needsValue && Boolean(field && !["text", "boolean"].includes(field.type));
+    row.value.hidden = field?.type === "boolean";
+    row.boolean.hidden = field?.type !== "boolean";
   }
-  if (fields.field_operator.selectedOptions[0]?.disabled) fields.field_operator.value = "eq";
-  const needsValue = fieldConditionNeedsValue(fields.field_operator.value);
-  byId("field-filter-value").hidden = !selected || !needsValue;
-  configureFieldInput(fields.field_value, field);
-  fields.field_value.required = selected && needsValue && Boolean(field && !["text", "boolean"].includes(field.type));
-  fields.field_value.hidden = field?.type === "boolean";
-  fields.field_boolean.hidden = field?.type !== "boolean";
 }
 function fieldConditionNeedsValue(operator) {
   return ["eq", "gt", "gte", "lt", "lte"].includes(operator);
 }
-function contactFieldCondition() {
-  const fields = byId("contacts-filter").elements;
-  if (!fields.field_id.value) return null;
-  const field = contactFields.find((item) => item.id === fields.field_id.value);
-  if (!field) throw new Error(errors.field_not_found);
-  return {
-    field_id: field.id,
-    field_operator: fields.field_operator.value,
-    ...(fieldConditionNeedsValue(fields.field_operator.value)
-      ? {
-          field_value: typedFieldValue(
-            field,
-            field.type === "boolean" ? fields.field_boolean.value : fields.field_value.value,
-          ),
-        }
-      : {}),
-  };
+// The ordered operator labels of a field type; eq, is_set and is_unset read the same for every type.
+function orderedOperatorLabels(type) {
+  return type === "date"
+    ? { gte: "당일 포함 이후", gt: "당일 제외 이후", lte: "당일 포함 이전", lt: "당일 제외 이전" }
+    : { gte: "이상", gt: "초과", lte: "이하", lt: "미만" };
 }
+// The conditions of the shown rows that name a field, in row order.
+function contactFieldConditions() {
+  const conditions = [];
+  for (const row of fieldFilterRows()) {
+    if (!row.shown || !row.field.value) continue;
+    const field = contactFields.find((item) => item.id === row.field.value);
+    if (!field) throw new Error(errors.field_not_found);
+    if (conditions.some((condition) => condition.field_id === field.id))
+      throw new Error("같은 추가 정보 필드는 한 번만 조건으로 고를 수 있습니다.");
+    conditions.push({
+      field_id: field.id,
+      field_operator: row.operator.value,
+      ...(fieldConditionNeedsValue(row.operator.value)
+        ? { field_value: typedFieldValue(field, field.type === "boolean" ? row.boolean.value : row.value.value) }
+        : {}),
+    });
+  }
+  return conditions;
+}
+// The request keys of the conditions on screen: one row keeps the legacy keys, two or three a set with its mode.
+function contactFieldConditionKeys() {
+  const conditions = contactFieldConditions();
+  if (conditions.length > 1)
+    return { field_conditions: conditions, field_mode: byId("contacts-filter").elements.field_mode.value };
+  return conditions[0] ?? {};
+}
+// Marks a row change as a condition edit, as typing in the form does.
+function fieldRowsChanged() {
+  fieldFilterControls();
+  byId("contacts-filter").dispatchEvent(new Event("input", { bubbles: true }));
+}
+byId("field-filter-add").addEventListener("click", () => {
+  const shown = fieldFilterRows().filter((row) => row.shown).length;
+  showFieldRows(shown + 1);
+  fieldRowsChanged();
+  fieldFilterRows()[shown]?.field.focus();
+});
+for (const index of [1, 2])
+  byId(`field-filter-remove-${index + 1}`).addEventListener("click", () => {
+    const rows = fieldFilterRows();
+    // Later rows move up one place, so the shown rows stay contiguous.
+    for (let next = index; next < rows.length - 1; next++) {
+      rows[next].field.value = rows[next + 1].field.value;
+      rows[next].operator.value = rows[next + 1].operator.value;
+      // The input takes the moved field's type first, so a number input does not drop a moved text value.
+      configureFieldInput(
+        rows[next].value,
+        contactFields.find((field) => field.id === rows[next].field.value),
+      );
+      rows[next].value.value = rows[next + 1].value.value;
+      rows[next].boolean.value = rows[next + 1].boolean.value;
+    }
+    showFieldRows(rows.filter((row) => row.shown).length - 1);
+    fieldRowsChanged();
+  });
 byId("contacts-filter").addEventListener("change", fieldFilterControls);
 function fieldControls() {
   for (const control of byId("field-create").elements) control.disabled = fieldBusy;
@@ -3228,13 +3336,14 @@ async function loadContactFields(force = false) {
     const result = await api("/api/contact-fields");
     if (generation !== fieldsGeneration || request !== fieldsRequest) return false;
     contactFields = result.fields;
-    const select = byId("contacts-filter").elements.field_id;
-    const previous = select.value;
-    select.replaceChildren(new Option("조건 없음", ""));
-    for (const field of contactFields) select.add(new Option(field.name, field.id));
-    if (previous && !contactFields.some((field) => field.id === previous))
-      select.add(new Option("사용할 수 없는 필드", previous));
-    select.value = previous;
+    for (const { field: select } of fieldFilterRows()) {
+      const previous = select.value;
+      select.replaceChildren(new Option("조건 없음", ""));
+      for (const field of contactFields) select.add(new Option(field.name, field.id));
+      if (previous && !contactFields.some((field) => field.id === previous))
+        select.add(new Option("사용할 수 없는 필드", previous));
+      select.value = previous;
+    }
     fieldFilterControls();
     byId("field-definitions").replaceChildren();
     for (const field of contactFields) {
@@ -3292,8 +3401,8 @@ byId("field-create").addEventListener("submit", (event) => {
   }).finally(fieldControls);
 });
 function archiveField(field, button) {
-  const selected = byId("contacts-filter").elements.field_id;
-  const filterNotice = selected.value === field.id ? " 이 필드의 검색 조건은 해제됩니다." : "";
+  const selects = fieldFilterRows().map((row) => row.field);
+  const filterNotice = selects.some((select) => select.value === field.id) ? " 이 필드의 검색 조건은 해제됩니다." : "";
   if (!canReloadContacts() || !confirm(`${field.name} 필드를 보관할까요? 저장한 값은 유지됩니다.${filterNotice}`))
     return;
   const generation = fieldsGeneration;
@@ -3303,10 +3412,12 @@ function archiveField(field, button) {
     try {
       await api(`/api/contact-fields/${field.id}`, "DELETE");
       if (generation !== fieldsGeneration) return;
-      if (selected.value === field.id) selected.value = "";
+      for (const select of selects) {
+        if (select.value === field.id) select.value = "";
+        [...select.options].find((option) => option.value === field.id)?.remove();
+      }
       contactFields = contactFields.filter((definition) => definition.id !== field.id);
       button.closest(".field-definition")?.remove();
-      [...selected.options].find((option) => option.value === field.id)?.remove();
       fieldFilterControls();
       clearContactResults();
       const loaded = await loadContactFields(true);

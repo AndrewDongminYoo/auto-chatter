@@ -1224,6 +1224,86 @@ test("workerd contact API uses restricted server privileges and verified workspa
     const independentExport = await runtime.dispatchFetch("https://app.test/api/workspace/export", { headers });
     assert.equal(independentExport.status, 200);
     await independentExport.arrayBuffer();
+    // The restricted server role stores a field set in the new columns, evaluates it and refuses to archive its fields.
+    const planResponse = await runtime.dispatchFetch("https://app.test/api/contact-fields", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Plan", type: "text" }),
+    });
+    assert.equal(planResponse.status, 201);
+    const plan = await planResponse.json();
+    const planPath = `https://app.test/api/connections/${connection}/contacts/sender-1/fields/${plan.id}`;
+    assert.equal(
+      (await runtime.dispatchFetch(planPath, { method: "PUT", headers, body: JSON.stringify({ value: "pro" }) }))
+        .status,
+      200,
+    );
+    const fieldSet = [
+      { field_id: field.id, field_operator: "gte", field_value: 0 },
+      { field_id: plan.id, field_operator: "eq", field_value: "pro" },
+    ].sort((x, y) => (x.field_id < y.field_id ? -1 : 1));
+    const setCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        name: "Scored pro",
+        connection_id: connection,
+        field_conditions: fieldSet,
+        field_mode: "all",
+      }),
+    });
+    assert.equal(setCreated.status, 201, await setCreated.clone().text());
+    const setSegment = await setCreated.json();
+    assert.deepEqual(setSegment, {
+      id: setSegment.id,
+      name: "Scored pro",
+      connection_id: connection,
+      tag: null,
+      field_conditions: fieldSet,
+      field_mode: "all",
+      version: 1,
+    });
+    const setSelected = await (
+      await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${setSegment.id}`, { headers })
+    ).json();
+    assert.deepEqual(
+      setSelected.contacts.map((contact) => contact.sender_id),
+      ["sender-1"],
+    );
+    const setQuery = new URLSearchParams({
+      preview: "true",
+      connection_id: connection,
+      field_conditions: JSON.stringify([
+        { field_id: field.id, field_operator: "gte", field_value: 0 },
+        { field_id: plan.id, field_operator: "eq", field_value: "free" },
+      ]),
+      field_mode: "all",
+    });
+    const noneMatch = await (
+      await runtime.dispatchFetch(`https://app.test/api/contacts?${setQuery}`, { headers })
+    ).json();
+    assert.equal(noneMatch.total, "0");
+    assert.equal(noneMatch.excluded.field, noneMatch.evaluated);
+    const planInUse = await runtime.dispatchFetch(`https://app.test/api/contact-fields/${plan.id}`, {
+      method: "DELETE",
+      headers,
+    });
+    assert.equal(planInUse.status, 409);
+    assert.deepEqual(await planInUse.json(), { error: "field_in_use" });
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`https://app.test/api/contact-segments/${setSegment.id}`, {
+          method: "DELETE",
+          headers,
+        })
+      ).status,
+      200,
+    );
+    assert.equal(
+      (await runtime.dispatchFetch(`https://app.test/api/contact-fields/${plan.id}`, { method: "DELETE", headers }))
+        .status,
+      200,
+    );
     const foreignField = await runtime.dispatchFetch(valuePath, {
       method: "PUT",
       headers: { ...headers, cookie: "__Host-ac-access=foreign" },
