@@ -16,8 +16,13 @@ DO $$ BEGIN
     );
   END IF;
   -- OR needs a tag condition and a field condition; the tag condition may now be the tag set.
-  ALTER TABLE instagram_contact_segments DROP CONSTRAINT IF EXISTS contact_segment_condition_operator;
-  ALTER TABLE instagram_contact_segments ADD CONSTRAINT contact_segment_condition_operator CHECK(
-    condition_operator IN ('and','or') AND (condition_operator='and' OR ((tag IS NOT NULL OR tags IS NOT NULL) AND field_id IS NOT NULL))
-  );
+  -- Once 057 has replaced this rule with one that reads field_conditions, a re-run leaves it alone: this older rule
+  -- would reject a stored OR segment whose field condition is a field set.
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint c JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=ANY(c.conkey)
+    WHERE c.conrelid='instagram_contact_segments'::regclass AND c.conname='contact_segment_condition_operator' AND a.attname='field_conditions') THEN
+    ALTER TABLE instagram_contact_segments DROP CONSTRAINT IF EXISTS contact_segment_condition_operator;
+    ALTER TABLE instagram_contact_segments ADD CONSTRAINT contact_segment_condition_operator CHECK(
+      condition_operator IN ('and','or') AND (condition_operator='and' OR ((tag IS NOT NULL OR tags IS NOT NULL) AND field_id IS NOT NULL))
+    );
+  END IF;
 END $$;

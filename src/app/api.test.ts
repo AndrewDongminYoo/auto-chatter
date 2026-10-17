@@ -1704,6 +1704,224 @@ test("segment definitions take a legacy tag or a set of one to five tags with a 
   );
 });
 
+// Sorted field IDs for the field-set tests; the mock answers every field lookup with the type below.
+const setFields = [
+  "a1111111-1111-4111-8111-111111111111",
+  "b2222222-2222-4222-8222-222222222222",
+  "c3333333-3333-4333-8333-333333333333",
+  "d4444444-4444-4444-8444-444444444444",
+] as const;
+const setFieldTypes: Record<string, string> = {
+  [setFields[0]]: "text",
+  [setFields[1]]: "number",
+  [setFields[2]]: "date",
+  [setFields[3]]: "boolean",
+};
+
+test("contact field filters take the legacy keys or a field_conditions set of up to three and refuse other shapes before database access", async () => {
+  let values: unknown[] = [];
+  let lookups: unknown[] = [];
+  let queried = false;
+  const pool = {
+    query: async (sql: string, parameters: unknown[]) => {
+      queried = true;
+      if (sql.includes("workspace_members")) return { rows: [{ workspace_id: workspaceId, role: "owner" }] };
+      if (sql.includes("FROM instagram_contact_fields WHERE")) {
+        lookups.push(parameters[1]);
+        return { rows: [{ type: setFieldTypes[String(parameters[1])] }] };
+      }
+      values = parameters;
+      return { rows: [] };
+    },
+    end: async () => {},
+  } as unknown as Pool;
+  const request = (query: URLSearchParams | string) =>
+    appApi(
+      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
+      config,
+      () => pool,
+      mediaFetch(),
+    );
+  const set = (conditions: unknown, extra: Record<string, string> = {}) =>
+    new URLSearchParams({ field_conditions: JSON.stringify(conditions), ...extra });
+  const text = { field_id: setFields[0], field_operator: "eq", field_value: "x" };
+  const score = { field_id: setFields[1], field_operator: "gt", field_value: 3 };
+  const day = { field_id: setFields[2], field_operator: "lte", field_value: "2026-10-18" };
+  const flag = { field_id: setFields[3], field_operator: "is_unset" };
+  // The legacy keys keep the response and the parameter positions; the condition becomes a set of one.
+  const legacy = await request(
+    new URLSearchParams({ field_id: setFields[0], field_operator: "eq", field_value: JSON.stringify("x") }),
+  );
+  assert.equal(legacy.status, 200);
+  assert.deepEqual(await legacy.json(), { contacts: [], after: null });
+  assert.equal(values.length, 15);
+  assert.deepEqual(values.slice(5, 7), [[setFields[0]], "all"]);
+  assert.deepEqual(JSON.parse(String(values[7])), [text]);
+  for (const [query, conditions, mode] of [
+    [set([text]), [text], "all"],
+    [set([text], { field_mode: "any" }), [text], "all"],
+    [
+      new URLSearchParams({ field_id: setFields[0], field_operator: "eq", field_value: '"x"', field_mode: "any" }),
+      [text],
+      "all",
+    ],
+    [set([score, text]), [text, score], "all"],
+    [set([score, text], { field_mode: "all" }), [text, score], "all"],
+    [set([day, score, text], { field_mode: "any" }), [text, score, day], "any"],
+    [set([flag, { ...day, field_id: setFields[2].toUpperCase() }]), [day, flag], "all"],
+  ] as const) {
+    lookups = [];
+    const response = await request(query);
+    assert.equal(response.status, 200, String(query));
+    assert.deepEqual(
+      values[5],
+      conditions.map((condition) => condition.field_id),
+      String(query),
+    );
+    assert.equal(values[6], mode, String(query));
+    assert.deepEqual(JSON.parse(String(values[7])), conditions, String(query));
+    // Each field is checked once, in field_id order.
+    assert.deepEqual(
+      lookups,
+      conditions.map((condition) => condition.field_id),
+      String(query),
+    );
+  }
+  await request("");
+  assert.deepEqual(values.slice(5, 8), [null, null, null]);
+  // Three text values of 1000 characters that JSON doubles in length stay under the 8192-character bound.
+  const quoted = '"'.repeat(1000);
+  const large = JSON.stringify([
+    { ...text, field_value: quoted },
+    { field_id: setFields[1], field_operator: "is_set" },
+    { field_id: setFields[2], field_operator: "is_unset" },
+  ]);
+  assert.ok(large.length > 2000 && large.length <= 8192);
+  assert.equal((await request(new URLSearchParams({ field_conditions: large }))).status, 200);
+  const longest = JSON.stringify([text]).padEnd(8192, " ");
+  assert.equal((await request(new URLSearchParams({ field_conditions: longest }))).status, 200);
+  for (const [query, error] of [
+    [set([text, score, day, flag]), "invalid_field_condition"],
+    [set([text, { ...text, field_value: "y" }]), "invalid_field_condition"],
+    [set([text, { ...text, field_id: setFields[0].toUpperCase() }]), "invalid_field_condition"],
+    [set([]), "invalid_field_condition"],
+    [set(text), "invalid_field_condition"],
+    [set(null), "invalid_field_condition"],
+    [set([null]), "invalid_field_condition"],
+    [set(["x"]), "invalid_field_condition"],
+    [set([{ field_operator: "is_set" }]), "invalid_field_condition"],
+    [set([{ field_id: null, field_operator: "is_set" }]), "invalid_field_condition"],
+    [set([{ ...text, extra: 1 }]), "invalid_field_condition"],
+    [set([{ field_id: setFields[0], field_operator: "eq" }]), "invalid_field_condition"],
+    [set([{ field_id: setFields[0], field_operator: "eq", field_value: null }]), "invalid_field_condition"],
+    [set([{ ...flag, field_value: true }]), "invalid_field_condition"],
+    [set([{ field_id: "not-a-uuid", field_operator: "is_set" }]), "invalid_field_condition"],
+    [set([{ ...text, field_operator: "contains" }]), "invalid_field_condition"],
+    // A JSON-escaped lone surrogate parses, but PostgreSQL refuses it as jsonb input.
+    [set([{ ...text, field_value: "\ud800" }]), "invalid_field_condition"],
+    [set([text, { field_id: setFields[2], field_operator: "eq", field_value: "x\udc00" }]), "invalid_field_condition"],
+    [
+      new URLSearchParams({ field_id: setFields[0], field_operator: "eq", field_value: '"\\ud800"' }),
+      "invalid_field_condition",
+    ],
+    [new URLSearchParams({ field_conditions: "[{" }), "invalid_field_condition"],
+    [new URLSearchParams({ field_conditions: "" }), "invalid_field_condition"],
+    [new URLSearchParams({ field_conditions: JSON.stringify([text]).padEnd(8193, " ") }), "invalid_field_condition"],
+    [set([text], { field_id: setFields[1], field_operator: "is_set" }), "invalid_field_condition"],
+    [set([text], { field_operator: "is_set" }), "invalid_field_condition"],
+    [set([text, score], { field_mode: "none" }), "invalid_field_condition"],
+    [set([text, score], { field_mode: "ANY" }), "invalid_field_condition"],
+    [set([text, score], { field_mode: "" }), "invalid_field_condition"],
+    [new URLSearchParams({ field_mode: "all" }), "invalid_field_condition"],
+    [new URLSearchParams({ field_mode: "" }), "invalid_field_condition"],
+    [`field_conditions=${encodeURIComponent(JSON.stringify([text]))}&field_conditions=[]`, "invalid_contact_request"],
+    [`${set([text, score], { field_mode: "all" })}&field_mode=any`, "invalid_contact_request"],
+    // The field set is one side of the tag/field OR, which still needs a tag.
+    [set([text, score], { condition_operator: "or" }), "invalid_contact_condition"],
+    [set([text, score], { segment_id: segmentId }), "invalid_contact_request"],
+    [new URLSearchParams({ segment_id: segmentId, field_mode: "any" }), "invalid_contact_request"],
+    [new URLSearchParams({ segment_id: segmentId, field_conditions: "[{" }), "invalid_contact_request"],
+  ] as const) {
+    queried = false;
+    const response = await request(query);
+    assert.equal(response.status, 400, String(query));
+    assert.deepEqual(await response.json(), { error }, String(query));
+    assert.equal(queried, false, `${query} must fail before database access`);
+  }
+  // A set with a tag OR passes the operator check.
+  const either = await request(set([text, score], { tag: "lead", condition_operator: "or" }));
+  assert.equal(either.status, 200);
+  assert.equal(values[8], "or");
+});
+
+test("segment definitions take the legacy field keys or a set of one to three field conditions with a mode", async () => {
+  const fields = (definition: Record<string, unknown>) =>
+    parseSegmentDefinition({ name: "Scored", ...definition }).fieldCondition;
+  const text = { field_id: setFields[0], field_operator: "eq", field_value: "x" };
+  const score = { field_id: setFields[1], field_operator: "gt", field_value: 3 };
+  const flag = { field_id: setFields[3], field_operator: "is_set" };
+  assert.equal(fields({}), null);
+  assert.equal(fields({ field_conditions: null, field_mode: null }), null);
+  assert.equal(fields({ field_id: null, field_conditions: null }), null);
+  assert.deepEqual(fields(text), { conditions: [text], mode: "all" });
+  // A set of one condition is the legacy condition, whatever the mode.
+  assert.deepEqual(fields({ field_conditions: [text], field_mode: "any" }), { conditions: [text], mode: "all" });
+  assert.deepEqual(fields({ ...text, field_mode: "any" }), { conditions: [text], mode: "all" });
+  assert.deepEqual(fields({ field_conditions: [score, text] }), { conditions: [text, score], mode: "all" });
+  assert.deepEqual(
+    fields({ field_conditions: [flag, score, { ...text, field_id: setFields[0].toUpperCase() }], field_mode: "any" }),
+    { conditions: [text, score, flag], mode: "any" },
+  );
+  // A legacy key that is null counts as absent, so it can go with a set.
+  assert.deepEqual(fields({ field_id: null, field_conditions: [text, score] }), {
+    conditions: [text, score],
+    mode: "all",
+  });
+  for (const [body, code] of [
+    [{ ...text, field_conditions: [score, flag] }, "invalid_field_condition"],
+    [{ ...text, field_conditions: [text] }, "invalid_field_condition"],
+    [{ field_operator: "is_set", field_conditions: [text, score] }, "invalid_field_condition"],
+    [{ field_conditions: [] }, "invalid_field_condition"],
+    [{ field_conditions: text }, "invalid_field_condition"],
+    [{ field_conditions: JSON.stringify([text, score]) }, "invalid_field_condition"],
+    [
+      { field_conditions: [text, score, flag, { field_id: setFields[2], field_operator: "is_set" }] },
+      "invalid_field_condition",
+    ],
+    [{ field_conditions: [text, { field_id: setFields[0], field_operator: "is_set" }] }, "invalid_field_condition"],
+    [{ field_conditions: [text, null] }, "invalid_field_condition"],
+    [{ field_conditions: [text, { ...score, extra: true }] }, "invalid_field_condition"],
+    [{ field_conditions: [text, { field_operator: "is_set" }] }, "invalid_field_condition"],
+    [{ field_conditions: [text, { field_id: setFields[1], field_operator: "gt" }] }, "invalid_field_condition"],
+    [{ field_conditions: [text, score], field_mode: "none" }, "invalid_field_condition"],
+    [{ field_conditions: [text, score], field_mode: 1 }, "invalid_field_condition"],
+    [{ field_conditions: [{ ...text, field_value: "\ud800" }, score] }, "invalid_field_condition"],
+    [{ ...text, field_value: "\udc00x" }, "invalid_field_condition"],
+    [{ field_mode: "all" }, "invalid_field_condition"],
+    [{ field_conditions: [text, score], condition_operator: "or" }, "invalid_contact_condition"],
+  ] as const) {
+    assert.throws(() => fields(body), refused(code), JSON.stringify(body));
+    await assert.rejects(createContactSegment(segmentPool, segmentUser, { name: "Scored", ...body }), refused(code));
+    await assert.rejects(
+      updateContactSegment(segmentPool, segmentUser, segmentId, { name: "Scored", ...body, expected_version: 1 }),
+      refused(code),
+    );
+  }
+  for (const definition of [
+    { field_conditions: [score, text], field_mode: "any" },
+    { field_conditions: [score, text], field_mode: "any", tags: ["a", "b"], condition_operator: "or" },
+  ]) {
+    await assert.rejects(
+      createContactSegment(segmentPool, segmentUser, { name: "Scored", ...definition }),
+      reachedDatabase,
+    );
+    await assert.rejects(
+      updateContactSegment(segmentPool, segmentUser, segmentId, { name: "Scored", ...definition, expected_version: 1 }),
+      reachedDatabase,
+    );
+  }
+});
+
 test("contact mutations reject cross-origin writes and invalid tags before a write", async () => {
   const path = `https://app.test/api/connections/${connectionId}/contacts/888`;
   const open = () => {

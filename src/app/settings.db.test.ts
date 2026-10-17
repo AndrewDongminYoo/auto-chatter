@@ -4933,3 +4933,632 @@ test("multi-tag migration adds the columns and checks, keeps legacy rows and can
     client.release();
   }
 });
+
+// Contacts for the field-set tests, with text, number, date and boolean fields and none, some or all values set.
+async function multiFieldContacts() {
+  const workspace = await ensureWorkspace(pool, a);
+  const plan = await createField("Set plan", "text");
+  const score = await createField("Set score", "number");
+  const joined = await createField("Set joined", "date");
+  const vip = await createField("Set vip", "boolean");
+  for (const [sender, tags, values] of [
+    ["all", ["lead"], { [plan.id]: "pro", [score.id]: 10, [joined.id]: "2026-01-01", [vip.id]: true }],
+    ["empty", ["lead", "x"], {}],
+    ["none", null, { [plan.id]: "free", [score.id]: 1, [joined.id]: "2026-12-31" }],
+    ["some", ["vip"], { [plan.id]: "pro", [score.id]: 1, [vip.id]: false }],
+  ] as const) {
+    await pool.query(
+      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,$3,'media',$3,'private')",
+      [workspace, connectionId, sender],
+    );
+    if (tags) await saveContactTags(pool, a, connectionId, sender, { tags });
+    for (const [id, value] of Object.entries(values))
+      assert.equal((await fieldRequest("PUT", fieldValuePath(id, sender), { value })).status, 200);
+  }
+  // T: all, some. N: all. D: all. B: all. S: all, none. U: none, empty.
+  const conditions = {
+    T: { field_id: plan.id, field_operator: "eq", field_value: "pro" },
+    N: { field_id: score.id, field_operator: "gt", field_value: 5 },
+    D: { field_id: joined.id, field_operator: "lte", field_value: "2026-06-30" },
+    B: { field_id: vip.id, field_operator: "eq", field_value: true },
+    S: { field_id: joined.id, field_operator: "is_set" },
+    U: { field_id: vip.id, field_operator: "is_unset" },
+  };
+  return { workspace, fields: { plan, score, joined, vip }, conditions };
+}
+const fieldSetQuery = (conditions: object[], mode: string | null, extra: [string, string][] = []) => {
+  const query = new URLSearchParams([["field_conditions", JSON.stringify(conditions)], ...extra]);
+  if (mode) query.set("field_mode", mode);
+  return query;
+};
+// The list and the preview of one query select the same contacts, and the preview partitions the other four.
+async function assertFieldSet(
+  query: URLSearchParams,
+  expected: string[],
+  excluded: { tag: string; field: string; both: string },
+) {
+  const label = query.toString();
+  const list = await listContacts(pool, a, query);
+  assert.deepEqual(
+    list.contacts.map((c) => c.sender_id),
+    expected,
+    label,
+  );
+  const preview = await listContacts(pool, a, new URLSearchParams([...query, ["preview", "true"]]));
+  assert.deepEqual(
+    preview.contacts.map((c) => c.sender_id),
+    expected,
+    label,
+  );
+  assert.equal(preview.total, String(expected.length), label);
+  assert.equal(preview.evaluated, "4", label);
+  assert.deepEqual(preview.excluded, excluded, label);
+}
+const onlyField = (matched: number) => ({ tag: "0", field: String(4 - matched), both: "0" });
+
+test("field sets match all or any of two or three conditions of every type", async () => {
+  const { conditions: c } = await multiFieldContacts();
+  for (const [set, mode, expected] of [
+    [[c.T, c.N], "all", ["all"]],
+    [[c.N, c.T], null, ["all"]],
+    [[c.T, c.N], "any", ["all", "some"]],
+    [[c.T, c.D, c.B], "all", ["all"]],
+    [[c.N, c.D, c.B], "any", ["all"]],
+    [[c.S, c.U], "all", ["none"]],
+    [[c.S, c.U], "any", ["all", "empty", "none"]],
+    [[c.T, c.U], "all", []],
+    [[c.T, c.U], "any", ["all", "empty", "none", "some"]],
+    [[c.N, c.U], "all", []],
+    [[c.D, c.U, c.T], "any", ["all", "empty", "none", "some"]],
+    [[c.B, c.S], "any", ["all", "none"]],
+    [[c.B, c.S, c.T], "all", ["all"]],
+  ] as const)
+    await assertFieldSet(fieldSetQuery([...set], mode), [...expected], onlyField(expected.length));
+  // A set of one is the legacy condition for every operator.
+  for (const condition of Object.values(c)) {
+    const legacy = new URLSearchParams({ field_id: condition.field_id, field_operator: condition.field_operator });
+    if ("field_value" in condition) legacy.set("field_value", JSON.stringify(condition.field_value));
+    const single = await listContacts(pool, a, fieldSetQuery([condition], "any"));
+    assert.deepEqual(single, await listContacts(pool, a, legacy), JSON.stringify(condition));
+  }
+  // The other workspace evaluates none of these contacts and cannot use these fields.
+  const foreign = await fieldRequest("GET", `/api/contacts?${fieldSetQuery([c.T, c.N], "any")}`, undefined, b);
+  assert.equal(foreign.status, 404);
+  assert.deepEqual(await foreign.json(), { error: "field_not_found" });
+  // The HTTP route reads the JSON key the same way and refuses a fourth condition or a repeated field.
+  const response = await fieldRequest("GET", `/api/contacts?${fieldSetQuery([c.T, c.N], "any")}`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(
+    (await response.json()).contacts.map((contact: { sender_id: string }) => contact.sender_id),
+    ["all", "some"],
+  );
+  for (const set of [
+    [c.T, c.N, c.D, c.U],
+    [c.S, c.D],
+  ]) {
+    const refused = await fieldRequest("GET", `/api/contacts?${fieldSetQuery(set, null)}`);
+    assert.equal(refused.status, 400);
+    assert.deepEqual(await refused.json(), { error: "invalid_field_condition" });
+  }
+  // validateFieldCondition still checks each condition against its field type.
+  const ordered = await fieldRequest(
+    "GET",
+    `/api/contacts?${fieldSetQuery([c.N, { ...c.T, field_operator: "gt" }], null)}`,
+  );
+  assert.equal(ordered.status, 400);
+  assert.deepEqual(await ordered.json(), { error: "invalid_field_condition" });
+  const typed = await fieldRequest("GET", `/api/contacts?${fieldSetQuery([c.T, { ...c.N, field_value: "5" }], null)}`);
+  assert.equal(typed.status, 400);
+  assert.deepEqual(await typed.json(), { error: "invalid_field_value" });
+});
+
+test("field sets are one side of the tag set AND/OR and the preview partitions like the list", async () => {
+  const { conditions: c } = await multiFieldContacts();
+  // Tag set any(lead, vip): all, empty, some.
+  const tags = (operator?: string): [string, string][] => [
+    ["tag", "lead"],
+    ["tag", "vip"],
+    ["tag_mode", "any"],
+    ...(operator ? [["condition_operator", operator] as [string, string]] : []),
+  ];
+  await assertFieldSet(fieldSetQuery([c.T, c.U], "any", tags()), ["all", "empty", "some"], {
+    tag: "1",
+    field: "0",
+    both: "0",
+  });
+  await assertFieldSet(fieldSetQuery([c.T, c.N], "all", tags()), ["all"], { tag: "0", field: "2", both: "1" });
+  await assertFieldSet(fieldSetQuery([c.T, c.N], "all", tags("or")), ["all", "empty", "some"], {
+    tag: "0",
+    field: "0",
+    both: "1",
+  });
+  await assertFieldSet(fieldSetQuery([c.S, c.U], "any", tags("or")), ["all", "empty", "none", "some"], {
+    tag: "0",
+    field: "0",
+    both: "0",
+  });
+  // Tag set all(lead, vip) matches nobody, so OR leaves the field set alone.
+  const allTags: [string, string][] = [
+    ["tag", "lead"],
+    ["tag", "vip"],
+    ["tag_mode", "all"],
+    ["condition_operator", "or"],
+  ];
+  await assertFieldSet(fieldSetQuery([c.S, c.U], "any", allTags), ["all", "empty", "none"], {
+    tag: "0",
+    field: "0",
+    both: "1",
+  });
+  await assertFieldSet(fieldSetQuery([c.S, c.U], "all", allTags.slice(0, 3)), [], {
+    tag: "1",
+    field: "0",
+    both: "3",
+  });
+});
+
+test("multi-field segments store sorted sets, keep legacy single conditions and evaluate like the matching query", async () => {
+  const { workspace, fields, conditions: c } = await multiFieldContacts();
+  const created = await fieldRequest("POST", "/api/contact-segments", {
+    name: "Pro or scored",
+    field_conditions: [c.N, { ...c.T, field_id: c.T.field_id.toUpperCase() }],
+    field_mode: "any",
+  });
+  assert.equal(created.status, 201);
+  const segment = await created.json();
+  const sorted = [c.T, c.N].sort((x, y) => (x.field_id < y.field_id ? -1 : 1));
+  assert.deepEqual(segment, {
+    id: segment.id,
+    name: "Pro or scored",
+    connection_id: null,
+    tag: null,
+    field_conditions: sorted,
+    field_mode: "any",
+    version: 1,
+  });
+  assert.deepEqual(
+    (await listContactSegments(pool, a)).find((s) => s.id === segment.id),
+    segment,
+  );
+  const row = async () =>
+    (
+      await pool.query(
+        "SELECT field_id,field_operator,field_value,field_conditions,field_mode FROM instagram_contact_segments WHERE id=$1",
+        [segment.id],
+      )
+    ).rows[0];
+  assert.deepEqual(await row(), {
+    field_id: null,
+    field_operator: null,
+    field_value: null,
+    field_conditions: sorted,
+    field_mode: "any",
+  });
+  const bySegment = new URLSearchParams({ segment_id: segment.id });
+  await assertFieldSet(bySegment, ["all", "some"], onlyField(2));
+  for (const mixed of [`field_conditions=${encodeURIComponent(JSON.stringify([c.T]))}`, "field_mode=any"])
+    assert.equal((await fieldRequest("GET", `/api/contacts?${bySegment}&${mixed}`)).status, 400, mixed);
+  assert.equal((await fieldRequest("GET", `/api/contacts?${bySegment}`, undefined, b)).status, 404);
+  // A field referenced only inside field_conditions cannot be archived.
+  for (const id of [fields.plan.id, fields.score.id]) {
+    const archived = await fieldRequest("DELETE", `/api/contact-fields/${id}`);
+    assert.equal(archived.status, 409);
+    assert.deepEqual(await archived.json(), { error: "field_in_use" });
+  }
+  // The same set in another order and spelling is an unchanged definition and keeps the version.
+  const same = await updateContactSegment(pool, a, segment.id, {
+    name: "Pro or scored",
+    field_conditions: [c.T, c.N],
+    field_mode: "any",
+    expected_version: 1,
+  });
+  assert.deepEqual(same, { conflict: false, segment });
+  // Changing only the mode is a change.
+  const allOf = await updateContactSegment(pool, a, segment.id, {
+    name: "Pro or scored",
+    field_conditions: [c.N, c.T],
+    field_mode: "all",
+    expected_version: 1,
+  });
+  assert.deepEqual(allOf.segment, { ...segment, field_mode: "all", version: 2 });
+  await assertFieldSet(bySegment, ["all"], onlyField(1));
+  // Three conditions, with is_unset, then a set of one that is stored and returned as the legacy condition.
+  const three = await updateContactSegment(pool, a, segment.id, {
+    name: "Pro or scored",
+    field_conditions: [c.U, c.T, c.D],
+    field_mode: "any",
+    expected_version: 2,
+  });
+  assert.equal(three.segment.version, 3);
+  assert.equal((three.segment as { field_conditions: unknown[] }).field_conditions.length, 3);
+  await assertFieldSet(bySegment, ["all", "empty", "none", "some"], onlyField(4));
+  const single = await updateContactSegment(pool, a, segment.id, {
+    name: "Pro or scored",
+    field_conditions: [c.N],
+    field_mode: "any",
+    expected_version: 3,
+  });
+  assert.deepEqual(single.segment, {
+    id: segment.id,
+    name: "Pro or scored",
+    connection_id: null,
+    tag: null,
+    ...c.N,
+    version: 4,
+  });
+  assert.deepEqual(await row(), {
+    field_id: c.N.field_id,
+    field_operator: "gt",
+    field_value: 5,
+    field_conditions: null,
+    field_mode: null,
+  });
+  // The legacy key form of the same single condition is unchanged too.
+  const legacySame = await updateContactSegment(pool, a, segment.id, {
+    name: "Pro or scored",
+    ...c.N,
+    expected_version: 4,
+  });
+  assert.equal(legacySame.segment.version, 4);
+  // A field set OR a tag set passes the updated condition_operator CHECK.
+  const either = await updateContactSegment(pool, a, segment.id, {
+    name: "Pro or scored",
+    tags: ["lead", "vip"],
+    tag_mode: "all",
+    field_conditions: [c.T, c.N],
+    field_mode: "all",
+    condition_operator: "or",
+    expected_version: 4,
+  });
+  assert.deepEqual(either.segment, {
+    id: segment.id,
+    name: "Pro or scored",
+    connection_id: null,
+    tags: ["lead", "vip"],
+    tag_mode: "all",
+    condition_operator: "or",
+    field_conditions: sorted,
+    field_mode: "all",
+    version: 5,
+  });
+  await assertFieldSet(bySegment, ["all"], { tag: "0", field: "0", both: "3" });
+  // Legacy single-field segments keep their shape.
+  const legacy = await createContactSegment(pool, a, { name: "Legacy", ...c.S });
+  assert.deepEqual(legacy, { id: legacy.id, name: "Legacy", connection_id: null, tag: null, ...c.S, version: 1 });
+  const collapsed = await createContactSegment(pool, a, {
+    name: "Collapsed",
+    field_conditions: [c.S],
+    field_mode: "any",
+  });
+  assert.deepEqual(collapsed, { ...legacy, id: collapsed.id, name: "Collapsed" });
+  const both = await fieldRequest("POST", "/api/contact-segments", {
+    name: "Both",
+    ...c.S,
+    field_conditions: [c.T, c.N],
+  });
+  assert.equal(both.status, 400);
+  assert.deepEqual(await both.json(), { error: "invalid_field_condition" });
+  // An archived field or another workspace's field is refused on create and on edit, and nothing is written.
+  const archivedField = await createField("Set archived", "text");
+  assert.equal((await fieldRequest("DELETE", `/api/contact-fields/${archivedField.id}`)).status, 200);
+  const foreignResponse = await fieldRequest("POST", "/api/contact-fields", { name: "Foreign", type: "number" }, b);
+  assert.equal(foreignResponse.status, 201);
+  const foreignField = await foreignResponse.json();
+  const before = await segmentRows();
+  for (const reference of [
+    { field_id: archivedField.id, field_operator: "is_set" },
+    { field_id: foreignField.id, field_operator: "is_set" },
+  ]) {
+    const create = await fieldRequest("POST", "/api/contact-segments", {
+      name: "Refused",
+      field_conditions: [c.T, reference],
+    });
+    assert.equal(create.status, 404);
+    assert.deepEqual(await create.json(), { error: "field_not_found" });
+    const edit = await fieldRequest("PUT", segmentPath(segment.id), {
+      name: "Pro or scored",
+      field_conditions: [reference, c.N],
+      expected_version: 5,
+    });
+    assert.equal(edit.status, 404);
+    assert.deepEqual(await edit.json(), { error: "field_not_found" });
+  }
+  assert.deepEqual(await segmentRows(), before);
+  // The other workspace can neither read nor edit the segment.
+  await assert.rejects(
+    updateContactSegment(pool, b, segment.id, { name: "Foreign", field_conditions: [c.T, c.N], expected_version: 5 }),
+    (e: unknown) => e instanceof ApiError && e.status === 404,
+  );
+  assert.equal(
+    (await listContactSegments(pool, b)).some((s) => s.id === segment.id),
+    false,
+  );
+  await archiveContactSegment(pool, a, segment.id);
+  assert.equal((await fieldRequest("GET", `/api/contacts?${bySegment}`)).status, 404);
+  // An archived segment no longer holds its fields.
+  await archiveContactSegment(pool, a, legacy.id);
+  await archiveContactSegment(pool, a, collapsed.id);
+  assert.equal((await fieldRequest("DELETE", `/api/contact-fields/${fields.plan.id}`)).status, 200);
+  assert.ok(workspace);
+});
+
+test("a multi-field segment write holds every field, so a concurrent archive waits and answers field_in_use", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const first = await createField("Race set first", "text");
+  const second = await createField("Race set second", "number");
+  const other = "99999999-9999-4999-8999-999999999998";
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'race-set')", [
+    other,
+    workspace,
+  ]);
+  // The archived field is the one that sorts last, so it is held only by the field_conditions lock loop.
+  const [, last] = [first, second].sort((x, y) => (x.id < y.id ? -1 : 1));
+  // The blocker holds the new connection, so the create's foreign-key check waits after it locked the fields.
+  const blocker = await pool.connect();
+  try {
+    await blocker.query("BEGIN");
+    await blocker.query("SELECT id FROM instagram_connections WHERE id=$1 FOR UPDATE", [other]);
+    const create = fieldRequest("POST", "/api/contact-segments", {
+      name: "Race set",
+      connection_id: other,
+      field_conditions: [
+        { field_id: first.id, field_operator: "is_set" },
+        { field_id: second.id, field_operator: "is_unset" },
+      ],
+      field_mode: "any",
+    });
+    await lockWaiters(1);
+    let archiveSettled = false;
+    const archive = fieldRequest("DELETE", `/api/contact-fields/${last.id}`).finally(() => {
+      archiveSettled = true;
+    });
+    await lockWaiters(2, () => archiveSettled);
+    await blocker.query("COMMIT");
+    const [saved, archived] = await Promise.all([create, archive]);
+    assert.equal(saved.status, 201);
+    assert.equal(archived.status, 409);
+    assert.deepEqual(await archived.json(), { error: "field_in_use" });
+  } finally {
+    await blocker.query("ROLLBACK").catch(() => undefined);
+    blocker.release();
+  }
+  assert.equal(
+    (await pool.query("SELECT archived FROM instagram_contact_fields WHERE id=$1", [last.id])).rows[0].archived,
+    false,
+  );
+});
+
+test("a field archive that commits before a multi-field edit reads the field makes the edit answer field_not_found", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const kept = await createField("Set kept", "text");
+  const field = await createField("Set archived first", "text");
+  const segment = await createContactSegment(pool, a, { name: "Set archive first" });
+  const before = await segmentRows();
+  // The blocker holds the workspace row, so the edit waits at its first lock while the archive commits.
+  const blocker = await pool.connect();
+  try {
+    await blocker.query("BEGIN");
+    await blocker.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [workspace]);
+    const edit = fieldRequest("PUT", segmentPath(segment.id), {
+      name: "Set archive first",
+      field_conditions: [
+        { field_id: kept.id, field_operator: "is_set" },
+        { field_id: field.id, field_operator: "is_set" },
+      ],
+      expected_version: 1,
+    });
+    await lockWaiters(1);
+    assert.equal((await fieldRequest("DELETE", `/api/contact-fields/${field.id}`)).status, 200);
+    await blocker.query("COMMIT");
+    const edited = await edit;
+    assert.equal(edited.status, 404);
+    assert.deepEqual(await edited.json(), { error: "field_not_found" });
+  } finally {
+    await blocker.query("ROLLBACK").catch(() => undefined);
+    blocker.release();
+  }
+  assert.deepEqual(await segmentRows(), before);
+});
+
+test("the multi-field CHECK refuses malformed sets written directly", async () => {
+  const workspace = await ensureWorkspace(pool, a);
+  const field = await createField("Set check", "number");
+  const [x, y, z, w] = [
+    "a1111111-1111-4111-8111-111111111111",
+    "b2222222-2222-4222-8222-222222222222",
+    "c3333333-3333-4333-8333-333333333333",
+    "d4444444-4444-4444-8444-444444444444",
+  ];
+  const set = (...items: unknown[]) => `'${JSON.stringify(items)}'::jsonb`;
+  const isSet = (id: string) => ({ field_id: id, field_operator: "is_set" });
+  const insert = (columns: string) =>
+    pool.query(
+      `INSERT INTO instagram_contact_segments(workspace_id,name,field_id,field_operator,field_conditions,field_mode) SELECT $1,'Direct',${columns}`,
+      [workspace],
+    );
+  for (const columns of [
+    `NULL,NULL,${set(isSet(x), { field_id: y, field_operator: "eq", field_value: true })},'all' RETURNING id`,
+    `NULL,NULL,${set(isSet(x), { field_id: y, field_operator: "gt", field_value: 1 }, { field_id: z, field_operator: "lte", field_value: "2026-01-01" })},'any' RETURNING id`,
+  ]) {
+    const valid = await insert(columns);
+    await pool.query("UPDATE instagram_contact_segments SET archived=true WHERE id=$1", [valid.rows[0].id]);
+  }
+  for (const columns of [
+    `NULL,NULL,${set(isSet(x))},'all'`,
+    `NULL,NULL,${set(isSet(x), isSet(y), isSet(z), isSet(w))},'all'`,
+    `NULL,NULL,'{}'::jsonb,'all'`,
+    `NULL,NULL,'"x"'::jsonb,'all'`,
+    `NULL,NULL,'[]'::jsonb,'all'`,
+    `NULL,NULL,${set(isSet(x), isSet(y))},'none'`,
+    `NULL,NULL,${set(isSet(x), isSet(y))},NULL`,
+    `NULL,NULL,NULL,'all'`,
+    `'${field.id}','is_set',${set(isSet(x), isSet(y))},'all'`,
+    `NULL,NULL,${set(isSet(x), "y")},'all'`,
+    `NULL,NULL,${set(isSet(x), { ...isSet(y), extra: 1 })},'all'`,
+    `NULL,NULL,${set(isSet(x), { field_id: y, field_operator: "eq" })},'all'`,
+    `NULL,NULL,${set(isSet(x), { ...isSet(y), field_value: 1 })},'all'`,
+    `NULL,NULL,${set(isSet(x), { field_id: y, field_operator: "gt", field_value: true })},'all'`,
+    `NULL,NULL,${set(isSet(x), { field_id: y, field_operator: "contains", field_value: "a" })},'all'`,
+    `NULL,NULL,${set(isSet(x), { field_operator: "is_set" })},'all'`,
+    `NULL,NULL,${set(isSet(x), { field_id: 1, field_operator: "is_set" })},'all'`,
+    `NULL,NULL,${set(isSet(x), isSet(y.toUpperCase()))},'all'`,
+    `NULL,NULL,${set(isSet(y), isSet(x))},'all'`,
+    `NULL,NULL,${set(isSet(x), isSet(x))},'all'`,
+    `NULL,NULL,${set(isSet(x), isSet(z), isSet(y))},'all'`,
+  ])
+    await assert.rejects(insert(columns), { code: "23514", constraint: "contact_segment_multi_field" }, columns);
+  // OR still needs a tag condition and a field condition, and a field set counts as one.
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO instagram_contact_segments(workspace_id,name,field_conditions,field_mode,condition_operator) VALUES($1,'No tag',${set(isSet(x), isSet(y))},'any','or')`,
+      [workspace],
+    ),
+    { code: "23514", constraint: "contact_segment_condition_operator" },
+  );
+  await pool.query(
+    `INSERT INTO instagram_contact_segments(workspace_id,name,tag,field_conditions,field_mode,condition_operator) VALUES($1,'Tag or set','lead',${set(isSet(x), isSet(y))},'any','or')`,
+    [workspace],
+  );
+});
+
+test("multi-field migration adds the columns and checks, keeps legacy rows and can be applied repeatedly", async () => {
+  const field = await createField("Migration multi field", "number");
+  const legacy = await createContactSegment(pool, a, {
+    name: "Legacy or",
+    tag: "lead",
+    field_id: field.id,
+    field_operator: "is_set",
+    condition_operator: "or",
+  });
+  const constraints = (client: { query: typeof pool.query }) =>
+    client
+      .query(
+        "SELECT conname FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname IN ('contact_segment_multi_field','contact_segment_condition_operator') ORDER BY conname",
+      )
+      .then((result) => result.rows.map((row) => row.conname));
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN field_conditions, DROP COLUMN field_mode");
+    // Dropping field_conditions also dropped the condition_operator CHECK that reads it; the migration restores both.
+    assert.deepEqual(await constraints(client), []);
+    const migration = await readFile(
+      new URL("../../db/migrations/057_segment_multi_field.sql", import.meta.url),
+      "utf8",
+    );
+    await client.query(migration);
+    await client.query(migration);
+    assert.deepEqual(await constraints(client), ["contact_segment_condition_operator", "contact_segment_multi_field"]);
+    const read = async () =>
+      (
+        await client.query(
+          "SELECT tag,field_id,field_operator,field_conditions,field_mode,condition_operator FROM instagram_contact_segments WHERE id=$1",
+          [legacy.id],
+        )
+      ).rows[0];
+    assert.deepEqual(await read(), {
+      tag: "lead",
+      field_id: field.id,
+      field_operator: "is_set",
+      field_conditions: null,
+      field_mode: null,
+      condition_operator: "or",
+    });
+    const set = [
+      { field_id: "a1111111-1111-4111-8111-111111111111", field_operator: "is_set" },
+      { field_id: "b2222222-2222-4222-8222-222222222222", field_operator: "is_unset" },
+    ];
+    await client.query(
+      "UPDATE instagram_contact_segments SET field_id=NULL,field_operator=NULL,field_conditions=$2::jsonb,field_mode='any' WHERE id=$1",
+      [legacy.id, JSON.stringify(set)],
+    );
+    await client.query(migration);
+    assert.deepEqual(await read(), {
+      tag: "lead",
+      field_id: null,
+      field_operator: null,
+      field_conditions: set,
+      field_mode: "any",
+      condition_operator: "or",
+    });
+    for (const [change, constraint] of [
+      [`field_conditions='${JSON.stringify(set.slice(0, 1))}'::jsonb`, "contact_segment_multi_field"],
+      [`field_id='${field.id}',field_operator='is_set'`, "contact_segment_multi_field"],
+      ["field_conditions=NULL,field_mode=NULL", "contact_segment_condition_operator"],
+    ]) {
+      await client.query("SAVEPOINT invalid_multi_field");
+      await assert.rejects(client.query(`UPDATE instagram_contact_segments SET ${change} WHERE id=$1`, [legacy.id]), {
+        code: "23514",
+        constraint,
+      });
+      await client.query("ROLLBACK TO SAVEPOINT invalid_multi_field");
+    }
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+});
+
+test("re-running migrations 056 and 057 and the schema keeps OR segments that use a field set", async () => {
+  const first = await createField("Rerun first", "number");
+  const second = await createField("Rerun second", "text");
+  const field_conditions = [
+    { field_id: first.id, field_operator: "is_set" },
+    { field_id: second.id, field_operator: "is_unset" },
+  ];
+  const withTag = await createContactSegment(pool, a, {
+    name: "Tag or field set",
+    tag: "lead",
+    field_conditions,
+    field_mode: "any",
+    condition_operator: "or",
+  });
+  const withTags = await createContactSegment(pool, a, {
+    name: "Tags or field set",
+    tags: ["lead", "vip"],
+    tag_mode: "all",
+    field_conditions,
+    field_mode: "all",
+    condition_operator: "or",
+  });
+  const read = (client: { query: typeof pool.query }) =>
+    client
+      .query(
+        "SELECT id,tag,tags,field_id,field_conditions,field_mode,condition_operator FROM instagram_contact_segments WHERE id=ANY($1::uuid[]) ORDER BY name",
+        [[withTag.id, withTags.id]],
+      )
+      .then((result) => result.rows);
+  const rule = (client: { query: typeof pool.query }) =>
+    client
+      .query(
+        "SELECT pg_get_constraintdef(oid) AS rule FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname='contact_segment_condition_operator'",
+      )
+      .then((result) => result.rows[0]?.rule as string | undefined);
+  const before = await read(pool);
+  assert.equal(before.length, 2);
+  const file = (path: string) => readFile(new URL(path, import.meta.url), "utf8");
+  const [multiTag, multiField, schema] = await Promise.all([
+    file("../../db/migrations/056_segment_multi_tag.sql"),
+    file("../../db/migrations/057_segment_multi_field.sql"),
+    file("../../db/schema.sql"),
+  ]);
+  const client = await pool.connect();
+  try {
+    // deploy/migrate-multi-user.sql runs 056 and then 057 in one transaction on a database that already has both.
+    await client.query("BEGIN");
+    await client.query(multiTag);
+    await client.query(multiField);
+    await client.query(multiTag);
+    await client.query(multiField);
+    assert.deepEqual(await read(client), before);
+    assert.match((await rule(client)) ?? "", /field_conditions/);
+    await client.query("ROLLBACK");
+    // The DB tests apply db/schema.sql to a database that may still hold rows.
+    await client.query("BEGIN");
+    await client.query(schema);
+    assert.deepEqual(await read(client), before);
+    assert.match((await rule(client)) ?? "", /field_conditions/);
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+});

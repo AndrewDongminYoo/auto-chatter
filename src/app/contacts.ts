@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { lockWorkspaceForMember, workspaceFor } from "./settings.ts";
 import {
+  type FieldCondition,
   fieldConditionNeedsValue,
   lockContact,
   parseFieldCondition,
@@ -46,6 +47,49 @@ function parseTagCondition(values: readonly unknown[], mode: unknown): TagCondit
   const tags = [...new Set(values.map(tag))].sort();
   return { tags, mode: tags.length > 1 && mode === "any" ? "any" : "all" };
 }
+// A field condition set names 1 to 3 conditions on distinct fields: every one must hold (all) or at least one (any).
+// The legacy keys carry one condition and field_conditions a set; a set of one is the legacy condition, whatever the mode.
+export const SEGMENT_FIELD_CONDITION_LIMIT = 3;
+type FieldConditionSet = { conditions: FieldCondition[]; mode: "all" | "any" };
+const FIELD_CONDITION_KEYS = ["field_id", "field_operator", "field_value"];
+function parseFieldConditionSet(
+  legacy: Record<string, unknown>,
+  list: unknown,
+  mode: unknown,
+): FieldConditionSet | null {
+  const single = parseFieldCondition(legacy);
+  // null means no set (absent in a segment body); listContacts passes undefined when the key is absent.
+  if (list !== undefined && list !== null && single) throw new ApiError(400, "invalid_field_condition");
+  let conditions: FieldCondition[] = single ? [single] : [];
+  if (list !== undefined && list !== null) {
+    if (!Array.isArray(list) || !list.length || list.length > SEGMENT_FIELD_CONDITION_LIMIT)
+      throw new ApiError(400, "invalid_field_condition");
+    conditions = list.map((item) => {
+      // Each item is one complete condition; a missing field_id is an error here, not an absent condition.
+      if (
+        !isRecord(item) ||
+        item.field_id == null ||
+        Object.keys(item).some((key) => !FIELD_CONDITION_KEYS.includes(key))
+      )
+        throw new ApiError(400, "invalid_field_condition");
+      return parseFieldCondition(item)!;
+    });
+  }
+  // Lowercase IDs, so the stored jsonb compares as the uuid column does (the field_in_use containment check).
+  conditions = conditions
+    .map((condition) => ({ ...condition, field_id: condition.field_id.toLowerCase() }))
+    .sort((left, right) => (left.field_id < right.field_id ? -1 : left.field_id > right.field_id ? 1 : 0));
+  if (conditions.some((condition, index) => index > 0 && conditions[index - 1].field_id === condition.field_id))
+    throw new ApiError(400, "invalid_field_condition");
+  if (mode != null && mode !== "all" && mode !== "any") throw new ApiError(400, "invalid_field_condition");
+  if (!conditions.length) {
+    if (mode != null) throw new ApiError(400, "invalid_field_condition");
+    return null;
+  }
+  return { conditions, mode: conditions.length > 1 && mode === "any" ? "any" : "all" };
+}
+// The decoded length bound of the field_conditions query value; the contact-segments spec (다중 필드 조건) derives it.
+export const FIELD_CONDITIONS_QUERY_LENGTH = 8192;
 function parseConditionOperator(value: unknown, hasTag: boolean, hasField: boolean): "and" | "or" {
   if (value === undefined) return "and";
   if ((value !== "and" && value !== "or") || (value === "or" && (!hasTag || !hasField)))
@@ -145,6 +189,8 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
         "field_id",
         "field_operator",
         "field_value",
+        "field_conditions",
+        "field_mode",
         "condition_operator",
         "last_comment_from",
         "last_comment_before",
@@ -176,6 +222,8 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
         "field_id",
         "field_operator",
         "field_value",
+        "field_conditions",
+        "field_mode",
         "condition_operator",
         "last_comment_from",
         "last_comment_before",
@@ -197,7 +245,19 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       throw new ApiError(400, "invalid_field_condition");
     }
   }
-  let condition = parseFieldCondition(fieldInput);
+  // field_conditions is one JSON array; a present key must hold one, so a JSON null is refused here.
+  const fieldList = options.get("field_conditions");
+  let fieldConditions: unknown;
+  if (fieldList !== null) {
+    if (fieldList.length > FIELD_CONDITIONS_QUERY_LENGTH) throw new ApiError(400, "invalid_field_condition");
+    try {
+      fieldConditions = JSON.parse(fieldList);
+    } catch {
+      throw new ApiError(400, "invalid_field_condition");
+    }
+    if (!Array.isArray(fieldConditions)) throw new ApiError(400, "invalid_field_condition");
+  }
+  let fieldCondition = parseFieldConditionSet(fieldInput, fieldConditions, options.get("field_mode"));
   const days = options.get("last_comment_days");
   if (days !== null && !/^[1-9][0-9]{0,2}$/.test(days)) throw new ApiError(400, "invalid_contact_activity");
   let activity = parseActivityWindow({
@@ -214,7 +274,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   let operator = parseConditionOperator(
     options.get("condition_operator") ?? undefined,
     Boolean(tagCondition),
-    Boolean(condition),
+    Boolean(fieldCondition),
   );
   const after = cursor(options.get("after"));
   const workspaceId = await workspaceFor(pool, user, "agent");
@@ -227,6 +287,8 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       field_id: string | null;
       field_operator: string;
       field_value: unknown;
+      field_conditions: unknown;
+      field_mode: string | null;
       condition_operator: string;
       last_comment_from: Date | null;
       last_comment_before: Date | null;
@@ -235,7 +297,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       consent_purpose: string | null;
       consent_state: string | null;
     }>(
-      "SELECT connection_id,tag,tags,tag_mode,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
+      "SELECT connection_id,tag,tags,tag_mode,field_id,field_operator,field_value,field_conditions,field_mode,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
       [workspaceId, segmentId],
     );
     if (!segment.rows[0]) throw new ApiError(404, "segment_not_found");
@@ -251,16 +313,23 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       last_comment_days: saved.last_comment_days,
       last_comment_period: saved.last_comment_period,
     });
-    condition = saved.field_id
-      ? {
-          field_id: saved.field_id,
-          field_operator: saved.field_operator,
-          ...(fieldConditionNeedsValue(saved.field_operator) ? { field_value: saved.field_value } : {}),
-        }
-      : null;
-    operator = parseConditionOperator(saved.condition_operator, Boolean(tagCondition), Boolean(condition));
+    fieldCondition = saved.field_conditions
+      ? parseFieldConditionSet({}, saved.field_conditions, saved.field_mode)
+      : saved.field_id
+        ? {
+            conditions: [
+              {
+                field_id: saved.field_id,
+                field_operator: saved.field_operator,
+                ...(fieldConditionNeedsValue(saved.field_operator) ? { field_value: saved.field_value } : {}),
+              },
+            ],
+            mode: "all",
+          }
+        : null;
+    operator = parseConditionOperator(saved.condition_operator, Boolean(tagCondition), Boolean(fieldCondition));
   }
-  await validateFieldCondition(pool, workspaceId, condition);
+  for (const condition of fieldCondition?.conditions ?? []) await validateFieldCondition(pool, workspaceId, condition);
   // One statement clock for the page and preview, using elapsed hours even across DST.
   // The calendar period reads the workspace time zone in the same statement. Its local boundaries are
   // converted back with AT TIME ZONE, so PostgreSQL resolves daylight-saving gaps and overlaps.
@@ -293,12 +362,17 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   // Recorded state only; this is not the delivery guard and never bridges DM identities.
   const consentMatches = `($12::text IS NULL OR CASE WHEN $13::text='no_record' THEN NOT EXISTS(SELECT 1 ${consentScope})
     ELSE EXISTS(SELECT 1 ${consentScope} AND state.decision=CASE WHEN $13='granted' THEN 'grant' ELSE 'revoke' END) END)`;
-  const fieldMatches = `($6::uuid IS NULL OR CASE WHEN $7::text='is_unset' THEN NOT EXISTS(
-   SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=$6 AND v.value IS NOT NULL)
- ELSE EXISTS(SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=$6 AND v.value IS NOT NULL
-   AND ($7='is_set' OR (jsonb_typeof(v.value)=jsonb_typeof($8::jsonb) AND CASE $7
-     WHEN 'eq' THEN v.value=$8::jsonb WHEN 'gt' THEN v.value>$8::jsonb WHEN 'gte' THEN v.value>=$8::jsonb
-     WHEN 'lt' THEN v.value<$8::jsonb WHEN 'lte' THEN v.value<=$8::jsonb ELSE false END))) END)`;
+  // The one field predicate of the list, the preview and a saved segment: $6 holds the sorted field IDs (NULL
+  // without a field condition), $7 the mode and $8 the normalized set, one row per condition. The legacy single
+  // condition is a set of one. bool_and over the set is all, bool_or any; the comparisons are those of one condition.
+  const fieldMatches = `($6::uuid[] IS NULL OR (SELECT CASE WHEN $7::text='any' THEN bool_or(condition_matches) ELSE bool_and(condition_matches) END
+ FROM (SELECT CASE WHEN c.field_operator='is_unset' THEN NOT EXISTS(
+   SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=c.field_id AND v.value IS NOT NULL)
+ ELSE EXISTS(SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=c.field_id AND v.value IS NOT NULL
+   AND (c.field_operator='is_set' OR (jsonb_typeof(v.value)=jsonb_typeof(c.field_value) AND CASE c.field_operator
+     WHEN 'eq' THEN v.value=c.field_value WHEN 'gt' THEN v.value>c.field_value WHEN 'gte' THEN v.value>=c.field_value
+     WHEN 'lt' THEN v.value<c.field_value WHEN 'lte' THEN v.value<=c.field_value ELSE false END))) END AS condition_matches
+ FROM jsonb_to_recordset($8::jsonb) AS c(field_id uuid,field_operator text,field_value jsonb)) conditions))`;
   // The one tag predicate of the list, the preview and a saved segment: $3 is the sorted tag set or NULL.
   // A contact without a tag row has no tags. The operator is chosen from the validated mode, never from input text.
   const tagMatches = `($3::text[] IS NULL OR coalesce(t.tags,'{}'::text[]) ${tagCondition?.mode === "any" ? "&&" : "@>"} $3::text[])`;
@@ -362,9 +436,9 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
     tagCondition?.tags ?? null,
     after?.connection_id ?? null,
     after?.sender_id ?? null,
-    condition?.field_id ?? null,
-    condition?.field_operator ?? null,
-    condition && fieldConditionNeedsValue(condition.field_operator) ? JSON.stringify(condition.field_value) : null,
+    fieldCondition?.conditions.map((condition) => condition.field_id) ?? null,
+    fieldCondition?.mode ?? null,
+    fieldCondition ? JSON.stringify(fieldCondition.conditions) : null,
     operator,
     activity?.last_comment_from ?? null,
     activity?.last_comment_before ?? null,
@@ -445,7 +519,7 @@ export async function saveContactTags(pool: Pool, user: User, connectionId: stri
 
 // The columns of a segment list item, also returned by create and edit.
 const SEGMENT_COLUMNS =
-  "id,name,connection_id,tag,tags,tag_mode,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state,version";
+  "id,name,connection_id,tag,tags,tag_mode,field_id,field_operator,field_value,field_conditions,field_mode,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state,version";
 
 export async function listContactSegments(pool: Pool, user: User) {
   const workspace = await workspaceFor(pool, user, "agent");
@@ -468,6 +542,8 @@ function segmentResult(row: {
   field_id?: string | null;
   field_operator?: string | null;
   field_value?: unknown;
+  field_conditions?: unknown;
+  field_mode?: string | null;
   condition_operator?: string;
   last_comment_from?: Date | null;
   last_comment_before?: Date | null;
@@ -480,6 +556,8 @@ function segmentResult(row: {
     field_id,
     field_operator,
     field_value,
+    field_conditions,
+    field_mode,
     condition_operator,
     last_comment_from,
     last_comment_before,
@@ -492,6 +570,18 @@ function segmentResult(row: {
     tag_mode,
     ...base
   } = row;
+  // A multi-field segment returns its set and mode and no legacy field keys; a one-condition segment keeps them.
+  const fieldKeys: {
+    field_conditions?: unknown;
+    field_mode?: string | null;
+    field_id?: string;
+    field_operator?: string | null;
+    field_value?: unknown;
+  } = field_conditions
+    ? { field_conditions, field_mode }
+    : field_id
+      ? { field_id, field_operator, ...(fieldConditionNeedsValue(field_operator ?? "") ? { field_value } : {}) }
+      : {};
   return {
     ...base,
     // A multi-tag segment returns its set and mode and no tag key; a one-tag or legacy segment keeps tag.
@@ -503,9 +593,7 @@ function segmentResult(row: {
       ? { last_comment_from: last_comment_from.toISOString(), last_comment_before: last_comment_before.toISOString() }
       : {}),
     ...(condition_operator === "or" ? { condition_operator } : {}),
-    ...(field_id
-      ? { field_id, field_operator, ...(fieldConditionNeedsValue(field_operator ?? "") ? { field_value } : {}) }
-      : {}),
+    ...fieldKeys,
   };
 }
 
@@ -518,6 +606,8 @@ const SEGMENT_DEFINITION_KEYS = [
   "field_id",
   "field_operator",
   "field_value",
+  "field_conditions",
+  "field_mode",
   "condition_operator",
   "last_comment_from",
   "last_comment_before",
@@ -550,21 +640,25 @@ export function parseSegmentDefinition(input: unknown, extraKeys: readonly strin
     Array.isArray(input.tags) ? input.tags : legacyTag === null ? [] : [legacyTag],
     input.tag_mode,
   );
-  const condition = parseFieldCondition(input);
+  // The legacy field keys or field_conditions (an array); a null field_conditions counts as no set.
+  const fieldCondition = parseFieldConditionSet(input, input.field_conditions, input.field_mode);
   const activity = parseActivityWindow(input);
   const consent = parseConsentCondition(input);
-  const operator = parseConditionOperator(input.condition_operator, Boolean(tagCondition), Boolean(condition));
-  return { input, name, connectionId, tagCondition, condition, activity, consent, operator };
+  const operator = parseConditionOperator(input.condition_operator, Boolean(tagCondition), Boolean(fieldCondition));
+  return { input, name, connectionId, tagCondition, fieldCondition, activity, consent, operator };
 }
 type SegmentDefinition = ReturnType<typeof parseSegmentDefinition>;
 
 // The stored columns of a definition, in the order of segmentDefinitionValues.
 const SEGMENT_DEFINITION_COLUMNS =
-  "name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state,last_comment_days,last_comment_period,tags,tag_mode";
+  "name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state,last_comment_days,last_comment_period,tags,tag_mode,field_conditions,field_mode";
 function segmentDefinitionValues(definition: SegmentDefinition) {
-  const { name, connectionId, tagCondition, condition, activity, consent, operator } = definition;
+  const { name, connectionId, tagCondition, fieldCondition, activity, consent, operator } = definition;
   // One tag is stored in the legacy tag column; two or more in tags with their mode.
   const single = tagCondition?.tags.length === 1;
+  // One field condition is stored in the legacy field columns; two or three in field_conditions with their mode.
+  const multiField = fieldCondition && fieldCondition.conditions.length > 1 ? fieldCondition : null;
+  const condition = multiField ? null : (fieldCondition?.conditions[0] ?? null);
   return [
     name,
     connectionId,
@@ -581,13 +675,16 @@ function segmentDefinitionValues(definition: SegmentDefinition) {
     activity?.last_comment_period ?? null,
     tagCondition && !single ? tagCondition.tags : null,
     tagCondition && !single ? tagCondition.mode : null,
+    multiField ? JSON.stringify(multiField.conditions) : null,
+    multiField?.mode ?? null,
   ];
 }
 
-// The referenced field is held FOR SHARE until commit, so archiveContactField (field FOR UPDATE, then the
-// active-segment check) either waits and sees this segment, or commits first and this refuses the field.
+// Every referenced field is held FOR SHARE until commit, in field_id order, so archiveContactField (field FOR UPDATE,
+// then the active-segment check) either waits and sees this segment, or commits first and this refuses the field.
 async function validateSegmentReferences(client: PoolClient, workspace: string, definition: SegmentDefinition) {
-  await validateFieldCondition(client, workspace, definition.condition, true);
+  for (const condition of definition.fieldCondition?.conditions ?? [])
+    await validateFieldCondition(client, workspace, condition, true);
   if (
     definition.connectionId !== null &&
     !(
@@ -611,7 +708,7 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
     await validateSegmentReferences(client, workspace, definition);
     const result = await client.query(
       `INSERT INTO instagram_contact_segments(workspace_id,${SEGMENT_DEFINITION_COLUMNS})
- SELECT $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15::text[],$16 WHERE (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived)<50
+ SELECT $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15::text[],$16,$17::jsonb,$18 WHERE (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived)<50
  RETURNING ${SEGMENT_COLUMNS}`,
       [workspace, ...segmentDefinitionValues(definition)],
     );
@@ -665,10 +762,10 @@ export async function updateContactSegment(
     // IS DISTINCT FROM compares in SQL, so jsonb and timestamps need no conversion; an unchanged row updates nothing.
     const updated = (
       await client.query(
-        `UPDATE instagram_contact_segments SET (${SEGMENT_DEFINITION_COLUMNS})=($3,$4,$5,$6,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text,$16::text[],$17::text),
+        `UPDATE instagram_contact_segments SET (${SEGMENT_DEFINITION_COLUMNS})=($3,$4,$5,$6,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text,$16::text[],$17::text,$18::jsonb,$19::text),
    version=version+1
  WHERE workspace_id=$1 AND id=$2
-   AND (${SEGMENT_DEFINITION_COLUMNS}) IS DISTINCT FROM ($3,$4::uuid,$5,$6::uuid,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text,$16::text[],$17::text)
+   AND (${SEGMENT_DEFINITION_COLUMNS}) IS DISTINCT FROM ($3,$4::uuid,$5,$6::uuid,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text,$16::text[],$17::text,$18::jsonb,$19::text)
  RETURNING ${SEGMENT_COLUMNS}`,
         [workspace, id, ...segmentDefinitionValues(definition)],
       )
