@@ -1,5 +1,6 @@
 import { contactDetails } from "./contact-details.ts";
 import { exportContactCsv } from "./contact-csv.ts";
+import { CONTACT_IMPORT_REQUEST_BYTES, previewContactCsv } from "./contact-csv-preview.ts";
 import {
   queueManualReply,
   listManualReplies,
@@ -550,6 +551,10 @@ export async function appApi(
             "Content-Disposition": `attachment; filename="auto-chatter-contacts-v1-${exported.exportedAt.slice(0, 10)}.csv"`,
           },
         });
+      }
+      if (url.pathname === "/api/contacts/import-preview" && request.method === "POST") {
+        if (url.searchParams.size) throw new ApiError(400, "invalid_contact_import_request");
+        return json(await previewContactCsv(pool, user, await readJson(request, CONTACT_IMPORT_REQUEST_BYTES)));
       }
       if (url.pathname === "/api/contacts" && request.method === "GET")
         return json(await listContacts(pool, user, url.searchParams));

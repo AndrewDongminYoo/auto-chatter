@@ -1,7 +1,199 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
 import { CONTACT_CSV_HEADER, ContactCsvBuffer, contactCsvRow, contactCsvScalar } from "./contact-csv.ts";
 import { decodeContactScalar, parseContactCsv } from "./contact-csv-test-utils.ts";
+import { parseImportCsv, CONTACT_IMPORT_BYTES } from "./contact-csv-preview.ts";
+
+function previewHarness(api: () => Promise<unknown>, channels: BroadcastChannel[], channelAvailable = true) {
+  class Element extends EventTarget {
+    textContent = "";
+    value = "selected.csv";
+    disabled = false;
+    hidden = false;
+    children: Element[] = [];
+    files = [{ size: 5, arrayBuffer: async () => new TextEncoder().encode("dummy").buffer }];
+    append(...items: Element[]) {
+      this.children.push(...items);
+    }
+    replaceChildren() {
+      this.children = [];
+    }
+    setAttribute() {}
+    removeAttribute() {}
+  }
+  const nodes = new Map<string, Element>();
+  const get = (id: string) => {
+    if (!nodes.has(id)) nodes.set(id, new Element());
+    return nodes.get(id)!;
+  };
+  const window = new EventTarget();
+  const context = vm.createContext({
+    document: { getElementById: get },
+    window,
+    TextDecoder,
+    BroadcastChannel: channelAvailable
+      ? class extends BroadcastChannel {
+          constructor(name: string) {
+            super(name);
+            channels.push(this);
+          }
+        }
+      : undefined,
+  });
+  vm.runInContext(readFileSync(new URL("../../public/app/contact-csv-preview.js", import.meta.url), "utf8"), context);
+  const controller = context.createContactCsvPreview({
+    api,
+    node: (_tag: string, text = "") => {
+      const element = new Element();
+      element.textContent = text;
+      return element;
+    },
+  });
+  controller.configure("admin");
+  return {
+    controller,
+    get,
+    window,
+    submit: () => get("contacts-import-form").dispatchEvent(new Event("submit", { cancelable: true })),
+  };
+}
+const previewRows = {
+  checked_at: "2026-10-17T00:00:00Z",
+  counts: { total: 1, changed: 1, unchanged: 0, invalid: 0, duplicate: 0, not_found: 0 },
+  rows: [
+    {
+      row: 1,
+      status: "changed",
+      connection_id: "dummy",
+      sender_id: "private-A",
+      current_tags: ["private"],
+      proposed_tags: [],
+    },
+  ],
+};
+async function waitForPreview(check: () => boolean) {
+  for (let i = 0; i < 100 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
+test("CSV preview clears another tab's file and rows when the authenticated session changes", async () => {
+  const channels: BroadcastChannel[] = [];
+  try {
+    const a = previewHarness(async () => previewRows, channels);
+    const b = previewHarness(async () => previewRows, channels);
+    a.submit();
+    await waitForPreview(() => a.get("contacts-import-rows").children.length === 1);
+    assert.equal(a.get("contacts-import-rows").children.length, 1, "fixture must render private data first");
+    const sender = new BroadcastChannel("auto-chatter-session");
+    channels.push(sender);
+    sender.postMessage("changed");
+    await waitForPreview(() => a.get("contacts-import-rows").children.length === 0);
+    assert.equal(
+      a.get("contacts-import-rows").children.length,
+      0,
+      "session change must erase the previous account's rows",
+    );
+    assert.equal(a.get("contacts-import-file").value, "");
+    assert.equal(a.get("contacts-import").hidden, true);
+    b.controller.configure("admin");
+    a.controller.configure("admin");
+    a.submit();
+    await waitForPreview(() => a.get("contacts-import-rows").children.length === 1);
+    b.controller.sessionChanged();
+    await waitForPreview(() => a.get("contacts-import-rows").children.length === 0);
+    assert.equal(a.get("contacts-import-rows").children.length, 0);
+  } finally {
+    for (const channel of channels) channel.close();
+  }
+});
+
+test("CSV preview refuses to read a file when cross-tab session notifications are unavailable", async () => {
+  let calls = 0;
+  const h = previewHarness(
+    async () => {
+      calls++;
+      return previewRows;
+    },
+    [],
+    false,
+  );
+  h.submit();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 0);
+  assert.equal(h.get("contacts-import").hidden, true);
+  assert.equal(h.get("contacts-import-check").disabled, true);
+});
+
+test("CSV preview ignores an old response after a session signal and a restored page", async () => {
+  const channels: BroadcastChannel[] = [];
+  try {
+    let complete!: (value: unknown) => void;
+    const a = previewHarness(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+      channels,
+    );
+    a.submit();
+    await waitForPreview(() => complete !== undefined);
+    const sender = new BroadcastChannel("auto-chatter-session");
+    channels.push(sender);
+    sender.postMessage("changed");
+    await waitForPreview(() => a.get("contacts-import").hidden);
+    complete(previewRows);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(a.get("contacts-import-rows").children.length, 0);
+    assert.equal(a.get("contacts-import-status").textContent, "");
+    a.controller.configure("admin");
+    a.submit();
+    await new Promise((resolve) => setImmediate(resolve));
+    complete(previewRows);
+    await waitForPreview(() => a.get("contacts-import-rows").children.length === 1);
+    assert.equal(a.get("contacts-import-rows").children.length, 1);
+    const restored = new Event("pageshow");
+    Object.defineProperty(restored, "persisted", { value: true });
+    a.window.dispatchEvent(restored);
+    assert.equal(a.get("contacts-import-rows").children.length, 0);
+    assert.equal(a.get("contacts-import-file").value, "");
+  } finally {
+    for (const channel of channels) channel.close();
+  }
+});
+
+test("CSV import parser counts quoted records and preserves escapes Unicode and identifier text", () => {
+  const rows = [
+    Array.from({ length: 14 }, () => ""),
+    Array.from({ length: 14 }, (_, i) => (i === 6 ? "'0000123" : i === 7 ? '한글\r\n"quoted", 😀' : "x")),
+  ];
+  const text = "\ufeff" + contactCsvRow(CONTACT_CSV_HEADER) + rows.map(contactCsvRow).join("");
+  assert.deepEqual(parseImportCsv(text), rows);
+  assert.deepEqual(parseImportCsv(CONTACT_CSV_HEADER.join(",") + "\n"), []);
+  assert.deepEqual(parseImportCsv(text.slice(0, -2)), rows);
+  assert.deepEqual(parseImportCsv(contactCsvRow(CONTACT_CSV_HEADER) + "a,b,"), [["a", "b", ""]]);
+  for (const value of ['"unclosed', 'bad"quote', '"closed"tail', "a\rb", "\0", "\ud800"])
+    assert.throws(() => parseImportCsv(contactCsvRow(CONTACT_CSV_HEADER) + value), {
+      status: 400,
+      message: "invalid_contact_import_format",
+    });
+  assert.throws(() => parseImportCsv("\ufeff\ufeff" + contactCsvRow(CONTACT_CSV_HEADER)), { status: 400 });
+  assert.throws(() => parseImportCsv(contactCsvRow([...CONTACT_CSV_HEADER].reverse())), { status: 400 });
+});
+
+test("CSV import parser accepts exact byte and record caps and rejects one over without truncation", () => {
+  const header = contactCsvRow(CONTACT_CSV_HEADER);
+  const exact = header + '"' + "x".repeat(CONTACT_IMPORT_BYTES - Buffer.byteLength(header) - 2) + '"';
+  assert.equal(Buffer.byteLength(exact), CONTACT_IMPORT_BYTES);
+  assert.equal(parseImportCsv(exact).length, 1);
+  assert.throws(() => parseImportCsv(exact + "x"), { status: 422, message: "contact_import_too_large" });
+  const rows = header + contactCsvRow(["row"]).repeat(500);
+  assert.equal(parseImportCsv(rows).length, 500);
+  assert.throws(() => parseImportCsv(rows + contactCsvRow(["extra"])), {
+    status: 422,
+    message: "contact_import_too_large",
+  });
+});
 
 test("CSV v1 has one fixed header and every cell is quoted with doubled quotes and CRLF records", () => {
   assert.deepEqual(CONTACT_CSV_HEADER, [
