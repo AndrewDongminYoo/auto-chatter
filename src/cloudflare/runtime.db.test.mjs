@@ -1242,6 +1242,43 @@ test("workerd contact API uses restricted server privileges and verified workspa
     );
     assert.equal(activityArchived.status, 200);
     assert.equal((await runtime.dispatchFetch(activityPath, { headers })).status, 404);
+    await pool.query("UPDATE instagram_comment_events SET created_at=now()-interval '1 hour' WHERE connection_id=$1", [
+      connection,
+    ]);
+    const relativeCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Recent", connection_id: connection, last_comment_days: 7 }),
+    });
+    assert.equal(relativeCreated.status, 201);
+    const relativeSegment = await relativeCreated.json();
+    assert.equal(relativeSegment.last_comment_days, 7);
+    const relativePath = `https://app.test/api/contacts?preview=true&segment_id=${relativeSegment.id}`;
+    const recent = await (await runtime.dispatchFetch(relativePath, { headers })).json();
+    assert.equal(recent.total, "1");
+    assert.deepEqual(recent.excluded, { activity: "0", tag: "0", field: "0", both: "0" });
+    assert.equal(Date.parse(recent.activity_window.before) - Date.parse(recent.activity_window.from), 7 * 86400000);
+    assert.equal(
+      (await runtime.dispatchFetch(relativePath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } }))
+        .status,
+      404,
+    );
+    await pool.query("UPDATE instagram_comment_events SET created_at=now()-interval '8 days' WHERE connection_id=$1", [
+      connection,
+    ]);
+    const old = await (await runtime.dispatchFetch(relativePath, { headers })).json();
+    assert.equal(old.total, "0");
+    assert.deepEqual(old.excluded, { activity: "1", tag: "0", field: "0", both: "0" });
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`https://app.test/api/contact-segments/${relativeSegment.id}`, {
+          method: "DELETE",
+          headers,
+        })
+      ).status,
+      200,
+    );
+    assert.equal((await runtime.dispatchFetch(relativePath, { headers })).status, 404);
     const consentCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
       method: "POST",
       headers,

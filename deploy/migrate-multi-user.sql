@@ -52,5 +52,6 @@ BEGIN;
 \ir ../db/migrations/050_manual_reply_report_period.sql
 \ir ../db/migrations/051_flow_run_report_period.sql
 \ir ../db/migrations/052_handoff_report_period.sql
+\ir ../db/migrations/053_segment_relative_activity.sql
 \ir supabase-access.sql
 COMMIT;

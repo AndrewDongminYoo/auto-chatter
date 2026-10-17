@@ -218,6 +218,7 @@ function resetSession() {
   byId("contacts-list").replaceChildren();
   byId("contacts-filter").reset();
   fieldFilterControls();
+  contactActivityControls();
   contactConsentControls();
   byId("contacts-more").hidden = true;
   byId("contacts-status").textContent = "";
@@ -337,7 +338,7 @@ const errors = {
   invalid_field_value: "선택한 종류에 맞는 값을 입력해 주세요. 텍스트는 최대 1000자입니다.",
   invalid_field_condition: "추가 정보의 필드·조건·찾을 값을 확인해 주세요.",
   invalid_contact_condition: "OR 결합에는 태그와 추가 정보 조건이 모두 필요합니다.",
-  invalid_contact_activity: "UTC 기간의 시작과 종료를 함께 입력하고, 종료를 시작보다 늦게 지정해 주세요.",
+  invalid_contact_activity: "UTC 시작·종료를 함께 지정하거나 최근 일수 1~366 중 하나를 선택해 주세요.",
   invalid_contact_consent: "동의 목적과 기록 상태를 함께 선택해 주세요.",
   field_not_found: "접근할 수 없거나 보관된 필드입니다. 필드를 다시 불러와 주세요.",
   field_in_use: "저장된 필터에서 사용하는 필드입니다. 해당 필터를 먼저 보관해 주세요.",
@@ -2457,8 +2458,25 @@ function clearContactResults() {
   byId("contacts-list").replaceChildren();
   byId("contacts-more").hidden = true;
 }
+function contactActivityControls() {
+  const fields = byId("contacts-filter").elements;
+  const relative = fields.activity_mode.value === "relative";
+  byId("contact-activity-days").hidden = !relative;
+  fields.last_comment_days.disabled = !relative;
+  fields.last_comment_days.required = relative;
+  for (const key of ["from", "before"]) {
+    byId(`contact-activity-${key}`).hidden = relative;
+    fields[`last_comment_${key}`].disabled = relative;
+  }
+}
 function contactActivityWindow() {
   const fields = byId("contacts-filter").elements;
+  if (fields.activity_mode.value === "relative") {
+    const days = fields.last_comment_days.value;
+    if (!/^[1-9][0-9]{0,2}$/.test(days) || !fields.last_comment_days.validity.valid || Number(days) > 366)
+      throw new Error(errors.invalid_contact_activity);
+    return { last_comment_days: Number(days) };
+  }
   const from = fields.last_comment_from.value,
     before = fields.last_comment_before.value;
   if (!from && !before) return null;
@@ -2475,6 +2493,18 @@ function contactActivityWindow() {
   )
     throw new Error(errors.invalid_contact_activity);
   return { last_comment_from: start.toISOString(), last_comment_before: end.toISOString() };
+}
+function relativeActivitySummary(window, days) {
+  if (!days) return "";
+  const valid = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(value);
+  const milliseconds = (value) => Date.parse(value.slice(0, -4) + "Z");
+  if (
+    !valid(window?.from) ||
+    !valid(window?.before) ||
+    milliseconds(window.before) - milliseconds(window.from) !== Number(days) * 86400000
+  )
+    throw new Error("최근 활동의 조회 기간을 확인할 수 없습니다.");
+  return ` 이번 조회 기간(UTC): ${window.from} 이상, ${window.before} 미만. 조회와 다음 페이지마다 다시 계산합니다.`;
 }
 function contactConsentControls() {
   const fields = byId("contacts-filter").elements;
@@ -2541,12 +2571,17 @@ async function loadContacts(more = false) {
   try {
     const page = await api(`/api/contacts?${query}`);
     if (generation !== contactsGeneration) return;
+    const days =
+      query.get("last_comment_days") ||
+      contactSegments.find((s) => s.id === query.get("segment_id"))?.last_comment_days;
+    const period = relativeActivitySummary(page.activity_window, days);
     for (const contact of page.contacts)
       if (!purgedContactConnections.has(contact.connection_id)) byId("contacts-list").append(contactCard(contact));
     contactsAfter = page.after;
     byId("contacts-more").hidden = !contactsAfter;
     byId("contacts-status").textContent =
-      `연락처 ${byId("contacts-list").children.length}명을 표시합니다. 같은 계정의 반복 댓글은 한 명으로 묶습니다.`;
+      `연락처 ${byId("contacts-list").children.length}명을 표시합니다. 같은 계정의 반복 댓글은 한 명으로 묶습니다.` +
+      period;
     if (!byId("contacts-list").children.length)
       byId("contacts-list").append(
         emptyState("표시할 연락처가 없습니다", "댓글을 받거나 태그·계정 필터를 바꾼 뒤 다시 불러와 주세요."),
@@ -2602,7 +2637,9 @@ byId("segment-preview").addEventListener("click", async () => {
     status.textContent = "현재 조건에 맞는 연락처를 확인하고 있습니다…";
     const page = await api(`/api/contacts?${query}`);
     if (!current()) return;
-    const activityCount = query.has("last_comment_from") ? page.excluded?.activity : "0";
+    const period = relativeActivitySummary(page.activity_window, query.get("last_comment_days"));
+    const activityCount =
+      query.has("last_comment_from") || query.has("last_comment_days") ? page.excluded?.activity : "0";
     const consentCount = query.has("consent_purpose") ? page.excluded?.consent : "0";
     const counts = [
       page.total,
@@ -2625,7 +2662,8 @@ byId("segment-preview").addEventListener("click", async () => {
       throw new Error("대상 수와 제외 사유를 확인할 수 없습니다.");
     status.textContent =
       `조회 시점의 대상은 총 ${page.total}명입니다. 선택 계정 범위 ${page.evaluated}명 중 ${excludedTotal}명이 조건과 맞지 않습니다.` +
-      (page.total === "0" ? " 조건에 맞는 연락처가 없습니다." : " 아래에 최대 5명의 예시를 표시합니다.");
+      (page.total === "0" ? " 조건에 맞는 연락처가 없습니다." : " 아래에 최대 5명의 예시를 표시합니다.") +
+      period;
     for (const [count, label] of [
       [activityCount, "활동 기간 밖 (먼저 제외)"],
       [consentCount, "동의 기록 조건 불일치"],
@@ -2688,6 +2726,7 @@ byId("contacts-filter").addEventListener("input", (event) => {
   activeSegmentId = "";
   byId("contact-segment").value = "";
   if (event.target.name === "tag") fieldFilterControls();
+  if (event.target.name === "activity_mode") contactActivityControls();
   if (event.target.name === "consent_purpose") contactConsentControls();
   segmentControls();
 });
@@ -2706,6 +2745,9 @@ byId("contact-segment").addEventListener("change", (event) => {
   fields.condition_operator.value = segment?.condition_operator || "and";
   fields.last_comment_from.value = segment?.last_comment_from?.slice(0, -1) || "";
   fields.last_comment_before.value = segment?.last_comment_before?.slice(0, -1) || "";
+  fields.activity_mode.value = segment?.last_comment_days ? "relative" : "fixed";
+  fields.last_comment_days.value = segment?.last_comment_days || "7";
+  contactActivityControls();
   fields.consent_purpose.value = segment?.consent_purpose || "";
   fields.consent_state.value = segment?.consent_state || "";
   contactConsentControls();
@@ -2778,6 +2820,7 @@ byId("segment-archive").addEventListener("click", (event) => {
           query.set("last_comment_from", segment.last_comment_from);
           query.set("last_comment_before", segment.last_comment_before);
         }
+        if (segment.last_comment_days) query.set("last_comment_days", segment.last_comment_days);
         if (segment.consent_purpose) {
           query.set("consent_purpose", segment.consent_purpose);
           query.set("consent_state", segment.consent_state);

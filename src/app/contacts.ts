@@ -31,9 +31,19 @@ function parseConditionOperator(value: unknown, filterTag: string | null, hasFie
     throw new ApiError(400, "invalid_contact_condition");
   return value;
 }
-function parseActivityWindow(input: { last_comment_from?: unknown; last_comment_before?: unknown }) {
+function parseActivityWindow(input: {
+  last_comment_from?: unknown;
+  last_comment_before?: unknown;
+  last_comment_days?: unknown;
+}): { last_comment_from?: string; last_comment_before?: string; last_comment_days?: number } | null {
   const from = input.last_comment_from,
     before = input.last_comment_before;
+  if (input.last_comment_days != null) {
+    const days = input.last_comment_days;
+    if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > 366 || from != null || before != null)
+      throw new ApiError(400, "invalid_contact_activity");
+    return { last_comment_days: days };
+  }
   if (from == null && before == null) return null;
   const valid = (value: unknown): value is string => {
     if (
@@ -95,6 +105,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
         "condition_operator",
         "last_comment_from",
         "last_comment_before",
+        "last_comment_days",
         "consent_purpose",
         "consent_state",
         "preview",
@@ -121,6 +132,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
         "condition_operator",
         "last_comment_from",
         "last_comment_before",
+        "last_comment_days",
         "consent_purpose",
         "consent_state",
       ].some((key) => options.has(key)))
@@ -137,9 +149,12 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
     }
   }
   let condition = parseFieldCondition(fieldInput);
+  const days = options.get("last_comment_days");
+  if (days !== null && !/^[1-9][0-9]{0,2}$/.test(days)) throw new ApiError(400, "invalid_contact_activity");
   let activity = parseActivityWindow({
     last_comment_from: options.get("last_comment_from"),
     last_comment_before: options.get("last_comment_before"),
+    last_comment_days: days === null ? null : Number(days),
   });
   let consent = parseConsentCondition({
     consent_purpose: options.get("consent_purpose"),
@@ -158,10 +173,11 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       condition_operator: string;
       last_comment_from: Date | null;
       last_comment_before: Date | null;
+      last_comment_days: number | null;
       consent_purpose: string | null;
       consent_state: string | null;
     }>(
-      "SELECT connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
+      "SELECT connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,consent_purpose,consent_state FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
       [workspaceId, segmentId],
     );
     if (!segment.rows[0]) throw new ApiError(404, "segment_not_found");
@@ -172,6 +188,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
     activity = parseActivityWindow({
       last_comment_from: saved.last_comment_from?.toISOString(),
       last_comment_before: saved.last_comment_before?.toISOString(),
+      last_comment_days: saved.last_comment_days,
     });
     condition = saved.field_id
       ? {
@@ -183,7 +200,15 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
     operator = parseConditionOperator(saved.condition_operator, filterTag, Boolean(condition));
   }
   await validateFieldCondition(pool, workspaceId, condition);
-  const activityMatches = `($10::timestamptz IS NULL OR (max(e.created_at)>=$10 AND max(e.created_at)<$11::timestamptz))`;
+  // One statement clock for the page and preview, using elapsed hours even across DST.
+  const evaluation = `evaluation AS MATERIALIZED (SELECT statement_timestamp() AS as_of)`;
+  const relativeWindow = `(SELECT json_build_object(
+    'from',to_char((as_of - $14::int * interval '24 hours') AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+    'before',to_char(as_of AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')) FROM evaluation)`;
+  const activityMatches = `(CASE WHEN $14::int IS NOT NULL THEN
+    max(e.created_at)>=(SELECT as_of - $14 * interval '24 hours' FROM evaluation)
+    AND max(e.created_at)<(SELECT as_of FROM evaluation)
+    ELSE ($10::timestamptz IS NULL OR (max(e.created_at)>=$10 AND max(e.created_at)<$11::timestamptz)) END)`;
   const consentScope = `FROM channel_consent_state state WHERE state.workspace_id=e.workspace_id
     AND state.connection_id=e.connection_id AND state.channel='instagram' AND state.identity_kind='comment_sender'
     AND state.identity_value=e.sender_id AND state.purpose=$12`;
@@ -215,7 +240,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   // Aggregate independently of matching samples so even zero matches retain their exclusion summary.
   // Materialize only identities and predicate outcomes, not every contact's displayed field JSON.
   const query = preview
-    ? `WITH contact_filters AS MATERIALIZED (
+    ? `WITH ${evaluation}, contact_filters AS MATERIALIZED (
  SELECT e.connection_id,e.sender_id,coalesce($3::text IS NULL OR $3=ANY(t.tags),false) AS tag_matches,
  ${fieldMatches} AS field_matches,${activityMatches} AS activity_matches,${consentMatches} AS consent_matches
  ${contactScope}
@@ -233,9 +258,12 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
  (count(*) FILTER (WHERE activity_matches AND consent_matches AND NOT matched AND NOT tag_matches AND NOT field_matches))::text AS preview_excluded_both
  FROM outcomes
 )
- SELECT page.*,summary.* FROM summary LEFT JOIN LATERAL (${contactQuery}) page ON true
+ SELECT page.*,summary.*,${relativeWindow} AS activity_window FROM summary LEFT JOIN LATERAL (${contactQuery}) page ON true
  ORDER BY page.connection_id,page.sender_id`
-    : contactQuery;
+    : activity?.last_comment_days
+      ? `WITH ${evaluation} SELECT page.*,${relativeWindow} AS activity_window
+         FROM evaluation LEFT JOIN LATERAL (${contactQuery}) page ON true ORDER BY page.connection_id,page.sender_id`
+      : `WITH ${evaluation} ${contactQuery}`;
   const result = await pool.query<
     (Contact | { [Key in keyof Contact]: null }) & {
       preview_total?: string;
@@ -245,6 +273,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       preview_excluded_both?: string;
       preview_excluded_activity?: string;
       preview_excluded_consent?: string;
+      activity_window?: { from: string; before: string };
     }
   >(query, [
     workspaceId,
@@ -260,6 +289,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
     activity?.last_comment_before ?? null,
     consent?.consent_purpose ?? null,
     consent?.consent_state ?? null,
+    activity?.last_comment_days ?? null,
   ]);
   const summary = result.rows[0];
   const contacts = result.rows
@@ -273,12 +303,14 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
         preview_excluded_both,
         preview_excluded_activity,
         preview_excluded_consent,
+        activity_window,
         ...contact
       }) => (contact.connection_id === null ? [] : [contact]),
     );
   const last = contacts.at(-1);
   return {
     contacts,
+    ...(activity?.last_comment_days ? { activity_window: summary?.activity_window } : {}),
     ...(preview
       ? {
           total: summary?.preview_total ?? "0",
@@ -337,7 +369,7 @@ export async function listContactSegments(pool: Pool, user: User) {
   const workspace = await workspaceFor(pool, user, "agent");
   return (
     await pool.query(
-      "SELECT id,name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived ORDER BY name,id",
+      "SELECT id,name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,consent_purpose,consent_state FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived ORDER BY name,id",
       [workspace],
     )
   ).rows.map(segmentResult);
@@ -354,6 +386,7 @@ function segmentResult(row: {
   condition_operator?: string;
   last_comment_from?: Date | null;
   last_comment_before?: Date | null;
+  last_comment_days?: number | null;
   consent_purpose?: string | null;
   consent_state?: string | null;
 }) {
@@ -364,12 +397,14 @@ function segmentResult(row: {
     condition_operator,
     last_comment_from,
     last_comment_before,
+    last_comment_days,
     consent_purpose,
     consent_state,
     ...base
   } = row;
   return {
     ...base,
+    ...(last_comment_days ? { last_comment_days } : {}),
     ...(consent_purpose && consent_state ? { consent_purpose, consent_state } : {}),
     ...(last_comment_from && last_comment_before
       ? { last_comment_from: last_comment_from.toISOString(), last_comment_before: last_comment_before.toISOString() }
@@ -396,6 +431,7 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
           "condition_operator",
           "last_comment_from",
           "last_comment_before",
+          "last_comment_days",
           "consent_purpose",
           "consent_state",
         ].includes(key),
@@ -431,9 +467,9 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
     )
       throw new ApiError(404, "connection_not_found");
     const result = await client.query(
-      `INSERT INTO instagram_contact_segments(workspace_id,name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state)
- SELECT $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12 WHERE (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived)<50
- RETURNING id,name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state`,
+      `INSERT INTO instagram_contact_segments(workspace_id,name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state,last_comment_days)
+ SELECT $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13 WHERE (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived)<50
+ RETURNING id,name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,consent_purpose,consent_state`,
       [
         workspace,
         name,
@@ -447,6 +483,7 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
         activity?.last_comment_before ?? null,
         consent?.consent_purpose ?? null,
         consent?.consent_state ?? null,
+        activity?.last_comment_days ?? null,
       ],
     );
     if (!result.rows[0]) throw new ApiError(409, "segment_limit_reached");

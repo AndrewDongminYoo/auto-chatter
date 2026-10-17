@@ -1250,7 +1250,7 @@ test("contact consent filters validate an exact purpose-state pair before databa
         evaluated: "9007199254740993",
         excluded: { consent: "9007199254740993", tag: "0", field: "0", both: "0" },
       });
-      assert.deepEqual(values.slice(-2), [purpose, state]);
+      assert.deepEqual(values.slice(11, 13), [purpose, state]);
     }
   }
   for (const invalid of [
