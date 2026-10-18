@@ -36,11 +36,29 @@ export function requireSameOrigin(request: Request): void {
   if (request.headers.get("origin") !== new URL(request.url).origin) throw new ApiError(403, "origin_rejected");
 }
 
-export async function readJson(request: Request, maxBytes = 16_384): Promise<unknown> {
+function requireJsonType(request: Request): void {
   if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json"))
     throw new ApiError(415, "json_required");
+}
+
+export async function readJson(request: Request, maxBytes = 16_384): Promise<unknown> {
+  requireJsonType(request);
   if (!request.body) throw new ApiError(400, "invalid_json");
-  const reader = request.body.getReader();
+  return parseJsonBytes(await readBodyBytes(request.body, maxBytes));
+}
+
+// A body of zero bytes is no input whatever its headers say (a streamed empty body has neither a null body nor a
+// Content-Length of 0); any other body must be JSON, as for readJson.
+export async function readOptionalJson(request: Request, maxBytes = 16_384): Promise<unknown> {
+  if (!request.body) return undefined;
+  const bytes = await readBodyBytes(request.body, maxBytes);
+  if (!bytes.byteLength) return undefined;
+  requireJsonType(request);
+  return parseJsonBytes(bytes);
+}
+
+async function readBodyBytes(body: ReadableStream<Uint8Array>, maxBytes: number): Promise<Buffer> {
+  const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
@@ -57,8 +75,12 @@ export async function readJson(request: Request, maxBytes = 16_384): Promise<unk
   } finally {
     reader.releaseLock();
   }
+  return Buffer.concat(chunks);
+}
+
+function parseJsonBytes(bytes: Uint8Array): unknown {
   try {
-    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)));
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
     throw new ApiError(400, "invalid_json");
   }

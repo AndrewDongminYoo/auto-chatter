@@ -37,6 +37,7 @@ import {
   isUuid,
   json,
   readJson,
+  readOptionalJson,
   requireSameOrigin,
   type AuthEnv,
   type User,
@@ -628,8 +629,7 @@ export async function appApi(
         return json({ snapshots: await listSegmentSnapshots(pool, user, segmentSnapshots[1]!) });
       if (segmentSnapshots && request.method === "POST") {
         // The dashboard sends no body; a zero-length body needs no Content-Type, and any other body must be exactly {}.
-        const empty = request.body === null || request.headers.get("content-length") === "0";
-        const input = empty ? undefined : await readJson(request, 1024);
+        const input = await readOptionalJson(request, 1024);
         return json(await createSegmentSnapshot(pool, user, segmentSnapshots[1]!, input), 201);
       }
       if (snapshotCsv && request.method === "GET") {

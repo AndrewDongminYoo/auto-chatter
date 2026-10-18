@@ -3134,6 +3134,60 @@ test("segment snapshot routes refuse cross-origin writes, malformed IDs, queries
   assert.deepEqual(limiter.keys, []);
 });
 
+test("a segment snapshot request with a zero-byte body passes the body check whatever its headers say", async () => {
+  const send = async (init: RequestInit) => {
+    let reached = false;
+    const response = await appApi(
+      new Request(`https://app.test/api/contact-segments/${segmentId}/snapshots`, {
+        method: "POST",
+        ...init,
+        headers: { cookie: "__Host-ac-access=test-session", origin: "https://app.test", ...init.headers },
+      }),
+      config,
+      () =>
+        ({
+          query: async (sql: string) => {
+            if (/^SELECT workspace_id FROM workspace_members WHERE user_id=\$1 AND removed_at IS NULL$/.test(sql))
+              return { rows: [{ workspace_id: workspaceId }] };
+            reached = true;
+            throw new Error("database reached");
+          },
+          connect: async () => {
+            reached = true;
+            throw new Error("database reached");
+          },
+          end: async () => {},
+        }) as unknown as Pool,
+      mediaFetch(),
+    );
+    return { response, reached };
+  };
+  // A streamed empty body has a non-null body and no Content-Length, and the runtime adds a text/plain type.
+  const streamed = new Request("https://app.test/", { method: "POST", body: "" });
+  assert.notEqual(streamed.body, null);
+  assert.equal(streamed.headers.get("content-length"), null);
+  for (const init of [
+    {},
+    { body: "" },
+    { body: "", headers: { "content-type": "application/json" } },
+    { body: "{}", headers: { "content-type": "application/json" } },
+  ] as RequestInit[]) {
+    const { response, reached } = await send(init);
+    assert.equal(response.status, 503, JSON.stringify(init));
+    assert.equal(reached, true, JSON.stringify(init));
+  }
+  for (const [init, status, error] of [
+    [{ body: "{}" }, 415, "json_required"],
+    [{ body: " ", headers: { "content-type": "application/json" } }, 400, "invalid_json"],
+    [{ body: "x".repeat(1025), headers: { "content-type": "application/json" } }, 413, "request_too_large"],
+  ] as const) {
+    const { response, reached } = await send(init);
+    assert.equal(response.status, status, init.body);
+    assert.deepEqual(await response.json(), { error }, init.body);
+    assert.equal(reached, false, init.body);
+  }
+});
+
 test("the segment snapshot CSV fails closed on the contact export allowance before opening the database", async () => {
   for (const [binding, status, error] of [
     [recordingLimit(false).binding, 429, "contact_export_rate_limited"],
