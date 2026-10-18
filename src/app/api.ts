@@ -82,6 +82,12 @@ import { archiveContactField, createContactField, listContactFields, saveContact
 import { recordConsentEvent } from "./channel-consent.ts";
 import { deleteConnectionData, listDataDeletions } from "./data-deletion.ts";
 import { exportWorkspace } from "./workspace-export.ts";
+import {
+  createSegmentSnapshot,
+  exportSegmentSnapshotCsv,
+  getSegmentSnapshot,
+  listSegmentSnapshots,
+} from "./segment-snapshots.ts";
 import { failureCode, logOperation } from "./operations-log.ts";
 import { operationsHealth } from "./operations-health.ts";
 import { manualReplyReport } from "./manual-reply-reports.ts";
@@ -236,6 +242,15 @@ export async function appApi(
       // No query exports every contact; the only accepted key is one segment_id holding a UUID.
       if (url.searchParams.size && (url.searchParams.size !== 1 || !isUuid(url.searchParams.get("segment_id"))))
         throw new ApiError(400, "invalid_contact_export_request");
+      await spendUserAllowance(env.CONTACT_EXPORT_LIMIT, user.id, {
+        limited: "contact_export_rate_limited",
+        unavailable: "contact_export_unavailable",
+      });
+    }
+    const snapshotCsv = /^\/api\/segment-snapshots\/([a-f0-9-]+)\/members\.csv$/.exec(url.pathname);
+    if (snapshotCsv && request.method === "GET") {
+      if (url.searchParams.size) throw new ApiError(400, "invalid_snapshot_request");
+      // The same per-user allowance as the contact CSV export.
       await spendUserAllowance(env.CONTACT_EXPORT_LIMIT, user.id, {
         limited: "contact_export_rate_limited",
         unavailable: "contact_export_unavailable",
@@ -608,6 +623,29 @@ export async function appApi(
         // A stale expected_version answers with the current segment, like the label rule.
         return saved.conflict ? json({ error: "segment_conflict", segment: saved.segment }, 409) : json(saved.segment);
       }
+      const segmentSnapshots = /^\/api\/contact-segments\/([a-f0-9-]+)\/snapshots$/.exec(url.pathname);
+      if (segmentSnapshots && request.method === "GET")
+        return json({ snapshots: await listSegmentSnapshots(pool, user, segmentSnapshots[1]!) });
+      if (segmentSnapshots && request.method === "POST") {
+        // The dashboard sends no body; a zero-length body needs no Content-Type, and any other body must be exactly {}.
+        const empty = request.body === null || request.headers.get("content-length") === "0";
+        const input = empty ? undefined : await readJson(request, 1024);
+        return json(await createSegmentSnapshot(pool, user, segmentSnapshots[1]!, input), 201);
+      }
+      if (snapshotCsv && request.method === "GET") {
+        const exported = await exportSegmentSnapshotCsv(pool, user, snapshotCsv[1]!);
+        return new Response(exported.body, {
+          headers: {
+            "Content-Type": "text/csv; charset=utf-8",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": `attachment; filename="auto-chatter-segment-snapshot-${exported.snapshotId}-${exported.asOf.slice(0, 10)}.csv"`,
+          },
+        });
+      }
+      const segmentSnapshot = /^\/api\/segment-snapshots\/([a-f0-9-]+)$/.exec(url.pathname);
+      if (segmentSnapshot && request.method === "GET")
+        return json(await getSegmentSnapshot(pool, user, segmentSnapshot[1]!, url.searchParams));
       const automation = /^\/api\/connections\/([a-f0-9-]+)\/contacts\/([^/]+)\/automation$/.exec(url.pathname);
       if (automation && request.method === "PUT") {
         let senderId: string;

@@ -11,6 +11,7 @@ import {
   SEGMENT_REQUEST_BYTES,
   updateContactSegment,
 } from "./contacts.ts";
+import { createSegmentSnapshot, parseSnapshotRequest, SEGMENT_SNAPSHOT_LIMITS } from "./segment-snapshots.ts";
 const config = {
   SUPABASE_URL: "https://project.supabase.co",
   SUPABASE_SECRET_KEY: "sb_secret_test",
@@ -3074,4 +3075,108 @@ test("a write refused by a default limit spends no Instagram connect allowance (
     assert.deepEqual(await response.json(), { error: "rate_limited" }, refused);
     assert.deepEqual(connect.keys, [], refused);
   }
+});
+
+// Segment target snapshots (#35): shape refusals never reach the database, and the CSV spends the contact export
+// allowance before the database is opened.
+test("segment snapshot routes refuse cross-origin writes, malformed IDs, queries and bodies before the database", async () => {
+  const send = (path: string, method = "GET", init: RequestInit = {}, env: Parameters<typeof appApi>[1] = config) =>
+    appApi(
+      new Request(`https://app.test${path}`, {
+        method,
+        ...init,
+        headers: { cookie: "__Host-ac-access=test-session", origin: "https://app.test", ...init.headers },
+      }),
+      env,
+      membershipOnlyPool,
+      mediaFetch(),
+    );
+  const crossOrigin = await appApi(
+    new Request(`https://app.test/api/contact-segments/${segmentId}/snapshots`, {
+      method: "POST",
+      headers: { origin: "https://evil.test" },
+    }),
+    config,
+    untouchedPool,
+  );
+  assert.equal(crossOrigin.status, 403);
+  for (const [path, method] of [
+    ["/api/contact-segments/123/snapshots", "POST"],
+    ["/api/contact-segments/123/snapshots", "GET"],
+    ["/api/segment-snapshots/123", "GET"],
+    [`/api/segment-snapshots/${segmentId}?after=bad!`, "GET"],
+    [`/api/segment-snapshots/${segmentId}?page=2`, "GET"],
+  ]) {
+    const response = await send(path, method);
+    assert.equal(response.status, 400, path);
+    assert.deepEqual(await response.json(), { error: "invalid_snapshot_request" }, path);
+  }
+  for (const body of ['{"note":"x"}', "[]", "null", "1"]) {
+    const response = await send(`/api/contact-segments/${segmentId}/snapshots`, "POST", {
+      body,
+      headers: { "content-type": "application/json" },
+    });
+    assert.equal(response.status, 400, body);
+    assert.deepEqual(await response.json(), { error: "invalid_snapshot_request" }, body);
+  }
+  const limiter = recordingLimit(true);
+  const csv = await send(
+    `/api/segment-snapshots/${segmentId}/members.csv?x=1`,
+    "GET",
+    {},
+    {
+      ...config,
+      CONTACT_EXPORT_LIMIT: limiter.binding,
+    },
+  );
+  assert.equal(csv.status, 400);
+  assert.deepEqual(await csv.json(), { error: "invalid_snapshot_request" });
+  assert.deepEqual(limiter.keys, []);
+});
+
+test("the segment snapshot CSV fails closed on the contact export allowance before opening the database", async () => {
+  for (const [binding, status, error] of [
+    [recordingLimit(false).binding, 429, "contact_export_rate_limited"],
+    [undefined, 503, "contact_export_unavailable"],
+    [recordingLimit("throw").binding, 503, "contact_export_unavailable"],
+  ] as const) {
+    let opened = false;
+    const response = await appApi(
+      new Request(`https://app.test/api/segment-snapshots/${segmentId}/members.csv`, {
+        headers: { cookie: "__Host-ac-access=test-session" },
+      }),
+      { ...config, CONTACT_EXPORT_LIMIT: binding },
+      () => {
+        opened = true;
+        return untouchedPool();
+      },
+      mediaFetch(),
+    );
+    assert.equal(response.status, status);
+    assert.deepEqual(await response.json(), { error });
+    assert.equal(opened, false);
+    assert.equal(response.headers.has("content-disposition"), false);
+  }
+});
+
+test("a snapshot request body is empty or exactly {}, checked before the role read", async () => {
+  assert.equal(parseSnapshotRequest(undefined), undefined);
+  assert.equal(parseSnapshotRequest({}), undefined);
+  for (const input of [null, [], "", 0, { note: 1 }, { expected_version: 1 }])
+    assert.throws(() => parseSnapshotRequest(input), refused("invalid_snapshot_request"), JSON.stringify(input));
+  await assert.rejects(
+    createSegmentSnapshot(segmentPool, segmentUser, segmentId, { x: 1 }),
+    refused("invalid_snapshot_request"),
+  );
+  await assert.rejects(
+    createSegmentSnapshot(segmentPool, segmentUser, "bad", undefined),
+    refused("invalid_snapshot_request"),
+  );
+  await assert.rejects(createSegmentSnapshot(segmentPool, segmentUser, segmentId, undefined), reachedDatabase);
+  assert.deepEqual(SEGMENT_SNAPSHOT_LIMITS, {
+    maxMembers: 5000,
+    perWorkspace: 200,
+    maxStoredMembers: 20_000,
+    pageSize: 50,
+  });
 });

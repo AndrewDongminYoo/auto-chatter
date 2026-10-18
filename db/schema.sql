@@ -581,6 +581,42 @@ DO $$ BEGIN
     );
   END IF;
 END $$;
+-- Frozen target snapshots of saved segments (#35, docs/specs/2026-10-18-segment-target-snapshots.md). A snapshot
+-- stores the segment's definition copy, its name, as_of, the preview counts and the selected comment senders'
+-- identifiers, nothing else. Server roles may only SELECT and INSERT both tables (deploy/supabase-access.sql); only
+-- the three deletion functions remove rows. The stored counts stay as evidence after a deletion removes members.
+-- The snapshot's segment foreign key references this unique index. A plain index takes SHARE and the foreign key
+-- SHARE ROW EXCLUSIVE on the segment table: segment writes wait for the runner's COMMIT, segment reads do not.
+-- ADD CONSTRAINT ... UNIQUE would take ACCESS EXCLUSIVE and block the reads too.
+CREATE UNIQUE INDEX IF NOT EXISTS instagram_contact_segments_id_workspace ON instagram_contact_segments(id,workspace_id);
+CREATE TABLE IF NOT EXISTS instagram_segment_snapshots (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  segment_id uuid NOT NULL,
+  created_by uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  as_of timestamptz NOT NULL,
+  definition jsonb NOT NULL CHECK(jsonb_typeof(definition)='object'),
+  segment_name text NOT NULL CHECK(length(btrim(segment_name)) BETWEEN 1 AND 60),
+  counts jsonb NOT NULL CHECK(jsonb_typeof(counts)='object'),
+  member_count integer NOT NULL CHECK(member_count BETWEEN 0 AND 5000),
+  UNIQUE(id,workspace_id),
+  FOREIGN KEY(segment_id,workspace_id) REFERENCES instagram_contact_segments(id,workspace_id)
+);
+CREATE INDEX IF NOT EXISTS instagram_segment_snapshots_segment_idx
+  ON instagram_segment_snapshots(workspace_id,segment_id,created_at DESC,id DESC);
+CREATE TABLE IF NOT EXISTS instagram_segment_snapshot_members (
+  snapshot_id uuid NOT NULL,
+  workspace_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  sender_id text NOT NULL CHECK(length(btrim(sender_id))>0),
+  PRIMARY KEY(snapshot_id,connection_id,sender_id),
+  FOREIGN KEY(snapshot_id,workspace_id) REFERENCES instagram_segment_snapshots(id,workspace_id),
+  FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id)
+);
+-- Connection and person deletion find a comment sender's member rows in every snapshot.
+CREATE INDEX IF NOT EXISTS instagram_segment_snapshot_members_contact_idx
+  ON instagram_segment_snapshot_members(workspace_id,connection_id,sender_id);
 CREATE UNIQUE INDEX IF NOT EXISTS private_reply_outbox_identity_idx
   ON private_reply_outbox(id,connection_id,workspace_id);
 CREATE TABLE IF NOT EXISTS instagram_inbox_handoffs (
@@ -1340,6 +1376,10 @@ BEGIN
   DELETE FROM public.instagram_contact_field_values WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_field_values', affected);
+  -- The connection's members of every target snapshot; the snapshots and their stored counts stay.
+  DELETE FROM public.instagram_segment_snapshot_members WHERE workspace_id=p_workspace AND connection_id=p_connection;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_segment_snapshot_members', affected);
   -- Follow rows first: confirmation ingestion locks them before writing a receipt.
   DELETE FROM public.instagram_follow_conversations WHERE connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
@@ -1613,6 +1653,11 @@ BEGIN
   WHERE workspace_id=p_workspace AND connection_id=p_connection AND sender_id=ANY(senders);
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_field_values', affected);
+  -- The person's member rows of every target snapshot, keyed by the comment sender; the stored counts stay.
+  DELETE FROM public.instagram_segment_snapshot_members
+  WHERE workspace_id=p_workspace AND connection_id=p_connection AND sender_id=ANY(senders);
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_segment_snapshot_members', affected);
   DELETE FROM public.instagram_follow_conversations
   WHERE connection_id=p_connection AND (reply_id=ANY(replies) OR recipient_id=ANY(recipients));
   GET DIAGNOSTICS affected = ROW_COUNT;
@@ -1813,6 +1858,13 @@ BEGIN
   DELETE FROM public.instagram_contact_field_values WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_field_values', affected);
+  -- Target snapshot members, then the snapshots, before the segments they point at.
+  DELETE FROM public.instagram_segment_snapshot_members WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_segment_snapshot_members', affected);
+  DELETE FROM public.instagram_segment_snapshots WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_segment_snapshots', affected);
   DELETE FROM public.instagram_contact_segments WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_segments', affected);

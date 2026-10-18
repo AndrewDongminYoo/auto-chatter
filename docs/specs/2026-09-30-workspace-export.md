@@ -31,6 +31,8 @@
 - 댓글·DM 작성자 ID와 본문처럼 작업 공간이 운영하며 쌓은 기록은 포함합니다.
 - `workspace_reply_templates`의 활성·보관 템플릿과 본문·작성자·버전도 포함합니다.
   미리보기에 입력한 변수 값은 저장하지 않으므로 내보낼 행이 없습니다.
+- [고정 대상](2026-10-18-segment-target-snapshots.md)의 `instagram_segment_snapshots`(조건 사본·이름·기준 시각·집계 건수)와 `instagram_segment_snapshot_members`(연결 ID·댓글 작성자 ID)를 별도 테이블로 포함하며 제외하는 열은 없습니다.
+  명단 행도 행 한도와 바이트 한도에 함께 세므로, 고정 대상 쪽에서 작업 공간의 명단 행을 모두 합쳐 20,000행(약 200바이트씩, 행 한도의 40%, 바이트 한도의 4분의 1 미만)으로 제한합니다([저장 한도](2026-10-18-segment-target-snapshots.md#저장-한도)).
 - 연결의 `access_token_encrypted`와 초대의 `token_hash`는 제외합니다. 토큰 만료·발급 시각은 포함합니다.
 - `instagram_oauth_states`(짧게 쓰이는 로그인 비밀값), `workspace_deletion_records`(이미 삭제된 작업 공간의 증적), `scheduled_steps`(작업 공간 데이터가 없는 서비스 전체 운영 상태, [운영 상태](2026-10-01-operations-health.md)), `instagram_inbox_reminders`와 `instagram_inbox_reminder_events`(만든 멤버만 볼 수 있는 리마인더와 그 감사 기록, [인박스 리마인더](2026-10-04-inbox-reminders.md))는 `EXCLUDED_TABLES`로 제외합니다.
 - 새 public 테이블은 `EXPORTED_TABLES`나 `EXCLUDED_TABLES` 중 하나에 넣어야 하며, DB 테스트가 이를 강제합니다. 이름에 `token`, `secret`, `encrypt`, `password`, `hash`가 들어간 열은 시각 열 세 개를 빼고 `omit`에 넣어야 합니다.

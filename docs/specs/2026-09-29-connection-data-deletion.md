@@ -22,6 +22,7 @@ Meta 앱 설정의 사용자 데이터 삭제 URL과 App Review 제출 내용은
 - 수동 답장과 감사 기록, 상담 전환과 이력
 - 보관한 수신 DM과 확인 버튼 응답, 확인 메시지 수신 기록
 - 연락처 자동화 중지 상태, 태그, 필드 값
+- 모든 [고정 대상](2026-10-18-segment-target-snapshots.md)에서 이 연결의 명단 행(`instagram_segment_snapshot_members`, migration 061부터). 고정 대상 행과 그 기준 시각·집계 건수는 남습니다.
 - 팔로우 대화, 비공개 답장 outbox, 댓글 이벤트
 - 플로 실행과 실행 단계 기록(migration 021부터)
 - 동의 기록 중 허용(grant) 상태와, 현재 상태가 참조하지 않는 허용 이벤트

@@ -206,7 +206,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
   });
   try {
     await pool.query(
-      "DROP TABLE IF EXISTS workspace_reply_templates, webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_reminder_events, instagram_inbox_reminders, instagram_inbox_notes, instagram_inbox_label_events, instagram_inbox_label_rules, instagram_inbox_conversation_labels, instagram_inbox_labels, instagram_inbox_read_state, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS workspace_reply_templates, webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_reminder_events, instagram_inbox_reminders, instagram_inbox_notes, instagram_inbox_label_events, instagram_inbox_label_rules, instagram_inbox_conversation_labels, instagram_inbox_labels, instagram_inbox_read_state, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_segment_snapshot_members, instagram_segment_snapshots, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
@@ -1968,6 +1968,159 @@ test("workerd segment CSV export uses restricted server privileges and the saved
     const archived = await runtime.dispatchFetch(segmentPath, { headers });
     assert.equal(archived.status, 404);
     assert.equal(archived.headers.has("content-disposition"), false);
+  } finally {
+    await runtime.dispose();
+    await pool.end();
+  }
+});
+
+test("workerd segment snapshots use restricted server privileges and refuse an agent", async () => {
+  const databaseUrl = process.env.TEST_DATABASE_URL;
+  const url = new URL(databaseUrl);
+  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
+    throw new Error("Database tests require a local automations_test database");
+  const pool = new Pool({ connectionString: databaseUrl });
+  const workspace = "11111111-1111-4111-8111-111111111111",
+    user = "66666666-6666-4666-8666-666666666666",
+    foreign = "77777777-7777-4777-8777-777777777777",
+    connection = "22222222-2222-4222-8222-222222222222";
+  const serverUrl = new URL(databaseUrl);
+  serverUrl.username = "auto_chatter_server";
+  serverUrl.password = "runtime-test-only";
+  const config = JSON.parse(await readFile(new URL("../../wrangler.json", import.meta.url), "utf8"));
+  const runtime = new Miniflare({
+    modules: true,
+    scriptPath: ".wrangler/build/index.js",
+    compatibilityDate: config.compatibility_date,
+    compatibilityFlags: config.compatibility_flags,
+    hyperdrives: { HYPERDRIVE: serverUrl.href },
+    durableObjects: Object.fromEntries(
+      config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }]),
+    ),
+    bindings: {
+      SUPABASE_URL: "https://auth-test.supabase.co",
+      SUPABASE_SECRET_KEY: "sb_secret_test",
+      SEND_ENABLED: "false",
+    },
+    outboundService: async (request) => {
+      assert.equal(new URL(request.url).origin, "https://auth-test.supabase.co");
+      return Response.json({
+        id: request.headers.get("authorization") === "Bearer foreign" ? foreign : user,
+        email: "owner@example.test",
+        email_confirmed_at: "2026-09-27",
+      });
+    },
+  });
+  try {
+    await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
+    await pool.query("TRUNCATE workspaces CASCADE");
+    await pool.query("INSERT INTO workspaces VALUES($1),($2)", [workspace, foreign]);
+    await pool.query("INSERT INTO workspace_members VALUES($1,$2),($3,$3)", [user, workspace, foreign]);
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'123',true)", [
+      connection,
+      workspace,
+    ]);
+    await pool.query(
+      `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+       VALUES($1,$2,'comment-1','media','sender-1','private comment'),($1,$2,'comment-2','media','sender-2','other comment')`,
+      [workspace, connection],
+    );
+    await pool.query(
+      "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1',ARRAY['lead'])",
+      [workspace, connection],
+    );
+    await pool.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8"));
+    await pool.query("ALTER ROLE auto_chatter_server LOGIN PASSWORD 'runtime-test-only'");
+    for (const table of ["instagram_segment_snapshots", "instagram_segment_snapshot_members"])
+      assert.deepEqual(
+        (
+          await pool.query(
+            `SELECT has_table_privilege('auto_chatter_server',$1,'SELECT') AS select,
+               has_table_privilege('auto_chatter_server',$1,'INSERT') AS insert,
+               has_table_privilege('auto_chatter_server',$1,'UPDATE') AS update,
+               has_table_privilege('auto_chatter_server',$1,'DELETE') AS delete`,
+            [table],
+          )
+        ).rows[0],
+        { select: true, insert: true, update: false, delete: false },
+        table,
+      );
+    const headers = {
+      cookie: "__Host-ac-access=owned",
+      origin: "https://app.test",
+      "content-type": "application/json",
+    };
+    const created = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Snapshot leads", tag: "lead" }),
+    });
+    assert.equal(created.status, 201, await created.clone().text());
+    const segment = await created.json();
+    const snapshotsPath = `https://app.test/api/contact-segments/${segment.id}/snapshots`;
+    // The dashboard sends no body; an explicit {} is the same request and any key is refused.
+    const frozen = await runtime.dispatchFetch(snapshotsPath, {
+      method: "POST",
+      headers: { cookie: headers.cookie, origin: headers.origin },
+    });
+    assert.equal(frozen.status, 201, await frozen.clone().text());
+    const snapshot = await frozen.json();
+    assert.equal(snapshot.member_count, 1);
+    assert.equal(snapshot.counts.total, "1");
+    assert.equal(snapshot.counts.evaluated, "2");
+    const again = await runtime.dispatchFetch(snapshotsPath, { method: "POST", headers, body: "{}" });
+    assert.equal(again.status, 201, await again.clone().text());
+    const refused = await runtime.dispatchFetch(snapshotsPath, { method: "POST", headers, body: '{"send":true}' });
+    assert.equal(refused.status, 400);
+    assert.deepEqual(await refused.json(), { error: "invalid_snapshot_request" });
+    const listed = await (await runtime.dispatchFetch(snapshotsPath, { headers })).json();
+    assert.deepEqual(
+      listed.snapshots.map((item) => item.id),
+      [(await again.json()).id, snapshot.id],
+    );
+    const detail = await (
+      await runtime.dispatchFetch(`https://app.test/api/segment-snapshots/${snapshot.id}`, { headers })
+    ).json();
+    assert.deepEqual(detail.members, [{ connection_id: connection, sender_id: "sender-1" }]);
+    assert.equal(detail.snapshot.stored_member_count, 1);
+    const csv = await runtime.dispatchFetch(`https://app.test/api/segment-snapshots/${snapshot.id}/members.csv`, {
+      headers,
+    });
+    assert.equal(csv.status, 200, await csv.clone().text());
+    assert.equal(
+      csv.headers.get("content-disposition"),
+      `attachment; filename="auto-chatter-segment-snapshot-${snapshot.id}-${snapshot.as_of.slice(0, 10)}.csv"`,
+    );
+    const bytes = Buffer.from(await csv.arrayBuffer());
+    assert.equal(bytes.subarray(0, 3).toString("hex"), "efbbbf");
+    const rows = bytes.toString().split("\r\n").slice(1, -1);
+    assert.equal(rows.length, 1);
+    assert.ok(rows[0].includes(`"${connection}","'sender-1"`));
+    assert.doesNotMatch(bytes.toString(), /sender-2|private comment|Snapshot leads/);
+    // Freezing sends nothing.
+    assert.equal((await pool.query("SELECT count(*)::int AS count FROM private_reply_outbox")).rows[0].count, 0);
+    const foreignHeaders = { ...headers, cookie: "__Host-ac-access=foreign" };
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`https://app.test/api/segment-snapshots/${snapshot.id}`, {
+          headers: foreignHeaders,
+        })
+      ).status,
+      404,
+    );
+    await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [user]);
+    for (const [path, method] of [
+      [snapshotsPath, "POST"],
+      [snapshotsPath, "GET"],
+      [`https://app.test/api/segment-snapshots/${snapshot.id}`, "GET"],
+      [`https://app.test/api/segment-snapshots/${snapshot.id}/members.csv`, "GET"],
+    ]) {
+      const denied = await runtime.dispatchFetch(path, { method, headers });
+      assert.equal(denied.status, 403, path);
+      assert.deepEqual(await denied.json(), { error: "role_forbidden" });
+      assert.equal(denied.headers.has("content-disposition"), false);
+    }
+    assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_segment_snapshots")).rows[0].count, 2);
   } finally {
     await runtime.dispose();
     await pool.end();
