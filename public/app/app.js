@@ -2662,10 +2662,13 @@ function contactTagControls() {
   fields.tag_mode.disabled = contactFilterTags().length < 2;
   if (fields.tag_mode.disabled) fields.tag_mode.value = "all";
 }
+// The comment consent pair and the DM consent pair: clearing a purpose clears and disables its state.
 function contactConsentControls() {
   const fields = byId("contacts-filter").elements;
-  fields.consent_state.disabled = !fields.consent_purpose.value;
-  if (!fields.consent_purpose.value) fields.consent_state.value = "";
+  for (const prefix of ["", "dm_"]) {
+    fields[`${prefix}consent_state`].disabled = !fields[`${prefix}consent_purpose`].value;
+    if (!fields[`${prefix}consent_purpose`].value) fields[`${prefix}consent_state`].value = "";
+  }
 }
 function contactConsentCondition() {
   const fields = byId("contacts-filter").elements;
@@ -2676,11 +2679,22 @@ function contactConsentCondition() {
     throw new Error(errors.invalid_contact_consent);
   return { consent_purpose: purpose, consent_state: state };
 }
+// The recorded state of the contact's verified DM conversations; the server checks the same pair.
+function contactDmConsentCondition() {
+  const fields = byId("contacts-filter").elements;
+  const purpose = fields.dm_consent_purpose.value,
+    state = fields.dm_consent_state.value;
+  if (!purpose && !state) return null;
+  if (!["service_reply", "marketing"].includes(purpose) || !["granted", "revoked", "no_record"].includes(state))
+    throw new Error(errors.invalid_contact_consent);
+  return { dm_consent_purpose: purpose, dm_consent_state: state };
+}
 function contactDraftQuery() {
   const fields = byId("contacts-filter").elements;
   const fieldKeys = contactFieldConditionKeys();
   const activity = contactActivityWindow();
   const consent = contactConsentCondition();
+  const dmConsent = contactDmConsentCondition();
   const query = new URLSearchParams();
   if (fields.connection_id.value) query.set("connection_id", fields.connection_id.value);
   const tags = contactFilterTags();
@@ -2689,6 +2703,7 @@ function contactDraftQuery() {
   if (fields.condition_operator.value === "or") query.set("condition_operator", "or");
   if (activity) for (const [key, value] of Object.entries(activity)) query.set(key, value);
   if (consent) for (const [key, value] of Object.entries(consent)) query.set(key, value);
+  if (dmConsent) for (const [key, value] of Object.entries(dmConsent)) query.set(key, value);
   for (const [key, value] of Object.entries(fieldKeys))
     query.set(key, key === "field_value" || key === "field_conditions" ? JSON.stringify(value) : value);
   return query;
@@ -2805,6 +2820,8 @@ byId("segment-preview").addEventListener("click", async () => {
         ? page.excluded?.activity
         : "0";
     const consentCount = query.has("consent_purpose") ? page.excluded?.consent : "0";
+    const dmIdentityCount = query.has("dm_consent_purpose") ? page.excluded?.dm_identity : "0";
+    const dmConsentCount = query.has("dm_consent_purpose") ? page.excluded?.dm_consent : "0";
     const counts = [
       page.total,
       page.evaluated,
@@ -2813,12 +2830,16 @@ byId("segment-preview").addEventListener("click", async () => {
       page.excluded?.both,
       activityCount,
       consentCount,
+      dmIdentityCount,
+      dmConsentCount,
     ];
     if (counts.some((value) => typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)))
       throw new Error("대상 수와 제외 사유를 확인할 수 없습니다.");
     const excludedTotal =
       BigInt(activityCount) +
       BigInt(consentCount) +
+      BigInt(dmIdentityCount) +
+      BigInt(dmConsentCount) +
       BigInt(page.excluded.tag) +
       BigInt(page.excluded.field) +
       BigInt(page.excluded.both);
@@ -2831,6 +2852,8 @@ byId("segment-preview").addEventListener("click", async () => {
     for (const [count, label] of [
       [activityCount, "활동 기간 밖 (먼저 제외)"],
       [consentCount, "동의 기록 조건 불일치"],
+      [dmIdentityCount, "확인된 DM 대화 없음"],
+      [dmConsentCount, "DM 동의 기록 조건 불일치"],
       [page.excluded.tag, "태그 조건만 불일치"],
       [page.excluded.field, "추가 정보 조건만 불일치"],
       [page.excluded.both, "태그·추가 정보 조건 모두 불일치"],
@@ -2921,6 +2944,8 @@ function fillSegmentConditions(segment) {
   contactActivityControls();
   fields.consent_purpose.value = segment?.consent_purpose || "";
   fields.consent_state.value = segment?.consent_state || "";
+  fields.dm_consent_purpose.value = segment?.dm_consent_purpose || "";
+  fields.dm_consent_state.value = segment?.dm_consent_state || "";
   contactConsentControls();
   fieldFilterControls();
   rows.forEach((row, index) => {
@@ -2974,6 +2999,10 @@ function segmentSummary(segment) {
     parts.push(
       `동의 기록 ${optionLabel(fields.consent_purpose, segment.consent_purpose)} ${optionLabel(fields.consent_state, segment.consent_state)}`,
     );
+  if (segment.dm_consent_purpose)
+    parts.push(
+      `DM 동의 기록 ${optionLabel(fields.dm_consent_purpose, segment.dm_consent_purpose)} ${optionLabel(fields.dm_consent_state, segment.dm_consent_state)}`,
+    );
   return parts.join(" · ");
 }
 async function loadContactSegments(force = false) {
@@ -3012,7 +3041,7 @@ byId("contacts-filter").addEventListener("input", (event) => {
     fieldFilterControls();
   }
   if (event.target.name === "activity_mode") contactActivityControls();
-  if (event.target.name === "consent_purpose") contactConsentControls();
+  if (event.target.name === "consent_purpose" || event.target.name === "dm_consent_purpose") contactConsentControls();
   segmentControls();
 });
 byId("contact-segment").addEventListener("change", (event) => {
@@ -3133,6 +3162,7 @@ byId("segment-save").addEventListener("submit", (event) => {
     Object.assign(payload, contactFieldConditionKeys());
     Object.assign(payload, contactActivityWindow());
     Object.assign(payload, contactConsentCondition());
+    Object.assign(payload, contactDmConsentCondition());
   } catch (error) {
     notice(error.message, true);
     return;
@@ -3190,6 +3220,10 @@ byId("segment-archive").addEventListener("click", (event) => {
         if (segment.consent_purpose) {
           query.set("consent_purpose", segment.consent_purpose);
           query.set("consent_state", segment.consent_state);
+        }
+        if (segment.dm_consent_purpose) {
+          query.set("dm_consent_purpose", segment.dm_consent_purpose);
+          query.set("dm_consent_state", segment.dm_consent_state);
         }
         if (segment.field_conditions) {
           query.set("field_conditions", JSON.stringify(segment.field_conditions));

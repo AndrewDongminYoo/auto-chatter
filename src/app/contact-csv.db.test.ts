@@ -984,7 +984,8 @@ test("segment export selects exactly the contact list's segment contacts for eve
   changeQuery = exportClock;
   const clocks: unknown[] = [];
   afterQuery = async (_client, sql) => {
-    if (sql.includes("evaluation AS MATERIALIZED")) assert.match(sql, /SELECT \$17::timestamptz AS as_of/);
+    // The clock follows the predicate's 17 values and the batch size.
+    if (sql.includes("evaluation AS MATERIALIZED")) assert.match(sql, /SELECT \$19::timestamptz AS as_of/);
   };
   const full = records((await csv.exportContactCsv(tracked(), user)).body);
   for (const [index, [definition, expected]] of definitions.entries()) {
@@ -996,7 +997,7 @@ test("segment export selects exactly the contact list's segment contacts for eve
     assert.deepEqual(names(listed.contacts), [...expected].sort(), JSON.stringify(definition));
     const tracking: (query: QueryConfig) => QueryConfig = exportClock;
     changeQuery = (query) => {
-      if (query.text.includes("evaluation AS MATERIALIZED")) clocks.push(query.values?.[16]);
+      if (query.text.includes("evaluation AS MATERIALIZED")) clocks.push(query.values?.[18]);
       return tracking(query);
     };
     const exported = await csv.exportContactCsv(tracked(), user, { batchSize: 2 }, segment.id);
@@ -1027,7 +1028,7 @@ test("segment export evaluates one as_of for all batches even while the clock mo
   const segment = await createContactSegment(pool, user, { name: "recent", last_comment_days: 366 });
   const clocks: unknown[] = [];
   changeQuery = (query) => {
-    if (query.text.includes("evaluation AS MATERIALIZED")) clocks.push(query.values?.[16]);
+    if (query.text.includes("evaluation AS MATERIALIZED")) clocks.push(query.values?.[18]);
     return query;
   };
   afterQuery = async (_client, sql) => {

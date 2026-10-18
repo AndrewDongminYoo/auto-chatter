@@ -1322,6 +1322,119 @@ test("contact consent filters validate an exact purpose-state pair before databa
   }
 });
 
+test("contact DM consent filters validate an exact purpose-state pair before database access", async () => {
+  let values: unknown[] = [];
+  let queried = false;
+  const pool = {
+    query: async (sql: string, parameters: unknown[]) => {
+      queried = true;
+      if (sql.includes("workspace_members")) return { rows: [{ workspace_id: workspaceId, role: "owner" }] };
+      values = parameters;
+      return {
+        rows: [
+          {
+            connection_id: null,
+            preview_total: "0",
+            preview_evaluated: "9007199254740995",
+            preview_excluded_consent: "1",
+            preview_excluded_dm_identity: "9007199254740993",
+            preview_excluded_dm_consent: "1",
+            preview_excluded_activity: "0",
+            preview_excluded_tag: "0",
+            preview_excluded_field: "0",
+            preview_excluded_both: "0",
+          },
+        ],
+      };
+    },
+    end: async () => {},
+  } as unknown as Pool;
+  const request = (query: URLSearchParams) =>
+    appApi(
+      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
+      config,
+      () => pool,
+      mediaFetch(),
+    );
+  for (const purpose of ["service_reply", "marketing"]) {
+    for (const state of ["granted", "revoked", "no_record"]) {
+      const response = await request(
+        new URLSearchParams({ preview: "true", dm_consent_purpose: purpose, dm_consent_state: state }),
+      );
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      // The comment consent key stays omitted without its own condition; the DM keys keep their order.
+      assert.deepEqual(body, {
+        contacts: [],
+        after: null,
+        total: "0",
+        evaluated: "9007199254740995",
+        excluded: { dm_identity: "9007199254740993", dm_consent: "1", tag: "0", field: "0", both: "0" },
+      });
+      assert.deepEqual(Object.keys(body.excluded), ["dm_identity", "dm_consent", "tag", "field", "both"]);
+      assert.deepEqual(values.slice(11, 13), [null, null]);
+      assert.deepEqual(values.slice(15, 17), [purpose, state]);
+    }
+  }
+  const both = await request(
+    new URLSearchParams({
+      preview: "true",
+      consent_purpose: "marketing",
+      consent_state: "granted",
+      dm_consent_purpose: "service_reply",
+      dm_consent_state: "revoked",
+    }),
+  );
+  assert.deepEqual(Object.keys((await both.json()).excluded), [
+    "consent",
+    "dm_identity",
+    "dm_consent",
+    "tag",
+    "field",
+    "both",
+  ]);
+  assert.deepEqual(values.slice(11, 17), ["marketing", "granted", null, null, "service_reply", "revoked"]);
+  await request(new URLSearchParams({ preview: "true" }));
+  assert.deepEqual(values.slice(15, 17), [null, null]);
+  for (const invalid of [
+    { dm_consent_purpose: "marketing" },
+    { dm_consent_state: "granted" },
+    { dm_consent_purpose: "", dm_consent_state: "granted" },
+    { dm_consent_purpose: "marketing", dm_consent_state: "" },
+    { dm_consent_purpose: "all", dm_consent_state: "revoked" },
+    { dm_consent_purpose: "marketing", dm_consent_state: "eligible" },
+    { dm_consent_purpose: "marketing", dm_consent_state: "grant" },
+    { dm_consent_purpose: "MARKETING", dm_consent_state: "granted" },
+  ]) {
+    queried = false;
+    const response = await request(new URLSearchParams(Object.entries(invalid)));
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error, "invalid_contact_consent");
+    assert.equal(queried, false);
+  }
+  for (const mixed of [
+    { dm_consent_purpose: "marketing", dm_consent_state: "granted" },
+    { dm_consent_purpose: "marketing" },
+    { dm_consent_state: "granted" },
+  ] as Record<string, string>[]) {
+    queried = false;
+    const response = await request(
+      new URLSearchParams({ ...mixed, segment_id: "44444444-4444-4444-8444-444444444444" }),
+    );
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error, "invalid_contact_request");
+    assert.equal(queried, false);
+  }
+  for (const duplicate of ["dm_consent_purpose", "dm_consent_state"]) {
+    const query = new URLSearchParams({ dm_consent_purpose: "marketing", dm_consent_state: "granted" });
+    query.append(duplicate, query.get(duplicate)!);
+    queried = false;
+    const response = await request(query);
+    assert.equal(response.status, 400);
+    assert.equal(queried, false);
+  }
+});
+
 test("contact calendar periods accept four exact values and refuse mixing before database access", async () => {
   let values: unknown[] = [];
   let queried = false;
@@ -1371,7 +1484,7 @@ test("contact calendar periods accept four exact values and refuse mixing before
       excluded: { activity: "9007199254740993", tag: "0", field: "0", both: "0" },
     });
     // Appended last, so the earlier parameter positions stay as they were.
-    assert.equal(values.length, 15);
+    assert.equal(values.length, 17);
     assert.deepEqual(values.slice(9, 11), [null, null]);
     assert.equal(values[13], null);
     assert.equal(values[14], period);
@@ -1551,6 +1664,20 @@ test("segment edits refuse a missing or invalid expected_version, unknown keys a
     [{ name: "Leads", expected_version: 1, field_operator: "eq" }, "invalid_field_condition"],
     [{ name: "Leads", expected_version: 1, last_comment_days: 0 }, "invalid_contact_activity"],
     [{ name: "Leads", expected_version: 1, consent_purpose: "marketing" }, "invalid_contact_consent"],
+    [{ name: "Leads", expected_version: 1, dm_consent_purpose: "marketing" }, "invalid_contact_consent"],
+    [{ name: "Leads", expected_version: 1, dm_consent_state: "granted" }, "invalid_contact_consent"],
+    [
+      { name: "Leads", expected_version: 1, dm_consent_purpose: "all", dm_consent_state: "revoked" },
+      "invalid_contact_consent",
+    ],
+    [
+      { name: "Leads", expected_version: 1, dm_consent_purpose: "marketing", dm_consent_state: "eligible" },
+      "invalid_contact_consent",
+    ],
+    [
+      { name: "Leads", expected_version: 1, dm_consent_purpose: "", dm_consent_state: "granted" },
+      "invalid_contact_consent",
+    ],
     [{ name: "Leads", expected_version: 1, condition_operator: "or" }, "invalid_contact_condition"],
   ] as const)
     await assert.rejects(updateContactSegment(segmentPool, segmentUser, segmentId, body), refused(code));
@@ -1579,8 +1706,12 @@ test("segment create and edit share one definition parser", async () => {
       last_comment_days: 7,
       consent_purpose: "marketing",
       consent_state: "granted",
+      dm_consent_purpose: "service_reply",
+      dm_consent_state: "no_record",
     },
     { name: "Window", last_comment_from: "2026-10-01T00:00:00.000Z", last_comment_before: "2026-10-02T00:00:00.000Z" },
+    { name: "DM", dm_consent_purpose: "marketing", dm_consent_state: "revoked" },
+    { name: "No DM", dm_consent_purpose: null, dm_consent_state: null },
   ];
   for (const definition of definitions) {
     await assert.rejects(createContactSegment(segmentPool, segmentUser, definition), reachedDatabase);
@@ -1594,6 +1725,29 @@ test("segment create and edit share one definition parser", async () => {
     ]);
     assert.deepEqual(edited, created);
   }
+});
+
+test("segment definitions take the DM consent pair beside the comment consent pair", () => {
+  const parsed = parseSegmentDefinition({
+    name: "DM",
+    consent_purpose: "marketing",
+    consent_state: "granted",
+    dm_consent_purpose: "service_reply",
+    dm_consent_state: "no_record",
+  });
+  assert.deepEqual(parsed.consent, { consent_purpose: "marketing", consent_state: "granted" });
+  assert.deepEqual(parsed.dmConsent, { dm_consent_purpose: "service_reply", dm_consent_state: "no_record" });
+  assert.equal(parseSegmentDefinition({ name: "None" }).dmConsent, null);
+  assert.equal(
+    parseSegmentDefinition({ name: "Null", dm_consent_purpose: null, dm_consent_state: null }).dmConsent,
+    null,
+  );
+  for (const invalid of [
+    { dm_consent_purpose: "marketing", dm_consent_state: null },
+    { dm_consent_purpose: false, dm_consent_state: "granted" },
+    { dm_consent_purpose: ["marketing"], dm_consent_state: "granted" },
+  ])
+    assert.throws(() => parseSegmentDefinition({ name: "Invalid", ...invalid }), refused("invalid_contact_consent"));
 });
 
 test("segment definitions take a calendar period as an exact string and refuse mixing with other activity forms", async () => {
@@ -1655,7 +1809,7 @@ test("contact tag filters repeat tag up to five times with one mode and refuse o
   const single = await request("tag=%20Lead%20");
   assert.equal(single.status, 200);
   assert.deepEqual(await single.json(), { contacts: [], after: null });
-  assert.equal(values.length, 15);
+  assert.equal(values.length, 17);
   assert.deepEqual(values[2], ["lead"]);
   assert.match(statement, all);
   assert.doesNotMatch(statement, any);
@@ -1797,7 +1951,7 @@ test("contact field filters take the legacy keys or a field_conditions set of up
   );
   assert.equal(legacy.status, 200);
   assert.deepEqual(await legacy.json(), { contacts: [], after: null });
-  assert.equal(values.length, 15);
+  assert.equal(values.length, 17);
   assert.deepEqual(values.slice(5, 7), [[setFields[0]], "all"]);
   assert.deepEqual(JSON.parse(String(values[7])), [text]);
   for (const [query, conditions, mode] of [

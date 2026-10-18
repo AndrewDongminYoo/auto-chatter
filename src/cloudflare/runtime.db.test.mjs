@@ -1284,6 +1284,63 @@ test("workerd contact API uses restricted server privileges and verified workspa
     ).json();
     assert.equal(noneMatch.total, "0");
     assert.equal(noneMatch.excluded.field, noneMatch.evaluated);
+    // The restricted server role saves and evaluates a DM consent segment over the verified bridge: sender-1's
+    // fresh sent reply to 456 above, and 456's stored DMs.
+    assert.equal(
+      (await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_messages WHERE recipient_id='456'")).rows[0]
+        .count > 0,
+      true,
+    );
+    const dmCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        name: "DM no record",
+        connection_id: connection,
+        dm_consent_purpose: "marketing",
+        dm_consent_state: "no_record",
+      }),
+    });
+    assert.equal(dmCreated.status, 201, await dmCreated.clone().text());
+    const dmSegment = await dmCreated.json();
+    assert.equal(dmSegment.dm_consent_purpose, "marketing");
+    assert.equal(dmSegment.dm_consent_state, "no_record");
+    assert.deepEqual(
+      (await (await runtime.dispatchFetch("https://app.test/api/contact-segments", { headers })).json()).segments.find(
+        (segment) => segment.id === dmSegment.id,
+      ),
+      dmSegment,
+    );
+    const dmSelected = await (
+      await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${dmSegment.id}`, { headers })
+    ).json();
+    assert.deepEqual(
+      dmSelected.contacts.map((contact) => contact.sender_id),
+      ["sender-1"],
+    );
+    assert.equal(JSON.stringify(dmSelected).includes('"456"'), false);
+    const dmGranted = await (
+      await runtime.dispatchFetch(
+        `https://app.test/api/contacts?${new URLSearchParams({
+          preview: "true",
+          connection_id: connection,
+          dm_consent_purpose: "marketing",
+          dm_consent_state: "granted",
+        })}`,
+        { headers },
+      )
+    ).json();
+    assert.equal(dmGranted.total, "0");
+    assert.equal(dmGranted.excluded.dm_consent, "1");
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`https://app.test/api/contact-segments/${dmSegment.id}`, {
+          method: "DELETE",
+          headers,
+        })
+      ).status,
+      200,
+    );
     const planInUse = await runtime.dispatchFetch(`https://app.test/api/contact-fields/${plan.id}`, {
       method: "DELETE",
       headers,

@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { membershipFor } from "./settings.ts";
-import { inboxIdentityCandidatesSql } from "./inbox-identity.ts";
+import { verifiedDmRecipientsSql } from "./inbox-identity.ts";
 
 type After = { workspace_id: string; connection_id: string; sender_id: string; recipient_id: string };
 function parseAfter(query: URLSearchParams, connection: string, sender: string): After | null {
@@ -91,12 +91,9 @@ export async function contactDetails(
       state: string;
       handoff_active: boolean;
     }>(
-      `WITH owned AS (
-         SELECT id,workspace_id,inbox_enabled_at FROM instagram_connections WHERE workspace_id=$1 AND id=$2
-       ), candidates AS (${inboxIdentityCandidatesSql}), verified AS (
-         SELECT recipient_id,(array_agg(id::text ORDER BY sent_at DESC,id DESC) FILTER (WHERE fresh))[1] AS evidence_reply_id
-         FROM candidates GROUP BY recipient_id
-         HAVING count(DISTINCT sender_id)=1 AND min(sender_id)=$3 AND bool_or(fresh)
+      `WITH verified AS (
+         SELECT recipient_id,evidence_reply_id FROM (${verifiedDmRecipientsSql("workspace_id=$1 AND id=$2")}) bridge
+         WHERE sender_id=$3
        )
        SELECT verified.recipient_id,verified.evidence_reply_id,m.message_count,m.last_message_id,m.first_message_at,m.last_message_at,
          coalesce(state.status,'open') AS state,coalesce(handoff.active,false) AS handoff_active
@@ -108,7 +105,7 @@ export async function contactDetails(
        ) m ON true
        LEFT JOIN instagram_inbox_conversations state ON state.workspace_id=$1 AND state.connection_id=$2 AND state.recipient_id=verified.recipient_id
        LEFT JOIN instagram_inbox_handoffs handoff ON handoff.workspace_id=$1 AND handoff.connection_id=$2 AND handoff.recipient_id=verified.recipient_id
-       WHERE verified.recipient_id ~ '^[0-9]{1,40}$' AND ($4::text IS NULL OR verified.recipient_id>$4)
+       WHERE ($4::text IS NULL OR verified.recipient_id>$4)
        ORDER BY verified.recipient_id LIMIT 51`,
       [workspace, connection, sender, after?.recipient_id ?? null],
     );

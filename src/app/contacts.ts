@@ -9,6 +9,7 @@ import {
   type SqlReader,
   validateFieldCondition,
 } from "./contact-fields.ts";
+import { verifiedDmRecipientsSql } from "./inbox-identity.ts";
 
 type Contact = {
   connection_id: string;
@@ -156,6 +157,14 @@ function parseConsentCondition(input: { consent_purpose?: unknown; consent_state
     throw new ApiError(400, "invalid_contact_consent");
   return { consent_purpose: purpose, consent_state: state };
 }
+// The same pair for the recorded state of the contact's verified DM conversations (verifiedDmRecipientsSql).
+function parseDmConsentCondition(input: { dm_consent_purpose?: unknown; dm_consent_state?: unknown }) {
+  const condition = parseConsentCondition({
+    consent_purpose: input.dm_consent_purpose,
+    consent_state: input.dm_consent_state,
+  });
+  return condition && { dm_consent_purpose: condition.consent_purpose, dm_consent_state: condition.consent_state };
+}
 // Contact writes share the connection row lock with delete_connection_data (FOR NO KEY UPDATE),
 // so a write either finishes before a deletion or re-checks the contact after it.
 export async function lockContactConnection(client: PoolClient, workspace: string, connectionId: string) {
@@ -184,6 +193,7 @@ type ContactConditions = {
   fieldCondition: FieldConditionSet | null;
   activity: ReturnType<typeof parseActivityWindow>;
   consent: ReturnType<typeof parseConsentCondition>;
+  dmConsent: ReturnType<typeof parseDmConsentCondition>;
   operator: "and" | "or";
 };
 // The conditions of an active saved segment of the workspace. The contact list reads it from the pool and the
@@ -210,8 +220,10 @@ export async function savedSegmentConditions(
     last_comment_period: string | null;
     consent_purpose: string | null;
     consent_state: string | null;
+    dm_consent_purpose: string | null;
+    dm_consent_state: string | null;
   }>(
-    "SELECT connection_id,tag,tags,tag_mode,field_id,field_operator,field_value,field_conditions,field_mode,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
+    "SELECT connection_id,tag,tags,tag_mode,field_id,field_operator,field_value,field_conditions,field_mode,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state,dm_consent_purpose,dm_consent_state FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
     [workspaceId, segmentId],
   );
   if (!segment.rows[0]) throw new ApiError(404, "segment_not_found");
@@ -220,6 +232,7 @@ export async function savedSegmentConditions(
     ? parseTagCondition(saved.tags, saved.tag_mode)
     : parseTagCondition(saved.tag === null ? [] : [saved.tag], null);
   const consent = parseConsentCondition(saved);
+  const dmConsent = parseDmConsentCondition(saved);
   const activity = parseActivityWindow({
     last_comment_from: saved.last_comment_from?.toISOString(),
     last_comment_before: saved.last_comment_before?.toISOString(),
@@ -241,12 +254,12 @@ export async function savedSegmentConditions(
         }
       : null;
   const operator = parseConditionOperator(saved.condition_operator, Boolean(tagCondition), Boolean(fieldCondition));
-  return { connectionId: saved.connection_id, tagCondition, fieldCondition, activity, consent, operator };
+  return { connectionId: saved.connection_id, tagCondition, fieldCondition, activity, consent, dmConsent, operator };
 }
 // The one contact predicate of the list, the preview, a saved segment and the segment export. Its fragments use
 // fixed positions: $1 workspace, $2 connection, $3 tags, $4 and $5 the caller's page cursor, $6 to $8 the field
-// set, $9 the operator, $10 and $11 the fixed window, $12 and $13 consent, $14 days and $15 the calendar period;
-// values holds them in that order. clock is the SQL expression of the evaluation time (as_of).
+// set, $9 the operator, $10 and $11 the fixed window, $12 and $13 consent, $14 days, $15 the calendar period and
+// $16 and $17 the DM consent; values holds them in that order. clock is the SQL expression of the evaluation time (as_of).
 // matches is a row condition over e and t after contactScope; activityMatches is aggregate and goes in HAVING.
 export function segmentConditionSql(
   workspaceId: string,
@@ -254,10 +267,12 @@ export function segmentConditionSql(
   clock: string,
   after: { connection_id: string; sender_id: string } | null,
 ) {
-  const { connectionId, tagCondition, fieldCondition, activity, consent, operator } = conditions;
+  const { connectionId, tagCondition, fieldCondition, activity, consent, dmConsent, operator } = conditions;
   // One statement clock for the page and preview, using elapsed hours even across DST.
   // The calendar period reads the workspace time zone in the same statement. Its local boundaries are
   // converted back with AT TIME ZONE, so PostgreSQL resolves daylight-saving gaps and overlaps.
+  // The fragment also defines dm_verified, the verified DM recipients of the selected accounts, read only with a
+  // DM consent condition ($16), so every caller that puts evaluation in its WITH gets the DM predicates.
   const evaluation = `evaluation AS MATERIALIZED (SELECT as_of,time_zone,
     local_from AT TIME ZONE time_zone AS period_from,local_before AT TIME ZONE time_zone AS period_before
     FROM (SELECT ${clock} AS as_of) clock
@@ -269,7 +284,9 @@ export function segmentConditionSql(
       WHEN 'this_month' THEN local_start WHEN 'last_month' THEN local_start - interval '1 month' END AS local_from,
       CASE $15::text
       WHEN 'today' THEN local_start + interval '1 day' WHEN 'yesterday' THEN local_start
-      WHEN 'this_month' THEN local_start + interval '1 month' WHEN 'last_month' THEN local_start END AS local_before) local_period)`;
+      WHEN 'this_month' THEN local_start + interval '1 month' WHEN 'last_month' THEN local_start END AS local_before) local_period),
+    dm_verified AS MATERIALIZED (SELECT connection_id,sender_id,recipient_id
+      FROM (${verifiedDmRecipientsSql("workspace_id=$1 AND ($2::uuid IS NULL OR id=$2) AND $16::text IS NOT NULL")}) bridge)`;
   const utc = (value: string) => `to_char(${value} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
   const activityWindow = activity?.last_comment_period
     ? `(SELECT json_build_object('from',${utc("period_from")},'before',${utc("period_before")},'time_zone',time_zone) FROM evaluation)`
@@ -284,9 +301,20 @@ export function segmentConditionSql(
   const consentScope = `FROM channel_consent_state state WHERE state.workspace_id=e.workspace_id
     AND state.connection_id=e.connection_id AND state.channel='instagram' AND state.identity_kind='comment_sender'
     AND state.identity_value=e.sender_id AND state.purpose=$12`;
-  // Recorded state only; this is not the delivery guard and never bridges DM identities.
+  // Recorded state only; this is not the delivery guard and compares only the exact comment sender identity.
   const consentMatches = `($12::text IS NULL OR CASE WHEN $13::text='no_record' THEN NOT EXISTS(SELECT 1 ${consentScope})
     ELSE EXISTS(SELECT 1 ${consentScope} AND state.decision=CASE WHEN $13='granted' THEN 'grant' ELSE 'revoke' END) END)`;
+  // The DM consent filter reads the advisory verified bridge of the contact detail (dm_verified, defined with
+  // evaluation), in the contact's own connection. A contact without a verified DM recipient never matches; one
+  // with several matches when any of them has the recorded state. It does not merge identities, write consent or
+  // decide delivery eligibility. Both predicates are uncorrelated IN lists, so each is evaluated once per statement.
+  const dmConsentScope = `FROM channel_consent_state state WHERE state.workspace_id=$1
+    AND state.connection_id=dm.connection_id AND state.channel='instagram' AND state.identity_kind='dm_recipient'
+    AND state.identity_value=dm.recipient_id AND state.purpose=$16`;
+  const dmIdentityMatches = `($16::text IS NULL OR (e.connection_id,e.sender_id) IN (SELECT connection_id,sender_id FROM dm_verified))`;
+  const dmConsentMatches = `($16::text IS NULL OR (e.connection_id,e.sender_id) IN (SELECT dm.connection_id,dm.sender_id FROM dm_verified dm
+    WHERE CASE WHEN $17::text='no_record' THEN NOT EXISTS(SELECT 1 ${dmConsentScope})
+    ELSE EXISTS(SELECT 1 ${dmConsentScope} AND state.decision=CASE WHEN $17='granted' THEN 'grant' ELSE 'revoke' END) END))`;
   // The one field predicate of the list, the preview and a saved segment: $6 holds the sorted field IDs (NULL
   // without a field condition), $7 the mode and $8 the normalized set, one row per condition. The legacy single
   // condition is a set of one. bool_and over the set is all, bool_or any; the comparisons are those of one condition.
@@ -305,15 +333,18 @@ export function segmentConditionSql(
  LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=e.workspace_id AND automation.connection_id=e.connection_id AND automation.sender_id=e.sender_id
  LEFT JOIN instagram_contact_tags t ON t.workspace_id=e.workspace_id AND t.connection_id=e.connection_id AND t.sender_id=e.sender_id
  WHERE e.workspace_id=$1 AND ($2::uuid IS NULL OR e.connection_id=$2)`;
-  // AND needs both the tag and the field predicate, OR either one; the consent filter always applies.
+  // AND needs both the tag and the field predicate, OR either one; the consent filters always apply.
   const matches = `($9::text='or' OR ${tagMatches})
  AND (($9::text='or' AND ${tagMatches}) OR ${fieldMatches})
- AND ${consentMatches}`;
+ AND ${consentMatches}
+ AND ${dmConsentMatches}`;
   return {
     evaluation,
     activityWindow,
     activityMatches,
     consentMatches,
+    dmIdentityMatches,
+    dmConsentMatches,
     fieldMatches,
     tagMatches,
     contactScope,
@@ -334,6 +365,8 @@ export function segmentConditionSql(
       consent?.consent_state ?? null,
       activity?.last_comment_days ?? null,
       activity?.last_comment_period ?? null,
+      dmConsent?.dm_consent_purpose ?? null,
+      dmConsent?.dm_consent_state ?? null,
     ],
   };
 }
@@ -358,6 +391,8 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
         "last_comment_period",
         "consent_purpose",
         "consent_state",
+        "dm_consent_purpose",
+        "dm_consent_state",
         "preview",
       ].includes(key) ||
       // Only tag may repeat; parseTagCondition refuses more than five values.
@@ -391,6 +426,8 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
         "last_comment_period",
         "consent_purpose",
         "consent_state",
+        "dm_consent_purpose",
+        "dm_consent_state",
       ].some((key) => options.has(key)))
   )
     throw new ApiError(400, "invalid_contact_request");
@@ -431,6 +468,10 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
     consent_purpose: options.get("consent_purpose"),
     consent_state: options.get("consent_state"),
   });
+  let dmConsent = parseDmConsentCondition({
+    dm_consent_purpose: options.get("dm_consent_purpose"),
+    dm_consent_state: options.get("dm_consent_state"),
+  });
   let operator = parseConditionOperator(
     options.get("condition_operator") ?? undefined,
     Boolean(tagCondition),
@@ -439,17 +480,16 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   const after = cursor(options.get("after"));
   const workspaceId = await workspaceFor(pool, user, "agent");
   if (segmentId !== null)
-    ({ connectionId, tagCondition, fieldCondition, activity, consent, operator } = await savedSegmentConditions(
-      pool,
-      workspaceId,
-      segmentId,
-    ));
+    ({ connectionId, tagCondition, fieldCondition, activity, consent, dmConsent, operator } =
+      await savedSegmentConditions(pool, workspaceId, segmentId));
   for (const condition of fieldCondition?.conditions ?? []) await validateFieldCondition(pool, workspaceId, condition);
   const {
     evaluation,
     activityWindow,
     activityMatches,
     consentMatches,
+    dmIdentityMatches,
+    dmConsentMatches,
     fieldMatches,
     tagMatches,
     contactScope,
@@ -457,7 +497,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
     values,
   } = segmentConditionSql(
     workspaceId,
-    { connectionId, tagCondition, fieldCondition, activity, consent, operator },
+    { connectionId, tagCondition, fieldCondition, activity, consent, dmConsent, operator },
     "statement_timestamp()",
     after,
   );
@@ -476,20 +516,25 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   const query = preview
     ? `WITH ${evaluation}, contact_filters AS MATERIALIZED (
  SELECT e.connection_id,e.sender_id,${tagMatches} AS tag_matches,
- ${fieldMatches} AS field_matches,${activityMatches} AS activity_matches,${consentMatches} AS consent_matches
+ ${fieldMatches} AS field_matches,${activityMatches} AS activity_matches,${consentMatches} AS consent_matches,
+ ${dmIdentityMatches} AS dm_identity_matches,${dmConsentMatches} AS dm_consent_matches
  ${contactScope}
  GROUP BY e.workspace_id,e.connection_id,e.sender_id,t.tags
 ), outcomes AS (
- SELECT *,activity_matches AND consent_matches AND CASE WHEN $9::text='or' THEN tag_matches OR field_matches ELSE tag_matches AND field_matches END AS matched
+ SELECT *,activity_matches AND consent_matches AND dm_identity_matches AND dm_consent_matches
+   AND CASE WHEN $9::text='or' THEN tag_matches OR field_matches ELSE tag_matches AND field_matches END AS matched,
+ activity_matches AND consent_matches AND dm_identity_matches AND dm_consent_matches AS limits_match
  FROM contact_filters
 ), summary AS (
  SELECT count(*)::text AS preview_evaluated,
  (count(*) FILTER (WHERE matched))::text AS preview_total,
  (count(*) FILTER (WHERE NOT activity_matches))::text AS preview_excluded_activity,
  (count(*) FILTER (WHERE activity_matches AND NOT consent_matches))::text AS preview_excluded_consent,
- (count(*) FILTER (WHERE activity_matches AND consent_matches AND NOT matched AND NOT tag_matches AND field_matches))::text AS preview_excluded_tag,
- (count(*) FILTER (WHERE activity_matches AND consent_matches AND NOT matched AND tag_matches AND NOT field_matches))::text AS preview_excluded_field,
- (count(*) FILTER (WHERE activity_matches AND consent_matches AND NOT matched AND NOT tag_matches AND NOT field_matches))::text AS preview_excluded_both
+ (count(*) FILTER (WHERE activity_matches AND consent_matches AND NOT dm_identity_matches))::text AS preview_excluded_dm_identity,
+ (count(*) FILTER (WHERE activity_matches AND consent_matches AND dm_identity_matches AND NOT dm_consent_matches))::text AS preview_excluded_dm_consent,
+ (count(*) FILTER (WHERE limits_match AND NOT matched AND NOT tag_matches AND field_matches))::text AS preview_excluded_tag,
+ (count(*) FILTER (WHERE limits_match AND NOT matched AND tag_matches AND NOT field_matches))::text AS preview_excluded_field,
+ (count(*) FILTER (WHERE limits_match AND NOT matched AND NOT tag_matches AND NOT field_matches))::text AS preview_excluded_both
  FROM outcomes
 )
  SELECT page.*,summary.*,${activityWindow} AS activity_window FROM summary LEFT JOIN LATERAL (${contactQuery}) page ON true
@@ -507,6 +552,8 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       preview_excluded_both?: string;
       preview_excluded_activity?: string;
       preview_excluded_consent?: string;
+      preview_excluded_dm_identity?: string;
+      preview_excluded_dm_consent?: string;
       activity_window?: { from: string; before: string; time_zone?: string };
     }
   >(query, values);
@@ -522,6 +569,8 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
         preview_excluded_both,
         preview_excluded_activity,
         preview_excluded_consent,
+        preview_excluded_dm_identity,
+        preview_excluded_dm_consent,
         activity_window,
         ...contact
       }) => (contact.connection_id === null ? [] : [contact]),
@@ -539,6 +588,12 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
           excluded: {
             ...(activity ? { activity: summary?.preview_excluded_activity ?? "0" } : {}),
             ...(consent ? { consent: summary?.preview_excluded_consent ?? "0" } : {}),
+            ...(dmConsent
+              ? {
+                  dm_identity: summary?.preview_excluded_dm_identity ?? "0",
+                  dm_consent: summary?.preview_excluded_dm_consent ?? "0",
+                }
+              : {}),
             tag: summary?.preview_excluded_tag ?? "0",
             field: summary?.preview_excluded_field ?? "0",
             both: summary?.preview_excluded_both ?? "0",
@@ -582,7 +637,7 @@ export async function saveContactTags(pool: Pool, user: User, connectionId: stri
 
 // The columns of a segment list item, also returned by create and edit.
 const SEGMENT_COLUMNS =
-  "id,name,connection_id,tag,tags,tag_mode,field_id,field_operator,field_value,field_conditions,field_mode,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state,version";
+  "id,name,connection_id,tag,tags,tag_mode,field_id,field_operator,field_value,field_conditions,field_mode,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state,dm_consent_purpose,dm_consent_state,version";
 
 export async function listContactSegments(pool: Pool, user: User) {
   const workspace = await workspaceFor(pool, user, "agent");
@@ -614,6 +669,8 @@ function segmentResult(row: {
   last_comment_period?: string | null;
   consent_purpose?: string | null;
   consent_state?: string | null;
+  dm_consent_purpose?: string | null;
+  dm_consent_state?: string | null;
 }) {
   const {
     field_id,
@@ -628,6 +685,8 @@ function segmentResult(row: {
     last_comment_period,
     consent_purpose,
     consent_state,
+    dm_consent_purpose,
+    dm_consent_state,
     tag,
     tags,
     tag_mode,
@@ -652,6 +711,7 @@ function segmentResult(row: {
     ...(last_comment_days ? { last_comment_days } : {}),
     ...(last_comment_period ? { last_comment_period } : {}),
     ...(consent_purpose && consent_state ? { consent_purpose, consent_state } : {}),
+    ...(dm_consent_purpose && dm_consent_state ? { dm_consent_purpose, dm_consent_state } : {}),
     ...(last_comment_from && last_comment_before
       ? { last_comment_from: last_comment_from.toISOString(), last_comment_before: last_comment_before.toISOString() }
       : {}),
@@ -678,6 +738,8 @@ const SEGMENT_DEFINITION_KEYS = [
   "last_comment_period",
   "consent_purpose",
   "consent_state",
+  "dm_consent_purpose",
+  "dm_consent_state",
 ];
 
 // Create and edit share this parser, so both accept and refuse the same definitions. The body is a full
@@ -707,16 +769,17 @@ export function parseSegmentDefinition(input: unknown, extraKeys: readonly strin
   const fieldCondition = parseFieldConditionSet(input, input.field_conditions, input.field_mode);
   const activity = parseActivityWindow(input);
   const consent = parseConsentCondition(input);
+  const dmConsent = parseDmConsentCondition(input);
   const operator = parseConditionOperator(input.condition_operator, Boolean(tagCondition), Boolean(fieldCondition));
-  return { input, name, connectionId, tagCondition, fieldCondition, activity, consent, operator };
+  return { input, name, connectionId, tagCondition, fieldCondition, activity, consent, dmConsent, operator };
 }
 type SegmentDefinition = ReturnType<typeof parseSegmentDefinition>;
 
 // The stored columns of a definition, in the order of segmentDefinitionValues.
 const SEGMENT_DEFINITION_COLUMNS =
-  "name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state,last_comment_days,last_comment_period,tags,tag_mode,field_conditions,field_mode";
+  "name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state,last_comment_days,last_comment_period,tags,tag_mode,field_conditions,field_mode,dm_consent_purpose,dm_consent_state";
 function segmentDefinitionValues(definition: SegmentDefinition) {
-  const { name, connectionId, tagCondition, fieldCondition, activity, consent, operator } = definition;
+  const { name, connectionId, tagCondition, fieldCondition, activity, consent, dmConsent, operator } = definition;
   // One tag is stored in the legacy tag column; two or more in tags with their mode.
   const single = tagCondition?.tags.length === 1;
   // One field condition is stored in the legacy field columns; two or three in field_conditions with their mode.
@@ -740,6 +803,8 @@ function segmentDefinitionValues(definition: SegmentDefinition) {
     tagCondition && !single ? tagCondition.mode : null,
     multiField ? JSON.stringify(multiField.conditions) : null,
     multiField?.mode ?? null,
+    dmConsent?.dm_consent_purpose ?? null,
+    dmConsent?.dm_consent_state ?? null,
   ];
 }
 
@@ -771,7 +836,7 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
     await validateSegmentReferences(client, workspace, definition);
     const result = await client.query(
       `INSERT INTO instagram_contact_segments(workspace_id,${SEGMENT_DEFINITION_COLUMNS})
- SELECT $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15::text[],$16,$17::jsonb,$18 WHERE (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived)<50
+ SELECT $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15::text[],$16,$17::jsonb,$18,$19,$20 WHERE (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived)<50
  RETURNING ${SEGMENT_COLUMNS}`,
       [workspace, ...segmentDefinitionValues(definition)],
     );
@@ -825,10 +890,10 @@ export async function updateContactSegment(
     // IS DISTINCT FROM compares in SQL, so jsonb and timestamps need no conversion; an unchanged row updates nothing.
     const updated = (
       await client.query(
-        `UPDATE instagram_contact_segments SET (${SEGMENT_DEFINITION_COLUMNS})=($3,$4,$5,$6,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text,$16::text[],$17::text,$18::jsonb,$19::text),
+        `UPDATE instagram_contact_segments SET (${SEGMENT_DEFINITION_COLUMNS})=($3,$4,$5,$6,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text,$16::text[],$17::text,$18::jsonb,$19::text,$20::text,$21::text),
    version=version+1
  WHERE workspace_id=$1 AND id=$2
-   AND (${SEGMENT_DEFINITION_COLUMNS}) IS DISTINCT FROM ($3,$4::uuid,$5,$6::uuid,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text,$16::text[],$17::text,$18::jsonb,$19::text)
+   AND (${SEGMENT_DEFINITION_COLUMNS}) IS DISTINCT FROM ($3,$4::uuid,$5,$6::uuid,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text,$16::text[],$17::text,$18::jsonb,$19::text,$20::text,$21::text)
  RETURNING ${SEGMENT_COLUMNS}`,
         [workspace, id, ...segmentDefinitionValues(definition)],
       )
