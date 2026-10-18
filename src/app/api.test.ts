@@ -1435,6 +1435,131 @@ test("contact DM consent filters validate an exact purpose-state pair before dat
   }
 });
 
+test("contact DM activity takes canonical days 1 to 366 in $18 and refuses other values before database access", async () => {
+  let values: unknown[] = [];
+  let statement = "";
+  let queried = false;
+  const dmWindow = { from: "2026-10-15T03:00:00.000000Z", before: "2026-10-18T03:00:00.000000Z" };
+  const pool = {
+    query: async (sql: string, parameters: unknown[]) => {
+      queried = true;
+      if (sql.includes("workspace_members")) return { rows: [{ workspace_id: workspaceId, role: "owner" }] };
+      values = parameters;
+      statement = sql;
+      return {
+        rows: [
+          {
+            connection_id: null,
+            preview_total: "0",
+            preview_evaluated: "9007199254740997",
+            preview_excluded_activity: "1",
+            preview_excluded_consent: "0",
+            preview_excluded_dm_identity: "9007199254740993",
+            preview_excluded_dm_consent: "1",
+            preview_excluded_dm_activity: "2",
+            preview_excluded_tag: "0",
+            preview_excluded_field: "0",
+            preview_excluded_both: "0",
+            dm_activity_window: dmWindow,
+          },
+        ],
+      };
+    },
+    end: async () => {},
+  } as unknown as Pool;
+  const request = (query: URLSearchParams) =>
+    appApi(
+      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
+      config,
+      () => pool,
+      mediaFetch(),
+    );
+  for (const days of ["1", "30", "366"]) {
+    const preview = await request(new URLSearchParams({ preview: "true", last_dm_days: days }));
+    assert.equal(preview.status, 200);
+    const body = await preview.json();
+    // DM activity alone adds dm_identity and dm_activity, and returns only the window's UTC bounds.
+    assert.deepEqual(body, {
+      contacts: [],
+      dm_activity_window: dmWindow,
+      after: null,
+      total: "0",
+      evaluated: "9007199254740997",
+      excluded: { dm_identity: "9007199254740993", dm_activity: "2", tag: "0", field: "0", both: "0" },
+    });
+    assert.equal(values.length, 18);
+    assert.equal(values[17], Number(days));
+    assert.deepEqual(values.slice(13, 17), [null, null, null, null]);
+    assert.match(statement, /\$18::int IS NOT NULL/);
+    const list = await request(new URLSearchParams({ last_dm_days: days }));
+    assert.deepEqual(await list.json(), { contacts: [], dm_activity_window: dmWindow, after: null });
+    assert.equal(values[17], Number(days));
+  }
+  // Every DM and comment limit together: the reasons keep their order.
+  const all = await request(
+    new URLSearchParams({
+      preview: "true",
+      last_comment_days: "7",
+      consent_purpose: "marketing",
+      consent_state: "granted",
+      dm_consent_purpose: "service_reply",
+      dm_consent_state: "granted",
+      last_dm_days: "3",
+    }),
+  );
+  const allBody = await all.json();
+  assert.deepEqual(Object.keys(allBody.excluded), [
+    "activity",
+    "consent",
+    "dm_identity",
+    "dm_consent",
+    "dm_activity",
+    "tag",
+    "field",
+    "both",
+  ]);
+  assert.equal(values[13], 7);
+  assert.deepEqual(values.slice(15, 18), ["service_reply", "granted", 3]);
+  // Each comment activity form combines with DM activity.
+  for (const activity of [
+    { last_comment_period: "today" },
+    { last_comment_from: "2026-10-01T00:00:00.000Z", last_comment_before: "2026-10-02T00:00:00.000Z" },
+  ] as Record<string, string>[]) {
+    const response = await request(new URLSearchParams({ ...activity, last_dm_days: "5" }));
+    assert.equal(response.status, 200);
+    assert.equal(values[17], 5);
+  }
+  // Without the condition the key, the window and the parameter stay absent.
+  const none = await request(
+    new URLSearchParams({ preview: "true", dm_consent_purpose: "marketing", dm_consent_state: "granted" }),
+  );
+  const noneBody = await none.json();
+  assert.equal("dm_activity_window" in noneBody, false);
+  assert.deepEqual(Object.keys(noneBody.excluded), ["dm_identity", "dm_consent", "tag", "field", "both"]);
+  assert.equal(values[17], null);
+  for (const invalid of ["0", "367", "999", "1000", "07", "+7", "7.0", "1e2", " 7", "7 ", "", "-1", "seven"]) {
+    queried = false;
+    const response = await request(new URLSearchParams({ last_dm_days: invalid }));
+    assert.equal(response.status, 400, invalid);
+    assert.equal((await response.json()).error, "invalid_contact_activity");
+    assert.equal(queried, false);
+  }
+  queried = false;
+  const mixed = await request(
+    new URLSearchParams({ last_dm_days: "7", segment_id: "44444444-4444-4444-8444-444444444444" }),
+  );
+  assert.equal(mixed.status, 400);
+  assert.equal((await mixed.json()).error, "invalid_contact_request");
+  assert.equal(queried, false);
+  const duplicate = new URLSearchParams({ last_dm_days: "7" });
+  duplicate.append("last_dm_days", "7");
+  queried = false;
+  const repeated = await request(duplicate);
+  assert.equal(repeated.status, 400);
+  assert.equal((await repeated.json()).error, "invalid_contact_request");
+  assert.equal(queried, false);
+});
+
 test("contact calendar periods accept four exact values and refuse mixing before database access", async () => {
   let values: unknown[] = [];
   let queried = false;
@@ -1484,7 +1609,7 @@ test("contact calendar periods accept four exact values and refuse mixing before
       excluded: { activity: "9007199254740993", tag: "0", field: "0", both: "0" },
     });
     // Appended last, so the earlier parameter positions stay as they were.
-    assert.equal(values.length, 17);
+    assert.equal(values.length, 18);
     assert.deepEqual(values.slice(9, 11), [null, null]);
     assert.equal(values[13], null);
     assert.equal(values[14], period);
@@ -1727,6 +1852,37 @@ test("segment create and edit share one definition parser", async () => {
   }
 });
 
+test("segment create and edit share last_dm_days and refuse an invalid one before the database", async () => {
+  for (const [body, code] of [
+    [{ name: "Leads", expected_version: 1, last_dm_days: 0 }, "invalid_contact_activity"],
+    [{ name: "Leads", expected_version: 1, last_dm_days: 367 }, "invalid_contact_activity"],
+    [{ name: "Leads", expected_version: 1, last_dm_days: "7" }, "invalid_contact_activity"],
+  ] as const)
+    await assert.rejects(updateContactSegment(segmentPool, segmentUser, segmentId, body), refused(code));
+  const definitions = [
+    {
+      name: "DM activity",
+      last_dm_days: 30,
+      last_comment_days: 7,
+      dm_consent_purpose: "marketing",
+      dm_consent_state: "granted",
+    },
+    { name: "No DM activity", last_dm_days: null },
+  ];
+  for (const definition of definitions) {
+    await assert.rejects(createContactSegment(segmentPool, segmentUser, definition), reachedDatabase);
+    await assert.rejects(
+      updateContactSegment(segmentPool, segmentUser, segmentId, { ...definition, expected_version: 1 }),
+      reachedDatabase,
+    );
+    const { input: _created, ...created } = parseSegmentDefinition(definition);
+    const { input: _edited, ...edited } = parseSegmentDefinition({ ...definition, expected_version: 3 }, [
+      "expected_version",
+    ]);
+    assert.deepEqual(edited, created);
+  }
+});
+
 test("segment definitions take the DM consent pair beside the comment consent pair", () => {
   const parsed = parseSegmentDefinition({
     name: "DM",
@@ -1748,6 +1904,31 @@ test("segment definitions take the DM consent pair beside the comment consent pa
     { dm_consent_purpose: ["marketing"], dm_consent_state: "granted" },
   ])
     assert.throws(() => parseSegmentDefinition({ name: "Invalid", ...invalid }), refused("invalid_contact_consent"));
+});
+
+test("segment definitions take last_dm_days as an integer beside every comment activity form", () => {
+  for (const days of [1, 30, 366]) {
+    const parsed = parseSegmentDefinition({ name: "DM", last_dm_days: days });
+    assert.deepEqual(parsed.dmActivity, { last_dm_days: days });
+    assert.equal(parsed.activity, null);
+  }
+  assert.equal(parseSegmentDefinition({ name: "None" }).dmActivity, null);
+  assert.equal(parseSegmentDefinition({ name: "Null", last_dm_days: null }).dmActivity, null);
+  // Independent of the comment activity forms: each combination keeps both conditions.
+  for (const activity of [
+    { last_comment_days: 7 },
+    { last_comment_period: "today" },
+    { last_comment_from: "2026-10-01T00:00:00.000Z", last_comment_before: "2026-10-02T00:00:00.000Z" },
+  ]) {
+    const parsed = parseSegmentDefinition({ name: "Both", last_dm_days: 3, ...activity });
+    assert.deepEqual(parsed.dmActivity, { last_dm_days: 3 });
+    assert.deepEqual(parsed.activity, activity);
+  }
+  for (const invalid of [0, 367, -1, 1.5, "7", true, [7], Number.NaN])
+    assert.throws(
+      () => parseSegmentDefinition({ name: "Invalid", last_dm_days: invalid }),
+      refused("invalid_contact_activity"),
+    );
 });
 
 test("segment definitions take a calendar period as an exact string and refuse mixing with other activity forms", async () => {
@@ -1809,7 +1990,7 @@ test("contact tag filters repeat tag up to five times with one mode and refuse o
   const single = await request("tag=%20Lead%20");
   assert.equal(single.status, 200);
   assert.deepEqual(await single.json(), { contacts: [], after: null });
-  assert.equal(values.length, 17);
+  assert.equal(values.length, 18);
   assert.deepEqual(values[2], ["lead"]);
   assert.match(statement, all);
   assert.doesNotMatch(statement, any);
@@ -1951,7 +2132,7 @@ test("contact field filters take the legacy keys or a field_conditions set of up
   );
   assert.equal(legacy.status, 200);
   assert.deepEqual(await legacy.json(), { contacts: [], after: null });
-  assert.equal(values.length, 17);
+  assert.equal(values.length, 18);
   assert.deepEqual(values.slice(5, 7), [[setFields[0]], "all"]);
   assert.deepEqual(JSON.parse(String(values[7])), [text]);
   for (const [query, conditions, mode] of [

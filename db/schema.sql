@@ -549,6 +549,18 @@ DO $$ BEGIN
     );
   END IF;
 END $$;
+-- Recent received DMs of the contact's verified DM conversations only; a segment never grants delivery permission.
+ALTER TABLE instagram_contact_segments ADD COLUMN IF NOT EXISTS last_dm_days integer;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname='contact_segment_dm_activity') THEN
+    ALTER TABLE instagram_contact_segments ADD CONSTRAINT contact_segment_dm_activity CHECK(
+      last_dm_days IS NULL OR last_dm_days BETWEEN 1 AND 366
+    );
+  END IF;
+END $$;
+-- The latest received DM of one conversation for the DM activity filter, read once per conversation.
+CREATE INDEX IF NOT EXISTS instagram_inbox_messages_latest_idx
+  ON instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS private_reply_outbox_identity_idx
   ON private_reply_outbox(id,connection_id,workspace_id);
 CREATE TABLE IF NOT EXISTS instagram_inbox_handoffs (

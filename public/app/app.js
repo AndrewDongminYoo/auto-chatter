@@ -2605,7 +2605,8 @@ function contactActivityWindow() {
     throw new Error(errors.invalid_contact_activity);
   return { last_comment_from: start.toISOString(), last_comment_before: end.toISOString() };
 }
-function relativeActivitySummary(window, days) {
+// label names the window in its text: empty for comment activity, "DM " for the recent received DM window.
+function relativeActivitySummary(window, days, label = "") {
   if (!days) return "";
   const valid = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(value);
   const milliseconds = (value) => Date.parse(value.slice(0, -4) + "Z");
@@ -2614,8 +2615,8 @@ function relativeActivitySummary(window, days) {
     !valid(window?.before) ||
     milliseconds(window.before) - milliseconds(window.from) !== Number(days) * 86400000
   )
-    throw new Error("최근 활동의 조회 기간을 확인할 수 없습니다.");
-  return ` 이번 조회 기간(UTC): ${window.from} 이상, ${window.before} 미만. 조회와 다음 페이지마다 다시 계산합니다.`;
+    throw new Error(`최근 ${label}활동의 조회 기간을 확인할 수 없습니다.`);
+  return ` 이번 ${label}조회 기간(UTC): ${window.from} 이상, ${window.before} 미만. 조회와 다음 페이지마다 다시 계산합니다.`;
 }
 function calendarActivitySummary(window, period) {
   if (!period) return "";
@@ -2689,12 +2690,23 @@ function contactDmConsentCondition() {
     throw new Error(errors.invalid_contact_consent);
   return { dm_consent_purpose: purpose, dm_consent_state: state };
 }
+// Recent received DMs of the contact's verified DM conversations; an empty field means no condition. A number
+// input reads as empty for text it cannot parse, so badInput refuses that instead of dropping the condition.
+function contactDmActivityCondition() {
+  const input = byId("contacts-filter").elements.last_dm_days;
+  const days = input.value;
+  if (!days && !input.validity.badInput) return null;
+  if (!/^[1-9][0-9]{0,2}$/.test(days) || !input.validity.valid || Number(days) > 366)
+    throw new Error("최근 받은 DM 일수는 1~366 사이의 정수로 입력하거나 비워 주세요.");
+  return { last_dm_days: Number(days) };
+}
 function contactDraftQuery() {
   const fields = byId("contacts-filter").elements;
   const fieldKeys = contactFieldConditionKeys();
   const activity = contactActivityWindow();
   const consent = contactConsentCondition();
   const dmConsent = contactDmConsentCondition();
+  const dmActivity = contactDmActivityCondition();
   const query = new URLSearchParams();
   if (fields.connection_id.value) query.set("connection_id", fields.connection_id.value);
   const tags = contactFilterTags();
@@ -2704,6 +2716,7 @@ function contactDraftQuery() {
   if (activity) for (const [key, value] of Object.entries(activity)) query.set(key, value);
   if (consent) for (const [key, value] of Object.entries(consent)) query.set(key, value);
   if (dmConsent) for (const [key, value] of Object.entries(dmConsent)) query.set(key, value);
+  if (dmActivity) query.set("last_dm_days", dmActivity.last_dm_days);
   for (const [key, value] of Object.entries(fieldKeys))
     query.set(key, key === "field_value" || key === "field_conditions" ? JSON.stringify(value) : value);
   return query;
@@ -2748,8 +2761,11 @@ async function loadContacts(more = false) {
     const segment = contactSegments.find((s) => s.id === query.get("segment_id"));
     const days = query.get("last_comment_days") || segment?.last_comment_days;
     const calendar = query.get("last_comment_period") || segment?.last_comment_period;
+    const dmDays = query.get("last_dm_days") || segment?.last_dm_days;
     const period =
-      relativeActivitySummary(page.activity_window, days) + calendarActivitySummary(page.activity_window, calendar);
+      relativeActivitySummary(page.activity_window, days) +
+      calendarActivitySummary(page.activity_window, calendar) +
+      relativeActivitySummary(page.dm_activity_window, dmDays, "DM ");
     for (const contact of page.contacts)
       if (!purgedContactConnections.has(contact.connection_id)) byId("contacts-list").append(contactCard(contact));
     contactsAfter = page.after;
@@ -2814,14 +2830,17 @@ byId("segment-preview").addEventListener("click", async () => {
     if (!current()) return;
     const period =
       relativeActivitySummary(page.activity_window, query.get("last_comment_days")) +
-      calendarActivitySummary(page.activity_window, query.get("last_comment_period"));
+      calendarActivitySummary(page.activity_window, query.get("last_comment_period")) +
+      relativeActivitySummary(page.dm_activity_window, query.get("last_dm_days"), "DM ");
     const activityCount =
       query.has("last_comment_from") || query.has("last_comment_days") || query.has("last_comment_period")
         ? page.excluded?.activity
         : "0";
     const consentCount = query.has("consent_purpose") ? page.excluded?.consent : "0";
-    const dmIdentityCount = query.has("dm_consent_purpose") ? page.excluded?.dm_identity : "0";
+    const dmIdentityCount =
+      query.has("dm_consent_purpose") || query.has("last_dm_days") ? page.excluded?.dm_identity : "0";
     const dmConsentCount = query.has("dm_consent_purpose") ? page.excluded?.dm_consent : "0";
+    const dmActivityCount = query.has("last_dm_days") ? page.excluded?.dm_activity : "0";
     const counts = [
       page.total,
       page.evaluated,
@@ -2832,6 +2851,7 @@ byId("segment-preview").addEventListener("click", async () => {
       consentCount,
       dmIdentityCount,
       dmConsentCount,
+      dmActivityCount,
     ];
     if (counts.some((value) => typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)))
       throw new Error("대상 수와 제외 사유를 확인할 수 없습니다.");
@@ -2840,6 +2860,7 @@ byId("segment-preview").addEventListener("click", async () => {
       BigInt(consentCount) +
       BigInt(dmIdentityCount) +
       BigInt(dmConsentCount) +
+      BigInt(dmActivityCount) +
       BigInt(page.excluded.tag) +
       BigInt(page.excluded.field) +
       BigInt(page.excluded.both);
@@ -2854,6 +2875,7 @@ byId("segment-preview").addEventListener("click", async () => {
       [consentCount, "동의 기록 조건 불일치"],
       [dmIdentityCount, "확인된 DM 대화 없음"],
       [dmConsentCount, "DM 동의 기록 조건 불일치"],
+      [dmActivityCount, "최근 받은 DM 없음"],
       [page.excluded.tag, "태그 조건만 불일치"],
       [page.excluded.field, "추가 정보 조건만 불일치"],
       [page.excluded.both, "태그·추가 정보 조건 모두 불일치"],
@@ -2947,6 +2969,7 @@ function fillSegmentConditions(segment) {
   fields.dm_consent_purpose.value = segment?.dm_consent_purpose || "";
   fields.dm_consent_state.value = segment?.dm_consent_state || "";
   contactConsentControls();
+  fields.last_dm_days.value = segment?.last_dm_days || "";
   fieldFilterControls();
   rows.forEach((row, index) => {
     const saved = savedFields[index];
@@ -3003,6 +3026,7 @@ function segmentSummary(segment) {
     parts.push(
       `DM 동의 기록 ${optionLabel(fields.dm_consent_purpose, segment.dm_consent_purpose)} ${optionLabel(fields.dm_consent_state, segment.dm_consent_state)}`,
     );
+  if (segment.last_dm_days) parts.push(`최근 ${segment.last_dm_days}일 안에 받은 DM`);
   return parts.join(" · ");
 }
 async function loadContactSegments(force = false) {
@@ -3163,6 +3187,7 @@ byId("segment-save").addEventListener("submit", (event) => {
     Object.assign(payload, contactActivityWindow());
     Object.assign(payload, contactConsentCondition());
     Object.assign(payload, contactDmConsentCondition());
+    Object.assign(payload, contactDmActivityCondition());
   } catch (error) {
     notice(error.message, true);
     return;
@@ -3225,6 +3250,7 @@ byId("segment-archive").addEventListener("click", (event) => {
           query.set("dm_consent_purpose", segment.dm_consent_purpose);
           query.set("dm_consent_state", segment.dm_consent_state);
         }
+        if (segment.last_dm_days) query.set("last_dm_days", segment.last_dm_days);
         if (segment.field_conditions) {
           query.set("field_conditions", JSON.stringify(segment.field_conditions));
           query.set("field_mode", segment.field_mode);

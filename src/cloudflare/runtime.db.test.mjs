@@ -1341,6 +1341,63 @@ test("workerd contact API uses restricted server privileges and verified workspa
       ).status,
       200,
     );
+    // The restricted server role saves, edits and evaluates a DM activity segment: 456's latest stored DM is from
+    // this run, so it lies inside the last day.
+    const dmActivityCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Recent DM", connection_id: connection, last_dm_days: 1 }),
+    });
+    assert.equal(dmActivityCreated.status, 201, await dmActivityCreated.clone().text());
+    const dmActivitySegment = await dmActivityCreated.json();
+    assert.equal(dmActivitySegment.last_dm_days, 1);
+    assert.deepEqual(
+      (await (await runtime.dispatchFetch("https://app.test/api/contact-segments", { headers })).json()).segments.find(
+        (segment) => segment.id === dmActivitySegment.id,
+      ),
+      dmActivitySegment,
+    );
+    const dmActivityEdited = await runtime.dispatchFetch(
+      `https://app.test/api/contact-segments/${dmActivitySegment.id}`,
+      {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          name: "Recent DM",
+          connection_id: connection,
+          last_dm_days: 7,
+          expected_version: dmActivitySegment.version,
+        }),
+      },
+    );
+    assert.equal(dmActivityEdited.status, 200, await dmActivityEdited.clone().text());
+    assert.equal((await dmActivityEdited.json()).last_dm_days, 7);
+    const dmActivitySelected = await (
+      await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${dmActivitySegment.id}`, { headers })
+    ).json();
+    assert.deepEqual(
+      dmActivitySelected.contacts.map((contact) => contact.sender_id),
+      ["sender-1"],
+    );
+    assert.deepEqual(Object.keys(dmActivitySelected.dm_activity_window), ["from", "before"]);
+    assert.equal(JSON.stringify(dmActivitySelected).includes('"456"'), false);
+    const dmActivityPreview = await (
+      await runtime.dispatchFetch(
+        `https://app.test/api/contacts?${new URLSearchParams({ preview: "true", connection_id: connection, last_dm_days: "7" })}`,
+        { headers },
+      )
+    ).json();
+    assert.equal(dmActivityPreview.total, "1");
+    assert.equal(dmActivityPreview.excluded.dm_activity, "0");
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`https://app.test/api/contact-segments/${dmActivitySegment.id}`, {
+          method: "DELETE",
+          headers,
+        })
+      ).status,
+      200,
+    );
     const planInUse = await runtime.dispatchFetch(`https://app.test/api/contact-fields/${plan.id}`, {
       method: "DELETE",
       headers,
