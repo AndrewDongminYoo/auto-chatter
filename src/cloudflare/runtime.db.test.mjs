@@ -1668,3 +1668,121 @@ test("workerd contact API uses restricted server privileges and verified workspa
     await pool.end();
   }
 });
+
+// A separate runtime gives this test its own CSV export allowance, so the contact API test above keeps its counts (#26).
+test("workerd segment CSV export uses restricted server privileges and the saved segment", async () => {
+  const databaseUrl = process.env.TEST_DATABASE_URL;
+  const url = new URL(databaseUrl);
+  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
+    throw new Error("Database tests require a local automations_test database");
+  const pool = new Pool({ connectionString: databaseUrl });
+  const workspace = "11111111-1111-4111-8111-111111111111",
+    user = "66666666-6666-4666-8666-666666666666",
+    foreign = "77777777-7777-4777-8777-777777777777",
+    connection = "22222222-2222-4222-8222-222222222222";
+  const serverUrl = new URL(databaseUrl);
+  serverUrl.username = "auto_chatter_server";
+  serverUrl.password = "runtime-test-only";
+  const config = JSON.parse(await readFile(new URL("../../wrangler.json", import.meta.url), "utf8"));
+  const runtime = new Miniflare({
+    modules: true,
+    scriptPath: ".wrangler/build/index.js",
+    compatibilityDate: config.compatibility_date,
+    compatibilityFlags: config.compatibility_flags,
+    hyperdrives: { HYPERDRIVE: serverUrl.href },
+    durableObjects: Object.fromEntries(
+      config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }]),
+    ),
+    bindings: {
+      SUPABASE_URL: "https://auth-test.supabase.co",
+      SUPABASE_SECRET_KEY: "sb_secret_test",
+      SEND_ENABLED: "false",
+    },
+    outboundService: async (request) => {
+      assert.equal(new URL(request.url).origin, "https://auth-test.supabase.co");
+      return Response.json({
+        id: request.headers.get("authorization") === "Bearer foreign" ? foreign : user,
+        email: "owner@example.test",
+        email_confirmed_at: "2026-09-27",
+      });
+    },
+  });
+  try {
+    await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
+    await pool.query("TRUNCATE workspaces CASCADE");
+    await pool.query("INSERT INTO workspaces VALUES($1),($2)", [workspace, foreign]);
+    await pool.query("INSERT INTO workspace_members VALUES($1,$2),($3,$3)", [user, workspace, foreign]);
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'123',true)", [
+      connection,
+      workspace,
+    ]);
+    await pool.query(
+      `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+       VALUES($1,$2,'comment-1','media','sender-1','private comment'),($1,$2,'comment-2','media','sender-2','other comment')`,
+      [workspace, connection],
+    );
+    await pool.query(
+      "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1',ARRAY['lead'])",
+      [workspace, connection],
+    );
+    await pool.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8"));
+    await pool.query("ALTER ROLE auto_chatter_server LOGIN PASSWORD 'runtime-test-only'");
+    const headers = {
+      cookie: "__Host-ac-access=owned",
+      origin: "https://app.test",
+      "content-type": "application/json",
+    };
+    const created = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "CSV export leads", tag: "lead" }),
+    });
+    assert.equal(created.status, 201, await created.clone().text());
+    const segment = await created.json();
+    const segmentPath = `https://app.test/api/contacts/export.csv?segment_id=${segment.id}`;
+    // A malformed segment ID is refused before the allowance is spent.
+    assert.equal(
+      (await runtime.dispatchFetch("https://app.test/api/contacts/export.csv?segment_id=not-a-uuid", { headers }))
+        .status,
+      400,
+    );
+    const exported = await runtime.dispatchFetch(segmentPath, { headers });
+    assert.equal(exported.status, 200, await exported.clone().text());
+    assert.equal(exported.headers.get("content-type"), "text/csv; charset=utf-8");
+    assert.match(
+      exported.headers.get("content-disposition") ?? "",
+      new RegExp(`filename="auto-chatter-contacts-v1-segment-${segment.id}-\\d{4}-\\d{2}-\\d{2}\\.csv"`),
+    );
+    const rows = (await exported.text()).split("\r\n").slice(1, -1);
+    assert.equal(rows.length, 1);
+    assert.ok(rows[0].includes("'sender-1"));
+    assert.ok(rows[0].includes('""lead""'));
+    assert.doesNotMatch(rows.join(""), /sender-2|private comment|CSV export leads/);
+    assert.equal(
+      (await runtime.dispatchFetch(segmentPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } }))
+        .status,
+      404,
+    );
+    await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [user]);
+    const denied = await runtime.dispatchFetch(segmentPath, { headers });
+    assert.equal(denied.status, 403);
+    assert.deepEqual(await denied.json(), { error: "role_forbidden" });
+    assert.equal(denied.headers.has("content-disposition"), false);
+    await pool.query("UPDATE workspace_members SET role='owner' WHERE user_id=$1", [user]);
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`https://app.test/api/contact-segments/${segment.id}`, {
+          method: "DELETE",
+          headers,
+        })
+      ).status,
+      200,
+    );
+    const archived = await runtime.dispatchFetch(segmentPath, { headers });
+    assert.equal(archived.status, 404);
+    assert.equal(archived.headers.has("content-disposition"), false);
+  } finally {
+    await runtime.dispose();
+    await pool.end();
+  }
+});

@@ -34,6 +34,7 @@ import {
   ApiError,
   AuthClient,
   clearSession,
+  isUuid,
   json,
   readJson,
   requireSameOrigin,
@@ -231,7 +232,9 @@ export async function appApi(
     )
       throw new ApiError(403, "instagram_public_access_restricted");
     if (url.pathname === "/api/contacts/export.csv" && request.method === "GET") {
-      if (url.searchParams.size) throw new ApiError(400, "invalid_contact_export_request");
+      // No query exports every contact; the only accepted key is one segment_id holding a UUID.
+      if (url.searchParams.size && (url.searchParams.size !== 1 || !isUuid(url.searchParams.get("segment_id"))))
+        throw new ApiError(400, "invalid_contact_export_request");
       await spendUserAllowance(env.CONTACT_EXPORT_LIMIT, user.id, {
         limited: "contact_export_rate_limited",
         unavailable: "contact_export_unavailable",
@@ -544,13 +547,15 @@ export async function appApi(
       if (inbox?.[2] && request.method === "GET")
         return json(await inboxMessages(pool, user, inbox[1]!, inbox[2], url.searchParams));
       if (url.pathname === "/api/contacts/export.csv" && request.method === "GET") {
-        const exported = await exportContactCsv(pool, user);
+        const exported = await exportContactCsv(pool, user, {}, url.searchParams.get("segment_id"));
+        // The file name carries the segment ID, never its name.
+        const scope = exported.segmentId === null ? "" : `segment-${exported.segmentId}-`;
         return new Response(exported.body, {
           headers: {
             "Content-Type": "text/csv; charset=utf-8",
             "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
-            "Content-Disposition": `attachment; filename="auto-chatter-contacts-v1-${exported.exportedAt.slice(0, 10)}.csv"`,
+            "Content-Disposition": `attachment; filename="auto-chatter-contacts-v1-${scope}${exported.exportedAt.slice(0, 10)}.csv"`,
           },
         });
       }

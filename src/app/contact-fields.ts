@@ -1,4 +1,4 @@
-import type { Pool, PoolClient } from "pg";
+import type { Pool, PoolClient, QueryResult, QueryResultRow } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { lockWorkspaceForMember, workspaceFor } from "./settings.ts";
 
@@ -83,8 +83,12 @@ function validateValue(type: string, value: unknown) {
   if (!isValidFieldValue(type, value)) throw new ApiError(400, "invalid_field_value");
 }
 
+// The one read method a validation needs: a pool, a client, or the contact export's timed snapshot reader.
+export type SqlReader = {
+  query<R extends QueryResultRow = QueryResultRow>(text: string, values: unknown[]): Promise<QueryResult<R>>;
+};
 export async function validateFieldCondition(
-  db: Pool | PoolClient,
+  db: SqlReader,
   workspace: string,
   condition: FieldCondition | null,
   lock = false,

@@ -8,9 +8,16 @@ import * as csv from "./contact-csv.ts";
 import { previewContactCsv } from "./contact-csv-preview.ts";
 import { applyContactCsv, CONTACT_IMPORT_APPLY_REQUEST_BYTES } from "./contact-csv-import.ts";
 import { decodeContactScalar, parseContactCsv } from "./contact-csv-test-utils.ts";
-import { lockContactConnection, saveContactTags } from "./contacts.ts";
+import {
+  archiveContactSegment,
+  createContactSegment,
+  listContacts,
+  lockContactConnection,
+  saveContactTags,
+} from "./contacts.ts";
 import { lockContact } from "./contact-fields.ts";
 import { seedWorkspace } from "./workspace-fixture.ts";
+import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
@@ -850,4 +857,260 @@ test("total budget is not restarted between batches or after client-side process
   });
   assert.equal(statements.includes("COMMIT"), false);
   assert.deepEqual(releases, [true]);
+});
+
+// Segment export (#26): one fixture whose contacts each condition kind separates, evaluated at a fixed clock.
+const asOf = "2026-10-10T03:00:00.000000Z";
+// listContacts evaluates at statement_timestamp(); pin it as settings.db.test.ts relativeClock does.
+function listClock(): Pool {
+  return {
+    query: async (sql: string, values: unknown[] = []) =>
+      pool.query(sql.replace("statement_timestamp()", `'${asOf}'::timestamptz`), values),
+  } as unknown as Pool;
+}
+// The export takes its one evaluation time from the exported_at read (transaction_timestamp()); pin that read.
+const exportClock = (query: QueryConfig) =>
+  query.text.includes("transaction_timestamp()")
+    ? { ...query, text: query.text.replace("transaction_timestamp()", `'${asOf}'::timestamptz`) }
+    : query;
+async function comment(sender: string, at: string, conn = connection) {
+  await pool.query(
+    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$4,'RAW COMMENT SECRET',$5)",
+    [workspace, conn, randomUUID(), sender, at],
+  );
+}
+async function segmentFixture() {
+  // Latest comments, in Asia/Seoul (the workspace default) relative to asOf (12:00 on 2026-10-10 local).
+  await comment("a", "2026-10-10T01:00:00.000000Z");
+  await comment("b", "2026-10-09T10:00:00.000000Z"); // 19:00 local yesterday
+  await comment("c", "2026-10-05T00:00:00.000000Z");
+  await comment("d", "2026-10-10T02:59:59.999999Z");
+  await comment("e", "2026-10-10T02:00:00.000000Z", second);
+  await comment("f", asOf);
+  await comment("g", "2026-10-01T00:00:00.000000Z");
+  await comment("g", "2026-10-10T01:30:00.000000Z");
+  for (const [sender, tags, conn] of [
+    ["a", ["lead", "vip"], connection],
+    ["b", ["lead"], connection],
+    ["c", ["vip"], connection],
+    ["e", ["lead"], second],
+  ] as const)
+    await saveContactTags(pool, user, conn, sender, { tags });
+  const field = async (name: string, type: string) =>
+    (
+      await pool.query("INSERT INTO instagram_contact_fields(workspace_id,name,type) VALUES($1,$2,$3) RETURNING id", [
+        workspace,
+        name,
+        type,
+      ])
+    ).rows[0].id as string;
+  const score = await field("score", "number"),
+    plan = await field("plan", "text");
+  for (const [sender, id, value, conn] of [
+    ["a", score, "10", connection],
+    ["b", score, "3", connection],
+    ["e", score, "10", second],
+    ["a", plan, '"pro"', connection],
+    ["c", plan, '"pro"', connection],
+  ] as const)
+    await pool.query(
+      "INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,$3,$4,$5::jsonb)",
+      [workspace, conn, sender, id, value],
+    );
+  for (const [sender, decision] of [
+    ["a", "grant"],
+    ["c", "revoke"],
+  ] as const)
+    await recordChannelConsentEvent(pool, {
+      requestKey: randomUUID(),
+      workspaceId: workspace,
+      connectionId: connection,
+      channel: "instagram",
+      identityKind: "comment_sender",
+      identityValue: sender,
+      purpose: "marketing",
+      decision,
+      evidenceKind: "explicit",
+      evidenceReference: "test evidence",
+      occurredAt: new Date("2026-10-01T00:00:00Z"),
+      actorId: owner,
+    });
+  return { score, plan };
+}
+const pairs = (rows: { connection_id: string; sender_id: string }[]) =>
+  rows.map((row) => `${row.connection_id === second ? "second" : "first"}:${row.sender_id}`).sort();
+
+test("segment export selects exactly the contact list's segment contacts for every condition kind at one clock", async () => {
+  const { score, plan } = await segmentFixture();
+  const definitions: [Record<string, unknown>, string[]][] = [
+    [{ tag: "lead" }, ["a", "b", "second:e"]],
+    [{ tags: ["lead", "vip"], tag_mode: "all" }, ["a"]],
+    [{ tags: ["lead", "vip"], tag_mode: "any" }, ["a", "b", "c", "second:e"]],
+    [{ field_id: score, field_operator: "gte", field_value: 5 }, ["a", "second:e"]],
+    [
+      {
+        field_conditions: [
+          { field_id: score, field_operator: "gte", field_value: 5 },
+          { field_id: plan, field_operator: "eq", field_value: "pro" },
+        ],
+        field_mode: "all",
+      },
+      ["a"],
+    ],
+    [
+      {
+        field_conditions: [
+          { field_id: score, field_operator: "gte", field_value: 5 },
+          { field_id: plan, field_operator: "eq", field_value: "pro" },
+        ],
+        field_mode: "any",
+      },
+      ["a", "c", "second:e"],
+    ],
+    [
+      { tag: "vip", field_id: score, field_operator: "gte", field_value: 5, condition_operator: "or" },
+      ["a", "c", "second:e"],
+    ],
+    [
+      { last_comment_from: "2026-10-09T00:00:00.000Z", last_comment_before: "2026-10-10T02:00:00.000Z" },
+      ["a", "b", "g"],
+    ],
+    [{ last_comment_days: 3 }, ["a", "b", "d", "g", "second:e"]],
+    [{ last_comment_period: "today" }, ["a", "d", "f", "g", "second:e"]],
+    [{ consent_purpose: "marketing", consent_state: "granted" }, ["a"]],
+    [{ consent_purpose: "marketing", consent_state: "no_record" }, ["b", "d", "f", "g", "second:e"]],
+    [{ connection_id: connection, tag: "lead" }, ["a", "b"]],
+  ];
+  changeQuery = exportClock;
+  const clocks: unknown[] = [];
+  afterQuery = async (_client, sql) => {
+    if (sql.includes("evaluation AS MATERIALIZED")) assert.match(sql, /SELECT \$17::timestamptz AS as_of/);
+  };
+  const full = records((await csv.exportContactCsv(tracked(), user)).body);
+  for (const [index, [definition, expected]] of definitions.entries()) {
+    const segment = await createContactSegment(pool, user, { name: `segment ${index}`, ...definition });
+    const listed = await listContacts(listClock(), user, new URLSearchParams({ segment_id: segment.id }));
+    assert.equal(listed.after, null);
+    const names = (rows: { connection_id: string; sender_id: string }[]) =>
+      pairs(rows).map((pair) => pair.replace(/^first:/, ""));
+    assert.deepEqual(names(listed.contacts), [...expected].sort(), JSON.stringify(definition));
+    const tracking: (query: QueryConfig) => QueryConfig = exportClock;
+    changeQuery = (query) => {
+      if (query.text.includes("evaluation AS MATERIALIZED")) clocks.push(query.values?.[16]);
+      return tracking(query);
+    };
+    const exported = await csv.exportContactCsv(tracked(), user, { batchSize: 2 }, segment.id);
+    changeQuery = tracking;
+    assert.equal(exported.exportedAt, asOf);
+    assert.equal(exported.segmentId, segment.id);
+    const rows = records(exported.body);
+    assert.deepEqual(
+      pairs(rows.map((row) => ({ connection_id: row.connection_id!, sender_id: decodeContactScalar(row.sender_id!) }))),
+      pairs(listed.contacts),
+      JSON.stringify(definition),
+    );
+    // The same v1 rows as the full export, in its order, filtered to the segment.
+    const selected = new Set(rows.map((row) => `${row.connection_id}:${row.sender_id}`));
+    assert.deepEqual(
+      rows,
+      full.filter((row) => selected.has(`${row.connection_id}:${row.sender_id}`)),
+    );
+  }
+  // Every batch of every export evaluated the window at that export's exported_at.
+  assert.ok(clocks.length > definitions.length);
+  assert.deepEqual(new Set(clocks), new Set([asOf]));
+});
+
+test("segment export evaluates one as_of for all batches even while the clock moves", async () => {
+  await segmentFixture();
+  // A relative window over the real clock, wide enough that every contact is in it and each batch evaluates it.
+  const segment = await createContactSegment(pool, user, { name: "recent", last_comment_days: 366 });
+  const clocks: unknown[] = [];
+  changeQuery = (query) => {
+    if (query.text.includes("evaluation AS MATERIALIZED")) clocks.push(query.values?.[16]);
+    return query;
+  };
+  afterQuery = async (_client, sql) => {
+    if (sql.includes("evaluation AS MATERIALIZED")) await pool.query("SELECT pg_sleep(0.01)");
+  };
+  const exported = await csv.exportContactCsv(tracked(), user, { batchSize: 1 }, segment.id);
+  assert.equal(clocks.length, 8);
+  assert.equal(records(exported.body).length, 7);
+  assert.deepEqual(new Set(clocks), new Set([exported.exportedAt]));
+  assert.ok(statements.some((sql) => sql.includes("instagram_contact_segments")));
+});
+
+test("segment export answers segment_not_found for archived missing and foreign segments, and refuses agent and removed members", async () => {
+  await add("00123");
+  const archived = await createContactSegment(pool, user, { name: "archived" });
+  await archiveContactSegment(pool, user, archived.id);
+  const foreignSegment = (
+    await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'foreign') RETURNING id", [
+      foreign,
+    ])
+  ).rows[0].id as string;
+  for (const id of [archived.id, randomUUID(), foreignSegment]) {
+    const response = await request(owner, `?segment_id=${id}`);
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), { error: "segment_not_found" });
+    assert.equal(response.headers.has("content-disposition"), false);
+  }
+  const active = await createContactSegment(pool, user, { name: "active" });
+  // The role is checked before the segment is read, so an agent learns nothing about a segment ID.
+  for (const id of [active.id, randomUUID()]) {
+    const response = await request(agent, `?segment_id=${id}`);
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: "role_forbidden" });
+  }
+  await pool.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [admin, owner]);
+  const removed = await request(admin, `?segment_id=${active.id}`);
+  assert.equal(removed.status, 403);
+  assert.deepEqual(await removed.json(), { error: "workspace_required" });
+  // The segment is read inside the snapshot transaction, after BEGIN and the membership read.
+  statements.length = 0;
+  await request(owner, `?segment_id=${randomUUID()}`);
+  const begin = statements.findIndex((sql) => sql.startsWith("BEGIN"));
+  const read = statements.findIndex((sql) => sql.includes("FROM instagram_contact_segments"));
+  assert.ok(begin >= 0 && read > begin);
+  assert.ok(statements.includes("ROLLBACK"));
+});
+
+test("segment export refuses an oversized selection whole, returns only the header when empty and changes no table", async () => {
+  await segmentFixture();
+  const lead = await createContactSegment(pool, user, { name: "Lead buyers", tag: "lead" });
+  await assert.rejects(csv.exportContactCsv(tracked(), user, { maxRows: 2, batchSize: 1 }, lead.id), {
+    status: 422,
+    message: "contact_export_too_large",
+  });
+  assert.ok(statements.includes("ROLLBACK"));
+  assert.equal(statements.includes("COMMIT"), false);
+  statements.length = 0;
+  await assert.rejects(csv.exportContactCsv(tracked(), user, { maxBytes: 700 }, lead.id), {
+    status: 422,
+    message: "contact_export_too_large",
+  });
+  assert.equal(statements.includes("COMMIT"), false);
+  // Three lead contacts fit in three rows: the refusal above is the limit, not the segment.
+  assert.equal(records((await csv.exportContactCsv(tracked(), user, { maxRows: 3 }, lead.id)).body).length, 3);
+  const empty = await createContactSegment(pool, user, { name: "Nobody yet", tag: "nobody" });
+  const before = await databaseSnapshot();
+  for (const id of [empty.id, lead.id]) {
+    const response = await request(admin, `?segment_id=${id.toUpperCase()}`);
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(response.headers.get("content-type"), "text/csv; charset=utf-8");
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    assert.match(
+      response.headers.get("content-disposition") ?? "",
+      new RegExp(`^attachment; filename="auto-chatter-contacts-v1-segment-${id}-\\d{4}-\\d{2}-\\d{2}\\.csv"$`),
+    );
+    const bytes = Buffer.from(await response.arrayBuffer());
+    assert.equal(bytes.subarray(0, 3).toString("hex"), "efbbbf");
+    const parsed = parseContactCsv(bytes.toString());
+    assert.deepEqual(parsed[0], Array.from(csv.CONTACT_CSV_HEADER));
+    assert.equal(parsed.length - 1, id === empty.id ? 0 : 3);
+    assert.doesNotMatch(bytes.toString(), /RAW COMMENT SECRET|Lead buyers|Nobody yet/);
+  }
+  assert.deepEqual(await databaseSnapshot(), before);
+  assert.equal(notifications, 0);
 });
