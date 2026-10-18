@@ -231,6 +231,7 @@ function segmentTreeLeafValue(leaf, fields) {
 }
 // The inputs of a draft that a request would carry, in order; input a leaf of its kind or its field's type does not
 // send is left out. fields are the workspace's active field definitions ({ id, type }), as for segmentTreeBuild.
+// segmentTreeSame uses it only for a draft that cannot build, which sends no request to compare.
 function segmentTreeKey(draft, fields = []) {
   if (!draft) return null;
   return JSON.stringify([
@@ -252,7 +253,12 @@ function segmentTreeKey(draft, fields = []) {
 }
 // True when two drafts (or two absent drafts) carry the same conditions. Order matters, as in the server's unchanged
 // check, so a move is a change and moving back undoes it. Unlike the server, a case-only tag change counts.
+// When both drafts build, the built requests are compared, so inputs that build the same request (a number typed as
+// 5 or 5.0) are the same; otherwise the raw inputs are compared (segmentTreeKey).
 function segmentTreeSame(left, right, fields = []) {
+  const builtLeft = segmentTreeBuild(left, fields);
+  const builtRight = segmentTreeBuild(right, fields);
+  if (!builtLeft.error && !builtRight.error) return JSON.stringify(builtLeft.tree) === JSON.stringify(builtRight.tree);
   return segmentTreeKey(left, fields) === segmentTreeKey(right, fields);
 }
 // True when discarding the draft would lose conditions: it has at least one, and no saved tree (the condition_tree

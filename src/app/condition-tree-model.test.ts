@@ -439,6 +439,25 @@ test("comparison reads only the value input of the field's type", () => {
   assert.equal(model.segmentTreeSame(edited, loaded), false);
 });
 
+test("comparison reads a number as the request sends it", () => {
+  const saved: Tree = {
+    mode: "all",
+    groups: [{ mode: "all", conditions: [{ field_id: numberField, field_operator: "eq", field_value: 5 }] }],
+  };
+  const loaded = model.segmentTreeFromSaved(saved)!;
+  for (const value of ["5.0", "5e0", " 5 "]) {
+    const edited = model.segmentTreeSetLeaf(loaded, 0, 0, { value }).draft;
+    assert.deepEqual(plain(model.segmentTreeBuild(edited, fields)), plain(model.segmentTreeBuild(loaded, fields)));
+    assert.equal(model.segmentTreeSame(edited, loaded, fields), true, value);
+    assert.equal(model.segmentTreeUnsaved(edited, [saved], fields), false, value);
+  }
+  // A different number is still a change, and a draft that cannot build compares its raw input.
+  const changed = model.segmentTreeSetLeaf(loaded, 0, 0, { value: "5.1" }).draft;
+  assert.equal(model.segmentTreeSame(changed, loaded, fields), false);
+  assert.equal(model.segmentTreeUnsaved(changed, [saved], fields), true);
+  assert.equal(model.segmentTreeSame(model.segmentTreeSetLeaf(loaded, 0, 0, { value: "5.0" }).draft, loaded), false);
+});
+
 test("a tree is unsaved when it has a condition that no saved tree holds in the same order", () => {
   const saved: Tree = {
     mode: "all",
