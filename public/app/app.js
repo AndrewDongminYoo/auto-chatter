@@ -58,7 +58,7 @@ function segmentEditChanged() {
     Boolean(editingSegment) &&
     (segmentConditionInputs !== editingSegment.inputs ||
       byId("segment-save").elements.name.value !== editingSegment.loadedName ||
-      !segmentTreeSame(draftConditionTree, editingSegment.loadedTree))
+      !segmentTreeSame(draftConditionTree, editingSegment.loadedTree, contactFields))
   );
 }
 // True when the draft's group conditions would be lost by discarding them, because no saved filter holds that tree.
@@ -67,6 +67,7 @@ function conditionTreeUnsaved() {
   return segmentTreeUnsaved(
     draftConditionTree,
     contactSegments.map((segment) => segment.condition_tree),
+    contactFields,
   );
 }
 // Asks before the draft's tree is cleared or replaced, when choosing a saved filter again could not bring it back.

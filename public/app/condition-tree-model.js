@@ -222,8 +222,16 @@ function segmentTreeBuild(draft, fields) {
   }
   return { tree: { mode: draft.mode, groups }, error: "" };
 }
-// The inputs of a draft that a request would carry, in order; input a leaf of its kind does not send is left out.
-function segmentTreeKey(draft) {
+// The value input a valued field leaf sends: the boolean select for a boolean field, the value input for any other
+// type, and both when the field is not among fields (its type is unknown, and the build refuses the leaf anyway).
+function segmentTreeLeafValue(leaf, fields) {
+  const field = fields.find((definition) => definition.id === leaf.field_id);
+  if (!field) return [leaf.value, leaf.boolean];
+  return field.type === "boolean" ? [leaf.boolean] : [leaf.value];
+}
+// The inputs of a draft that a request would carry, in order; input a leaf of its kind or its field's type does not
+// send is left out. fields are the workspace's active field definitions ({ id, type }), as for segmentTreeBuild.
+function segmentTreeKey(draft, fields = []) {
   if (!draft) return null;
   return JSON.stringify([
     draft.mode,
@@ -235,7 +243,7 @@ function segmentTreeKey(draft) {
               leaf.kind,
               leaf.field_id,
               leaf.field_operator,
-              ...(segmentTreeNeedsValue(leaf.field_operator) ? [leaf.value, leaf.boolean] : []),
+              ...(segmentTreeNeedsValue(leaf.field_operator) ? segmentTreeLeafValue(leaf, fields) : []),
             ]
           : [leaf.kind, leaf.tag],
       ),
@@ -244,14 +252,14 @@ function segmentTreeKey(draft) {
 }
 // True when two drafts (or two absent drafts) carry the same conditions. Order matters, as in the server's unchanged
 // check, so a move is a change and moving back undoes it. Unlike the server, a case-only tag change counts.
-function segmentTreeSame(left, right) {
-  return segmentTreeKey(left) === segmentTreeKey(right);
+function segmentTreeSame(left, right, fields = []) {
+  return segmentTreeKey(left, fields) === segmentTreeKey(right, fields);
 }
 // True when discarding the draft would lose conditions: it has at least one, and no saved tree (the condition_tree
 // values of the saved filters, absent for a filter without one) is the same, so selecting a filter cannot bring it back.
-function segmentTreeUnsaved(draft, savedTrees) {
+function segmentTreeUnsaved(draft, savedTrees, fields = []) {
   if (!draft || segmentTreeLeafCount(draft) === 0) return false;
-  return !savedTrees.some((tree) => tree && segmentTreeSame(draft, segmentTreeFromSaved(tree)));
+  return !savedTrees.some((tree) => tree && segmentTreeSame(draft, segmentTreeFromSaved(tree), fields));
 }
 // Removes every field leaf of an archived field; a group it empties stays, so the draft becomes incomplete.
 function segmentTreeRemoveField(draft, fieldId) {

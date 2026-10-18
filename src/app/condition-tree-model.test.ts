@@ -29,8 +29,12 @@ interface TreeModel {
   segmentTreeOperators(type: string | undefined): string[];
   segmentTreeNeedsValue(operator: string): boolean;
   segmentTreeBuild(draft: Draft | null, fields: { id: string; type: string }[]): { tree: Tree | null; error: string };
-  segmentTreeSame(left: Draft | null, right: Draft | null): boolean;
-  segmentTreeUnsaved(draft: Draft | null, savedTrees: (Tree | null | undefined)[]): boolean;
+  segmentTreeSame(left: Draft | null, right: Draft | null, fields?: { id: string; type: string }[]): boolean;
+  segmentTreeUnsaved(
+    draft: Draft | null,
+    savedTrees: (Tree | null | undefined)[],
+    fields?: { id: string; type: string }[],
+  ): boolean;
   segmentTreeRemoveField(draft: Draft | null, fieldId: string): { draft: Draft | null; removed: number };
   segmentTreeSummary(tree: Tree, fieldText: (leaf: Record<string, unknown>) => string): string;
 }
@@ -396,6 +400,43 @@ test("comparison is order sensitive, like the server's unchanged check", () => {
   assert.equal(model.segmentTreeSame(valued, model.segmentTreeSetLeaf(valued, 0, 0, { value: "2" }).draft), false);
   const tag = draftOf(1);
   assert.equal(model.segmentTreeSame(tag, model.segmentTreeSetLeaf(tag, 0, 0, { field_id: textField }).draft), true);
+});
+
+test("comparison reads only the value input of the field's type", () => {
+  const saved: Tree = {
+    mode: "all",
+    groups: [
+      {
+        mode: "all",
+        conditions: [
+          { field_id: numberField, field_operator: "eq", field_value: 5 },
+          { field_id: booleanField, field_operator: "eq", field_value: false },
+        ],
+      },
+    ],
+  };
+  const loaded = model.segmentTreeFromSaved(saved)!;
+  // A number leaf that visited a boolean field and "아니요", then came back to the same value, sends the loaded tree.
+  let edited = model.segmentTreeSetLeaf(loaded, 0, 0, { field_id: booleanField, value: "" }).draft;
+  edited = model.segmentTreeSetLeaf(edited, 0, 0, { boolean: "false" }).draft;
+  edited = model.segmentTreeSetLeaf(edited, 0, 0, { field_id: numberField, value: "5" }).draft;
+  // A boolean leaf whose hidden value input holds text sends the loaded tree too.
+  edited = model.segmentTreeSetLeaf(edited, 0, 1, { value: "typed" }).draft;
+  assert.deepEqual(plain(model.segmentTreeBuild(edited, fields)), plain(model.segmentTreeBuild(loaded, fields)));
+  assert.equal(model.segmentTreeSame(edited, loaded, fields), true);
+  assert.equal(model.segmentTreeUnsaved(edited, [saved], fields), false);
+  // The input of the field's type is still compared.
+  assert.equal(
+    model.segmentTreeSame(model.segmentTreeSetLeaf(loaded, 0, 0, { value: "6" }).draft, loaded, fields),
+    false,
+  );
+  assert.equal(
+    model.segmentTreeSame(model.segmentTreeSetLeaf(loaded, 0, 1, { boolean: "true" }).draft, loaded, fields),
+    false,
+  );
+  // Without the field's type, both inputs are compared.
+  assert.equal(model.segmentTreeSame(edited, loaded, []), false);
+  assert.equal(model.segmentTreeSame(edited, loaded), false);
 });
 
 test("a tree is unsaved when it has a condition that no saved tree holds in the same order", () => {
