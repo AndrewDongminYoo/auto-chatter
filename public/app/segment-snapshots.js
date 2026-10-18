@@ -31,6 +31,8 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
   let after = null;
   // Only the latest "명단 보기" request may fill the detail view.
   let openRequest = 0;
+  // Only the latest list request may fill the list, so a list read before a freeze never replaces the one read after it.
+  let listRequest = 0;
 
   function time(value) {
     try {
@@ -111,11 +113,12 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
   }
   async function load(message) {
     const current = generation;
+    const request = ++listRequest;
     const id = segment.id;
     if (!message) status.textContent = "고정한 대상을 불러오고 있습니다…";
     try {
       const result = await api(`/api/contact-segments/${id}/snapshots`);
-      if (current !== generation) return;
+      if (current !== generation || request !== listRequest) return;
       render(result.snapshots);
       status.textContent =
         message ??
@@ -123,7 +126,7 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
           ? `이 필터로 고정한 대상 ${count(result.snapshots.length)}개. 고정한 명단은 바뀌지 않습니다.`
           : "이 필터로 고정한 대상이 아직 없습니다.");
     } catch (error) {
-      if (current === generation) status.textContent = messages[error.code] || error.message;
+      if (current === generation && request === listRequest) status.textContent = messages[error.code] || error.message;
     }
   }
   function appendMembers(page) {
