@@ -561,6 +561,26 @@ END $$;
 -- The latest received DM of one conversation for the DM activity filter, read once per conversation.
 CREATE INDEX IF NOT EXISTS instagram_inbox_messages_latest_idx
   ON instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_at DESC);
+-- A two-level condition tree, the third condition form; existing rows keep NULL and their tag and field conditions.
+ALTER TABLE instagram_contact_segments ADD COLUMN IF NOT EXISTS condition_tree jsonb;
+DO $$ BEGIN
+  -- The root shape and the absence of the other condition forms; groups and leaves stay with the application parser.
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname='contact_segment_condition_tree') THEN
+    ALTER TABLE instagram_contact_segments ADD CONSTRAINT contact_segment_condition_tree CHECK(
+      condition_tree IS NULL OR (
+        CASE WHEN jsonb_typeof(condition_tree)='object' THEN
+          condition_tree - 'mode' - 'groups' = '{}'::jsonb
+          AND coalesce(condition_tree->>'mode' IN ('all','any'),false)
+          AND CASE WHEN jsonb_typeof(condition_tree->'groups')='array' THEN
+            jsonb_array_length(condition_tree->'groups') BETWEEN 1 AND 5 ELSE false END
+        ELSE false END
+        AND tag IS NULL AND tags IS NULL AND tag_mode IS NULL
+        AND field_id IS NULL AND field_operator IS NULL AND field_value IS NULL
+        AND field_conditions IS NULL AND field_mode IS NULL
+        AND condition_operator='and')
+    );
+  END IF;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS private_reply_outbox_identity_idx
   ON private_reply_outbox(id,connection_id,workspace_id);
 CREATE TABLE IF NOT EXISTS instagram_inbox_handoffs (

@@ -92,6 +92,92 @@ function parseFieldConditionSet(
 }
 // The decoded length bound of the field_conditions query value; the contact-segments spec (다중 필드 조건) derives it.
 export const FIELD_CONDITIONS_QUERY_LENGTH = 8192;
+// A condition tree is a root all/any over 1 to 5 groups, each an all/any over 1 to 5 leaves, at most 10 leaves in all.
+// A leaf is a tag that is present, a tag that is absent (negate) or one field condition. Groups and leaves keep their
+// order and may repeat a tag or a field, so order is part of the definition. The contact-segments spec (중첩 조건
+// 그룹) owns the contract and the derivation of the query length bound.
+export const CONDITION_TREE_GROUP_LIMIT = 5;
+export const CONDITION_TREE_GROUP_LEAF_LIMIT = 5;
+export const CONDITION_TREE_LEAF_LIMIT = 10;
+export const CONDITION_TREE_QUERY_LENGTH = 16384;
+// The body limit of segment create and edit. The parser's value, tag and name limits bound a definition, and
+// JSON.stringify writes at most three UTF-8 bytes per UTF-16 unit of a valid value, so the largest definition is
+// 31,681 bytes; the limit is about twice that (the spec section 중첩 조건 그룹 and api.test.ts measure it).
+export const SEGMENT_REQUEST_BYTES = 65_536;
+type ConditionTreeLeaf = { tag: string; negate?: true } | FieldCondition;
+type ConditionTree = {
+  mode: "all" | "any";
+  groups: { mode: "all" | "any"; conditions: ConditionTreeLeaf[] }[];
+};
+function treeMode(value: unknown): "all" | "any" {
+  if (value !== "all" && value !== "any") throw new ApiError(400, "invalid_contact_condition");
+  return value;
+}
+function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]) {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+function parseConditionTreeLeaf(value: unknown): ConditionTreeLeaf {
+  if (!isRecord(value)) throw new ApiError(400, "invalid_contact_condition");
+  const isTag = Object.hasOwn(value, "tag"),
+    isField = Object.hasOwn(value, "field_id");
+  if (isTag === isField) throw new ApiError(400, "invalid_contact_condition");
+  if (isTag) {
+    if (!hasOnlyKeys(value, ["tag", "negate"])) throw new ApiError(400, "invalid_contact_condition");
+    // A lone surrogate survives JSON.parse but not PostgreSQL's jsonb input, so it is refused here.
+    if (typeof value.tag === "string" && /\p{Cs}/u.test(value.tag)) throw new ApiError(400, "invalid_contact_tags");
+    const name = tag(value.tag);
+    if (Object.hasOwn(value, "negate") && value.negate !== true && value.negate !== false)
+      throw new ApiError(400, "invalid_contact_condition");
+    return value.negate === true ? { tag: name, negate: true } : { tag: name };
+  }
+  // An unknown key is a tree shape error at every level. A field leaf is one complete condition; a null field_id is
+  // a field condition error here, as in field_conditions.
+  if (!hasOnlyKeys(value, FIELD_CONDITION_KEYS)) throw new ApiError(400, "invalid_contact_condition");
+  if (value.field_id == null) throw new ApiError(400, "invalid_field_condition");
+  const condition = parseFieldCondition(value)!;
+  return { ...condition, field_id: condition.field_id.toLowerCase() };
+}
+// null and undefined mean no tree; any other value must be a complete tree.
+function parseConditionTree(value: unknown): ConditionTree | null {
+  if (value === undefined || value === null) return null;
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["mode", "groups"]) ||
+    !Array.isArray(value.groups) ||
+    !value.groups.length ||
+    value.groups.length > CONDITION_TREE_GROUP_LIMIT
+  )
+    throw new ApiError(400, "invalid_contact_condition");
+  const mode = treeMode(value.mode);
+  let leaves = 0;
+  const groups = value.groups.map((group: unknown) => {
+    if (
+      !isRecord(group) ||
+      !hasOnlyKeys(group, ["mode", "conditions"]) ||
+      !Array.isArray(group.conditions) ||
+      !group.conditions.length ||
+      group.conditions.length > CONDITION_TREE_GROUP_LEAF_LIMIT
+    )
+      throw new ApiError(400, "invalid_contact_condition");
+    leaves += group.conditions.length;
+    if (leaves > CONDITION_TREE_LEAF_LIMIT) throw new ApiError(400, "invalid_contact_condition");
+    return { mode: treeMode(group.mode), conditions: group.conditions.map(parseConditionTreeLeaf) };
+  });
+  return { mode, groups };
+}
+function treeFieldConditions(tree: ConditionTree | null): FieldCondition[] {
+  return (tree?.groups ?? []).flatMap((group) =>
+    group.conditions.filter((leaf): leaf is FieldCondition => "field_id" in leaf),
+  );
+}
+// Every field condition of a lookup, the field set's and then the tree's in leaf order; the list and the export
+// validate each before they read.
+export function contactConditionFields(conditions: {
+  fieldCondition: FieldConditionSet | null;
+  conditionTree: ConditionTree | null;
+}): FieldCondition[] {
+  return [...(conditions.fieldCondition?.conditions ?? []), ...treeFieldConditions(conditions.conditionTree)];
+}
 function parseConditionOperator(value: unknown, hasTag: boolean, hasField: boolean): "and" | "or" {
   if (value === undefined) return "and";
   if ((value !== "and" && value !== "or") || (value === "or" && (!hasTag || !hasField)))
@@ -205,6 +291,7 @@ type ContactConditions = {
   dmConsent: ReturnType<typeof parseDmConsentCondition>;
   dmActivity: ReturnType<typeof parseDmActivity>;
   operator: "and" | "or";
+  conditionTree: ConditionTree | null;
 };
 // The conditions of an active saved segment of the workspace. The contact list reads it from the pool and the
 // contact export from its snapshot transaction; both evaluate the result with segmentConditionSql.
@@ -233,8 +320,9 @@ export async function savedSegmentConditions(
     dm_consent_purpose: string | null;
     dm_consent_state: string | null;
     last_dm_days: number | null;
+    condition_tree: unknown;
   }>(
-    "SELECT connection_id,tag,tags,tag_mode,field_id,field_operator,field_value,field_conditions,field_mode,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state,dm_consent_purpose,dm_consent_state,last_dm_days FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
+    "SELECT connection_id,tag,tags,tag_mode,field_id,field_operator,field_value,field_conditions,field_mode,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state,dm_consent_purpose,dm_consent_state,last_dm_days,condition_tree FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
     [workspaceId, segmentId],
   );
   if (!segment.rows[0]) throw new ApiError(404, "segment_not_found");
@@ -275,13 +363,24 @@ export async function savedSegmentConditions(
     dmConsent,
     dmActivity,
     operator,
+    conditionTree: parseConditionTree(saved.condition_tree),
   };
+}
+// The comparison of one field condition, read from the alias c (field_id uuid, field_operator text, field_value
+// jsonb) for the contact row e. The field set and the condition tree share this text, so they cannot drift.
+function fieldConditionMatchSql(c: string) {
+  return `CASE WHEN ${c}.field_operator='is_unset' THEN NOT EXISTS(
+   SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=${c}.field_id AND v.value IS NOT NULL)
+ ELSE EXISTS(SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=${c}.field_id AND v.value IS NOT NULL
+   AND (${c}.field_operator='is_set' OR (jsonb_typeof(v.value)=jsonb_typeof(${c}.field_value) AND CASE ${c}.field_operator
+     WHEN 'eq' THEN v.value=${c}.field_value WHEN 'gt' THEN v.value>${c}.field_value WHEN 'gte' THEN v.value>=${c}.field_value
+     WHEN 'lt' THEN v.value<${c}.field_value WHEN 'lte' THEN v.value<=${c}.field_value ELSE false END))) END`;
 }
 // The one contact predicate of the list, the preview, a saved segment and the segment export. Its fragments use
 // fixed positions: $1 workspace, $2 connection, $3 tags, $4 and $5 the caller's page cursor, $6 to $8 the field
-// set, $9 the operator, $10 and $11 the fixed window, $12 and $13 consent, $14 days, $15 the calendar period and
-// $16 and $17 the DM consent and $18 the DM activity days; values holds them in that order. clock is the SQL
-// expression of the evaluation time (as_of).
+// set, $9 the operator, $10 and $11 the fixed window, $12 and $13 consent, $14 days, $15 the calendar period,
+// $16 and $17 the DM consent, $18 the DM activity days and $19 the condition tree; values holds them in that order.
+// clock is the SQL expression of the evaluation time (as_of).
 // matches is a row condition over e and t after contactScope; activityMatches is aggregate and goes in HAVING.
 export function segmentConditionSql(
   workspaceId: string,
@@ -289,7 +388,17 @@ export function segmentConditionSql(
   clock: string,
   after: { connection_id: string; sender_id: string } | null,
 ) {
-  const { connectionId, tagCondition, fieldCondition, activity, consent, dmConsent, dmActivity, operator } = conditions;
+  const {
+    connectionId,
+    tagCondition,
+    fieldCondition,
+    activity,
+    consent,
+    dmConsent,
+    dmActivity,
+    operator,
+    conditionTree,
+  } = conditions;
   // One statement clock for the page and preview, using elapsed hours even across DST.
   // The calendar period reads the workspace time zone in the same statement. Its local boundaries are
   // converted back with AT TIME ZONE, so PostgreSQL resolves daylight-saving gaps and overlaps.
@@ -355,13 +464,20 @@ export function segmentConditionSql(
   // without a field condition), $7 the mode and $8 the normalized set, one row per condition. The legacy single
   // condition is a set of one. bool_and over the set is all, bool_or any; the comparisons are those of one condition.
   const fieldMatches = `($6::uuid[] IS NULL OR (SELECT CASE WHEN $7::text='any' THEN bool_or(condition_matches) ELSE bool_and(condition_matches) END
- FROM (SELECT CASE WHEN c.field_operator='is_unset' THEN NOT EXISTS(
-   SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=c.field_id AND v.value IS NOT NULL)
- ELSE EXISTS(SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=c.field_id AND v.value IS NOT NULL
-   AND (c.field_operator='is_set' OR (jsonb_typeof(v.value)=jsonb_typeof(c.field_value) AND CASE c.field_operator
-     WHEN 'eq' THEN v.value=c.field_value WHEN 'gt' THEN v.value>c.field_value WHEN 'gte' THEN v.value>=c.field_value
-     WHEN 'lt' THEN v.value<c.field_value WHEN 'lte' THEN v.value<=c.field_value ELSE false END))) END AS condition_matches
+ FROM (SELECT ${fieldConditionMatchSql("c")} AS condition_matches
  FROM jsonb_to_recordset($8::jsonb) AS c(field_id uuid,field_operator text,field_value jsonb)) conditions))`;
+  // The condition tree in $19 (NULL without one): bool_and or bool_or over the groups, chosen by the root mode, of
+  // bool_and or bool_or over each group's leaves, chosen by the group mode. A tag leaf has the contact tag test of
+  // tagMatches, inverted for negate; a field leaf has the field set's comparison. The modes are compared as text and
+  // the leaves are read as records, so the SQL text never depends on the tree. The parser guarantees at least one
+  // group and one leaf per group, so no aggregate runs over an empty set.
+  const treeMatches = `($19::jsonb IS NULL OR (SELECT CASE WHEN $19::jsonb->>'mode'='any' THEN bool_or(group_matches) ELSE bool_and(group_matches) END
+ FROM jsonb_array_elements($19::jsonb->'groups') AS tree_group(value)
+ CROSS JOIN LATERAL (SELECT CASE WHEN tree_group.value->>'mode'='any' THEN bool_or(leaf_matches) ELSE bool_and(leaf_matches) END AS group_matches
+   FROM (SELECT CASE WHEN c.tag IS NOT NULL THEN (coalesce(t.tags,'{}'::text[]) @> ARRAY[c.tag]) <> coalesce(c.negate,false)
+     ELSE ${fieldConditionMatchSql("c")} END AS leaf_matches
+     FROM jsonb_array_elements(tree_group.value->'conditions') AS tree_leaf(value)
+     CROSS JOIN LATERAL jsonb_to_record(tree_leaf.value) AS c(tag text,negate boolean,field_id uuid,field_operator text,field_value jsonb)) leaves) tree_groups))`;
   // The one tag predicate of the list, the preview and a saved segment: $3 is the sorted tag set or NULL.
   // A contact without a tag row has no tags. The operator is chosen from the validated mode, never from input text.
   const tagMatches = `($3::text[] IS NULL OR coalesce(t.tags,'{}'::text[]) ${tagCondition?.mode === "any" ? "&&" : "@>"} $3::text[])`;
@@ -369,9 +485,11 @@ export function segmentConditionSql(
  LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=e.workspace_id AND automation.connection_id=e.connection_id AND automation.sender_id=e.sender_id
  LEFT JOIN instagram_contact_tags t ON t.workspace_id=e.workspace_id AND t.connection_id=e.connection_id AND t.sender_id=e.sender_id
  WHERE e.workspace_id=$1 AND ($2::uuid IS NULL OR e.connection_id=$2)`;
-  // AND needs both the tag and the field predicate, OR either one; the consent filters always apply.
+  // AND needs both the tag and the field predicate, OR either one; the consent filters always apply. A tree is the
+  // third form: with one, the tag and field parameters are NULL and their predicates are true.
   const matches = `($9::text='or' OR ${tagMatches})
  AND (($9::text='or' AND ${tagMatches}) OR ${fieldMatches})
+ AND ${treeMatches}
  AND ${consentMatches}
  AND ${dmConsentMatches}
  AND ${dmActivityMatches}`;
@@ -386,6 +504,7 @@ export function segmentConditionSql(
     dmActivityMatches,
     fieldMatches,
     tagMatches,
+    treeMatches,
     contactScope,
     matches,
     values: [
@@ -407,6 +526,7 @@ export function segmentConditionSql(
       dmConsent?.dm_consent_purpose ?? null,
       dmConsent?.dm_consent_state ?? null,
       dmActivity?.last_dm_days ?? null,
+      conditionTree ? JSON.stringify(conditionTree) : null,
     ],
   };
 }
@@ -434,6 +554,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
         "dm_consent_purpose",
         "dm_consent_state",
         "last_dm_days",
+        "condition_tree",
         "preview",
       ].includes(key) ||
       // Only tag may repeat; parseTagCondition refuses more than five values.
@@ -470,9 +591,31 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
         "dm_consent_purpose",
         "dm_consent_state",
         "last_dm_days",
+        "condition_tree",
       ].some((key) => options.has(key)))
   )
     throw new ApiError(400, "invalid_contact_request");
+  // condition_tree is one JSON object and the third condition form, so no tag, field or operator key may join it.
+  const treeText = options.get("condition_tree");
+  let conditionTree: ConditionTree | null = null;
+  if (treeText !== null) {
+    if (
+      treeText.length > CONDITION_TREE_QUERY_LENGTH ||
+      ["tag", "tag_mode", ...FIELD_CONDITION_KEYS, "field_conditions", "field_mode", "condition_operator"].some((key) =>
+        options.has(key),
+      )
+    )
+      throw new ApiError(400, "invalid_contact_condition");
+    let tree: unknown;
+    try {
+      tree = JSON.parse(treeText);
+    } catch {
+      throw new ApiError(400, "invalid_contact_condition");
+    }
+    // A present key must hold a tree, so a JSON null is refused here.
+    if (!isRecord(tree)) throw new ApiError(400, "invalid_contact_condition");
+    conditionTree = parseConditionTree(tree);
+  }
   let tagCondition = parseTagCondition(tagValues, options.get("tag_mode"));
   const fieldInput: Record<string, unknown> = {};
   for (const key of ["field_id", "field_operator", "field_value"])
@@ -525,9 +668,10 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   const after = cursor(options.get("after"));
   const workspaceId = await workspaceFor(pool, user, "agent");
   if (segmentId !== null)
-    ({ connectionId, tagCondition, fieldCondition, activity, consent, dmConsent, dmActivity, operator } =
+    ({ connectionId, tagCondition, fieldCondition, activity, consent, dmConsent, dmActivity, operator, conditionTree } =
       await savedSegmentConditions(pool, workspaceId, segmentId));
-  for (const condition of fieldCondition?.conditions ?? []) await validateFieldCondition(pool, workspaceId, condition);
+  for (const condition of contactConditionFields({ fieldCondition, conditionTree }))
+    await validateFieldCondition(pool, workspaceId, condition);
   const {
     evaluation,
     activityWindow,
@@ -539,12 +683,13 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
     dmActivityMatches,
     fieldMatches,
     tagMatches,
+    treeMatches,
     contactScope,
     matches,
     values,
   } = segmentConditionSql(
     workspaceId,
-    { connectionId, tagCondition, fieldCondition, activity, consent, dmConsent, dmActivity, operator },
+    { connectionId, tagCondition, fieldCondition, activity, consent, dmConsent, dmActivity, operator, conditionTree },
     "statement_timestamp()",
     after,
   );
@@ -563,14 +708,15 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   const query = preview
     ? `WITH ${evaluation}, contact_filters AS MATERIALIZED (
  SELECT e.connection_id,e.sender_id,${tagMatches} AS tag_matches,
- ${fieldMatches} AS field_matches,${activityMatches} AS activity_matches,${consentMatches} AS consent_matches,
+ ${fieldMatches} AS field_matches,${treeMatches} AS tree_matches,${activityMatches} AS activity_matches,${consentMatches} AS consent_matches,
  ${dmIdentityMatches} AS dm_identity_matches,${dmConsentMatches} AS dm_consent_matches,
  ${dmActivityMatches} AS dm_activity_matches
  ${contactScope}
  GROUP BY e.workspace_id,e.connection_id,e.sender_id,t.tags
 ), outcomes AS (
  SELECT *,activity_matches AND consent_matches AND dm_identity_matches AND dm_consent_matches AND dm_activity_matches
-   AND CASE WHEN $9::text='or' THEN tag_matches OR field_matches ELSE tag_matches AND field_matches END AS matched,
+   AND CASE WHEN $9::text='or' THEN tag_matches OR field_matches ELSE tag_matches AND field_matches END
+   AND tree_matches AS matched,
  activity_matches AND consent_matches AND dm_identity_matches AND dm_consent_matches AND dm_activity_matches AS limits_match
  FROM contact_filters
 ), summary AS (
@@ -583,7 +729,8 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
  (count(*) FILTER (WHERE activity_matches AND consent_matches AND dm_identity_matches AND dm_consent_matches AND NOT dm_activity_matches))::text AS preview_excluded_dm_activity,
  (count(*) FILTER (WHERE limits_match AND NOT matched AND NOT tag_matches AND field_matches))::text AS preview_excluded_tag,
  (count(*) FILTER (WHERE limits_match AND NOT matched AND tag_matches AND NOT field_matches))::text AS preview_excluded_field,
- (count(*) FILTER (WHERE limits_match AND NOT matched AND NOT tag_matches AND NOT field_matches))::text AS preview_excluded_both
+ (count(*) FILTER (WHERE limits_match AND NOT matched AND NOT tag_matches AND NOT field_matches))::text AS preview_excluded_both,
+ (count(*) FILTER (WHERE limits_match AND NOT tree_matches))::text AS preview_excluded_conditions
  FROM outcomes
 )
  SELECT page.*,summary.*,${activityWindow} AS activity_window,${dmActivityWindow} AS dm_activity_window
@@ -600,6 +747,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       preview_excluded_tag?: string;
       preview_excluded_field?: string;
       preview_excluded_both?: string;
+      preview_excluded_conditions?: string;
       preview_excluded_activity?: string;
       preview_excluded_consent?: string;
       preview_excluded_dm_identity?: string;
@@ -619,6 +767,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
         preview_excluded_tag,
         preview_excluded_field,
         preview_excluded_both,
+        preview_excluded_conditions,
         preview_excluded_activity,
         preview_excluded_consent,
         preview_excluded_dm_identity,
@@ -646,9 +795,14 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
             ...(dmConsent || dmActivity ? { dm_identity: summary?.preview_excluded_dm_identity ?? "0" } : {}),
             ...(dmConsent ? { dm_consent: summary?.preview_excluded_dm_consent ?? "0" } : {}),
             ...(dmActivity ? { dm_activity: summary?.preview_excluded_dm_activity ?? "0" } : {}),
-            tag: summary?.preview_excluded_tag ?? "0",
-            field: summary?.preview_excluded_field ?? "0",
-            both: summary?.preview_excluded_both ?? "0",
+            // A tree has one reason after the limits; the tag/field split describes only the other two forms.
+            ...(conditionTree
+              ? { conditions: summary?.preview_excluded_conditions ?? "0" }
+              : {
+                  tag: summary?.preview_excluded_tag ?? "0",
+                  field: summary?.preview_excluded_field ?? "0",
+                  both: summary?.preview_excluded_both ?? "0",
+                }),
           },
         }
       : {}),
@@ -689,7 +843,7 @@ export async function saveContactTags(pool: Pool, user: User, connectionId: stri
 
 // The columns of a segment list item, also returned by create and edit.
 const SEGMENT_COLUMNS =
-  "id,name,connection_id,tag,tags,tag_mode,field_id,field_operator,field_value,field_conditions,field_mode,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state,dm_consent_purpose,dm_consent_state,last_dm_days,version";
+  "id,name,connection_id,tag,tags,tag_mode,field_id,field_operator,field_value,field_conditions,field_mode,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state,dm_consent_purpose,dm_consent_state,last_dm_days,condition_tree,version";
 
 export async function listContactSegments(pool: Pool, user: User) {
   const workspace = await workspaceFor(pool, user, "agent");
@@ -724,8 +878,10 @@ function segmentResult(row: {
   dm_consent_purpose?: string | null;
   dm_consent_state?: string | null;
   last_dm_days?: number | null;
+  condition_tree?: unknown;
 }) {
   const {
+    condition_tree,
     field_id,
     field_operator,
     field_value,
@@ -760,8 +916,9 @@ function segmentResult(row: {
       : {};
   return {
     ...base,
-    // A multi-tag segment returns its set and mode and no tag key; a one-tag or legacy segment keeps tag.
-    ...(tags ? { tags, tag_mode } : { tag }),
+    // A tree segment returns its tree and no tag key; a multi-tag segment its set and mode and no tag key; a
+    // one-tag or legacy segment keeps tag. A tree segment has no field keys either, as its field columns are NULL.
+    ...(condition_tree ? { condition_tree } : tags ? { tags, tag_mode } : { tag }),
     ...(last_comment_days ? { last_comment_days } : {}),
     ...(last_comment_period ? { last_comment_period } : {}),
     ...(consent_purpose && consent_state ? { consent_purpose, consent_state } : {}),
@@ -796,6 +953,7 @@ const SEGMENT_DEFINITION_KEYS = [
   "dm_consent_purpose",
   "dm_consent_state",
   "last_dm_days",
+  "condition_tree",
 ];
 
 // Create and edit share this parser, so both accept and refuse the same definitions. The body is a full
@@ -814,6 +972,20 @@ export function parseSegmentDefinition(input: unknown, extraKeys: readonly strin
   if (connectionId !== null && !isUuid(connectionId)) throw new ApiError(400, "invalid_segment");
   // The legacy tag (a string) or tags (an array); an absent, null or empty tag counts as no tag.
   const legacyTag = input.tag === undefined || input.tag === null || input.tag === "" ? null : input.tag;
+  // The tree is the third condition form: a body with one names no tag or field key and no condition_operator, not
+  // even "and". An absent, null or empty tag and a null key count as absent, as for the other forms. This is checked
+  // before the other forms are parsed, so every mixture answers with one code.
+  const conditionTree = parseConditionTree(input.condition_tree);
+  if (
+    conditionTree &&
+    (legacyTag !== null ||
+      ["tags", "tag_mode", "field_id", "field_operator", "field_conditions", "field_mode"].some(
+        (key) => input[key] != null,
+      ) ||
+      Object.hasOwn(input, "field_value") ||
+      input.condition_operator !== undefined)
+  )
+    throw new ApiError(400, "invalid_contact_condition");
   if (input.tags != null && legacyTag !== null) throw new ApiError(400, "invalid_segment");
   if (input.tags != null && (!Array.isArray(input.tags) || !input.tags.length))
     throw new ApiError(400, "invalid_contact_tags");
@@ -839,16 +1011,27 @@ export function parseSegmentDefinition(input: unknown, extraKeys: readonly strin
     dmConsent,
     dmActivity,
     operator,
+    conditionTree,
   };
 }
 type SegmentDefinition = ReturnType<typeof parseSegmentDefinition>;
 
 // The stored columns of a definition, in the order of segmentDefinitionValues.
 const SEGMENT_DEFINITION_COLUMNS =
-  "name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state,last_comment_days,last_comment_period,tags,tag_mode,field_conditions,field_mode,dm_consent_purpose,dm_consent_state,last_dm_days";
+  "name,connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,consent_purpose,consent_state,last_comment_days,last_comment_period,tags,tag_mode,field_conditions,field_mode,dm_consent_purpose,dm_consent_state,last_dm_days,condition_tree";
 function segmentDefinitionValues(definition: SegmentDefinition) {
-  const { name, connectionId, tagCondition, fieldCondition, activity, consent, dmConsent, dmActivity, operator } =
-    definition;
+  const {
+    name,
+    connectionId,
+    tagCondition,
+    fieldCondition,
+    activity,
+    consent,
+    dmConsent,
+    dmActivity,
+    operator,
+    conditionTree,
+  } = definition;
   // One tag is stored in the legacy tag column; two or more in tags with their mode.
   const single = tagCondition?.tags.length === 1;
   // One field condition is stored in the legacy field columns; two or three in field_conditions with their mode.
@@ -875,14 +1058,25 @@ function segmentDefinitionValues(definition: SegmentDefinition) {
     dmConsent?.dm_consent_purpose ?? null,
     dmConsent?.dm_consent_state ?? null,
     dmActivity?.last_dm_days ?? null,
+    conditionTree ? JSON.stringify(conditionTree) : null,
   ];
 }
 
 // Every referenced field is held FOR SHARE until commit, in field_id order, so archiveContactField (field FOR UPDATE,
 // then the active-segment check) either waits and sees this segment, or commits first and this refuses the field.
+// A tree may name one field in several leaves with different operators: each distinct field is locked once, with its
+// first leaf, and its other leaves are validated against the row this transaction already holds, without a lock.
 async function validateSegmentReferences(client: PoolClient, workspace: string, definition: SegmentDefinition) {
-  for (const condition of definition.fieldCondition?.conditions ?? [])
-    await validateFieldCondition(client, workspace, condition, true);
+  const conditions = contactConditionFields(definition).sort((left, right) =>
+    left.field_id < right.field_id ? -1 : left.field_id > right.field_id ? 1 : 0,
+  );
+  for (const [index, condition] of conditions.entries())
+    await validateFieldCondition(
+      client,
+      workspace,
+      condition,
+      !index || conditions[index - 1].field_id !== condition.field_id,
+    );
   if (
     definition.connectionId !== null &&
     !(
@@ -906,7 +1100,7 @@ export async function createContactSegment(pool: Pool, user: User, input: unknow
     await validateSegmentReferences(client, workspace, definition);
     const result = await client.query(
       `INSERT INTO instagram_contact_segments(workspace_id,${SEGMENT_DEFINITION_COLUMNS})
- SELECT $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15::text[],$16,$17::jsonb,$18,$19,$20,$21::int WHERE (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived)<50
+ SELECT $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15::text[],$16,$17::jsonb,$18,$19,$20,$21::int,$22::jsonb WHERE (SELECT count(*) FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived)<50
  RETURNING ${SEGMENT_COLUMNS}`,
       [workspace, ...segmentDefinitionValues(definition)],
     );
@@ -960,10 +1154,10 @@ export async function updateContactSegment(
     // IS DISTINCT FROM compares in SQL, so jsonb and timestamps need no conversion; an unchanged row updates nothing.
     const updated = (
       await client.query(
-        `UPDATE instagram_contact_segments SET (${SEGMENT_DEFINITION_COLUMNS})=($3,$4,$5,$6,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text,$16::text[],$17::text,$18::jsonb,$19::text,$20::text,$21::text,$22::int),
+        `UPDATE instagram_contact_segments SET (${SEGMENT_DEFINITION_COLUMNS})=($3,$4,$5,$6,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text,$16::text[],$17::text,$18::jsonb,$19::text,$20::text,$21::text,$22::int,$23::jsonb),
    version=version+1
  WHERE workspace_id=$1 AND id=$2
-   AND (${SEGMENT_DEFINITION_COLUMNS}) IS DISTINCT FROM ($3,$4::uuid,$5,$6::uuid,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text,$16::text[],$17::text,$18::jsonb,$19::text,$20::text,$21::text,$22::int)
+   AND (${SEGMENT_DEFINITION_COLUMNS}) IS DISTINCT FROM ($3,$4::uuid,$5,$6::uuid,$7,$8::jsonb,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14::int,$15::text,$16::text[],$17::text,$18::jsonb,$19::text,$20::text,$21::text,$22::int,$23::jsonb)
  RETURNING ${SEGMENT_COLUMNS}`,
         [workspace, id, ...segmentDefinitionValues(definition)],
       )

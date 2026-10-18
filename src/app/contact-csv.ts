@@ -2,7 +2,7 @@ import type { Pool, PoolClient, QueryConfig, QueryResult, QueryResultRow } from 
 import { ApiError, isRecord, type User } from "./auth.ts";
 import { roleAllows, type WorkspaceRole } from "./settings.ts";
 import { validateFieldCondition } from "./contact-fields.ts";
-import { savedSegmentConditions, segmentConditionSql } from "./contacts.ts";
+import { contactConditionFields, savedSegmentConditions, segmentConditionSql } from "./contacts.ts";
 
 export const CONTACT_CSV_HEADER = [
   "format_version",
@@ -156,7 +156,7 @@ export async function exportContactCsv(
     if (!roleAllows(membership.role, "admin")) throw new ApiError(403, "role_forbidden");
     const workspace = membership.workspace_id;
     const segment = segmentId === null ? null : await savedSegmentConditions({ query }, workspace, segmentId);
-    for (const condition of segment?.fieldCondition?.conditions ?? [])
+    for (const condition of segment ? contactConditionFields(segment) : [])
       await validateFieldCondition({ query }, workspace, condition);
     const exportedAt = (
       await query<{ exported_at: string }>(

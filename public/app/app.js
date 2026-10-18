@@ -32,6 +32,9 @@ let segmentsGeneration = 0;
 let segmentsRequest = 0;
 let segmentBusy = false;
 let activeSegmentId = "";
+// The condition tree of the draft: the selected tree segment's tree, kept while the limit inputs change and removed
+// only by choosing "직접 조건 설정" or "그룹 조건 지우기". The group editor that builds one comes in a later release.
+let draftConditionTree = null;
 let segmentNameDirty = false;
 let segmentPreviewRequest = 0;
 // The saved segment being edited: its ID, the version the edit is based on, the segment as last read from the
@@ -238,6 +241,7 @@ function resetSession() {
   contactSegments = [];
   segmentBusy = false;
   activeSegmentId = "";
+  draftConditionTree = null;
   leaveSegmentEdit({ discard: true });
   segmentNameDirty = false;
   fieldsGeneration++;
@@ -2702,17 +2706,19 @@ function contactDmActivityCondition() {
 }
 function contactDraftQuery() {
   const fields = byId("contacts-filter").elements;
-  const fieldKeys = contactFieldConditionKeys();
+  // A tree replaces the tag and field conditions and their operator; the limits below still apply.
+  const fieldKeys = draftConditionTree ? {} : contactFieldConditionKeys();
   const activity = contactActivityWindow();
   const consent = contactConsentCondition();
   const dmConsent = contactDmConsentCondition();
   const dmActivity = contactDmActivityCondition();
   const query = new URLSearchParams();
   if (fields.connection_id.value) query.set("connection_id", fields.connection_id.value);
-  const tags = contactFilterTags();
+  const tags = draftConditionTree ? [] : contactFilterTags();
   for (const value of tags) query.append("tag", value);
   if (tags.length > 1) query.set("tag_mode", fields.tag_mode.value);
-  if (fields.condition_operator.value === "or") query.set("condition_operator", "or");
+  if (!draftConditionTree && fields.condition_operator.value === "or") query.set("condition_operator", "or");
+  if (draftConditionTree) query.set("condition_tree", JSON.stringify(draftConditionTree));
   if (activity) for (const [key, value] of Object.entries(activity)) query.set(key, value);
   if (consent) for (const [key, value] of Object.entries(consent)) query.set(key, value);
   if (dmConsent) for (const [key, value] of Object.entries(dmConsent)) query.set(key, value);
@@ -2841,12 +2847,18 @@ byId("segment-preview").addEventListener("click", async () => {
       query.has("dm_consent_purpose") || query.has("last_dm_days") ? page.excluded?.dm_identity : "0";
     const dmConsentCount = query.has("dm_consent_purpose") ? page.excluded?.dm_consent : "0";
     const dmActivityCount = query.has("last_dm_days") ? page.excluded?.dm_activity : "0";
+    // A tree has one reason after the limits; the other forms split tag and field mismatches.
+    const conditionReasons = query.has("condition_tree")
+      ? [[page.excluded?.conditions, "그룹 조건 불일치"]]
+      : [
+          [page.excluded?.tag, "태그 조건만 불일치"],
+          [page.excluded?.field, "추가 정보 조건만 불일치"],
+          [page.excluded?.both, "태그·추가 정보 조건 모두 불일치"],
+        ];
     const counts = [
       page.total,
       page.evaluated,
-      page.excluded?.tag,
-      page.excluded?.field,
-      page.excluded?.both,
+      ...conditionReasons.map(([count]) => count),
       activityCount,
       consentCount,
       dmIdentityCount,
@@ -2861,9 +2873,7 @@ byId("segment-preview").addEventListener("click", async () => {
       BigInt(dmIdentityCount) +
       BigInt(dmConsentCount) +
       BigInt(dmActivityCount) +
-      BigInt(page.excluded.tag) +
-      BigInt(page.excluded.field) +
-      BigInt(page.excluded.both);
+      conditionReasons.reduce((total, [count]) => total + BigInt(count), 0n);
     if (BigInt(page.evaluated) !== BigInt(page.total) + excludedTotal)
       throw new Error("대상 수와 제외 사유를 확인할 수 없습니다.");
     status.textContent =
@@ -2876,9 +2886,7 @@ byId("segment-preview").addEventListener("click", async () => {
       [dmIdentityCount, "확인된 DM 대화 없음"],
       [dmConsentCount, "DM 동의 기록 조건 불일치"],
       [dmActivityCount, "최근 받은 DM 없음"],
-      [page.excluded.tag, "태그 조건만 불일치"],
-      [page.excluded.field, "추가 정보 조건만 불일치"],
-      [page.excluded.both, "태그·추가 정보 조건 모두 불일치"],
+      ...conditionReasons,
     ]) {
       if (count !== "0") byId("segment-preview-exclusions").append(node("li", `${label}: ${count}명`));
     }
@@ -2907,7 +2915,11 @@ function segmentControls() {
   byId("contact-segment").disabled = segmentBusy || Boolean(editingSegment);
   byId("segment-archive").disabled = segmentBusy || !activeSegmentId;
   byId("segment-edit").hidden = currentRole !== "owner" && currentRole !== "admin";
-  byId("segment-edit").disabled = segmentBusy || !activeSegmentId || Boolean(editingSegment);
+  // A tree segment cannot be edited here until the group editor exists; PUT still accepts trees.
+  const treeSegment = Boolean(contactSegments.find((segment) => segment.id === activeSegmentId)?.condition_tree);
+  byId("segment-edit").disabled = segmentBusy || !activeSegmentId || Boolean(editingSegment) || treeSegment;
+  byId("segment-edit-tree-hint").hidden = byId("segment-edit").hidden || !treeSegment;
+  conditionTreeControls();
   byId("segment-save").elements.name.disabled = segmentBusy;
   byId("segment-save").querySelector("button").disabled = segmentBusy;
   // While a save is in flight, action() shows the loading label; the trailing segmentControls() call restores it.
@@ -2936,8 +2948,27 @@ function leaveSegmentEdit({ discard = false } = {}) {
     segmentNameDirty = false;
   }
 }
+// While a tree is part of the draft, the tag and field inputs are disabled and the tree is described instead.
+// The three mode selects keep their own state functions, which every path that removes the tree runs again, so they
+// are only forced off here.
+function conditionTreeControls() {
+  const tree = Boolean(draftConditionTree);
+  const fields = byId("contacts-filter").elements;
+  for (const input of contactTagInputs()) input.disabled = tree;
+  for (const row of fieldFilterRows())
+    row.field.disabled = row.operator.disabled = row.value.disabled = row.boolean.disabled = tree;
+  for (const id of ["field-filter-add", "field-filter-remove-2", "field-filter-remove-3"]) byId(id).disabled = tree;
+  if (tree) for (const name of ["tag_mode", "field_mode", "condition_operator"]) fields[name].disabled = true;
+  byId("contact-condition-tree").hidden = !draftConditionTree;
+  byId("contact-condition-tree-clear").disabled = segmentBusy;
+  byId("contact-condition-tree-summary").textContent = draftConditionTree
+    ? `그룹 조건: ${conditionTreeSummary(draftConditionTree)}. 태그·추가 정보 조건은 그룹 조건을 지운 뒤 입력할 수 있습니다.`
+    : "";
+}
 function fillSegmentConditions(segment) {
   const fields = byId("contacts-filter").elements;
+  draftConditionTree = segment?.condition_tree ?? null;
+  conditionTreeControls();
   fields.connection_id.value = segment?.connection_id || "";
   const savedTags = segment?.tags ?? (segment?.tag ? [segment.tag] : []);
   contactTagInputs().forEach((input, index) => {
@@ -2987,6 +3018,28 @@ function segmentFieldConditions(segment) {
 function optionLabel(select, value) {
   return [...select.options].find((option) => option.value === value)?.textContent ?? String(value);
 }
+// One field condition as text, with the field's name and the operator label of its type.
+function fieldConditionSummary(condition) {
+  const field = contactFields.find((value) => value.id === condition.field_id);
+  return (
+    `${field?.name || "확인할 수 없는 필드"} ${orderedOperatorLabels(field?.type)[condition.field_operator] ?? optionLabel(byId("contacts-filter").elements.field_operator, condition.field_operator)}` +
+    (fieldConditionNeedsValue(condition.field_operator) ? ` ${displayFieldValue(condition.field_value)}` : "")
+  );
+}
+// A condition tree as one line: each group in parentheses, joined by the root mode, its leaves by the group mode.
+function conditionTreeSummary(tree) {
+  const join = (mode) => (mode === "any" ? " 또는 " : " 그리고 ");
+  return tree.groups
+    .map(
+      (group) =>
+        `(${group.conditions
+          .map((leaf) =>
+            "tag" in leaf ? `태그 ${leaf.tag} ${leaf.negate ? "없음" : "있음"}` : fieldConditionSummary(leaf),
+          )
+          .join(join(group.mode))})`,
+    )
+    .join(join(tree.mode));
+}
 // The saved values of a segment as one line of text, shown after a conflicting edit.
 function segmentSummary(segment) {
   const fields = byId("contacts-filter").elements;
@@ -2994,17 +3047,13 @@ function segmentSummary(segment) {
   const parts = [
     `이름 ${segment.name}`,
     `계정 ${segment.connection_id ? account?.username || account?.account_id || "확인할 수 없는 계정" : "모든 계정"}`,
-    segment.tags
-      ? `태그 ${segment.tags.join(", ")} (${segment.tag_mode === "any" ? "하나 이상 포함" : "모두 포함"})`
-      : `태그 ${segment.tag || "조건 없음"}`,
+    segment.condition_tree
+      ? `그룹 조건 ${conditionTreeSummary(segment.condition_tree)}`
+      : segment.tags
+        ? `태그 ${segment.tags.join(", ")} (${segment.tag_mode === "any" ? "하나 이상 포함" : "모두 포함"})`
+        : `태그 ${segment.tag || "조건 없음"}`,
   ];
-  const savedFields = segmentFieldConditions(segment).map((condition) => {
-    const field = contactFields.find((value) => value.id === condition.field_id);
-    return (
-      `${field?.name || "확인할 수 없는 필드"} ${orderedOperatorLabels(field?.type)[condition.field_operator] ?? optionLabel(fields.field_operator, condition.field_operator)}` +
-      (fieldConditionNeedsValue(condition.field_operator) ? ` ${displayFieldValue(condition.field_value)}` : "")
-    );
-  });
+  const savedFields = segmentFieldConditions(segment).map(fieldConditionSummary);
   if (savedFields.length > 1)
     parts.push(
       `추가 정보 ${savedFields.join(", ")} (${segment.field_mode === "any" ? "하나 이상 만족" : "모두 만족"})`,
@@ -3068,6 +3117,16 @@ byId("contacts-filter").addEventListener("input", (event) => {
   if (event.target.name === "consent_purpose" || event.target.name === "dm_consent_purpose") contactConsentControls();
   segmentControls();
 });
+byId("contact-condition-tree-clear").addEventListener("click", () => {
+  if (!draftConditionTree || segmentBusy) return;
+  draftConditionTree = null;
+  conditionTreeControls();
+  contactTagControls();
+  fieldFilterControls();
+  // Removing the tree is a condition edit: it clears the selection and the preview, as typing does.
+  byId("contacts-filter").dispatchEvent(new Event("input", { bubbles: true }));
+  byId("contacts-filter").elements.tag.focus();
+});
 byId("contact-segment").addEventListener("change", (event) => {
   if (!canReloadContacts()) {
     event.currentTarget.value = activeSegmentId;
@@ -3081,7 +3140,14 @@ byId("contact-segment").addEventListener("change", (event) => {
 });
 byId("segment-edit").addEventListener("click", () => {
   const segment = contactSegments.find((value) => value.id === activeSegmentId);
-  if (!segment || segmentBusy || editingSegment || (currentRole !== "owner" && currentRole !== "admin")) return;
+  if (
+    !segment ||
+    segment.condition_tree ||
+    segmentBusy ||
+    editingSegment ||
+    (currentRole !== "owner" && currentRole !== "admin")
+  )
+    return;
   // Editing replaces the name field with the saved name, so a name typed for a new filter needs a confirmation.
   if (segmentNameDirty && !confirm("입력한 새 필터 이름을 버리고 저장된 필터를 수정할까요?")) return;
   editingSegment = {
@@ -3178,12 +3244,14 @@ byId("segment-save").addEventListener("submit", (event) => {
   const name = byId("segment-save").elements.name.value;
   const tags = contactFilterTags();
   const payload = { name, connection_id: fields.connection_id.value || null };
+  // A tree is sent alone in place of the tag and field conditions and their operator.
+  if (draftConditionTree) payload.condition_tree = draftConditionTree;
   // One tag keeps the legacy shape; two or more go as a set with the chosen mode.
-  if (tags.length > 1) Object.assign(payload, { tags, tag_mode: fields.tag_mode.value });
+  else if (tags.length > 1) Object.assign(payload, { tags, tag_mode: fields.tag_mode.value });
   else payload.tag = tags[0] ?? null;
-  if (fields.condition_operator.value === "or") payload.condition_operator = "or";
+  if (!draftConditionTree && fields.condition_operator.value === "or") payload.condition_operator = "or";
   try {
-    Object.assign(payload, contactFieldConditionKeys());
+    if (!draftConditionTree) Object.assign(payload, contactFieldConditionKeys());
     Object.assign(payload, contactActivityWindow());
     Object.assign(payload, contactConsentCondition());
     Object.assign(payload, contactDmConsentCondition());
@@ -3251,6 +3319,7 @@ byId("segment-archive").addEventListener("click", (event) => {
           query.set("dm_consent_state", segment.dm_consent_state);
         }
         if (segment.last_dm_days) query.set("last_dm_days", segment.last_dm_days);
+        if (segment.condition_tree) query.set("condition_tree", JSON.stringify(segment.condition_tree));
         if (segment.field_conditions) {
           query.set("field_conditions", JSON.stringify(segment.field_conditions));
           query.set("field_mode", segment.field_mode);

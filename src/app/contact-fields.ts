@@ -170,9 +170,12 @@ export async function archiveContactField(pool: Pool, user: User, id: string) {
     if (
       (
         await client.query(
-          // A field set stores lowercase IDs, which $2::uuid::text matches. No index: at most 50 active segments per workspace.
+          // A field set and a condition tree store lowercase IDs, which $2::uuid::text matches; the tree containment
+          // holds when any leaf of any group names the field. No index: at most 50 active segments per workspace.
           `SELECT id FROM instagram_contact_segments WHERE workspace_id=$1 AND NOT archived
-           AND (field_id=$2 OR field_conditions @> jsonb_build_array(jsonb_build_object('field_id',$2::uuid::text))) LIMIT 1`,
+           AND (field_id=$2 OR field_conditions @> jsonb_build_array(jsonb_build_object('field_id',$2::uuid::text))
+             OR condition_tree @> jsonb_build_object('groups',jsonb_build_array(jsonb_build_object('conditions',
+               jsonb_build_array(jsonb_build_object('field_id',$2::uuid::text)))))) LIMIT 1`,
           [workspace, id],
         )
       ).rows[0]

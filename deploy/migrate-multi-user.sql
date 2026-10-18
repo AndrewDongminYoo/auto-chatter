@@ -59,5 +59,6 @@ BEGIN;
 \ir ../db/migrations/057_segment_multi_field.sql
 \ir ../db/migrations/058_segment_dm_consent.sql
 \ir ../db/migrations/059_segment_dm_activity.sql
+\ir ../db/migrations/060_segment_condition_tree.sql
 \ir supabase-access.sql
 COMMIT;

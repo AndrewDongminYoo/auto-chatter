@@ -72,6 +72,7 @@ import {
   listContacts,
   saveContactTags,
   saveContactAutomation,
+  SEGMENT_REQUEST_BYTES,
   updateContactSegment,
 } from "./contacts.ts";
 import { connectionMedia } from "./instagram-media.ts";
@@ -594,11 +595,16 @@ export async function appApi(
       if (url.pathname === "/api/contact-segments" && request.method === "GET")
         return json({ segments: await listContactSegments(pool, user) });
       if (url.pathname === "/api/contact-segments" && request.method === "POST")
-        return json(await createContactSegment(pool, user, await readJson(request)), 201);
+        return json(await createContactSegment(pool, user, await readJson(request, SEGMENT_REQUEST_BYTES)), 201);
       const segment = /^\/api\/contact-segments\/([a-f0-9-]+)$/.exec(url.pathname);
       if (segment && request.method === "DELETE") return json(await archiveContactSegment(pool, user, segment[1]!));
       if (segment && request.method === "PUT") {
-        const saved = await updateContactSegment(pool, user, segment[1]!, await readJson(request));
+        const saved = await updateContactSegment(
+          pool,
+          user,
+          segment[1]!,
+          await readJson(request, SEGMENT_REQUEST_BYTES),
+        );
         // A stale expected_version answers with the current segment, like the label rule.
         return saved.conflict ? json({ error: "segment_conflict", segment: saved.segment }, 409) : json(saved.segment);
       }
