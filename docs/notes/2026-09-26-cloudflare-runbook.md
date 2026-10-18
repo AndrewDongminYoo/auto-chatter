@@ -514,6 +514,19 @@ Worker를 버전 `bd9ed6d9-daea-4d84-a47a-226ebfdafdbd`로 배포했고, 15:59:3
 21개 항목의 공개 점검은 배포 전에는 바뀐 `index.html`과 `app.js`의 해시만 달라 19개가 통과했고, 배포 뒤 23:33:53Z의 점검에서는 21개가 모두 통과했습니다.
 `scheduled_steps`를 23:33:53Z, 23:35:15Z, 23:36:36Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. `stale_recovery`, `wake`, `webhook_delivery`는 발송이 꺼져 있어 이번에도 실행되지 않았습니다.
 로그인한 세션으로 요청하지 않았으므로 다중 필드 조건의 화면과 API는 운영에서 실행하지 않았습니다.
+
+2026-10-18 11:36Z에는 운영자의 "운영 DB에 적용하고 배포해주세요" 요청에 따라 `main` 커밋 `3bd679f`를 적용했습니다. 이 커밋에는 PR #226(세그먼트 CSV 내보내기, 마이그레이션 없음), PR #227(DM 동의 조건, migration 058), PR #228(DM 활동 조건, migration 059), PR #230(중첩 조건 그룹, migration 060), PR #231(그룹 편집기, 마이그레이션 없음), PR #232(대상 스냅샷, migration 061)와 PR #225(앞 기록, 문서만)가 들어 있습니다.
+적용 전 조회에서 운영 DB는 057까지 적용된 상태였고(`field_conditions` 있음, `dm_consent_purpose`·`last_dm_days`·`condition_tree` 열, `instagram_inbox_messages_latest_idx` 색인, `instagram_segment_snapshots` 테이블 없음, public 테이블 45개), 작업 공간 3개·세그먼트 0개·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다. 059가 트랜잭션 안에서 `CONCURRENTLY` 없이 만드는 색인의 대상인 `instagram_inbox_messages`는 5행(64 kB)이었습니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-18-migration-061/public-pre-058-061.dump`(294,840바이트, SHA-256 `833ec068b0136e9bbb6b4b71d76c71aeabc56d4022e26c33e29eaf49aa28d776`)에 저장했고, 목록 읽기에서 데이터 테이블 45개를 확인했습니다.
+앞과 같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE는 173건이었습니다.
+적용 후 public 테이블은 47개가 되었습니다. `instagram_contact_segments`에 `dm_consent_purpose`·`dm_consent_state`(text), `last_dm_days`(integer), `condition_tree`(jsonb) 열과 `contact_segment_dm_consent`·`contact_segment_dm_activity`·`contact_segment_condition_tree` CHECK가 생겼고, `contact_segment_condition_operator`는 그대로 남았습니다. 색인 `instagram_inbox_messages_latest_idx`(작업 공간·연결·상대·`message_at DESC`)와 고유 색인 `instagram_contact_segments_id_workspace`가 생겼습니다.
+새 테이블 `instagram_segment_snapshots`와 `instagram_segment_snapshot_members`는 RLS가 켜져 있고, `auto_chatter_server`는 두 테이블에 INSERT·SELECT만 가졌습니다. `delete_connection_data`, `delete_person_data`, `delete_workspace_data`의 본문이 모두 스냅샷 대상 행을 지웁니다. 서버 역할의 테이블 DELETE·TRUNCATE 권한, `anon`·`authenticated`의 public 테이블 권한, RLS가 꺼진 public 테이블은 모두 0개였습니다.
+배포 전 `main`의 `3bd679f`, `0e9e8bb`, `d44dc12` CI가 통과한 것을 확인했습니다.
+이어서 Worker를 버전 `ff26b265-37ee-4ea0-802b-314062a227ee`로 배포했고, 11:38:07Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `73e9b1e6-1cb4-457f-aa8f-ebc31345285b`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+공개 점검은 정적 파일이 두 개 늘어 23개 항목입니다. 배포 전에는 바뀐 `index.html`·`app.js`·`styles.css`의 해시와 새 `condition-tree-model.js`·`segment-snapshots.js`의 404로 5개가 실패했고, 배포 뒤의 점검에서는 23개가 모두 통과했습니다.
+`scheduled_steps`를 11:38:52Z, 11:40:19Z, 11:41:31Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. `stale_recovery`, `wake`, `webhook_delivery`는 배포 뒤 실행되지 않았습니다.
+세 단계의 마지막 성공 시각은 세 조회 모두 2026-10-18 00:43:49Z였습니다. 23:30Z 배포와 이번 배포 사이에 다른 배포는 없었으므로 `73e9b1e6`가 활성인 동안 한 번 기록된 것인데, 그 원인은 확인하지 않았습니다. 앞 기록의 "실행되지 않았습니다"는 그 기록의 조회 구간(23:33Z~23:36Z)에 대한 것입니다.
+로그인한 세션으로 요청하지 않았으므로 DM 조건, 중첩 조건 그룹, 그룹 편집기, 세그먼트 CSV 내보내기, 대상 스냅샷의 화면과 API는 운영에서 실행하지 않았습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
