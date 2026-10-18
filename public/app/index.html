@@ -872,12 +872,27 @@
                 >
                   전체 연락처 CSV
                 </button>
+                <button
+                  id="contacts-segment-export"
+                  type="button"
+                  class="secondary"
+                  aria-describedby="contacts-segment-export-help"
+                  hidden
+                  disabled
+                >
+                  선택한 필터로 내보내기
+                </button>
                 <button id="contacts-reload" class="secondary">새로고침</button>
               </div>
             </div>
             <p id="contacts-export-help" class="hint" hidden>
               저장된 전체 연락처를 내보냅니다. 현재 필터와 저장 전 수정은 적용하지 않습니다. 활성 사용자 정의 필드에는
               수집한 답장 등 개인정보가 포함될 수 있으니 파일을 안전하게 보관하세요.
+            </p>
+            <p id="contacts-segment-export-help" class="hint" hidden>
+              저장된 필터를 고르면 그 필터에 맞는 연락처만 같은 형식으로 내보냅니다. 화면에서 고친 조건이 아니라 저장된
+              필터 조건을 쓰며, 필터를 수정하면서 저장하지 않은 변경이 있으면 내보낼 수 없습니다. 활동 기간은 내보내는
+              시점을 기준으로 한 번 계산합니다.
             </p>
             <details id="contacts-export-format" hidden>
               <summary>CSV 값 읽는 방법</summary>

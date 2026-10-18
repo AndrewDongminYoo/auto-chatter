@@ -678,6 +678,49 @@ test("contact CSV export validates the session and query before spending the use
   assert.deepEqual(limiter.keys, [userId]);
 });
 
+test("segment CSV export accepts exactly one UUID segment_id before spending the allowance", async () => {
+  const limiter = recordingLimit(false);
+  const env = { ...config, CONTACT_EXPORT_LIMIT: limiter.binding };
+  const noPool = () => {
+    throw new Error("a refused segment export must not open the database");
+  };
+  const segment = "0f8fad5b-d9cb-469f-a165-70867728950e";
+  const send = (query: string) =>
+    appApi(
+      new Request(`https://app.test/api/contacts/export.csv${query}`, {
+        headers: { cookie: "__Host-ac-access=test-session" },
+      }),
+      env,
+      noPool,
+      mediaFetch(),
+    );
+  for (const query of [
+    "?segment_id=",
+    "?segment_id",
+    "?segment_id=bad",
+    `?segment_id=${segment}x`,
+    `?segment_id=${segment}&segment_id=${segment}`,
+    `?segment_id=${segment}&tag=lead`,
+    `?segment_id=${segment}&connection_id=${segment}`,
+    `?segment_id=${segment}&preview=true`,
+    `?segment=${segment}`,
+    `?SEGMENT_ID=${segment}`,
+  ]) {
+    const response = await send(query);
+    assert.equal(response.status, 400, query);
+    assert.deepEqual(await response.json(), { error: "invalid_contact_export_request" });
+    assert.equal(response.headers.has("content-disposition"), false);
+  }
+  assert.deepEqual(limiter.keys, []);
+  // A valid request passes validation and reaches the same per-user allowance as the full export.
+  for (const id of [segment, segment.toUpperCase()]) {
+    const response = await send(`?segment_id=${id}`);
+    assert.equal(response.status, 429);
+    assert.deepEqual(await response.json(), { error: "contact_export_rate_limited" });
+  }
+  assert.deepEqual(limiter.keys, [userId, userId]);
+});
+
 test("connection health distinguishes token expiry, account access and webhook subscription", async () => {
   const env = { ...mediaConfig, INSTAGRAM_OAUTH_APP_ID: "789" };
   const cases: Array<[Response, Response | undefined, string, number]> = [

@@ -6,6 +6,7 @@ import {
   fieldConditionNeedsValue,
   lockContact,
   parseFieldCondition,
+  type SqlReader,
   validateFieldCondition,
 } from "./contact-fields.ts";
 
@@ -177,6 +178,165 @@ function cursor(value: string | null): { connection_id: string; sender_id: strin
     throw new ApiError(400, "invalid_contact_request");
   }
 }
+type ContactConditions = {
+  connectionId: string | null;
+  tagCondition: TagCondition | null;
+  fieldCondition: FieldConditionSet | null;
+  activity: ReturnType<typeof parseActivityWindow>;
+  consent: ReturnType<typeof parseConsentCondition>;
+  operator: "and" | "or";
+};
+// The conditions of an active saved segment of the workspace. The contact list reads it from the pool and the
+// contact export from its snapshot transaction; both evaluate the result with segmentConditionSql.
+export async function savedSegmentConditions(
+  db: SqlReader,
+  workspaceId: string,
+  segmentId: string,
+): Promise<ContactConditions> {
+  const segment = await db.query<{
+    connection_id: string | null;
+    tag: string | null;
+    tags: string[] | null;
+    tag_mode: string | null;
+    field_id: string | null;
+    field_operator: string;
+    field_value: unknown;
+    field_conditions: unknown;
+    field_mode: string | null;
+    condition_operator: string;
+    last_comment_from: Date | null;
+    last_comment_before: Date | null;
+    last_comment_days: number | null;
+    last_comment_period: string | null;
+    consent_purpose: string | null;
+    consent_state: string | null;
+  }>(
+    "SELECT connection_id,tag,tags,tag_mode,field_id,field_operator,field_value,field_conditions,field_mode,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
+    [workspaceId, segmentId],
+  );
+  if (!segment.rows[0]) throw new ApiError(404, "segment_not_found");
+  const saved = segment.rows[0];
+  const tagCondition = saved.tags
+    ? parseTagCondition(saved.tags, saved.tag_mode)
+    : parseTagCondition(saved.tag === null ? [] : [saved.tag], null);
+  const consent = parseConsentCondition(saved);
+  const activity = parseActivityWindow({
+    last_comment_from: saved.last_comment_from?.toISOString(),
+    last_comment_before: saved.last_comment_before?.toISOString(),
+    last_comment_days: saved.last_comment_days,
+    last_comment_period: saved.last_comment_period,
+  });
+  const fieldCondition: FieldConditionSet | null = saved.field_conditions
+    ? parseFieldConditionSet({}, saved.field_conditions, saved.field_mode)
+    : saved.field_id
+      ? {
+          conditions: [
+            {
+              field_id: saved.field_id,
+              field_operator: saved.field_operator,
+              ...(fieldConditionNeedsValue(saved.field_operator) ? { field_value: saved.field_value } : {}),
+            },
+          ],
+          mode: "all",
+        }
+      : null;
+  const operator = parseConditionOperator(saved.condition_operator, Boolean(tagCondition), Boolean(fieldCondition));
+  return { connectionId: saved.connection_id, tagCondition, fieldCondition, activity, consent, operator };
+}
+// The one contact predicate of the list, the preview, a saved segment and the segment export. Its fragments use
+// fixed positions: $1 workspace, $2 connection, $3 tags, $4 and $5 the caller's page cursor, $6 to $8 the field
+// set, $9 the operator, $10 and $11 the fixed window, $12 and $13 consent, $14 days and $15 the calendar period;
+// values holds them in that order. clock is the SQL expression of the evaluation time (as_of).
+// matches is a row condition over e and t after contactScope; activityMatches is aggregate and goes in HAVING.
+export function segmentConditionSql(
+  workspaceId: string,
+  conditions: ContactConditions,
+  clock: string,
+  after: { connection_id: string; sender_id: string } | null,
+) {
+  const { connectionId, tagCondition, fieldCondition, activity, consent, operator } = conditions;
+  // One statement clock for the page and preview, using elapsed hours even across DST.
+  // The calendar period reads the workspace time zone in the same statement. Its local boundaries are
+  // converted back with AT TIME ZONE, so PostgreSQL resolves daylight-saving gaps and overlaps.
+  const evaluation = `evaluation AS MATERIALIZED (SELECT as_of,time_zone,
+    local_from AT TIME ZONE time_zone AS period_from,local_before AT TIME ZONE time_zone AS period_before
+    FROM (SELECT ${clock} AS as_of) clock
+    CROSS JOIN LATERAL (SELECT (SELECT time_zone FROM workspaces WHERE id=$1) AS time_zone) zone
+    CROSS JOIN LATERAL (SELECT date_trunc(CASE WHEN $15::text IN ('today','yesterday') THEN 'day' ELSE 'month' END,
+      as_of AT TIME ZONE time_zone) AS local_start) local_clock
+    CROSS JOIN LATERAL (SELECT CASE $15::text
+      WHEN 'today' THEN local_start WHEN 'yesterday' THEN local_start - interval '1 day'
+      WHEN 'this_month' THEN local_start WHEN 'last_month' THEN local_start - interval '1 month' END AS local_from,
+      CASE $15::text
+      WHEN 'today' THEN local_start + interval '1 day' WHEN 'yesterday' THEN local_start
+      WHEN 'this_month' THEN local_start + interval '1 month' WHEN 'last_month' THEN local_start END AS local_before) local_period)`;
+  const utc = (value: string) => `to_char(${value} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+  const activityWindow = activity?.last_comment_period
+    ? `(SELECT json_build_object('from',${utc("period_from")},'before',${utc("period_before")},'time_zone',time_zone) FROM evaluation)`
+    : `(SELECT json_build_object('from',${utc("(as_of - $14::int * interval '24 hours')")},'before',${utc("as_of")}) FROM evaluation)`;
+  const activityMatches = `(CASE WHEN $15::text IS NOT NULL THEN
+    max(e.created_at)>=(SELECT period_from FROM evaluation)
+    AND max(e.created_at)<(SELECT period_before FROM evaluation)
+    WHEN $14::int IS NOT NULL THEN
+    max(e.created_at)>=(SELECT as_of - $14 * interval '24 hours' FROM evaluation)
+    AND max(e.created_at)<(SELECT as_of FROM evaluation)
+    ELSE ($10::timestamptz IS NULL OR (max(e.created_at)>=$10 AND max(e.created_at)<$11::timestamptz)) END)`;
+  const consentScope = `FROM channel_consent_state state WHERE state.workspace_id=e.workspace_id
+    AND state.connection_id=e.connection_id AND state.channel='instagram' AND state.identity_kind='comment_sender'
+    AND state.identity_value=e.sender_id AND state.purpose=$12`;
+  // Recorded state only; this is not the delivery guard and never bridges DM identities.
+  const consentMatches = `($12::text IS NULL OR CASE WHEN $13::text='no_record' THEN NOT EXISTS(SELECT 1 ${consentScope})
+    ELSE EXISTS(SELECT 1 ${consentScope} AND state.decision=CASE WHEN $13='granted' THEN 'grant' ELSE 'revoke' END) END)`;
+  // The one field predicate of the list, the preview and a saved segment: $6 holds the sorted field IDs (NULL
+  // without a field condition), $7 the mode and $8 the normalized set, one row per condition. The legacy single
+  // condition is a set of one. bool_and over the set is all, bool_or any; the comparisons are those of one condition.
+  const fieldMatches = `($6::uuid[] IS NULL OR (SELECT CASE WHEN $7::text='any' THEN bool_or(condition_matches) ELSE bool_and(condition_matches) END
+ FROM (SELECT CASE WHEN c.field_operator='is_unset' THEN NOT EXISTS(
+   SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=c.field_id AND v.value IS NOT NULL)
+ ELSE EXISTS(SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=c.field_id AND v.value IS NOT NULL
+   AND (c.field_operator='is_set' OR (jsonb_typeof(v.value)=jsonb_typeof(c.field_value) AND CASE c.field_operator
+     WHEN 'eq' THEN v.value=c.field_value WHEN 'gt' THEN v.value>c.field_value WHEN 'gte' THEN v.value>=c.field_value
+     WHEN 'lt' THEN v.value<c.field_value WHEN 'lte' THEN v.value<=c.field_value ELSE false END))) END AS condition_matches
+ FROM jsonb_to_recordset($8::jsonb) AS c(field_id uuid,field_operator text,field_value jsonb)) conditions))`;
+  // The one tag predicate of the list, the preview and a saved segment: $3 is the sorted tag set or NULL.
+  // A contact without a tag row has no tags. The operator is chosen from the validated mode, never from input text.
+  const tagMatches = `($3::text[] IS NULL OR coalesce(t.tags,'{}'::text[]) ${tagCondition?.mode === "any" ? "&&" : "@>"} $3::text[])`;
+  const contactScope = `FROM instagram_comment_events e JOIN instagram_connections c ON c.id=e.connection_id AND c.workspace_id=e.workspace_id
+ LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=e.workspace_id AND automation.connection_id=e.connection_id AND automation.sender_id=e.sender_id
+ LEFT JOIN instagram_contact_tags t ON t.workspace_id=e.workspace_id AND t.connection_id=e.connection_id AND t.sender_id=e.sender_id
+ WHERE e.workspace_id=$1 AND ($2::uuid IS NULL OR e.connection_id=$2)`;
+  // AND needs both the tag and the field predicate, OR either one; the consent filter always applies.
+  const matches = `($9::text='or' OR ${tagMatches})
+ AND (($9::text='or' AND ${tagMatches}) OR ${fieldMatches})
+ AND ${consentMatches}`;
+  return {
+    evaluation,
+    activityWindow,
+    activityMatches,
+    consentMatches,
+    fieldMatches,
+    tagMatches,
+    contactScope,
+    matches,
+    values: [
+      workspaceId,
+      connectionId,
+      tagCondition?.tags ?? null,
+      after?.connection_id ?? null,
+      after?.sender_id ?? null,
+      fieldCondition?.conditions.map((condition) => condition.field_id) ?? null,
+      fieldCondition?.mode ?? null,
+      fieldCondition ? JSON.stringify(fieldCondition.conditions) : null,
+      operator,
+      activity?.last_comment_from ?? null,
+      activity?.last_comment_before ?? null,
+      consent?.consent_purpose ?? null,
+      consent?.consent_state ?? null,
+      activity?.last_comment_days ?? null,
+      activity?.last_comment_period ?? null,
+    ],
+  };
+}
 export async function listContacts(pool: Pool, user: User, options: URLSearchParams = new URLSearchParams()) {
   for (const key of options.keys())
     if (
@@ -278,118 +438,37 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   );
   const after = cursor(options.get("after"));
   const workspaceId = await workspaceFor(pool, user, "agent");
-  if (segmentId !== null) {
-    const segment = await pool.query<{
-      connection_id: string | null;
-      tag: string | null;
-      tags: string[] | null;
-      tag_mode: string | null;
-      field_id: string | null;
-      field_operator: string;
-      field_value: unknown;
-      field_conditions: unknown;
-      field_mode: string | null;
-      condition_operator: string;
-      last_comment_from: Date | null;
-      last_comment_before: Date | null;
-      last_comment_days: number | null;
-      last_comment_period: string | null;
-      consent_purpose: string | null;
-      consent_state: string | null;
-    }>(
-      "SELECT connection_id,tag,tags,tag_mode,field_id,field_operator,field_value,field_conditions,field_mode,condition_operator,last_comment_from,last_comment_before,last_comment_days,last_comment_period,consent_purpose,consent_state FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived",
-      [workspaceId, segmentId],
-    );
-    if (!segment.rows[0]) throw new ApiError(404, "segment_not_found");
-    connectionId = segment.rows[0].connection_id;
-    const saved = segment.rows[0];
-    tagCondition = saved.tags
-      ? parseTagCondition(saved.tags, saved.tag_mode)
-      : parseTagCondition(saved.tag === null ? [] : [saved.tag], null);
-    consent = parseConsentCondition(saved);
-    activity = parseActivityWindow({
-      last_comment_from: saved.last_comment_from?.toISOString(),
-      last_comment_before: saved.last_comment_before?.toISOString(),
-      last_comment_days: saved.last_comment_days,
-      last_comment_period: saved.last_comment_period,
-    });
-    fieldCondition = saved.field_conditions
-      ? parseFieldConditionSet({}, saved.field_conditions, saved.field_mode)
-      : saved.field_id
-        ? {
-            conditions: [
-              {
-                field_id: saved.field_id,
-                field_operator: saved.field_operator,
-                ...(fieldConditionNeedsValue(saved.field_operator) ? { field_value: saved.field_value } : {}),
-              },
-            ],
-            mode: "all",
-          }
-        : null;
-    operator = parseConditionOperator(saved.condition_operator, Boolean(tagCondition), Boolean(fieldCondition));
-  }
+  if (segmentId !== null)
+    ({ connectionId, tagCondition, fieldCondition, activity, consent, operator } = await savedSegmentConditions(
+      pool,
+      workspaceId,
+      segmentId,
+    ));
   for (const condition of fieldCondition?.conditions ?? []) await validateFieldCondition(pool, workspaceId, condition);
-  // One statement clock for the page and preview, using elapsed hours even across DST.
-  // The calendar period reads the workspace time zone in the same statement. Its local boundaries are
-  // converted back with AT TIME ZONE, so PostgreSQL resolves daylight-saving gaps and overlaps.
-  const evaluation = `evaluation AS MATERIALIZED (SELECT as_of,time_zone,
-    local_from AT TIME ZONE time_zone AS period_from,local_before AT TIME ZONE time_zone AS period_before
-    FROM (SELECT statement_timestamp() AS as_of) clock
-    CROSS JOIN LATERAL (SELECT (SELECT time_zone FROM workspaces WHERE id=$1) AS time_zone) zone
-    CROSS JOIN LATERAL (SELECT date_trunc(CASE WHEN $15::text IN ('today','yesterday') THEN 'day' ELSE 'month' END,
-      as_of AT TIME ZONE time_zone) AS local_start) local_clock
-    CROSS JOIN LATERAL (SELECT CASE $15::text
-      WHEN 'today' THEN local_start WHEN 'yesterday' THEN local_start - interval '1 day'
-      WHEN 'this_month' THEN local_start WHEN 'last_month' THEN local_start - interval '1 month' END AS local_from,
-      CASE $15::text
-      WHEN 'today' THEN local_start + interval '1 day' WHEN 'yesterday' THEN local_start
-      WHEN 'this_month' THEN local_start + interval '1 month' WHEN 'last_month' THEN local_start END AS local_before) local_period)`;
-  const utc = (value: string) => `to_char(${value} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
-  const activityWindow = activity?.last_comment_period
-    ? `(SELECT json_build_object('from',${utc("period_from")},'before',${utc("period_before")},'time_zone',time_zone) FROM evaluation)`
-    : `(SELECT json_build_object('from',${utc("(as_of - $14::int * interval '24 hours')")},'before',${utc("as_of")}) FROM evaluation)`;
-  const activityMatches = `(CASE WHEN $15::text IS NOT NULL THEN
-    max(e.created_at)>=(SELECT period_from FROM evaluation)
-    AND max(e.created_at)<(SELECT period_before FROM evaluation)
-    WHEN $14::int IS NOT NULL THEN
-    max(e.created_at)>=(SELECT as_of - $14 * interval '24 hours' FROM evaluation)
-    AND max(e.created_at)<(SELECT as_of FROM evaluation)
-    ELSE ($10::timestamptz IS NULL OR (max(e.created_at)>=$10 AND max(e.created_at)<$11::timestamptz)) END)`;
-  const consentScope = `FROM channel_consent_state state WHERE state.workspace_id=e.workspace_id
-    AND state.connection_id=e.connection_id AND state.channel='instagram' AND state.identity_kind='comment_sender'
-    AND state.identity_value=e.sender_id AND state.purpose=$12`;
-  // Recorded state only; this is not the delivery guard and never bridges DM identities.
-  const consentMatches = `($12::text IS NULL OR CASE WHEN $13::text='no_record' THEN NOT EXISTS(SELECT 1 ${consentScope})
-    ELSE EXISTS(SELECT 1 ${consentScope} AND state.decision=CASE WHEN $13='granted' THEN 'grant' ELSE 'revoke' END) END)`;
-  // The one field predicate of the list, the preview and a saved segment: $6 holds the sorted field IDs (NULL
-  // without a field condition), $7 the mode and $8 the normalized set, one row per condition. The legacy single
-  // condition is a set of one. bool_and over the set is all, bool_or any; the comparisons are those of one condition.
-  const fieldMatches = `($6::uuid[] IS NULL OR (SELECT CASE WHEN $7::text='any' THEN bool_or(condition_matches) ELSE bool_and(condition_matches) END
- FROM (SELECT CASE WHEN c.field_operator='is_unset' THEN NOT EXISTS(
-   SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=c.field_id AND v.value IS NOT NULL)
- ELSE EXISTS(SELECT 1 FROM instagram_contact_field_values v WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.field_id=c.field_id AND v.value IS NOT NULL
-   AND (c.field_operator='is_set' OR (jsonb_typeof(v.value)=jsonb_typeof(c.field_value) AND CASE c.field_operator
-     WHEN 'eq' THEN v.value=c.field_value WHEN 'gt' THEN v.value>c.field_value WHEN 'gte' THEN v.value>=c.field_value
-     WHEN 'lt' THEN v.value<c.field_value WHEN 'lte' THEN v.value<=c.field_value ELSE false END))) END AS condition_matches
- FROM jsonb_to_recordset($8::jsonb) AS c(field_id uuid,field_operator text,field_value jsonb)) conditions))`;
-  // The one tag predicate of the list, the preview and a saved segment: $3 is the sorted tag set or NULL.
-  // A contact without a tag row has no tags. The operator is chosen from the validated mode, never from input text.
-  const tagMatches = `($3::text[] IS NULL OR coalesce(t.tags,'{}'::text[]) ${tagCondition?.mode === "any" ? "&&" : "@>"} $3::text[])`;
-  const contactScope = `FROM instagram_comment_events e JOIN instagram_connections c ON c.id=e.connection_id AND c.workspace_id=e.workspace_id
- LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=e.workspace_id AND automation.connection_id=e.connection_id AND automation.sender_id=e.sender_id
- LEFT JOIN instagram_contact_tags t ON t.workspace_id=e.workspace_id AND t.connection_id=e.connection_id AND t.sender_id=e.sender_id
- WHERE e.workspace_id=$1 AND ($2::uuid IS NULL OR e.connection_id=$2)`;
+  const {
+    evaluation,
+    activityWindow,
+    activityMatches,
+    consentMatches,
+    fieldMatches,
+    tagMatches,
+    contactScope,
+    matches,
+    values,
+  } = segmentConditionSql(
+    workspaceId,
+    { connectionId, tagCondition, fieldCondition, activity, consent, operator },
+    "statement_timestamp()",
+    after,
+  );
   const contactQuery = `SELECT e.connection_id,e.sender_id,c.username,min(e.created_at) AS first_comment_at,
  max(e.created_at) AS last_comment_at,count(*)::text AS comment_count,coalesce((automation.paused OR automation.handoff_paused),false) AS automation_paused,coalesce(t.tags,'{}'::text[]) AS tags,
  coalesce((SELECT jsonb_object_agg(v.field_id::text,v.value) FROM instagram_contact_field_values v
  JOIN instagram_contact_fields f ON f.id=v.field_id AND f.workspace_id=v.workspace_id AND NOT f.archived
  WHERE v.workspace_id=e.workspace_id AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND v.value IS NOT NULL),'{}'::jsonb) AS fields
  ${contactScope}
- AND ($9::text='or' OR ${tagMatches})
  AND ($4::uuid IS NULL OR (e.connection_id,e.sender_id)>($4::uuid,$5::text))
- AND (($9::text='or' AND ${tagMatches}) OR ${fieldMatches})
- AND ${consentMatches}
+ AND ${matches}
  GROUP BY e.workspace_id,e.connection_id,e.sender_id,c.username,t.tags,(automation.paused OR automation.handoff_paused)
  HAVING ${activityMatches} ORDER BY e.connection_id,e.sender_id LIMIT 51`;
   // Aggregate independently of matching samples so even zero matches retain their exclusion summary.
@@ -430,23 +509,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       preview_excluded_consent?: string;
       activity_window?: { from: string; before: string; time_zone?: string };
     }
-  >(query, [
-    workspaceId,
-    connectionId,
-    tagCondition?.tags ?? null,
-    after?.connection_id ?? null,
-    after?.sender_id ?? null,
-    fieldCondition?.conditions.map((condition) => condition.field_id) ?? null,
-    fieldCondition?.mode ?? null,
-    fieldCondition ? JSON.stringify(fieldCondition.conditions) : null,
-    operator,
-    activity?.last_comment_from ?? null,
-    activity?.last_comment_before ?? null,
-    consent?.consent_purpose ?? null,
-    consent?.consent_state ?? null,
-    activity?.last_comment_days ?? null,
-    activity?.last_comment_period ?? null,
-  ]);
+  >(query, values);
   const summary = result.rows[0];
   const contacts = result.rows
     .slice(0, 50)

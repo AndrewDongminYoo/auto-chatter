@@ -18,6 +18,8 @@ let connections = [];
 let contactsGeneration = 0;
 let contactsExportGeneration = 0;
 let contactsExportBusy = false;
+// The saved segment whose export is in flight, so archiving that segment cancels it.
+let contactsExportSegmentId = "";
 let contactsAfter = null;
 let contactsBusy = false;
 let contactsSaving = false;
@@ -197,6 +199,8 @@ function resetSession() {
   invalidateContactExport();
   byId("contacts-export").hidden = true;
   byId("contacts-export-help").hidden = true;
+  byId("contacts-segment-export").hidden = true;
+  byId("contacts-segment-export-help").hidden = true;
   byId("contacts-export-format").hidden = true;
   byId("contacts-export-format").open = false;
   resetInbox();
@@ -330,7 +334,7 @@ const errors = {
   keywords_required: "키워드를 하나 이상 입력해 주세요.",
   invalid_contact_automation: "연락처 자동화 설정을 확인해 주세요.",
   invalid_contact_tags: "태그는 한 줄에 하나씩 최대 20개, 각각 40자까지 입력해 주세요.",
-  invalid_contact_export_request: "전체 연락처 내보내기 요청을 확인해 주세요.",
+  invalid_contact_export_request: "연락처 내보내기 요청을 확인해 주세요.",
   contact_export_too_large: "내보내기 한도(5,000명 또는 5 MiB)를 넘었습니다. 파일을 만들지 않았습니다.",
   contact_export_rate_limited: "연락처 내보내기 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
   contact_export_unavailable: "지금은 연락처를 내보낼 수 없습니다. 잠시 후 다시 시도해 주세요.",
@@ -1204,6 +1208,8 @@ async function loadWorkspace() {
   const operationsVisible = currentRole === "owner" || currentRole === "admin";
   byId("contacts-export").hidden = !operationsVisible;
   byId("contacts-export-help").hidden = !operationsVisible;
+  byId("contacts-segment-export").hidden = !operationsVisible;
+  byId("contacts-segment-export-help").hidden = !operationsVisible;
   byId("contacts-export-format").hidden = !operationsVisible;
   byId("operations-section").hidden = !operationsVisible;
   byId("webhooks-section").hidden = !operationsVisible;
@@ -1910,28 +1916,41 @@ byId("copy-invite").addEventListener("click", async () => {
     notice("링크를 선택했습니다. 직접 복사해 주세요.", true);
   }
 });
-// Independent of contact-list generations: changing filters never narrows or cancels this full export.
+// Independent of contact-list generations: changing filters never narrows or cancels an export in flight. Only one
+// export runs at a time; archiving the exported segment, a connection deletion or a session change cancels it.
+const contactExportLabels = {
+  "contacts-export": "전체 연락처 CSV",
+  "contacts-segment-export": "선택한 필터로 내보내기",
+};
+function contactExportControls() {
+  byId("contacts-export").disabled = contactsExportBusy;
+  // The saved definition is exported, so an edit with unsaved changes must be saved or cancelled first.
+  byId("contacts-segment-export").disabled =
+    contactsExportBusy || segmentBusy || !activeSegmentId || Boolean(editingSegment && segmentEditChanged());
+}
 function invalidateContactExport(message = "") {
   contactsExportGeneration++;
   contactsExportBusy = false;
-  const button = byId("contacts-export");
-  button.disabled = false;
-  button.textContent = "전체 연락처 CSV";
-  button.removeAttribute("aria-busy");
+  contactsExportSegmentId = "";
+  for (const [id, label] of Object.entries(contactExportLabels)) {
+    byId(id).textContent = label;
+    byId(id).removeAttribute("aria-busy");
+  }
+  contactExportControls();
   byId("contacts-export-status").textContent = message;
 }
-byId("contacts-export").addEventListener("click", async () => {
+async function downloadContactCsv(button, path, fileName, progress, done, segmentId = "") {
   if (contactsExportBusy || !["owner", "admin"].includes(currentRole)) return;
   const generation = contactsExportGeneration;
-  const button = byId("contacts-export");
   const status = byId("contacts-export-status");
   contactsExportBusy = true;
-  button.disabled = true;
+  contactsExportSegmentId = segmentId;
+  contactExportControls();
   button.textContent = "내보내는 중…";
   button.setAttribute("aria-busy", "true");
-  status.textContent = "저장된 전체 연락처 CSV를 만들고 있습니다…";
+  status.textContent = progress;
   try {
-    const text = await api("/api/contacts/export.csv", "GET", undefined, true, true);
+    const text = await api(path, "GET", undefined, true, true);
     if (generation !== contactsExportGeneration) return;
     // Response.text() removes a UTF-8 BOM during decoding. Restore exactly one in the actual file.
     const normalized = "\ufeff" + text.replace(/^\ufeff/, "");
@@ -1940,23 +1959,44 @@ byId("contacts-export").addEventListener("click", async () => {
     try {
       const link = document.createElement("a");
       link.href = url;
-      link.download = `auto-chatter-contacts-v1-${exportedOn}.csv`;
+      link.download = fileName(exportedOn);
       link.click();
     } finally {
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     }
-    status.textContent =
-      "전체 연락처 CSV를 저장했습니다. 필터와 저장 전 수정은 적용하지 않았습니다. 개인정보가 포함되므로 안전하게 보관하세요.";
+    status.textContent = done;
   } catch (error) {
     if (generation === contactsExportGeneration) status.textContent = error.message;
   } finally {
     if (generation === contactsExportGeneration) {
       contactsExportBusy = false;
-      button.disabled = false;
-      button.textContent = "전체 연락처 CSV";
+      contactsExportSegmentId = "";
+      button.textContent = contactExportLabels[button.id];
       button.removeAttribute("aria-busy");
+      contactExportControls();
     }
   }
+}
+byId("contacts-export").addEventListener("click", (event) =>
+  downloadContactCsv(
+    event.currentTarget,
+    "/api/contacts/export.csv",
+    (exportedOn) => `auto-chatter-contacts-v1-${exportedOn}.csv`,
+    "저장된 전체 연락처 CSV를 만들고 있습니다…",
+    "전체 연락처 CSV를 저장했습니다. 필터와 저장 전 수정은 적용하지 않았습니다. 개인정보가 포함되므로 안전하게 보관하세요.",
+  ),
+);
+byId("contacts-segment-export").addEventListener("click", (event) => {
+  const segment = contactSegments.find((value) => value.id === activeSegmentId);
+  if (!segment || event.currentTarget.disabled) return;
+  void downloadContactCsv(
+    event.currentTarget,
+    `/api/contacts/export.csv?${new URLSearchParams({ segment_id: segment.id })}`,
+    (exportedOn) => `auto-chatter-contacts-v1-segment-${segment.id}-${exportedOn}.csv`,
+    `저장된 "${segment.name}" 필터에 맞는 연락처 CSV를 만들고 있습니다…`,
+    `"${segment.name}" 필터에 맞는 연락처 CSV를 저장했습니다. 저장된 필터 조건으로 만들었고 화면의 저장 전 수정은 적용하지 않았습니다. 개인정보가 포함되므로 안전하게 보관하세요.`,
+    segment.id,
+  );
 });
 byId("export-data").addEventListener("click", (event) =>
   action(event.currentTarget, async () => {
@@ -2834,6 +2874,7 @@ function segmentControls() {
   // A segment request sends the conditions on screen; holding them until it ends keeps the saved and shown values equal.
   // The fieldset leaves each control's own disabled state alone, so conditional states come back unchanged.
   byId("contacts-filter-fields").disabled = segmentBusy;
+  contactExportControls();
 }
 // Leaves edit mode. By default the operator's draft stays: the filter form keeps its conditions, the name field keeps
 // its value, and a changed draft stays marked unsaved, because segmentEditChanged() ends with edit mode.
@@ -3072,6 +3113,8 @@ async function saveSegmentEdit(editing, payload, generation) {
 }
 byId("segment-save").addEventListener("input", () => {
   segmentNameDirty = Boolean(byId("segment-save").elements.name.value);
+  // A changed name is an unsaved edit too, which holds the segment export.
+  contactExportControls();
 });
 byId("segment-save").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -3130,6 +3173,8 @@ byId("segment-archive").addEventListener("click", (event) => {
     try {
       await api(`/api/contact-segments/${id}`, "DELETE");
       if (generation !== segmentsGeneration) return;
+      if (contactsExportSegmentId === id)
+        invalidateContactExport("필터가 보관되어 진행 중인 내보내기를 취소했습니다. 연락처와 태그는 유지됩니다.");
       if (segment && new URLSearchParams(contactsQuery).get("segment_id") === id) {
         const query = new URLSearchParams();
         if (segment.connection_id) query.set("connection_id", segment.connection_id);

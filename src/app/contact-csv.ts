@@ -1,6 +1,8 @@
 import type { Pool, PoolClient, QueryConfig, QueryResult, QueryResultRow } from "pg";
 import { ApiError, isRecord, type User } from "./auth.ts";
 import { roleAllows, type WorkspaceRole } from "./settings.ts";
+import { validateFieldCondition } from "./contact-fields.ts";
+import { savedSegmentConditions, segmentConditionSql } from "./contacts.ts";
 
 export const CONTACT_CSV_HEADER = [
   "format_version",
@@ -108,7 +110,14 @@ async function acquire(pool: Pool, milliseconds: number): Promise<PoolClient> {
 
 // Trusted internal limits support smaller resource budgets; HTTP never accepts an override.
 // An admitted snapshot may finish after a concurrent deletion/removal. It changes no stored data.
-export async function exportContactCsv(pool: Pool, user: User, options: Partial<ContactCsvLimits> = {}) {
+// With segmentId, only the contacts the saved segment selects are exported. The segment is read in the same
+// snapshot and its activity window is evaluated once, at exported_at, for every batch.
+export async function exportContactCsv(
+  pool: Pool,
+  user: User,
+  options: Partial<ContactCsvLimits> = {},
+  segmentId: string | null = null,
+) {
   const limits = { ...CONTACT_CSV_LIMITS, ...options };
   const deadline = performance.now() + limits.timeoutMs;
   const remaining = () => {
@@ -146,6 +155,9 @@ export async function exportContactCsv(pool: Pool, user: User, options: Partial<
     if (!membership) throw new ApiError(403, "workspace_required");
     if (!roleAllows(membership.role, "admin")) throw new ApiError(403, "role_forbidden");
     const workspace = membership.workspace_id;
+    const segment = segmentId === null ? null : await savedSegmentConditions({ query }, workspace, segmentId);
+    for (const condition of segment?.fieldCondition?.conditions ?? [])
+      await validateFieldCondition({ query }, workspace, condition);
     const exportedAt = (
       await query<{ exported_at: string }>(
         `SELECT to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS exported_at`,
@@ -154,14 +166,34 @@ export async function exportContactCsv(pool: Pool, user: User, options: Partial<
     const buffer = new ContactCsvBuffer(limits.maxRows, limits.maxBytes);
     let after: CsvContact | undefined;
     while (true) {
-      const rows = (
-        await query<CsvContact>(
-          `WITH contacts AS (
+      const cursor = after ? { connection_id: after.connection_id, sender_id: after.sender_id } : null;
+      // The segment batch keeps the contact list's parameter positions ($1 to $15, the cursor in $4 and $5), then the
+      // batch size ($16) and the evaluation clock ($17), so its predicate is the list's text.
+      const selected = segment && segmentConditionSql(workspace, segment, "$17::timestamptz", cursor);
+      const contacts = selected
+        ? {
+            text: `WITH ${selected.evaluation}, contacts AS (
+           SELECT e.connection_id,e.sender_id,min(e.created_at) AS first_at,max(e.created_at) AS last_at,count(*)::text AS comment_count
+           ${selected.contactScope}
+           AND ($4::uuid IS NULL OR (e.connection_id,e.sender_id COLLATE "C")>($4::uuid,$5::text COLLATE "C"))
+           AND ${selected.matches}
+           GROUP BY e.connection_id,e.sender_id HAVING ${selected.activityMatches}
+           ORDER BY e.connection_id,e.sender_id COLLATE "C" LIMIT $16
+         )`,
+            values: [...selected.values, limits.batchSize, exportedAt],
+          }
+        : {
+            text: `WITH contacts AS (
            SELECT e.connection_id,e.sender_id,min(e.created_at) AS first_at,max(e.created_at) AS last_at,count(*)::text AS comment_count
            FROM instagram_comment_events e JOIN instagram_connections c ON c.id=e.connection_id AND c.workspace_id=e.workspace_id
            WHERE e.workspace_id=$1 AND ($2::uuid IS NULL OR (e.connection_id,e.sender_id COLLATE "C")>($2::uuid,$3::text COLLATE "C"))
            GROUP BY e.connection_id,e.sender_id ORDER BY e.connection_id,e.sender_id COLLATE "C" LIMIT $4
-         )
+         )`,
+            values: [workspace, cursor?.connection_id ?? null, cursor?.sender_id ?? null, limits.batchSize],
+          };
+      const rows = (
+        await query<CsvContact>(
+          `${contacts.text}
          SELECT e.connection_id,e.sender_id,c.username,e.comment_count,
            to_char(e.first_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS first_at,
            to_char(e.last_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS last_at,
@@ -174,7 +206,7 @@ export async function exportContactCsv(pool: Pool, user: User, options: Partial<
          LEFT JOIN instagram_contact_tags tags ON tags.workspace_id=$1 AND tags.connection_id=e.connection_id AND tags.sender_id=e.sender_id
          LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=$1 AND automation.connection_id=e.connection_id AND automation.sender_id=e.sender_id
          ORDER BY e.connection_id,e.sender_id COLLATE "C"`,
-          [workspace, after?.connection_id ?? null, after?.sender_id ?? null, limits.batchSize],
+          contacts.values,
         )
       ).rows;
       for (const row of rows) {
@@ -202,7 +234,8 @@ export async function exportContactCsv(pool: Pool, user: User, options: Partial<
     const body = buffer.finish();
     remaining();
     await raw("COMMIT");
-    return { body, exportedAt };
+    // The canonical lowercase form, as PostgreSQL prints the segment's uuid.
+    return { body, exportedAt, segmentId: segmentId?.toLowerCase() ?? null };
   } catch (error) {
     const timedOut =
       performance.now() >= deadline ||
