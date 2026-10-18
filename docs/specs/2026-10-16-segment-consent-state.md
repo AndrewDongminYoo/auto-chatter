@@ -61,6 +61,7 @@ DM 동의 조건은 아래 [DM 동의 기록](#dm-동의-기록)에서 별도로
 2026-10-18에 [#26](https://github.com/AndrewDongminYoo/auto-chatter/issues/26)의 일부로 댓글 연락처를 확인된 DM 대화의 동의 기록으로 거르는 조건을 추가했습니다.
 DM 조건은 두 PR로 나눕니다.
 이 PR은 DM 동의 기록이며, 최근 N일 안에 받은 DM으로 거르는 DM 활동은 후속 범위입니다.
+DM 활동은 두 번째 PR로 아래 [DM 활동](#dm-활동)에서 추가했습니다.
 
 ### 확인된 DM 대화
 
@@ -93,7 +94,7 @@ DM 조건은 두 PR로 나눕니다.
 
 ### 미리보기 제외 사유
 
-- 순서는 `excluded.activity`(기간 지정 시), `excluded.consent`(댓글 동의 지정 시), `excluded.dm_identity`(DM 동의 지정 시 확인된 DM 대화 없음), `excluded.dm_consent`(확인된 대화가 있지만 어느 것도 요청한 상태가 아님), 기존 태그·필드·둘 다 분류입니다.
+- 순서는 `excluded.activity`(기간 지정 시), `excluded.consent`(댓글 동의 지정 시), `excluded.dm_identity`(DM 동의나 [DM 활동](#dm-활동) 지정 시 확인된 DM 대화 없음), `excluded.dm_consent`(확인된 대화가 있지만 어느 것도 요청한 상태가 아님), 기존 태그·필드·둘 다 분류입니다.
 - 각 사유는 겹치지 않고 `evaluated = total + 표시된 모든 제외 수`입니다.
   선택하지 않은 조건의 키는 생략하며 0명 결과도 요약을 유지합니다.
 - 화면은 두 사유를 "확인된 DM 대화 없음"과 "DM 동의 기록 조건 불일치"로 표시하고 합계 검사에 포함합니다.
@@ -111,7 +112,65 @@ DM 조건은 두 PR로 나눕니다.
 
 ### 비용과 비목표
 
-- DM 동의 조건이 있을 때만 한 문장 안에서 선택 계정의 모든 후보 답장을 연결·받는 사람별로 한 번 묶고(`dm_verified`), 연락처는 그 결과와 비교합니다.
+- DM 동의 조건이나 [DM 활동](#dm-활동) 조건이 있을 때만 한 문장 안에서 선택 계정의 모든 후보 답장을 연결·받는 사람별로 한 번 묶고(`dm_verified`), 연락처는 그 결과와 비교합니다.
   비용은 선택 계정의 후보 답장 수와 연락처 수에 비례합니다.
   합성 데이터의 측정은 [검증 노트](../notes/2026-10-18-segment-dm-consent-verification.md)에 기록하며 페이지 크기로 비용이 제한된다고 주장하지 않습니다.
-- DM 활동, 중첩 조건 언어, 발송 대상 지정, 캠페인, 새 전송 guard, 식별자 병합, 동의 기록 쓰기, 전송 쪽 동의 연결 변경은 포함하지 않습니다.
+- 중첩 조건 언어, 발송 대상 지정, 캠페인, 새 전송 guard, 식별자 병합, 동의 기록 쓰기, 전송 쪽 동의 연결 변경은 포함하지 않습니다.
+
+## DM 활동
+
+2026-10-18에 [#26](https://github.com/AndrewDongminYoo/auto-chatter/issues/26) DM 조건의 두 번째 PR로 댓글 연락처를 확인된 DM 대화에서 최근 받은 DM으로 거르는 조건을 추가했습니다.
+형태는 `last_comment_days`와 같은 최근 N일 하나입니다.
+고정 기간·달력 기간 DM 조건과 보낸 메시지 활동은 포함하지 않습니다.
+
+### 조건과 시계
+
+- `last_dm_days`는 1–366의 정수입니다.
+  조회에서는 앞자리 0이 없는 10진 문자열(`^[1-9][0-9]{0,2}$`)이어야 하고, 저장 요청에서는 JSON 정수여야 합니다.
+  벗어나면 `last_comment_days`와 같은 `400 invalid_contact_activity`이며, DB 접근 전에 거절합니다.
+  중복 키는 다른 조회 키와 같이 `400 invalid_contact_request`입니다.
+- 위의 [확인된 DM 대화](#확인된-dm-대화) 관계(`dm_verified`)를 그대로 사용합니다.
+  확인된 DM 상대 중 하나 이상의 마지막 저장 DM(같은 작업 공간·연결의 `instagram_inbox_messages.message_at` 최댓값, `text`와 `postback` 모두)이 `[as_of - N×24시간, as_of)` 안에 있으면 일치합니다.
+  마지막 DM만 비교하므로, 기간 안의 DM이 있어도 더 나중 DM이 `as_of` 이후이면 일치하지 않습니다.
+- `as_of`는 문장 하나의 평가 시계(`evaluation.as_of`)입니다.
+  목록·미리보기는 `statement_timestamp()`, 세그먼트 CSV 내보내기는 `exported_at` 하나로 모든 묶음을 평가합니다.
+  `now()`나 두 번째 시계를 쓰지 않습니다.
+  확인된 DM 대화 관계 자체는 연락처 상세와 같이 실제 현재 시각으로 새 근거를 판단하며 이 조건으로 바뀌지 않습니다.
+- 확인된 DM 대화가 없는 연락처는 일치하지 않습니다.
+- DM 동의와 DM 활동은 함께 쓸 수 있고 각각 "확인된 DM 상대 중 하나라도 맞으면"으로 따로 평가합니다.
+  동의가 맞는 상대와 최근 DM이 있는 상대가 같을 필요는 없습니다.
+- 댓글 활동의 세 형태(`last_comment_from`·`last_comment_before`, `last_comment_days`, `last_comment_period`)와 독립이며 어느 형태와도 함께 쓸 수 있습니다.
+- 계정·활동 기간·동의 기록과 같이 태그/필드 AND·OR와 별도인 AND 제한입니다.
+  `contact_segment_condition_operator`와 마이그레이션 056·057·058은 바꾸지 않습니다.
+- `segment_id`와 `last_dm_days`를 한 요청에서 섞으면 `400 invalid_contact_request`입니다.
+- `last_comment_days`가 `activity_window`를 반환하듯이, `last_dm_days`가 있으면(수동 조건이든 `segment_id`의 저장 조건이든) 목록과 미리보기 응답에 `dm_activity_window: {from, before}`를 반환합니다.
+  값은 마이크로초 UTC(`YYYY-MM-DDTHH:MM:SS.ffffffZ`) 경계뿐이며, 조건이 없으면 키를 생략합니다.
+  어떤 응답에도 DM 상대 ID나 상대별 DM 시각은 없습니다.
+- 저장된 받은 DM을 읽어 거르기만 합니다.
+  발송 가능 여부를 증명하지 않고, 24시간 답장 가능 시간을 열지 않으며, 식별자를 합치지 않고, 전송 guard를 바꾸지 않습니다.
+
+### DM 활동 제외 사유
+
+- 순서는 `excluded.activity`, `excluded.consent`, `excluded.dm_identity`(DM 동의나 DM 활동 지정 시), `excluded.dm_consent`(DM 동의 지정 시), `excluded.dm_activity`, 기존 태그·필드·둘 다 분류입니다.
+- `excluded.dm_activity`는 확인된 DM 대화가 있고 DM 동의를 만족하거나 지정하지 않았지만, 확인된 상대 중 어느 것의 마지막 DM도 기간 안에 없는 연락처입니다.
+- 각 사유는 겹치지 않고 `evaluated = total + 표시된 모든 제외 수`이며, 선택하지 않은 조건의 키는 생략하고 0명 결과도 요약을 유지합니다.
+- 화면은 이 사유를 "최근 받은 DM 없음"으로 표시하고 합계 검사에 포함합니다.
+
+### 저장과 마이그레이션 059
+
+- 마이그레이션 `059_segment_dm_activity.sql`은 nullable `last_dm_days integer` 열과 CHECK(`contact_segment_dm_activity`, `last_dm_days IS NULL OR last_dm_days BETWEEN 1 AND 366`)를 추가합니다.
+  추가만 하며 전체 실행기가 다시 적용해도 같은 결과입니다.
+  권한은 테이블 단위라 바꾸지 않고, 작업 공간 내보내기는 테이블 전체 열을, 삭제 함수는 행 전체를 다루므로 바꾸지 않습니다.
+- 생성·수정은 같은 파서로 값을 받고, 응답은 값이 있을 때만 `last_dm_days`를 포함합니다.
+  수정의 변경 없음 검사에 이 열을 포함합니다.
+- 목록·미리보기·`segment_id` 조회·세그먼트 CSV 내보내기가 같은 술어(`segmentConditionSql`의 `$18`)를 사용합니다.
+  `dm_verified`는 DM 동의(`$16`)나 DM 활동(`$18`)이 있을 때만 계산하고, 둘 다 없으면 비어 있습니다.
+  내보내기의 배치 크기와 시계 위치는 술어 값 개수에서 계산하므로 `$19`·`$20`이 됩니다.
+- 운영 DB는 전체 실행기로 migration 059를 적용한 뒤 새 코드를 배포해야 합니다.
+
+### DM 활동 비용과 비목표
+
+- 확인된 DM 상대마다 그 대화의 받은 DM 최댓값을 한 번 읽습니다.
+  기존 `instagram_inbox_messages_conversation_idx`(작업 공간·연결·상대·ID) 범위를 읽으며 새 색인은 추가하지 않습니다.
+  합성 데이터의 측정은 [검증 노트](../notes/2026-10-18-segment-dm-activity-verification.md)에 기록하며 페이지 크기로 비용이 제한된다고 주장하지 않습니다.
+- 고정·달력 DM 기간, 보낸 메시지 활동, 중첩 조건 언어, 발송 대상 지정, 캠페인, 새 전송 guard, 식별자 병합, 전송 쪽 연결 변경은 포함하지 않습니다.
