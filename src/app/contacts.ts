@@ -343,10 +343,12 @@ export function segmentConditionSql(
   // DM activity: a verified recipient whose latest stored inbox message (text or postback) in its own connection
   // lies in [as_of - $18 days, as_of), as last_comment_days reads the latest comment. Like DM consent, any verified
   // recipient may match, not necessarily the one that matches DM consent. It reads stored messages only: it opens
-  // no messaging window and decides no delivery eligibility.
+  // no messaging window and decides no delivery eligibility. The latest message is one probe of
+  // instagram_inbox_messages_latest_idx (migration 059), so a long history is not read in every export batch.
   const dmActivityMatches = `($18::int IS NULL OR (e.connection_id,e.sender_id) IN (SELECT dm.connection_id,dm.sender_id FROM dm_verified dm
-    CROSS JOIN LATERAL (SELECT max(message.message_at) AS last_message_at FROM instagram_inbox_messages message
-      WHERE message.workspace_id=$1 AND message.connection_id=dm.connection_id AND message.recipient_id=dm.recipient_id) latest
+    CROSS JOIN LATERAL (SELECT message.message_at AS last_message_at FROM instagram_inbox_messages message
+      WHERE message.workspace_id=$1 AND message.connection_id=dm.connection_id AND message.recipient_id=dm.recipient_id
+      ORDER BY message.message_at DESC LIMIT 1) latest
     WHERE latest.last_message_at>=(SELECT as_of - $18::int * interval '24 hours' FROM evaluation)
       AND latest.last_message_at<(SELECT as_of FROM evaluation)))`;
   // The one field predicate of the list, the preview and a saved segment: $6 holds the sorted field IDs (NULL

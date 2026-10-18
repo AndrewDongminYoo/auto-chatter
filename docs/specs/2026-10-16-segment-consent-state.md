@@ -159,7 +159,9 @@ DM 활동은 두 번째 PR로 아래 [DM 활동](#dm-활동)에서 추가했습�
 ### 저장과 마이그레이션 059
 
 - 마이그레이션 `059_segment_dm_activity.sql`은 nullable `last_dm_days integer` 열과 CHECK(`contact_segment_dm_activity`, `last_dm_days IS NULL OR last_dm_days BETWEEN 1 AND 366`)를 추가합니다.
+  같은 마이그레이션은 받은 DM 색인 `instagram_inbox_messages_latest_idx`(작업 공간·연결·상대·`message_at DESC`)를 추가합니다.
   추가만 하며 전체 실행기가 다시 적용해도 같은 결과입니다.
+  전체 실행기는 한 트랜잭션이라 색인을 `CONCURRENTLY` 없이 만들므로, 만드는 동안 `instagram_inbox_messages` 쓰기가 기다립니다. 운영 적용 전에 그 테이블의 행 수를 확인합니다.
   권한은 테이블 단위라 바꾸지 않고, 작업 공간 내보내기는 테이블 전체 열을, 삭제 함수는 행 전체를 다루므로 바꾸지 않습니다.
 - 생성·수정은 같은 파서로 값을 받고, 응답은 값이 있을 때만 `last_dm_days`를 포함합니다.
   수정의 변경 없음 검사에 이 열을 포함합니다.
@@ -170,7 +172,8 @@ DM 활동은 두 번째 PR로 아래 [DM 활동](#dm-활동)에서 추가했습�
 
 ### DM 활동 비용과 비목표
 
-- 확인된 DM 상대마다 그 대화의 받은 DM 최댓값을 한 번 읽습니다.
-  기존 `instagram_inbox_messages_conversation_idx`(작업 공간·연결·상대·ID) 범위를 읽으며 새 색인은 추가하지 않습니다.
+- 확인된 DM 상대마다 그 대화의 마지막 받은 DM을 `ORDER BY message_at DESC LIMIT 1`로 한 번 읽으며, `instagram_inbox_messages_latest_idx`에서 한 번 찾습니다.
+  그래서 대화 기록이 길어도 그 기록을 모두 읽지 않습니다. 세그먼트 CSV 내보내기는 25명 배치마다 술어를 다시 실행하므로 이 차이가 배치 수만큼 쌓입니다([#228 리뷰](https://github.com/AndrewDongminYoo/auto-chatter/pull/228#discussion_r4305482605)).
+  배치마다 `dm_verified`를 다시 만드는 비용은 남아 있으며 [#229](https://github.com/AndrewDongminYoo/auto-chatter/issues/229)에서 다룹니다.
   합성 데이터의 측정은 [검증 노트](../notes/2026-10-18-segment-dm-activity-verification.md)에 기록하며 페이지 크기로 비용이 제한된다고 주장하지 않습니다.
 - 고정·달력 DM 기간, 보낸 메시지 활동, 중첩 조건 언어, 발송 대상 지정, 캠페인, 새 전송 guard, 식별자 병합, 전송 쪽 연결 변경은 포함하지 않습니다.

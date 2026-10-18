@@ -8,3 +8,6 @@ DO $$ BEGIN
     );
   END IF;
 END $$;
+-- The latest received DM of one conversation for the DM activity filter, read once per conversation.
+CREATE INDEX IF NOT EXISTS instagram_inbox_messages_latest_idx
+  ON instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_at DESC);

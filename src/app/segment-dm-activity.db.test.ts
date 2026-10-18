@@ -414,6 +414,7 @@ test("DM activity segment migration preserves existing rows and enforces 1 to 36
   try {
     await client.query("BEGIN");
     await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN last_dm_days");
+    await client.query("DROP INDEX instagram_inbox_messages_latest_idx");
     await client.query(
       "INSERT INTO instagram_contact_segments(workspace_id,name,dm_consent_purpose,dm_consent_state,last_comment_days) VALUES($1,'Legacy','marketing','granted',7)",
       [workspace],
@@ -439,6 +440,19 @@ test("DM activity segment migration preserves existing rows and enforces 1 to 36
         last_dm_days: null,
       },
     ]);
+    assert.deepEqual(
+      (
+        await client.query(
+          "SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND indexname='instagram_inbox_messages_latest_idx'",
+        )
+      ).rows,
+      [
+        {
+          indexdef:
+            "CREATE INDEX instagram_inbox_messages_latest_idx ON public.instagram_inbox_messages USING btree (workspace_id, connection_id, recipient_id, message_at DESC)",
+        },
+      ],
+    );
     for (const days of [1, 366]) {
       await client.query("UPDATE instagram_contact_segments SET last_dm_days=$1", [days]);
       await client.query(migration);

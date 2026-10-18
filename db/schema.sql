@@ -558,6 +558,9 @@ DO $$ BEGIN
     );
   END IF;
 END $$;
+-- The latest received DM of one conversation for the DM activity filter, read once per conversation.
+CREATE INDEX IF NOT EXISTS instagram_inbox_messages_latest_idx
+  ON instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS private_reply_outbox_identity_idx
   ON private_reply_outbox(id,connection_id,workspace_id);
 CREATE TABLE IF NOT EXISTS instagram_inbox_handoffs (
