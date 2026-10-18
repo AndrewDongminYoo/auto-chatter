@@ -1125,6 +1125,21 @@
                     <option value="no_record">기록 없음</option>
                   </select></label
                 >
+                <label
+                  >DM 동의 목적<select name="dm_consent_purpose" aria-describedby="contact-dm-consent-help">
+                    <option value="">조건 없음</option>
+                    <option value="service_reply">서비스 답장</option>
+                    <option value="marketing">마케팅</option>
+                  </select></label
+                >
+                <label
+                  >DM 동의 기록 상태<select name="dm_consent_state" disabled aria-describedby="contact-dm-consent-help">
+                    <option value="">상태 선택</option>
+                    <option value="granted">허용으로 기록됨</option>
+                    <option value="revoked">철회로 기록됨</option>
+                    <option value="no_record">기록 없음</option>
+                  </select></label
+                >
                 <button type="submit" class="secondary">필터 적용</button>
               </fieldset>
             </form>
@@ -1136,15 +1151,20 @@
               시각을 확인합니다.
             </p>
             <p id="contact-consent-help" class="hint">
-              동의 조건은 댓글 연락처에 직접 기록된 목적별 상태만 확인합니다. DM 동의나 발송 가능 여부를 뜻하지
-              않습니다.
+              동의 조건은 댓글 연락처에 직접 기록된 목적별 상태만 확인합니다. DM 동의는 DM 동의 조건에서 따로 확인하며,
+              발송 가능 여부를 뜻하지 않습니다.
+            </p>
+            <p id="contact-dm-consent-help" class="hint">
+              DM 동의 조건은 확인된 DM 대화가 있는 연락처만 평가합니다. 받은 메시지함이 켜진 뒤 보낸 비공개 답장이 있고,
+              그 DM 상대가 이 댓글 참여자 한 명과만 연결되며, 저장된 DM이 있어야 확인된 대화입니다. 확인된 대화가 여러
+              개면 그중 하나라도 상태가 맞으면 포함합니다. 기록된 상태만 확인하며 발송 가능 여부를 뜻하지 않습니다.
             </p>
             <details class="segment-save">
               <summary>현재 조건을 필터로 저장</summary>
               <p class="hint">
-                저장 전 현재 조건에 맞는 연락처 수를 확인하세요. 기간, 동의 기록, 태그·추가 정보 순서로 제외 사유를
-                표시합니다. 아래에 최대 5명을 예시로 표시합니다. 목록에서 편집 중인 내용은 저장 전까지 반영되지
-                않습니다.
+                저장 전 현재 조건에 맞는 연락처 수를 확인하세요. 기간, 동의 기록, 확인된 DM 대화, DM 동의 기록,
+                태그·추가 정보 순서로 제외 사유를 표시합니다. 아래에 최대 5명을 예시로 표시합니다. 목록에서 편집 중인
+                내용은 저장 전까지 반영되지 않습니다.
               </p>
               <button id="segment-preview" type="button" class="secondary">현재 조건 미리보기</button>
               <p id="segment-preview-status" class="hint" role="status" aria-live="polite"></p>

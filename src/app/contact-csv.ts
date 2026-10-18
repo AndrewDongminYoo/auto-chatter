@@ -164,12 +164,16 @@ export async function exportContactCsv(
       )
     ).rows[0]!.exported_at;
     const buffer = new ContactCsvBuffer(limits.maxRows, limits.maxBytes);
+    // The segment batch keeps the contact list's parameter positions (the cursor in $4 and $5), then the batch size
+    // and the evaluation clock, so its predicate is the list's text. Their positions follow the predicate's values,
+    // whose count does not depend on the clock or the cursor.
+    const conditionValues = segment ? segmentConditionSql(workspace, segment, "NULL", null).values.length : 0;
+    const batchPosition = conditionValues + 1,
+      clockPosition = conditionValues + 2;
     let after: CsvContact | undefined;
     while (true) {
       const cursor = after ? { connection_id: after.connection_id, sender_id: after.sender_id } : null;
-      // The segment batch keeps the contact list's parameter positions ($1 to $15, the cursor in $4 and $5), then the
-      // batch size ($16) and the evaluation clock ($17), so its predicate is the list's text.
-      const selected = segment && segmentConditionSql(workspace, segment, "$17::timestamptz", cursor);
+      const selected = segment && segmentConditionSql(workspace, segment, `$${clockPosition}::timestamptz`, cursor);
       const contacts = selected
         ? {
             text: `WITH ${selected.evaluation}, contacts AS (
@@ -178,7 +182,7 @@ export async function exportContactCsv(
            AND ($4::uuid IS NULL OR (e.connection_id,e.sender_id COLLATE "C")>($4::uuid,$5::text COLLATE "C"))
            AND ${selected.matches}
            GROUP BY e.connection_id,e.sender_id HAVING ${selected.activityMatches}
-           ORDER BY e.connection_id,e.sender_id COLLATE "C" LIMIT $16
+           ORDER BY e.connection_id,e.sender_id COLLATE "C" LIMIT $${batchPosition}
          )`,
             values: [...selected.values, limits.batchSize, exportedAt],
           }

@@ -57,5 +57,6 @@ BEGIN;
 \ir ../db/migrations/055_segment_calendar_period.sql
 \ir ../db/migrations/056_segment_multi_tag.sql
 \ir ../db/migrations/057_segment_multi_field.sql
+\ir ../db/migrations/058_segment_dm_consent.sql
 \ir supabase-access.sql
 COMMIT;
