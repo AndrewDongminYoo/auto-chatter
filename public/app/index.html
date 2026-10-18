@@ -16,6 +16,7 @@
     <script src="./plan-labels.js" defer></script>
     <script src="./flow-editor-model.js" defer></script>
     <script src="./flow-editor.js" defer></script>
+    <script src="./condition-tree-model.js" defer></script>
     <script src="./app.js" defer></script>
   </head>
   <body>
@@ -946,10 +947,6 @@
               <button id="segment-archive" class="secondary" disabled>필터 보관</button>
             </div>
             <p id="segments-status" class="hint" role="status" aria-live="polite"></p>
-            <p id="segment-edit-tree-hint" class="hint" hidden>
-              그룹 조건으로 저장한 필터는 아직 이 화면에서 수정할 수 없습니다. 그룹 조건 편집은 다음 업데이트에서
-              제공합니다.
-            </p>
             <details class="segment-save">
               <summary>사용자 정의 필드</summary>
               <p class="hint">
@@ -1069,9 +1066,32 @@
                     <option value="or">하나 이상 (OR)</option>
                   </select></label
                 >
-                <div id="contact-condition-tree" hidden>
-                  <p id="contact-condition-tree-summary" class="hint"></p>
-                  <button type="button" id="contact-condition-tree-clear" class="secondary">그룹 조건 지우기</button>
+                <button type="button" id="contact-condition-tree-start" class="secondary">그룹 조건 사용</button>
+                <div id="contact-condition-tree" class="condition-tree" role="group" aria-label="그룹 조건" hidden>
+                  <p class="hint">
+                    그룹 조건을 쓰는 동안 위의 태그·추가 정보 입력과 결합 선택은 쓰지 않습니다. 계정, 활동, 동의, DM
+                    조건은 그룹 조건과 함께 적용됩니다. 그룹과 조건의 순서도 저장되며, 순서만 바꿔도 변경입니다.
+                  </p>
+                  <label
+                    >그룹 결합<select id="contact-condition-tree-mode">
+                      <option value="all">모든 그룹 만족</option>
+                      <option value="any">하나 이상의 그룹 만족</option>
+                    </select></label
+                  >
+                  <div id="contact-condition-tree-groups" class="condition-tree-groups"></div>
+                  <div class="condition-tree-actions">
+                    <button
+                      type="button"
+                      id="contact-condition-tree-add-group"
+                      class="secondary"
+                      aria-describedby="contact-condition-tree-add-group-reason"
+                    >
+                      그룹 추가
+                    </button>
+                    <button type="button" id="contact-condition-tree-clear" class="secondary">그룹 조건 지우기</button>
+                  </div>
+                  <p id="contact-condition-tree-add-group-reason" class="hint" hidden></p>
+                  <p id="contact-condition-tree-status" class="hint" role="status" aria-live="polite"></p>
                 </div>
                 <label
                   >댓글 활동 기간<select name="activity_mode" aria-describedby="contact-activity-help">

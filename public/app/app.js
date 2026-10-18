@@ -32,14 +32,15 @@ let segmentsGeneration = 0;
 let segmentsRequest = 0;
 let segmentBusy = false;
 let activeSegmentId = "";
-// The condition tree of the draft: the selected tree segment's tree, kept while the limit inputs change and removed
-// only by choosing "직접 조건 설정" or "그룹 조건 지우기". The group editor that builds one comes in a later release.
+// The condition tree of the draft, as a draft of condition-tree-model.js: started with "그룹 조건 사용" or read from
+// the selected tree segment, changed in the group editor, kept while the limit inputs change and removed only by
+// choosing "직접 조건 설정" or "그룹 조건 지우기". Requests send segmentTreeBuild's tree, never the draft.
 let draftConditionTree = null;
 let segmentNameDirty = false;
 let segmentPreviewRequest = 0;
 // The saved segment being edited: its ID, the version the edit is based on, the segment as last read from the
-// server, and the name put in the name field when the edit started or the saved values were last loaded. It is kept
-// apart from activeSegmentId, because changing a condition clears the selection.
+// server, and the name and the tree draft put in the form when the edit started or the saved values were last loaded.
+// It is kept apart from activeSegmentId, because changing a condition clears the selection.
 let editingSegment = null;
 // Counts operator edits of the filter conditions, so an edit can tell whether they changed since it started.
 let segmentConditionInputs = 0;
@@ -50,12 +51,28 @@ const contactTagInputNames = ["tag", "tag_2", "tag_3", "tag_4", "tag_5"];
 const fieldRowSuffixes = ["", "_2", "_3"];
 // True when the operator changed a condition or the name since the edit started or since the saved values were last
 // loaded. The name is compared with the loaded one, because segmentNameDirty is false for an emptied name field.
+// Group editor changes do not count as inputs; the tree is compared with the loaded one in order, so moving a group
+// or a condition is a change and moving it back is not.
 function segmentEditChanged() {
   return (
     Boolean(editingSegment) &&
     (segmentConditionInputs !== editingSegment.inputs ||
-      byId("segment-save").elements.name.value !== editingSegment.loadedName)
+      byId("segment-save").elements.name.value !== editingSegment.loadedName ||
+      !segmentTreeSame(draftConditionTree, editingSegment.loadedTree, contactFields))
   );
+}
+// True when the draft's group conditions would be lost by discarding them, because no saved filter holds that tree.
+// It protects a tree built outside edit mode, which no input counter records, wherever the draft can be discarded.
+function conditionTreeUnsaved() {
+  return segmentTreeUnsaved(
+    draftConditionTree,
+    contactSegments.map((segment) => segment.condition_tree),
+    contactFields,
+  );
+}
+// Asks before the draft's tree is cleared or replaced, when choosing a saved filter again could not bring it back.
+function canDropConditionTree() {
+  return !conditionTreeUnsaved() || confirm("만든 그룹 조건을 지울까요? 지운 그룹과 조건은 되돌릴 수 없습니다.");
 }
 let contactFields = [];
 let fieldsGeneration = 0;
@@ -98,6 +115,7 @@ function canDiscard() {
       !contactsDirty.size &&
       !segmentNameDirty &&
       !segmentEditChanged() &&
+      !conditionTreeUnsaved() &&
       !fieldNameDirty &&
       !inbox.hasDrafts() &&
       !flowEditor.hasChanges()) ||
@@ -186,6 +204,7 @@ window.addEventListener("beforeunload", (event) => {
     contactsDirty.size ||
     segmentNameDirty ||
     segmentEditChanged() ||
+    conditionTreeUnsaved() ||
     fieldNameDirty ||
     inbox.hasDrafts() ||
     flowEditor.hasChanges()
@@ -242,6 +261,7 @@ function resetSession() {
   segmentBusy = false;
   activeSegmentId = "";
   draftConditionTree = null;
+  renderConditionTree();
   leaveSegmentEdit({ discard: true });
   segmentNameDirty = false;
   fieldsGeneration++;
@@ -2706,7 +2726,9 @@ function contactDmActivityCondition() {
 }
 function contactDraftQuery() {
   const fields = byId("contacts-filter").elements;
-  // A tree replaces the tag and field conditions and their operator; the limits below still apply.
+  // A tree replaces the tag and field conditions and their operator; the limits below still apply. An incomplete
+  // tree throws its reason, so no request is sent for it.
+  const tree = conditionTreeRequest();
   const fieldKeys = draftConditionTree ? {} : contactFieldConditionKeys();
   const activity = contactActivityWindow();
   const consent = contactConsentCondition();
@@ -2718,7 +2740,7 @@ function contactDraftQuery() {
   for (const value of tags) query.append("tag", value);
   if (tags.length > 1) query.set("tag_mode", fields.tag_mode.value);
   if (!draftConditionTree && fields.condition_operator.value === "or") query.set("condition_operator", "or");
-  if (draftConditionTree) query.set("condition_tree", JSON.stringify(draftConditionTree));
+  if (tree) query.set("condition_tree", JSON.stringify(tree));
   if (activity) for (const [key, value] of Object.entries(activity)) query.set(key, value);
   if (consent) for (const [key, value] of Object.entries(consent)) query.set(key, value);
   if (dmConsent) for (const [key, value] of Object.entries(dmConsent)) query.set(key, value);
@@ -2915,10 +2937,7 @@ function segmentControls() {
   byId("contact-segment").disabled = segmentBusy || Boolean(editingSegment);
   byId("segment-archive").disabled = segmentBusy || !activeSegmentId;
   byId("segment-edit").hidden = currentRole !== "owner" && currentRole !== "admin";
-  // A tree segment cannot be edited here until the group editor exists; PUT still accepts trees.
-  const treeSegment = Boolean(contactSegments.find((segment) => segment.id === activeSegmentId)?.condition_tree);
-  byId("segment-edit").disabled = segmentBusy || !activeSegmentId || Boolean(editingSegment) || treeSegment;
-  byId("segment-edit-tree-hint").hidden = byId("segment-edit").hidden || !treeSegment;
+  byId("segment-edit").disabled = segmentBusy || !activeSegmentId || Boolean(editingSegment);
   conditionTreeControls();
   byId("segment-save").elements.name.disabled = segmentBusy;
   byId("segment-save").querySelector("button").disabled = segmentBusy;
@@ -2948,9 +2967,10 @@ function leaveSegmentEdit({ discard = false } = {}) {
     segmentNameDirty = false;
   }
 }
-// While a tree is part of the draft, the tag and field inputs are disabled and the tree is described instead.
+// While a tree is part of the draft, the tag and field inputs are disabled and the group editor is shown instead.
 // The three mode selects keep their own state functions, which every path that removes the tree runs again, so they
-// are only forced off here.
+// are only forced off here. The editor's own controls are rebuilt by renderConditionTree, not here, so typing keeps
+// its focus; this only refreshes the reason the draft cannot be sent yet.
 function conditionTreeControls() {
   const tree = Boolean(draftConditionTree);
   const fields = byId("contacts-filter").elements;
@@ -2959,15 +2979,205 @@ function conditionTreeControls() {
     row.field.disabled = row.operator.disabled = row.value.disabled = row.boolean.disabled = tree;
   for (const id of ["field-filter-add", "field-filter-remove-2", "field-filter-remove-3"]) byId(id).disabled = tree;
   if (tree) for (const name of ["tag_mode", "field_mode", "condition_operator"]) fields[name].disabled = true;
-  byId("contact-condition-tree").hidden = !draftConditionTree;
+  byId("contact-condition-tree").hidden = !tree;
+  byId("contact-condition-tree-start").hidden = tree;
   byId("contact-condition-tree-clear").disabled = segmentBusy;
-  byId("contact-condition-tree-summary").textContent = draftConditionTree
-    ? `그룹 조건: ${conditionTreeSummary(draftConditionTree)}. 태그·추가 정보 조건은 그룹 조건을 지운 뒤 입력할 수 있습니다.`
+  byId("contact-condition-tree-status").textContent = tree
+    ? segmentTreeBuild(draftConditionTree, contactFields).error
     : "";
+}
+// The tree of the draft for a request, or null without one; an incomplete draft throws the model's reason.
+function conditionTreeRequest() {
+  const { tree, error } = segmentTreeBuild(draftConditionTree, contactFields);
+  if (error) throw new Error(error);
+  return tree;
+}
+const conditionTreeKindLabels = { tag: "태그 있음", no_tag: "태그 없음", field: "추가 정보 조건" };
+// An operator's label for a field type, the words of the field rows.
+function conditionTreeOperatorLabel(type, operator) {
+  return (
+    { eq: "값이 같음", is_set: "입력됨", is_unset: "미입력" }[operator] ??
+    orderedOperatorLabels(type)[operator] ??
+    operator
+  );
+}
+function conditionTreeSelect(label, options, value, data) {
+  const wrapper = node("label", label);
+  const select = document.createElement("select");
+  for (const [optionValue, text] of options) select.add(new Option(text, optionValue));
+  select.value = value;
+  Object.assign(select.dataset, data);
+  wrapper.append(select);
+  return wrapper;
+}
+function conditionTreeButton(text, label, data, disabled = false, reasonId = "") {
+  const button = node("button", text, "secondary");
+  button.type = "button";
+  button.setAttribute("aria-label", label);
+  Object.assign(button.dataset, data);
+  button.disabled = disabled;
+  if (reasonId) button.setAttribute("aria-describedby", reasonId);
+  return button;
+}
+// One leaf row: its kind, its tag or its field, operator and value with the field rows' per-type behaviour, and its
+// move and remove controls. Controls carry no name, so the filter form's named elements stay the existing ones.
+function conditionTreeLeafRow(group, groupIndex, leaf, leafIndex) {
+  const place = `그룹 ${groupIndex + 1} 조건 ${leafIndex + 1}`;
+  const data = { treeGroup: String(groupIndex), treeLeaf: String(leafIndex) };
+  const row = node("div", "", "condition-tree-leaf");
+  row.setAttribute("role", "group");
+  row.setAttribute("aria-label", place);
+  row.append(
+    conditionTreeSelect(`조건 ${leafIndex + 1}`, Object.entries(conditionTreeKindLabels), leaf.kind, {
+      ...data,
+      treeInput: "kind",
+    }),
+  );
+  if (leaf.kind === "field") {
+    const field = contactFields.find((definition) => definition.id === leaf.field_id);
+    const fieldOptions = [["", "필드 선택"], ...contactFields.map((definition) => [definition.id, definition.name])];
+    if (leaf.field_id && !field) fieldOptions.push([leaf.field_id, "사용할 수 없는 필드"]);
+    row.append(conditionTreeSelect("추가 정보", fieldOptions, leaf.field_id, { ...data, treeInput: "field_id" }));
+    if (leaf.field_id) {
+      const operators = segmentTreeOperators(field?.type);
+      if (!operators.includes(leaf.field_operator)) operators.push(leaf.field_operator);
+      row.append(
+        conditionTreeSelect(
+          "조건",
+          operators.map((operator) => [operator, conditionTreeOperatorLabel(field?.type, operator)]),
+          leaf.field_operator,
+          { ...data, treeInput: "field_operator" },
+        ),
+      );
+    }
+    if (leaf.field_id && segmentTreeNeedsValue(leaf.field_operator)) {
+      if (field?.type === "boolean")
+        row.append(
+          conditionTreeSelect(
+            "찾을 값",
+            [
+              ["true", "예"],
+              ["false", "아니요"],
+            ],
+            leaf.boolean,
+            { ...data, treeInput: "boolean" },
+          ),
+        );
+      else {
+        const wrapper = node("label", "찾을 값");
+        const input = document.createElement("input");
+        configureFieldInput(input, field);
+        input.value = leaf.value;
+        Object.assign(input.dataset, { ...data, treeInput: "value" });
+        wrapper.append(input);
+        row.append(wrapper);
+      }
+    }
+  } else {
+    const wrapper = node("label", "태그");
+    const input = document.createElement("input");
+    input.maxLength = 40;
+    input.value = leaf.tag;
+    Object.assign(input.dataset, { ...data, treeInput: "tag" });
+    wrapper.append(input);
+    row.append(wrapper);
+  }
+  const last = group.conditions.length - 1;
+  row.append(
+    conditionTreeButton("위로", `${place} 위로 이동`, { ...data, treeAction: "leaf-up" }, leafIndex === 0),
+    conditionTreeButton("아래로", `${place} 아래로 이동`, { ...data, treeAction: "leaf-down" }, leafIndex === last),
+    conditionTreeButton("삭제", `${place} 삭제`, { ...data, treeAction: "leaf-remove" }),
+  );
+  return row;
+}
+function conditionTreeGroupBox(draft, group, groupIndex) {
+  const title = `그룹 ${groupIndex + 1}`;
+  const data = { treeGroup: String(groupIndex) };
+  const box = document.createElement("fieldset");
+  box.className = "condition-tree-group";
+  box.append(node("legend", title));
+  box.append(
+    conditionTreeSelect(
+      `${title} 안의 조건 결합`,
+      [
+        ["all", "모두 만족"],
+        ["any", "하나 이상 만족"],
+      ],
+      group.mode,
+      { ...data, treeInput: "group-mode" },
+    ),
+  );
+  group.conditions.forEach((leaf, leafIndex) => box.append(conditionTreeLeafRow(group, groupIndex, leaf, leafIndex)));
+  if (!group.conditions.length) box.append(node("p", "아직 조건이 없습니다. 조건을 추가해 주세요.", "hint"));
+  const addBlock = segmentTreeAddLeafBlock(draft, groupIndex);
+  const removeBlock = segmentTreeRemoveGroupBlock(draft);
+  const reasonId = `contact-condition-tree-group-${groupIndex + 1}-reason`;
+  const actions = node("div", "", "condition-tree-actions");
+  actions.append(
+    conditionTreeButton(
+      "조건 추가",
+      `${title}에 조건 추가`,
+      { ...data, treeAction: "leaf-add" },
+      Boolean(addBlock),
+      addBlock ? reasonId : "",
+    ),
+    conditionTreeButton("그룹 위로", `${title} 위로 이동`, { ...data, treeAction: "group-up" }, groupIndex === 0),
+    conditionTreeButton(
+      "그룹 아래로",
+      `${title} 아래로 이동`,
+      { ...data, treeAction: "group-down" },
+      groupIndex === draft.groups.length - 1,
+    ),
+    conditionTreeButton(
+      "그룹 삭제",
+      `${title} 삭제`,
+      { ...data, treeAction: "group-remove" },
+      Boolean(removeBlock),
+      removeBlock ? reasonId : "",
+    ),
+  );
+  box.append(actions);
+  const reasons = [addBlock, removeBlock].filter(Boolean);
+  if (reasons.length) {
+    const reason = node("p", reasons.join(" "), "hint");
+    reason.id = reasonId;
+    box.append(reason);
+  }
+  return box;
+}
+// Rebuilds the group editor from the draft; call it after every structural change, never on a keystroke.
+function renderConditionTree() {
+  const groups = byId("contact-condition-tree-groups");
+  groups.replaceChildren();
+  const draft = draftConditionTree;
+  if (!draft) return;
+  byId("contact-condition-tree-mode").value = draft.mode;
+  draft.groups.forEach((group, groupIndex) => groups.append(conditionTreeGroupBox(draft, group, groupIndex)));
+  const block = segmentTreeAddGroupBlock(draft);
+  byId("contact-condition-tree-add-group").disabled = Boolean(block);
+  byId("contact-condition-tree-add-group-reason").textContent = block;
+  byId("contact-condition-tree-add-group-reason").hidden = !block;
+}
+// Focuses the first enabled editor control matching one of the selectors, so focus survives a rebuild.
+function focusConditionTree(...selectors) {
+  for (const selector of selectors) {
+    const control = byId("contact-condition-tree").querySelector(selector);
+    if (control && !control.disabled) {
+      control.focus();
+      return;
+    }
+  }
+}
+// Marks an editor change as a condition edit: the filter form's input listener clears the selection and the
+// preview and refreshes the controls, as typing does, without counting it as an input (segmentEditChanged compares
+// the tree instead).
+function conditionTreeEdited() {
+  byId("contact-condition-tree").dispatchEvent(new Event("input", { bubbles: true }));
 }
 function fillSegmentConditions(segment) {
   const fields = byId("contacts-filter").elements;
-  draftConditionTree = segment?.condition_tree ?? null;
+  draftConditionTree = segmentTreeFromSaved(segment?.condition_tree);
+  renderConditionTree();
   conditionTreeControls();
   fields.connection_id.value = segment?.connection_id || "";
   const savedTags = segment?.tags ?? (segment?.tag ? [segment.tag] : []);
@@ -3026,20 +3236,6 @@ function fieldConditionSummary(condition) {
     (fieldConditionNeedsValue(condition.field_operator) ? ` ${displayFieldValue(condition.field_value)}` : "")
   );
 }
-// A condition tree as one line: each group in parentheses, joined by the root mode, its leaves by the group mode.
-function conditionTreeSummary(tree) {
-  const join = (mode) => (mode === "any" ? " 또는 " : " 그리고 ");
-  return tree.groups
-    .map(
-      (group) =>
-        `(${group.conditions
-          .map((leaf) =>
-            "tag" in leaf ? `태그 ${leaf.tag} ${leaf.negate ? "없음" : "있음"}` : fieldConditionSummary(leaf),
-          )
-          .join(join(group.mode))})`,
-    )
-    .join(join(tree.mode));
-}
 // The saved values of a segment as one line of text, shown after a conflicting edit.
 function segmentSummary(segment) {
   const fields = byId("contacts-filter").elements;
@@ -3048,7 +3244,7 @@ function segmentSummary(segment) {
     `이름 ${segment.name}`,
     `계정 ${segment.connection_id ? account?.username || account?.account_id || "확인할 수 없는 계정" : "모든 계정"}`,
     segment.condition_tree
-      ? `그룹 조건 ${conditionTreeSummary(segment.condition_tree)}`
+      ? `그룹 조건 ${segmentTreeSummary(segment.condition_tree, fieldConditionSummary)}`
       : segment.tags
         ? `태그 ${segment.tags.join(", ")} (${segment.tag_mode === "any" ? "하나 이상 포함" : "모두 포함"})`
         : `태그 ${segment.tag || "조건 없음"}`,
@@ -3105,7 +3301,10 @@ async function loadContactSegments(force = false) {
   }
 }
 byId("contacts-filter").addEventListener("input", (event) => {
-  segmentConditionInputs++;
+  // The group editor's changes are compared as a tree by segmentEditChanged instead of counted. A select change
+  // rebuilds the editor before this listener runs, so its detached control is recognized by its data attribute.
+  if (!event.target.closest("#contact-condition-tree") && !("treeInput" in event.target.dataset))
+    segmentConditionInputs++;
   invalidateSegmentPreview();
   activeSegmentId = "";
   byId("contact-segment").value = "";
@@ -3118,17 +3317,130 @@ byId("contacts-filter").addEventListener("input", (event) => {
   segmentControls();
 });
 byId("contact-condition-tree-clear").addEventListener("click", () => {
-  if (!draftConditionTree || segmentBusy) return;
+  // A tree with conditions that no saved filter holds cannot be brought back by selecting a filter again, so
+  // clearing it needs the same confirmation as discarding a typed filter name.
+  if (!draftConditionTree || segmentBusy || !canDropConditionTree()) return;
   draftConditionTree = null;
+  renderConditionTree();
   conditionTreeControls();
   contactTagControls();
   fieldFilterControls();
   // Removing the tree is a condition edit: it clears the selection and the preview, as typing does.
-  byId("contacts-filter").dispatchEvent(new Event("input", { bubbles: true }));
+  conditionTreeEdited();
   byId("contacts-filter").elements.tag.focus();
 });
+// Starts an empty tree in place of the tag and field inputs, which keep their values for when the tree is removed.
+byId("contact-condition-tree-start").addEventListener("click", () => {
+  if (draftConditionTree || segmentBusy) return;
+  draftConditionTree = segmentTreeEmpty();
+  renderConditionTree();
+  conditionTreeControls();
+  conditionTreeEdited();
+  focusConditionTree('[data-tree-action="leaf-add"]');
+});
+// Runs before the form's input listener, which then marks the edit with the new mode in the draft.
+byId("contact-condition-tree-mode").addEventListener("input", (event) => {
+  if (!draftConditionTree || segmentBusy) return;
+  draftConditionTree = segmentTreeSetMode(draftConditionTree, null, event.currentTarget.value).draft;
+});
+byId("contact-condition-tree-add-group").addEventListener("click", () => {
+  if (!draftConditionTree || segmentBusy) return;
+  const result = segmentTreeAddGroup(draftConditionTree);
+  if (result.error) {
+    byId("contact-condition-tree-status").textContent = result.error;
+    return;
+  }
+  draftConditionTree = result.draft;
+  renderConditionTree();
+  conditionTreeEdited();
+  const last = draftConditionTree.groups.length - 1;
+  focusConditionTree(`[data-tree-action="leaf-add"][data-tree-group="${last}"]`);
+});
+// Text inputs change the draft in place; selects rebuild the editor, since a kind, field or operator decides which
+// controls the leaf shows. This listener runs before the form's input listener, which then marks the edit.
+byId("contact-condition-tree-groups").addEventListener("input", (event) => {
+  const control = event.target;
+  const key = control.dataset.treeInput;
+  if (!key || !draftConditionTree || segmentBusy) return;
+  const group = Number(control.dataset.treeGroup);
+  if (key === "group-mode") {
+    draftConditionTree = segmentTreeSetMode(draftConditionTree, group, control.value).draft;
+    return;
+  }
+  const leafIndex = Number(control.dataset.treeLeaf);
+  const leaf = draftConditionTree.groups[group]?.conditions[leafIndex];
+  if (!leaf) return;
+  const changes = { [key]: control.value };
+  if (key === "field_id") {
+    // A field of another type starts with an empty value and an operator that type takes, as a field row does.
+    const before = contactFields.find((field) => field.id === leaf.field_id);
+    const after = contactFields.find((field) => field.id === control.value);
+    if (before?.type !== after?.type) changes.value = "";
+    if (!segmentTreeOperators(after?.type).includes(leaf.field_operator)) changes.field_operator = "eq";
+  }
+  draftConditionTree = segmentTreeSetLeaf(draftConditionTree, group, leafIndex, changes).draft;
+  if (control.tagName === "SELECT") {
+    renderConditionTree();
+    focusConditionTree(
+      `[data-tree-group="${group}"][data-tree-leaf="${leafIndex}"][data-tree-input="${key}"]`,
+      `[data-tree-group="${group}"][data-tree-leaf="${leafIndex}"][data-tree-input="kind"]`,
+    );
+  }
+});
+byId("contact-condition-tree-groups").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-tree-action]");
+  if (!button || !draftConditionTree || segmentBusy) return;
+  const action = button.dataset.treeAction;
+  const group = Number(button.dataset.treeGroup);
+  const leaf = Number(button.dataset.treeLeaf);
+  const operations = {
+    "leaf-add": () => segmentTreeAddLeaf(draftConditionTree, group),
+    "leaf-up": () => segmentTreeMoveLeaf(draftConditionTree, group, leaf, -1),
+    "leaf-down": () => segmentTreeMoveLeaf(draftConditionTree, group, leaf, 1),
+    "leaf-remove": () => segmentTreeRemoveLeaf(draftConditionTree, group, leaf),
+    "group-up": () => segmentTreeMoveGroup(draftConditionTree, group, -1),
+    "group-down": () => segmentTreeMoveGroup(draftConditionTree, group, 1),
+    "group-remove": () => segmentTreeRemoveGroup(draftConditionTree, group),
+  };
+  if (!Object.hasOwn(operations, action)) return;
+  const result = operations[action]();
+  if (result.error) {
+    byId("contact-condition-tree-status").textContent = result.error;
+    return;
+  }
+  draftConditionTree = result.draft;
+  renderConditionTree();
+  conditionTreeEdited();
+  // Focus follows the moved item, or stays near the place of an added or removed one.
+  const leafAt = (index, selector) => `[data-tree-group="${group}"][data-tree-leaf="${index}"]${selector}`;
+  const groupAt = (index, selector) => `[data-tree-group="${index}"]${selector}`;
+  const focus = {
+    "leaf-add": [leafAt(draftConditionTree.groups[group]?.conditions.length - 1, '[data-tree-input="kind"]')],
+    "leaf-up": [leafAt(leaf - 1, '[data-tree-action="leaf-up"]'), leafAt(leaf - 1, '[data-tree-action="leaf-down"]')],
+    "leaf-down": [leafAt(leaf + 1, '[data-tree-action="leaf-down"]'), leafAt(leaf + 1, '[data-tree-action="leaf-up"]')],
+    "leaf-remove": [
+      leafAt(leaf, '[data-tree-input="kind"]'),
+      leafAt(leaf - 1, '[data-tree-input="kind"]'),
+      groupAt(group, '[data-tree-action="leaf-add"]'),
+    ],
+    "group-up": [
+      groupAt(group - 1, '[data-tree-action="group-up"]'),
+      groupAt(group - 1, '[data-tree-action="group-down"]'),
+    ],
+    "group-down": [
+      groupAt(group + 1, '[data-tree-action="group-down"]'),
+      groupAt(group + 1, '[data-tree-action="group-up"]'),
+    ],
+    "group-remove": [
+      groupAt(Math.min(group, draftConditionTree.groups.length - 1), '[data-tree-action="leaf-add"]'),
+      "#contact-condition-tree-add-group",
+    ],
+  }[action];
+  focusConditionTree(...focus, "#contact-condition-tree-mode");
+});
 byId("contact-segment").addEventListener("change", (event) => {
-  if (!canReloadContacts()) {
+  // Selecting a filter replaces the draft's tree with the filter's, so an unsaved tree is asked about first.
+  if (!canReloadContacts() || !canDropConditionTree()) {
     event.currentTarget.value = activeSegmentId;
     return;
   }
@@ -3140,14 +3452,7 @@ byId("contact-segment").addEventListener("change", (event) => {
 });
 byId("segment-edit").addEventListener("click", () => {
   const segment = contactSegments.find((value) => value.id === activeSegmentId);
-  if (
-    !segment ||
-    segment.condition_tree ||
-    segmentBusy ||
-    editingSegment ||
-    (currentRole !== "owner" && currentRole !== "admin")
-  )
-    return;
+  if (!segment || segmentBusy || editingSegment || (currentRole !== "owner" && currentRole !== "admin")) return;
   // Editing replaces the name field with the saved name, so a name typed for a new filter needs a confirmation.
   if (segmentNameDirty && !confirm("입력한 새 필터 이름을 버리고 저장된 필터를 수정할까요?")) return;
   editingSegment = {
@@ -3156,6 +3461,7 @@ byId("segment-edit").addEventListener("click", () => {
     saved: segment,
     inputs: segmentConditionInputs,
     loadedName: segment.name,
+    loadedTree: segmentTreeFromSaved(segment.condition_tree),
   };
   invalidateSegmentPreview();
   fillSegmentConditions(segment);
@@ -3180,6 +3486,7 @@ byId("segment-edit-reload").addEventListener("click", () => {
   editingSegment.version = saved.version;
   editingSegment.inputs = segmentConditionInputs;
   editingSegment.loadedName = saved.name;
+  editingSegment.loadedTree = segmentTreeFromSaved(saved.condition_tree);
   invalidateSegmentPreview();
   fillSegmentConditions(saved);
   byId("segment-save").elements.name.value = saved.name;
@@ -3244,14 +3551,17 @@ byId("segment-save").addEventListener("submit", (event) => {
   const name = byId("segment-save").elements.name.value;
   const tags = contactFilterTags();
   const payload = { name, connection_id: fields.connection_id.value || null };
-  // A tree is sent alone in place of the tag and field conditions and their operator.
-  if (draftConditionTree) payload.condition_tree = draftConditionTree;
+  // A tree is sent alone in place of the tag and field conditions and their operator (below, once it builds).
   // One tag keeps the legacy shape; two or more go as a set with the chosen mode.
-  else if (tags.length > 1) Object.assign(payload, { tags, tag_mode: fields.tag_mode.value });
-  else payload.tag = tags[0] ?? null;
-  if (!draftConditionTree && fields.condition_operator.value === "or") payload.condition_operator = "or";
+  if (!draftConditionTree) {
+    if (tags.length > 1) Object.assign(payload, { tags, tag_mode: fields.tag_mode.value });
+    else payload.tag = tags[0] ?? null;
+    if (fields.condition_operator.value === "or") payload.condition_operator = "or";
+  }
   try {
-    if (!draftConditionTree) Object.assign(payload, contactFieldConditionKeys());
+    // An incomplete tree throws its reason here, before any request.
+    if (draftConditionTree) payload.condition_tree = conditionTreeRequest();
+    else Object.assign(payload, contactFieldConditionKeys());
     Object.assign(payload, contactActivityWindow());
     Object.assign(payload, contactConsentCondition());
     Object.assign(payload, contactDmConsentCondition());
@@ -3265,11 +3575,19 @@ byId("segment-save").addEventListener("submit", (event) => {
     segmentControls();
     try {
       if (editing) return await saveSegmentEdit(editing, payload, generation);
-      await api("/api/contact-segments", "POST", payload);
+      const created = await api("/api/contact-segments", "POST", payload);
       if (generation !== segmentsGeneration) return;
       byId("segment-save").reset();
       segmentNameDirty = false;
       await loadContactSegments(true);
+      if (generation !== segmentsGeneration) return;
+      // The editor takes the tree as the server stored it (tags normalized), so the saved draft matches the new
+      // filter and is not reported as unsaved. The fieldset was locked, so the draft is still the one sent.
+      if (draftConditionTree && created.condition_tree) {
+        draftConditionTree = segmentTreeFromSaved(created.condition_tree);
+        renderConditionTree();
+        conditionTreeControls();
+      }
       notice("필터를 저장했습니다. 저장된 필터에서 선택해 다시 사용할 수 있습니다.");
     } finally {
       if (generation === segmentsGeneration) {
@@ -3432,6 +3750,8 @@ function fieldFilterControls() {
     row.value.hidden = field?.type === "boolean";
     row.boolean.hidden = field?.type !== "boolean";
   }
+  // Rows typed before the group editor started keep their values, so the mode selects stay off while it is shown.
+  if (draftConditionTree) for (const name of ["field_mode", "condition_operator"]) fields[name].disabled = true;
 }
 function fieldConditionNeedsValue(operator) {
   return ["eq", "gt", "gte", "lt", "lte"].includes(operator);
@@ -3518,6 +3838,9 @@ async function loadContactFields(force = false) {
         select.add(new Option("사용할 수 없는 필드", previous));
       select.value = previous;
     }
+    // The group editor's field selects list the same definitions, with the same fallback for an unknown field.
+    renderConditionTree();
+    conditionTreeControls();
     fieldFilterControls();
     byId("field-definitions").replaceChildren();
     for (const field of contactFields) {
@@ -3576,7 +3899,10 @@ byId("field-create").addEventListener("submit", (event) => {
 });
 function archiveField(field, button) {
   const selects = fieldFilterRows().map((row) => row.field);
-  const filterNotice = selects.some((select) => select.value === field.id) ? " 이 필드의 검색 조건은 해제됩니다." : "";
+  const filterNotice =
+    selects.some((select) => select.value === field.id) || segmentTreeRemoveField(draftConditionTree, field.id).removed
+      ? " 이 필드의 검색 조건은 해제됩니다."
+      : "";
   if (!canReloadContacts() || !confirm(`${field.name} 필드를 보관할까요? 저장한 값은 유지됩니다.${filterNotice}`))
     return;
   const generation = fieldsGeneration;
@@ -3592,15 +3918,27 @@ function archiveField(field, button) {
       }
       contactFields = contactFields.filter((definition) => definition.id !== field.id);
       button.closest(".field-definition")?.remove();
+      // The group editor drops this field's conditions; a group they empty stays and makes the tree incomplete.
+      const tree = segmentTreeRemoveField(draftConditionTree, field.id);
+      let treeNotice = "";
+      if (tree.removed) {
+        draftConditionTree = tree.draft;
+        renderConditionTree();
+        conditionTreeEdited();
+        const incomplete = segmentTreeBuild(draftConditionTree, contactFields).error;
+        treeNotice =
+          ` 그룹 조건에서 이 필드를 쓰던 조건 ${tree.removed}개를 지웠습니다.` +
+          (incomplete ? ` 그룹 조건을 완성해야 조회할 수 있습니다. ${incomplete}` : "");
+      }
       fieldFilterControls();
       clearContactResults();
       const loaded = await loadContactFields(true);
       if (generation !== fieldsGeneration) return;
       if (loaded) await loadContacts();
       notice(
-        loaded
+        (loaded
           ? "필드를 보관했습니다. 저장한 값은 유지됩니다."
-          : "필드를 보관했지만 목록을 갱신하지 못했습니다. 새로고침으로 다시 불러와 주세요.",
+          : "필드를 보관했지만 목록을 갱신하지 못했습니다. 새로고침으로 다시 불러와 주세요.") + treeNotice,
       );
     } finally {
       if (generation === fieldsGeneration) {

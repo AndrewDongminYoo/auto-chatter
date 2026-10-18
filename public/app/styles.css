@@ -1487,6 +1487,50 @@ section {
   flex: 1 1 180px;
   margin: 0;
 }
+/* The group editor takes the filter's full width; its groups and leaves wrap like the filter row. */
+.condition-tree {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.condition-tree-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+.condition-tree-group > legend {
+  padding: 0 8px;
+}
+.condition-tree-leaf,
+.condition-tree-actions {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px 12px;
+  min-width: 0;
+}
+.condition-tree-leaf {
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+.condition-tree .hint {
+  flex: 1 1 100%;
+  overflow-wrap: anywhere;
+}
+.condition-tree label {
+  flex: 1 1 160px;
+  min-width: 0;
+  margin: 0;
+}
+.condition-tree input,
+.condition-tree select {
+  width: 100%;
+}
 .segment-save {
   margin-bottom: 20px;
 }
@@ -1551,6 +1595,12 @@ section {
   }
   .contacts-filter button {
     width: 100%;
+  }
+  /* A leaf's move and remove buttons share a row, so ten leaves stay short at phone width. */
+  .contacts-filter .condition-tree-leaf button,
+  .contacts-filter .condition-tree-actions button {
+    width: auto;
+    flex: 1 1 auto;
   }
 }
 
