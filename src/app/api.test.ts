@@ -4,7 +4,13 @@ import { appApi } from "./api.ts";
 import type { Pool } from "pg";
 import { sealSecret } from "./secrets.ts";
 import { ApiError } from "./auth.ts";
-import { createContactSegment, parseSegmentDefinition, updateContactSegment } from "./contacts.ts";
+import {
+  CONDITION_TREE_LEAF_LIMIT,
+  createContactSegment,
+  parseSegmentDefinition,
+  SEGMENT_REQUEST_BYTES,
+  updateContactSegment,
+} from "./contacts.ts";
 const config = {
   SUPABASE_URL: "https://project.supabase.co",
   SUPABASE_SECRET_KEY: "sb_secret_test",
@@ -1487,7 +1493,7 @@ test("contact DM activity takes canonical days 1 to 366 in $18 and refuses other
       evaluated: "9007199254740997",
       excluded: { dm_identity: "9007199254740993", dm_activity: "2", tag: "0", field: "0", both: "0" },
     });
-    assert.equal(values.length, 18);
+    assert.equal(values.length, 19);
     assert.equal(values[17], Number(days));
     assert.deepEqual(values.slice(13, 17), [null, null, null, null]);
     assert.match(statement, /\$18::int IS NOT NULL/);
@@ -1609,7 +1615,7 @@ test("contact calendar periods accept four exact values and refuse mixing before
       excluded: { activity: "9007199254740993", tag: "0", field: "0", both: "0" },
     });
     // Appended last, so the earlier parameter positions stay as they were.
-    assert.equal(values.length, 18);
+    assert.equal(values.length, 19);
     assert.deepEqual(values.slice(9, 11), [null, null]);
     assert.equal(values[13], null);
     assert.equal(values[14], period);
@@ -1990,7 +1996,7 @@ test("contact tag filters repeat tag up to five times with one mode and refuse o
   const single = await request("tag=%20Lead%20");
   assert.equal(single.status, 200);
   assert.deepEqual(await single.json(), { contacts: [], after: null });
-  assert.equal(values.length, 18);
+  assert.equal(values.length, 19);
   assert.deepEqual(values[2], ["lead"]);
   assert.match(statement, all);
   assert.doesNotMatch(statement, any);
@@ -2132,7 +2138,7 @@ test("contact field filters take the legacy keys or a field_conditions set of up
   );
   assert.equal(legacy.status, 200);
   assert.deepEqual(await legacy.json(), { contacts: [], after: null });
-  assert.equal(values.length, 18);
+  assert.equal(values.length, 19);
   assert.deepEqual(values.slice(5, 7), [[setFields[0]], "all"]);
   assert.deepEqual(JSON.parse(String(values[7])), [text]);
   for (const [query, conditions, mode] of [
@@ -2297,6 +2303,421 @@ test("segment definitions take the legacy field keys or a set of one to three fi
       updateContactSegment(segmentPool, segmentUser, segmentId, { name: "Scored", ...definition, expected_version: 1 }),
       reachedDatabase,
     );
+  }
+});
+
+// Condition tree builders: a tag leaf, a negated tag leaf, a group and a tree.
+const has = (tag: string) => ({ tag });
+const lacks = (tag: string) => ({ tag, negate: true });
+const group = (mode: string, ...conditions: unknown[]) => ({ mode, conditions });
+const tree = (mode: string, ...groups: unknown[]) => ({ mode, groups });
+
+test("contact condition trees take one bounded JSON tree in $19 and refuse other shapes before database access", async () => {
+  let values: unknown[] = [];
+  let lookups: unknown[] = [];
+  let queried = false;
+  const pool = {
+    query: async (sql: string, parameters: unknown[]) => {
+      queried = true;
+      if (sql.includes("workspace_members")) return { rows: [{ workspace_id: workspaceId, role: "owner" }] };
+      if (sql.includes("FROM instagram_contact_fields WHERE")) {
+        lookups.push(parameters[1]);
+        return { rows: [{ type: setFieldTypes[String(parameters[1])] }] };
+      }
+      values = parameters;
+      return {
+        rows: [
+          {
+            connection_id: null,
+            preview_total: "1",
+            preview_evaluated: "9007199254740997",
+            preview_excluded_activity: "2",
+            preview_excluded_conditions: "9007199254740994",
+            preview_excluded_tag: "0",
+            preview_excluded_field: "0",
+            preview_excluded_both: "0",
+          },
+        ],
+      };
+    },
+    end: async () => {},
+  } as unknown as Pool;
+  const request = (query: URLSearchParams | string) =>
+    appApi(
+      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
+      config,
+      () => pool,
+      mediaFetch(),
+    );
+  const withTree = (value: unknown, extra: Record<string, string> = {}) =>
+    new URLSearchParams({ condition_tree: JSON.stringify(value), ...extra });
+  const text = { field_id: setFields[0], field_operator: "eq", field_value: "x" };
+  const score = { field_id: setFields[1], field_operator: "gte", field_value: 100000 };
+  const day = { field_id: setFields[2], field_operator: "lt", field_value: "2026-10-18" };
+  const flag = { field_id: setFields[3], field_operator: "is_unset" };
+  // "(VIP and spent at least 100000) or event": the tree goes in $19, and the tag, field and operator positions stay
+  // NULL, NULL and "and", so their predicates are true.
+  const vip = tree("any", group("all", has("vip"), score), group("all", has("event")));
+  const list = await request(withTree(vip));
+  assert.equal(list.status, 200);
+  assert.deepEqual(await list.json(), { contacts: [], after: null });
+  assert.equal(values.length, 19);
+  assert.deepEqual(JSON.parse(String(values[18])), vip);
+  assert.deepEqual([values[2], values[5], values[6], values[7], values[8]], [null, null, null, null, "and"]);
+  // Without a tree $19 is NULL.
+  await request("");
+  assert.equal(values[18], null);
+  // Normalization: tags as contact tags, lowercase field IDs and negate false dropped; groups and leaves keep their
+  // order, a tag or a field may repeat, and field leaves are checked in leaf order, repeats included.
+  for (const [input, normalized] of [
+    [tree("all", group("any", has(" VIP "))), tree("all", group("any", has("vip")))],
+    [
+      tree("all", group("all", { tag: "b", negate: false }, lacks("A"))),
+      tree("all", group("all", has("b"), lacks("a"))),
+    ],
+    [
+      tree(
+        "any",
+        group("all", { ...day, field_id: setFields[2].toUpperCase() }, has("b"), has("a")),
+        group("any", text, has("b"), { ...score, field_operator: "lt", field_value: 100 }, score),
+      ),
+      tree(
+        "any",
+        group("all", day, has("b"), has("a")),
+        group("any", text, has("b"), { ...score, field_operator: "lt", field_value: 100 }, score),
+      ),
+    ],
+    [tree("all", group("all", flag), group("all", flag)), tree("all", group("all", flag), group("all", flag))],
+  ] as const) {
+    lookups = [];
+    const response = await request(withTree(input));
+    assert.equal(response.status, 200, JSON.stringify(input));
+    assert.deepEqual(JSON.parse(String(values[18])), normalized, JSON.stringify(input));
+    assert.deepEqual(
+      lookups,
+      (normalized.groups as { conditions: Record<string, unknown>[] }[]).flatMap((value) =>
+        value.conditions.flatMap((leaf) => ("field_id" in leaf ? [leaf.field_id] : [])),
+      ),
+    );
+  }
+  // Counts: 1 to 5 groups, 1 to 5 leaves per group and at most 10 leaves in all.
+  const leaves = (count: number) => Array.from({ length: count }, (_, index) => has(`t${index}`));
+  for (const value of [
+    tree("all", group("all", ...leaves(1))),
+    tree("all", group("all", ...leaves(5))),
+    tree("any", ...Array.from({ length: 5 }, () => group("any", ...leaves(2)))),
+    tree("all", group("all", ...leaves(5)), group("all", ...leaves(5))),
+  ])
+    assert.equal((await request(withTree(value))).status, 200, JSON.stringify(value));
+  // Preview with a tree: one reason after the limits, and no tag, field or both keys.
+  const preview = await request(withTree(vip, { preview: "true", last_comment_days: "7" }));
+  assert.deepEqual((await preview.json()).excluded, { activity: "2", conditions: "9007199254740994" });
+  // Ten text leaves of 1000 characters that need no escaping stay under the bound; the bound is on decoded text.
+  const wide = tree(
+    "all",
+    ...Array.from({ length: 5 }, () =>
+      group("all", ...[0, 1].map(() => ({ ...text, field_value: "가".repeat(1000) }))),
+    ),
+  );
+  assert.ok(JSON.stringify(wide).length > 10000 && JSON.stringify(wide).length <= 16384);
+  assert.equal((await request(withTree(wide))).status, 200);
+  assert.equal(
+    (await request(new URLSearchParams({ condition_tree: JSON.stringify(vip).padEnd(16384, " ") }))).status,
+    200,
+  );
+  const repeated = new URLSearchParams({ condition_tree: JSON.stringify(vip) });
+  repeated.append("condition_tree", JSON.stringify(vip));
+  for (const [query, error] of [
+    [withTree(tree("all")), "invalid_contact_condition"],
+    [withTree(tree("all", ...Array.from({ length: 6 }, () => group("all", has("a"))))), "invalid_contact_condition"],
+    [withTree(tree("all", group("all"))), "invalid_contact_condition"],
+    [withTree(tree("all", group("all", ...leaves(6)))), "invalid_contact_condition"],
+    [
+      withTree(tree("all", group("all", ...leaves(5)), group("all", ...leaves(5)), group("all", ...leaves(1)))),
+      "invalid_contact_condition",
+    ],
+    [withTree({ groups: [group("all", has("a"))] }), "invalid_contact_condition"],
+    [withTree(tree("none", group("all", has("a")))), "invalid_contact_condition"],
+    [withTree(tree("ALL", group("all", has("a")))), "invalid_contact_condition"],
+    [withTree(tree("all", group("either", has("a")))), "invalid_contact_condition"],
+    [withTree(tree("all", { conditions: [has("a")] })), "invalid_contact_condition"],
+    [withTree({ ...tree("all", group("all", has("a"))), extra: 1 }), "invalid_contact_condition"],
+    [withTree(tree("all", { ...group("all", has("a")), extra: 1 })), "invalid_contact_condition"],
+    [withTree(tree("all", group("all", { tag: "a", extra: 1 }))), "invalid_contact_condition"],
+    [withTree(tree("all", group("all", { tag: "a", ...flag }))), "invalid_contact_condition"],
+    [withTree(tree("all", group("all", {}))), "invalid_contact_condition"],
+    [withTree(tree("all", group("all", { negate: true }))), "invalid_contact_condition"],
+    [withTree(tree("all", group("all", null))), "invalid_contact_condition"],
+    [withTree(tree("all", group("all", "a"))), "invalid_contact_condition"],
+    [withTree(tree("all", "a")), "invalid_contact_condition"],
+    [withTree({ mode: "all", groups: {} }), "invalid_contact_condition"],
+    [withTree({ mode: "all", groups: [{ mode: "all", conditions: has("a") }] }), "invalid_contact_condition"],
+    [withTree([group("all", has("a"))]), "invalid_contact_condition"],
+    [withTree(null), "invalid_contact_condition"],
+    [withTree("tree"), "invalid_contact_condition"],
+    [new URLSearchParams({ condition_tree: "{" }), "invalid_contact_condition"],
+    [new URLSearchParams({ condition_tree: "" }), "invalid_contact_condition"],
+    [new URLSearchParams({ condition_tree: JSON.stringify(vip).padEnd(16385, " ") }), "invalid_contact_condition"],
+    // negate is true or false only.
+    ...["true", 1, null, "yes"].map(
+      (negate) =>
+        [withTree(tree("all", group("all", { tag: "a", negate }))), "invalid_contact_condition"] as [
+          URLSearchParams,
+          string,
+        ],
+    ),
+    // Tag leaves follow the contact tag rules, field leaves the field condition rules.
+    [withTree(tree("all", group("all", has("")))), "invalid_contact_tags"],
+    [withTree(tree("all", group("all", has("x".repeat(41))))), "invalid_contact_tags"],
+    [withTree(tree("all", group("all", { tag: 1 }))), "invalid_contact_tags"],
+    [withTree(tree("all", group("all", { tag: null }))), "invalid_contact_tags"],
+    [withTree(tree("all", group("all", has("a\u0000")))), "invalid_contact_tags"],
+    // A JSON-escaped lone surrogate parses, but PostgreSQL refuses it as jsonb input.
+    [
+      new URLSearchParams({
+        condition_tree: '{"mode":"all","groups":[{"mode":"all","conditions":[{"tag":"\\ud800"}]}]}',
+      }),
+      "invalid_contact_tags",
+    ],
+    [withTree(tree("all", group("all", { field_id: null, field_operator: "is_set" }))), "invalid_field_condition"],
+    [
+      withTree(tree("all", group("all", { field_id: "not-a-uuid", field_operator: "is_set" }))),
+      "invalid_field_condition",
+    ],
+    [withTree(tree("all", group("all", { ...text, field_operator: "contains" }))), "invalid_field_condition"],
+    [withTree(tree("all", group("all", { field_id: setFields[0], field_operator: "eq" }))), "invalid_field_condition"],
+    [withTree(tree("all", group("all", { ...text, field_value: null }))), "invalid_field_condition"],
+    [withTree(tree("all", group("all", { ...flag, field_value: true }))), "invalid_field_condition"],
+    // An unknown key on a field leaf is a tree shape error, as at every other level.
+    [withTree(tree("all", group("all", { ...text, field_mode: "all" }))), "invalid_contact_condition"],
+    [withTree(tree("all", group("all", { ...text, field_value: "\ud800" }))), "invalid_field_condition"],
+    // The tree is the third condition form, never mixed with the tag, field or operator keys or with segment_id.
+    ...(
+      [
+        { tag: "lead" },
+        { tag_mode: "all" },
+        { field_id: setFields[0], field_operator: "is_set" },
+        { field_operator: "is_set" },
+        { field_value: '"x"' },
+        { field_conditions: JSON.stringify([text]) },
+        { field_mode: "all" },
+        { condition_operator: "and" },
+        { condition_operator: "or" },
+      ] as Record<string, string>[]
+    ).map((extra) => [withTree(vip, extra), "invalid_contact_condition"] as [URLSearchParams, string]),
+    [withTree(vip, { segment_id: segmentId }), "invalid_contact_request"],
+    [new URLSearchParams({ segment_id: segmentId, condition_tree: "{" }), "invalid_contact_request"],
+    [repeated, "invalid_contact_request"],
+  ] as [URLSearchParams | string, string][]) {
+    queried = false;
+    const response = await request(query);
+    assert.equal(response.status, 400, String(query));
+    assert.deepEqual(await response.json(), { error }, String(query));
+    assert.equal(queried, false, `${query} must fail before database access`);
+  }
+  // The outer limits combine with a tree.
+  const limited = await request(
+    withTree(vip, {
+      connection_id: connectionId,
+      last_comment_days: "7",
+      consent_purpose: "marketing",
+      consent_state: "granted",
+      dm_consent_purpose: "marketing",
+      dm_consent_state: "granted",
+      last_dm_days: "3",
+    }),
+  );
+  assert.equal(limited.status, 200);
+  assert.deepEqual(
+    [values[1], values[13], values[11], values[15], values[17]],
+    [connectionId, 7, "marketing", "marketing", 3],
+  );
+  assert.deepEqual(JSON.parse(String(values[18])), vip);
+});
+
+test("segment definitions take a condition tree as a third form and lock its fields in field_id order", async () => {
+  const parsed = (definition: Record<string, unknown>) => parseSegmentDefinition({ name: "Grouped", ...definition });
+  const score = { field_id: setFields[1], field_operator: "gte", field_value: 100000 };
+  const text = { field_id: setFields[0], field_operator: "eq", field_value: "x" };
+  const vip = tree("any", group("all", has("vip"), score), group("all", has("event")));
+  assert.equal(parsed({}).conditionTree, null);
+  assert.equal(parsed({ condition_tree: null }).conditionTree, null);
+  const definition = parsed({
+    condition_tree: tree(
+      "any",
+      group("all", { tag: " VIP ", negate: false }, { ...score, field_id: setFields[1].toUpperCase() }),
+      group("all", has("event")),
+    ),
+  });
+  assert.deepEqual(definition.conditionTree, vip);
+  assert.deepEqual([definition.tagCondition, definition.fieldCondition, definition.operator], [null, null, "and"]);
+  // Absent, null and empty legacy keys count as absent, as for the other forms.
+  for (const absent of [
+    { tag: null },
+    { tag: "" },
+    { tags: null },
+    { field_id: null },
+    { field_conditions: null },
+    { field_mode: null },
+  ])
+    assert.deepEqual(parsed({ condition_tree: vip, ...absent }).conditionTree, vip, JSON.stringify(absent));
+  for (const [body, code] of [
+    [{ tag: "lead" }, "invalid_contact_condition"],
+    [{ tags: ["a", "b"] }, "invalid_contact_condition"],
+    [{ tags: [] }, "invalid_contact_condition"],
+    [{ tag_mode: "any" }, "invalid_contact_condition"],
+    [{ ...text }, "invalid_contact_condition"],
+    [{ field_operator: "is_set" }, "invalid_contact_condition"],
+    [{ field_value: null }, "invalid_contact_condition"],
+    [{ field_conditions: [text, score] }, "invalid_contact_condition"],
+    [{ field_mode: "all" }, "invalid_contact_condition"],
+    [{ condition_operator: "and" }, "invalid_contact_condition"],
+    [{ condition_operator: "or" }, "invalid_contact_condition"],
+    [{ condition_operator: null }, "invalid_contact_condition"],
+  ] as const) {
+    const mixed = { name: "Grouped", condition_tree: vip, ...body };
+    assert.throws(() => parseSegmentDefinition(mixed), refused(code), JSON.stringify(body));
+    await assert.rejects(createContactSegment(segmentPool, segmentUser, mixed), refused(code));
+    await assert.rejects(
+      updateContactSegment(segmentPool, segmentUser, segmentId, { ...mixed, expected_version: 1 }),
+      refused(code),
+    );
+  }
+  for (const [value, code] of [
+    [tree("all"), "invalid_contact_condition"],
+    [[], "invalid_contact_condition"],
+    ["tree", "invalid_contact_condition"],
+    [JSON.stringify(vip), "invalid_contact_condition"],
+    [tree("all", group("all", has(" "))), "invalid_contact_tags"],
+    [tree("all", group("all", { field_id: setFields[0], field_operator: "eq" })), "invalid_field_condition"],
+    [tree("all", group("all", { field_id: null, field_operator: "is_set" })), "invalid_field_condition"],
+    [tree("all", group("all", { ...text, extra: 1 })), "invalid_contact_condition"],
+    [tree("all", group("all", { ...has("a"), extra: 1 })), "invalid_contact_condition"],
+  ] as const) {
+    assert.throws(() => parsed({ condition_tree: value }), refused(code), JSON.stringify(value));
+    await assert.rejects(
+      createContactSegment(segmentPool, segmentUser, { name: "Grouped", condition_tree: value }),
+      refused(code),
+    );
+  }
+  // A write validates every field leaf, repeats included, in field_id order rather than leaf order, locks each
+  // distinct field FOR SHARE once, with its first leaf, and stores the tree as one jsonb value after the other
+  // definition columns.
+  const lookups: unknown[] = [];
+  let inserted: unknown[] = [];
+  const client = {
+    query: async (sql: string, parameters: unknown[] = []) => {
+      if (sql.includes("FROM instagram_contact_fields WHERE")) {
+        lookups.push([parameters[1], sql.endsWith(" FOR SHARE")]);
+        return { rows: [{ type: setFieldTypes[String(parameters[1])] }] };
+      }
+      if (sql.includes("workspace_members")) return { rows: [{ role: "owner" }] };
+      if (sql.includes("INSERT INTO instagram_contact_segments")) {
+        inserted = parameters;
+        return {
+          rows: [
+            {
+              id: segmentId,
+              name: "Grouped",
+              connection_id: null,
+              tag: null,
+              tags: null,
+              tag_mode: null,
+              field_id: null,
+              field_operator: null,
+              field_value: null,
+              field_conditions: null,
+              field_mode: null,
+              condition_operator: "and",
+              condition_tree: JSON.parse(String(parameters[21])),
+              version: 1,
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    },
+    release: () => {},
+  };
+  const writePool = {
+    query: async () => ({ rows: [{ workspace_id: workspaceId, role: "owner" }] }),
+    connect: async () => client,
+  } as unknown as Pool;
+  const ordered = tree("all", group("any", score, text), group("all", has("a"), score));
+  const created = await createContactSegment(writePool, segmentUser, { name: "Grouped", condition_tree: ordered });
+  assert.deepEqual(lookups, [
+    [setFields[0], true],
+    [setFields[1], true],
+    [setFields[1], false],
+  ]);
+  assert.equal(inserted.length, 22);
+  // tag, field_id, field_operator, field_value and condition_operator follow the workspace, name and connection.
+  assert.deepEqual(inserted.slice(3, 8), [null, null, null, null, "and"]);
+  assert.deepEqual(JSON.parse(String(inserted[21])), ordered);
+  // A tree segment answers with its tree and no tag or field key.
+  assert.deepEqual(created, {
+    id: segmentId,
+    name: "Grouped",
+    connection_id: null,
+    condition_tree: ordered,
+    version: 1,
+  });
+});
+
+test("segment create and edit read a body large enough for the largest tree the parser accepts", async () => {
+  // Ten text leaves of 1,000 Korean characters (three UTF-8 bytes each, the most JSON.stringify writes per UTF-16
+  // unit for a valid value) and a 60-character Korean name padded to the 300-unit raw name limit.
+  const leaf = { field_id: setFields[0], field_operator: "eq", field_value: "가".repeat(1000) };
+  const largest = {
+    name: `${"가".repeat(60)}${" ".repeat(240)}`,
+    connection_id: connectionId,
+    condition_tree: tree(
+      "any",
+      ...Array.from({ length: 2 }, () =>
+        group("all", ...Array.from({ length: CONDITION_TREE_LEAF_LIMIT / 2 }, () => leaf)),
+      ),
+    ),
+    last_comment_days: 366,
+    consent_purpose: "marketing",
+    consent_state: "granted",
+    dm_consent_purpose: "marketing",
+    dm_consent_state: "granted",
+    last_dm_days: 366,
+  };
+  assert.doesNotThrow(() => parseSegmentDefinition(largest));
+  const bytes = Buffer.byteLength(JSON.stringify({ ...largest, expected_version: 1 }));
+  assert.ok(bytes > 16_384, "the default readJson limit alone must refuse it");
+  assert.ok(bytes <= SEGMENT_REQUEST_BYTES / 2, `${bytes} bytes`);
+  // An agent passes the write limits and the body read, then the admin check refuses it; an oversized body is 413.
+  const pool = {
+    query: async (sql: string) => {
+      assert.match(sql, /FROM workspace_members WHERE user_id=\$1 AND removed_at IS NULL$/);
+      return { rows: [{ workspace_id: workspaceId, role: "agent" }] };
+    },
+    connect: async () => assert.fail("a refused request must not write the database"),
+    end: async () => {},
+  } as unknown as Pool;
+  for (const [path, method, body] of [
+    ["/api/contact-segments", "POST", largest],
+    [`/api/contact-segments/${segmentId}`, "PUT", { ...largest, expected_version: 1 }],
+  ] as const) {
+    const send = (text: string) =>
+      appApi(
+        new Request(`https://app.test${path}`, {
+          method,
+          headers: { origin: "https://app.test", cookie: "__Host-ac-access=test", "content-type": "application/json" },
+          body: text,
+        }),
+        config,
+        () => pool,
+        mediaFetch(),
+      );
+    const accepted = await send(JSON.stringify(body));
+    assert.equal(accepted.status, 403, method);
+    assert.deepEqual(await accepted.json(), { error: "role_forbidden" }, method);
+    const oversized = await send(JSON.stringify(body).padEnd(SEGMENT_REQUEST_BYTES + 1, " "));
+    assert.equal(oversized.status, 413, method);
+    assert.deepEqual(await oversized.json(), { error: "request_too_large" }, method);
   }
 });
 

@@ -1398,6 +1398,79 @@ test("workerd contact API uses restricted server privileges and verified workspa
       ).status,
       200,
     );
+    // The restricted server role saves, lists, edits and evaluates a condition tree segment: sender-1 has the lead
+    // tag (restored by the CSV import above) and the plan "pro", and nobody has the tag "nobody".
+    const conditionTree = {
+      mode: "any",
+      groups: [
+        {
+          mode: "all",
+          conditions: [{ tag: "lead" }, { field_id: plan.id, field_operator: "eq", field_value: "pro" }],
+        },
+        { mode: "all", conditions: [{ tag: "nobody" }] },
+      ],
+    };
+    const treeCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Grouped", connection_id: connection, condition_tree: conditionTree }),
+    });
+    assert.equal(treeCreated.status, 201, await treeCreated.clone().text());
+    const treeSegment = await treeCreated.json();
+    assert.deepEqual(treeSegment, {
+      id: treeSegment.id,
+      name: "Grouped",
+      connection_id: connection,
+      condition_tree: conditionTree,
+      version: 1,
+    });
+    assert.deepEqual(
+      (await (await runtime.dispatchFetch("https://app.test/api/contact-segments", { headers })).json()).segments.find(
+        (segment) => segment.id === treeSegment.id,
+      ),
+      treeSegment,
+    );
+    const treeEdited = await runtime.dispatchFetch(`https://app.test/api/contact-segments/${treeSegment.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        name: "Grouped",
+        connection_id: connection,
+        condition_tree: { ...conditionTree, groups: [...conditionTree.groups].reverse() },
+        expected_version: treeSegment.version,
+      }),
+    });
+    assert.equal(treeEdited.status, 200, await treeEdited.clone().text());
+    assert.equal((await treeEdited.json()).version, 2);
+    const treeSelected = await (
+      await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${treeSegment.id}`, { headers })
+    ).json();
+    assert.deepEqual(
+      treeSelected.contacts.map((contact) => contact.sender_id),
+      ["sender-1"],
+    );
+    const treePreview = await (
+      await runtime.dispatchFetch(
+        `https://app.test/api/contacts?${new URLSearchParams({
+          preview: "true",
+          connection_id: connection,
+          condition_tree: JSON.stringify(conditionTree),
+        })}`,
+        { headers },
+      )
+    ).json();
+    assert.equal(treePreview.total, "1");
+    assert.deepEqual(Object.keys(treePreview.excluded), ["conditions"]);
+    assert.equal(BigInt(treePreview.evaluated), 1n + BigInt(treePreview.excluded.conditions));
+    assert.equal(
+      (
+        await runtime.dispatchFetch(`https://app.test/api/contact-segments/${treeSegment.id}`, {
+          method: "DELETE",
+          headers,
+        })
+      ).status,
+      200,
+    );
     const planInUse = await runtime.dispatchFetch(`https://app.test/api/contact-fields/${plan.id}`, {
       method: "DELETE",
       headers,
