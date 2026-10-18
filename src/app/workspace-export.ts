@@ -21,6 +21,9 @@ export const EXPORTED_TABLES: Record<string, { scope: "self" | "workspace" | "co
   instagram_contact_automation: { scope: "workspace" },
   instagram_contact_tags: { scope: "workspace" },
   instagram_contact_segments: { scope: "workspace" },
+  // A target snapshot holds identifiers and counts only; its members are exported as their own table.
+  instagram_segment_snapshots: { scope: "workspace" },
+  instagram_segment_snapshot_members: { scope: "workspace" },
   instagram_contact_fields: { scope: "workspace" },
   instagram_contact_field_values: { scope: "workspace" },
   instagram_inbox_handoffs: { scope: "workspace" },

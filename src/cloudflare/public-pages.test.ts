@@ -38,6 +38,12 @@ for (const [pathname, title] of [
     if (pathname === "/privacy")
       assert.ok(html.includes("초대 기록은 취소·만료·사용된 것을 포함해 작업 공간을 삭제할 때까지 보관합니다"));
     if (pathname === "/privacy") assert.ok(html.includes("시행일: 2026년 10월 2일"));
+    // Target snapshots (#35): identifiers only, nothing sent, kept until a deletion function removes them.
+    if (pathname === "/privacy") {
+      assert.ok(html.includes("대상을 고정해도 메시지는 보내지 않으며, 명단에는 식별자만 저장하고"));
+      assert.ok(html.includes("고정한 발송 대상 명단도 자동으로 만료되지 않으며"));
+      assert.ok(html.includes("이용자 단위 삭제 또는 작업 공간 삭제로 지워질 때까지 보관합니다"));
+    }
     if (pathname === "/privacy")
       assert.ok(
         html.includes("응답 DM의 본문을 그 사용자 정의 필드에 저장하며, 이 저장은 수신 인박스 설정과 관계없이"),

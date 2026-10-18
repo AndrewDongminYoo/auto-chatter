@@ -25,6 +25,7 @@ BEGIN
       OR EXISTS(SELECT 1 FROM flows WHERE workspace_id=previous_workspace)
       OR EXISTS(SELECT 1 FROM instagram_contact_fields WHERE workspace_id=previous_workspace)
       OR EXISTS(SELECT 1 FROM instagram_contact_segments WHERE workspace_id=previous_workspace)
+      OR EXISTS(SELECT 1 FROM instagram_segment_snapshots WHERE workspace_id=previous_workspace)
       OR EXISTS(SELECT 1 FROM instagram_inbox_labels WHERE workspace_id=previous_workspace)
       OR EXISTS(SELECT 1 FROM instagram_inbox_label_rules WHERE workspace_id=previous_workspace)
       OR EXISTS(SELECT 1 FROM workspace_reply_templates WHERE workspace_id=previous_workspace)

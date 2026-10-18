@@ -530,6 +530,90 @@ export function segmentConditionSql(
     ],
   };
 }
+// The preview's CTEs after evaluation: contact_filters, outcomes and summary, which counts every evaluated contact
+// once by its predicate outcomes. listContacts and the segment snapshot share this text, so their counts cannot fork.
+// Aggregate independently of matching samples so even zero matches retain their exclusion summary.
+// Materialize only identities and predicate outcomes, not every contact's displayed field JSON.
+export function segmentPreviewSql(sql: ReturnType<typeof segmentConditionSql>): string {
+  const {
+    activityMatches,
+    consentMatches,
+    dmIdentityMatches,
+    dmConsentMatches,
+    dmActivityMatches,
+    fieldMatches,
+    tagMatches,
+    treeMatches,
+    contactScope,
+  } = sql;
+  return `contact_filters AS MATERIALIZED (
+ SELECT e.connection_id,e.sender_id,${tagMatches} AS tag_matches,
+ ${fieldMatches} AS field_matches,${treeMatches} AS tree_matches,${activityMatches} AS activity_matches,${consentMatches} AS consent_matches,
+ ${dmIdentityMatches} AS dm_identity_matches,${dmConsentMatches} AS dm_consent_matches,
+ ${dmActivityMatches} AS dm_activity_matches
+ ${contactScope}
+ GROUP BY e.workspace_id,e.connection_id,e.sender_id,t.tags
+), outcomes AS (
+ SELECT *,activity_matches AND consent_matches AND dm_identity_matches AND dm_consent_matches AND dm_activity_matches
+   AND CASE WHEN $9::text='or' THEN tag_matches OR field_matches ELSE tag_matches AND field_matches END
+   AND tree_matches AS matched,
+ activity_matches AND consent_matches AND dm_identity_matches AND dm_consent_matches AND dm_activity_matches AS limits_match
+ FROM contact_filters
+), summary AS (
+ SELECT count(*)::text AS preview_evaluated,
+ (count(*) FILTER (WHERE matched))::text AS preview_total,
+ (count(*) FILTER (WHERE NOT activity_matches))::text AS preview_excluded_activity,
+ (count(*) FILTER (WHERE activity_matches AND NOT consent_matches))::text AS preview_excluded_consent,
+ (count(*) FILTER (WHERE activity_matches AND consent_matches AND NOT dm_identity_matches))::text AS preview_excluded_dm_identity,
+ (count(*) FILTER (WHERE activity_matches AND consent_matches AND dm_identity_matches AND NOT dm_consent_matches))::text AS preview_excluded_dm_consent,
+ (count(*) FILTER (WHERE activity_matches AND consent_matches AND dm_identity_matches AND dm_consent_matches AND NOT dm_activity_matches))::text AS preview_excluded_dm_activity,
+ (count(*) FILTER (WHERE limits_match AND NOT matched AND NOT tag_matches AND field_matches))::text AS preview_excluded_tag,
+ (count(*) FILTER (WHERE limits_match AND NOT matched AND tag_matches AND NOT field_matches))::text AS preview_excluded_field,
+ (count(*) FILTER (WHERE limits_match AND NOT matched AND NOT tag_matches AND NOT field_matches))::text AS preview_excluded_both,
+ (count(*) FILTER (WHERE limits_match AND NOT tree_matches))::text AS preview_excluded_conditions
+ FROM outcomes
+)`;
+}
+export type SegmentPreviewSummary = {
+  preview_total?: string;
+  preview_evaluated?: string;
+  preview_excluded_tag?: string;
+  preview_excluded_field?: string;
+  preview_excluded_both?: string;
+  preview_excluded_conditions?: string;
+  preview_excluded_activity?: string;
+  preview_excluded_consent?: string;
+  preview_excluded_dm_identity?: string;
+  preview_excluded_dm_consent?: string;
+  preview_excluded_dm_activity?: string;
+};
+// The preview's total, evaluated and excluded decimal strings from a summary row; the excluded keys present depend on
+// which conditions the lookup has. listContacts and the segment snapshot share it.
+export function segmentPreviewCounts(
+  summary: SegmentPreviewSummary | undefined,
+  conditions: Pick<ContactConditions, "activity" | "consent" | "dmConsent" | "dmActivity" | "conditionTree">,
+) {
+  const { activity, consent, dmConsent, dmActivity, conditionTree } = conditions;
+  return {
+    total: summary?.preview_total ?? "0",
+    evaluated: summary?.preview_evaluated ?? "0",
+    excluded: {
+      ...(activity ? { activity: summary?.preview_excluded_activity ?? "0" } : {}),
+      ...(consent ? { consent: summary?.preview_excluded_consent ?? "0" } : {}),
+      ...(dmConsent || dmActivity ? { dm_identity: summary?.preview_excluded_dm_identity ?? "0" } : {}),
+      ...(dmConsent ? { dm_consent: summary?.preview_excluded_dm_consent ?? "0" } : {}),
+      ...(dmActivity ? { dm_activity: summary?.preview_excluded_dm_activity ?? "0" } : {}),
+      // A tree has one reason after the limits; the tag/field split describes only the other two forms.
+      ...(conditionTree
+        ? { conditions: summary?.preview_excluded_conditions ?? "0" }
+        : {
+            tag: summary?.preview_excluded_tag ?? "0",
+            field: summary?.preview_excluded_field ?? "0",
+            both: summary?.preview_excluded_both ?? "0",
+          }),
+    },
+  };
+}
 export async function listContacts(pool: Pool, user: User, options: URLSearchParams = new URLSearchParams()) {
   for (const key of options.keys())
     if (
@@ -672,27 +756,13 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       await savedSegmentConditions(pool, workspaceId, segmentId));
   for (const condition of contactConditionFields({ fieldCondition, conditionTree }))
     await validateFieldCondition(pool, workspaceId, condition);
-  const {
-    evaluation,
-    activityWindow,
-    dmActivityWindow,
-    activityMatches,
-    consentMatches,
-    dmIdentityMatches,
-    dmConsentMatches,
-    dmActivityMatches,
-    fieldMatches,
-    tagMatches,
-    treeMatches,
-    contactScope,
-    matches,
-    values,
-  } = segmentConditionSql(
+  const conditionSql = segmentConditionSql(
     workspaceId,
     { connectionId, tagCondition, fieldCondition, activity, consent, dmConsent, dmActivity, operator, conditionTree },
     "statement_timestamp()",
     after,
   );
+  const { evaluation, activityWindow, dmActivityWindow, activityMatches, contactScope, matches, values } = conditionSql;
   const contactQuery = `SELECT e.connection_id,e.sender_id,c.username,min(e.created_at) AS first_comment_at,
  max(e.created_at) AS last_comment_at,count(*)::text AS comment_count,coalesce((automation.paused OR automation.handoff_paused),false) AS automation_paused,coalesce(t.tags,'{}'::text[]) AS tags,
  coalesce((SELECT jsonb_object_agg(v.field_id::text,v.value) FROM instagram_contact_field_values v
@@ -703,36 +773,8 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
  AND ${matches}
  GROUP BY e.workspace_id,e.connection_id,e.sender_id,c.username,t.tags,(automation.paused OR automation.handoff_paused)
  HAVING ${activityMatches} ORDER BY e.connection_id,e.sender_id LIMIT 51`;
-  // Aggregate independently of matching samples so even zero matches retain their exclusion summary.
-  // Materialize only identities and predicate outcomes, not every contact's displayed field JSON.
   const query = preview
-    ? `WITH ${evaluation}, contact_filters AS MATERIALIZED (
- SELECT e.connection_id,e.sender_id,${tagMatches} AS tag_matches,
- ${fieldMatches} AS field_matches,${treeMatches} AS tree_matches,${activityMatches} AS activity_matches,${consentMatches} AS consent_matches,
- ${dmIdentityMatches} AS dm_identity_matches,${dmConsentMatches} AS dm_consent_matches,
- ${dmActivityMatches} AS dm_activity_matches
- ${contactScope}
- GROUP BY e.workspace_id,e.connection_id,e.sender_id,t.tags
-), outcomes AS (
- SELECT *,activity_matches AND consent_matches AND dm_identity_matches AND dm_consent_matches AND dm_activity_matches
-   AND CASE WHEN $9::text='or' THEN tag_matches OR field_matches ELSE tag_matches AND field_matches END
-   AND tree_matches AS matched,
- activity_matches AND consent_matches AND dm_identity_matches AND dm_consent_matches AND dm_activity_matches AS limits_match
- FROM contact_filters
-), summary AS (
- SELECT count(*)::text AS preview_evaluated,
- (count(*) FILTER (WHERE matched))::text AS preview_total,
- (count(*) FILTER (WHERE NOT activity_matches))::text AS preview_excluded_activity,
- (count(*) FILTER (WHERE activity_matches AND NOT consent_matches))::text AS preview_excluded_consent,
- (count(*) FILTER (WHERE activity_matches AND consent_matches AND NOT dm_identity_matches))::text AS preview_excluded_dm_identity,
- (count(*) FILTER (WHERE activity_matches AND consent_matches AND dm_identity_matches AND NOT dm_consent_matches))::text AS preview_excluded_dm_consent,
- (count(*) FILTER (WHERE activity_matches AND consent_matches AND dm_identity_matches AND dm_consent_matches AND NOT dm_activity_matches))::text AS preview_excluded_dm_activity,
- (count(*) FILTER (WHERE limits_match AND NOT matched AND NOT tag_matches AND field_matches))::text AS preview_excluded_tag,
- (count(*) FILTER (WHERE limits_match AND NOT matched AND tag_matches AND NOT field_matches))::text AS preview_excluded_field,
- (count(*) FILTER (WHERE limits_match AND NOT matched AND NOT tag_matches AND NOT field_matches))::text AS preview_excluded_both,
- (count(*) FILTER (WHERE limits_match AND NOT tree_matches))::text AS preview_excluded_conditions
- FROM outcomes
-)
+    ? `WITH ${evaluation}, ${segmentPreviewSql(conditionSql)}
  SELECT page.*,summary.*,${activityWindow} AS activity_window,${dmActivityWindow} AS dm_activity_window
  FROM summary LEFT JOIN LATERAL (${contactQuery}) page ON true
  ORDER BY page.connection_id,page.sender_id`
@@ -741,21 +783,11 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
          FROM evaluation LEFT JOIN LATERAL (${contactQuery}) page ON true ORDER BY page.connection_id,page.sender_id`
       : `WITH ${evaluation} ${contactQuery}`;
   const result = await pool.query<
-    (Contact | { [Key in keyof Contact]: null }) & {
-      preview_total?: string;
-      preview_evaluated?: string;
-      preview_excluded_tag?: string;
-      preview_excluded_field?: string;
-      preview_excluded_both?: string;
-      preview_excluded_conditions?: string;
-      preview_excluded_activity?: string;
-      preview_excluded_consent?: string;
-      preview_excluded_dm_identity?: string;
-      preview_excluded_dm_consent?: string;
-      preview_excluded_dm_activity?: string;
-      activity_window?: { from: string; before: string; time_zone?: string };
-      dm_activity_window?: { from: string; before: string };
-    }
+    (Contact | { [Key in keyof Contact]: null }) &
+      SegmentPreviewSummary & {
+        activity_window?: { from: string; before: string; time_zone?: string };
+        dm_activity_window?: { from: string; before: string };
+      }
   >(query, values);
   const summary = result.rows[0];
   const contacts = result.rows
@@ -785,27 +817,7 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
       ? { activity_window: summary?.activity_window }
       : {}),
     ...(dmActivity ? { dm_activity_window: summary?.dm_activity_window } : {}),
-    ...(preview
-      ? {
-          total: summary?.preview_total ?? "0",
-          evaluated: summary?.preview_evaluated ?? "0",
-          excluded: {
-            ...(activity ? { activity: summary?.preview_excluded_activity ?? "0" } : {}),
-            ...(consent ? { consent: summary?.preview_excluded_consent ?? "0" } : {}),
-            ...(dmConsent || dmActivity ? { dm_identity: summary?.preview_excluded_dm_identity ?? "0" } : {}),
-            ...(dmConsent ? { dm_consent: summary?.preview_excluded_dm_consent ?? "0" } : {}),
-            ...(dmActivity ? { dm_activity: summary?.preview_excluded_dm_activity ?? "0" } : {}),
-            // A tree has one reason after the limits; the tag/field split describes only the other two forms.
-            ...(conditionTree
-              ? { conditions: summary?.preview_excluded_conditions ?? "0" }
-              : {
-                  tag: summary?.preview_excluded_tag ?? "0",
-                  field: summary?.preview_excluded_field ?? "0",
-                  both: summary?.preview_excluded_both ?? "0",
-                }),
-          },
-        }
-      : {}),
+    ...(preview ? segmentPreviewCounts(summary, { activity, consent, dmConsent, dmActivity, conditionTree }) : {}),
     after:
       result.rows.length > 50 && last
         ? Buffer.from(JSON.stringify({ connection_id: last.connection_id, sender_id: last.sender_id })).toString(
@@ -930,6 +942,19 @@ function segmentResult(row: {
     ...(condition_operator === "or" ? { condition_operator } : {}),
     ...fieldKeys,
   };
+}
+
+// The active segment as the segment API returns it, held FOR SHARE until commit, so an edit or an archive of it waits
+// for the caller. An archived, missing or foreign segment answers segment_not_found.
+export async function lockActiveSegment(client: PoolClient, workspaceId: string, segmentId: string) {
+  const row = (
+    await client.query(
+      `SELECT ${SEGMENT_COLUMNS} FROM instagram_contact_segments WHERE workspace_id=$1 AND id=$2 AND NOT archived FOR SHARE`,
+      [workspaceId, segmentId],
+    )
+  ).rows[0];
+  if (!row) throw new ApiError(404, "segment_not_found");
+  return segmentResult(row);
 }
 
 const SEGMENT_DEFINITION_KEYS = [

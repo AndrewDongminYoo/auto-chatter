@@ -2,6 +2,15 @@ const byId = (id) => document.getElementById(id);
 const manualReports = createManualReplyReports({ api, node });
 const flowReports = createFlowRunReports({ api, node });
 const handoffReports = createHandoffReports({ api, node });
+// Members are shown by the account's current username from the loaded connection list; the server returns IDs only.
+const segmentSnapshots = createSegmentSnapshots({
+  api,
+  node,
+  connectionLabel: (id) => {
+    const account = connections.find((connection) => connection.id === id);
+    return account?.username ? `@${account.username}` : id;
+  },
+});
 const contactCsvPreview = createContactCsvPreview({
   api,
   node,
@@ -215,6 +224,7 @@ window.addEventListener("beforeunload", (event) => {
 });
 function resetSession() {
   contactCsvPreview.sessionChanged();
+  segmentSnapshots.reset();
   manualReports.reset();
   flowReports.reset();
   handoffReports.reset();
@@ -580,6 +590,7 @@ const deletedLabels = {
   instagram_contact_automation: "자동화 중지 상태",
   instagram_contact_tags: "연락처 태그",
   instagram_contact_field_values: "연락처 필드 값",
+  instagram_segment_snapshot_members: "고정한 발송 대상 명단",
   channel_consent_state: "동의 허용 상태",
   channel_consent_events: "동의 허용 기록",
 };
@@ -1207,6 +1218,7 @@ function renderGettingStarted(rules, globalSendEnabled, connectAvailable) {
 
 async function loadWorkspace() {
   contactCsvPreview.reset();
+  segmentSnapshots.reset();
   // A workspace reload ends a segment edit but keeps the draft: the name and conditions stay, and a changed draft
   // stays marked unsaved.
   if (editingSegment) leaveSegmentEdit();
@@ -1235,6 +1247,7 @@ async function loadWorkspace() {
   byId("contacts-segment-export").hidden = !operationsVisible;
   byId("contacts-segment-export-help").hidden = !operationsVisible;
   byId("contacts-export-format").hidden = !operationsVisible;
+  segmentSnapshots.configure(currentRole, workspaceTimeZone);
   byId("operations-section").hidden = !operationsVisible;
   byId("webhooks-section").hidden = !operationsVisible;
   if (operationsVisible) {
@@ -2951,6 +2964,11 @@ function segmentControls() {
   // The fieldset leaves each control's own disabled state alone, so conditional states come back unchanged.
   byId("contacts-filter-fields").disabled = segmentBusy;
   contactExportControls();
+  // Like the segment export, a freeze uses the saved definition, so an unsaved edit must be saved or cancelled first.
+  segmentSnapshots.sync(
+    contactSegments.find((segment) => segment.id === activeSegmentId) ?? null,
+    segmentBusy || Boolean(editingSegment && segmentEditChanged()),
+  );
 }
 // Leaves edit mode. By default the operator's draft stays: the filter form keeps its conditions, the name field keeps
 // its value, and a changed draft stays marked unsaved, because segmentEditChanged() ends with edit mode.

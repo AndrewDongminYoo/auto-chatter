@@ -70,9 +70,22 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
     "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'123','{vip}')",
     [workspace, connection],
   );
+  const segment = (
+    await pool.query(
+      "INSERT INTO instagram_contact_segments(workspace_id,name,connection_id,tag) VALUES($1,'vips',$2,'vip') RETURNING id",
+      [workspace, connection],
+    )
+  ).rows[0].id;
+  const snapshot = (
+    await pool.query(
+      `INSERT INTO instagram_segment_snapshots(workspace_id,segment_id,created_by,as_of,definition,segment_name,counts,member_count)
+       VALUES($1,$2,$3,now(),'{"tag":"vip"}','vips','{"total":"1","evaluated":"1","excluded":{}}',1) RETURNING id`,
+      [workspace, segment, user],
+    )
+  ).rows[0].id;
   await pool.query(
-    "INSERT INTO instagram_contact_segments(workspace_id,name,connection_id,tag) VALUES($1,'vips',$2,'vip')",
-    [workspace, connection],
+    "INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,'123')",
+    [snapshot, workspace, connection],
   );
   const field = (
     await pool.query(

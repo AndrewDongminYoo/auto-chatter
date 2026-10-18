@@ -599,10 +599,9 @@ test("migration 032 replays (with later deletion migrations), every deletion fun
     await pool.query(migration);
     for (const sql of later) await pool.query(sql);
   }
-  // Migration 048 is the latest workspace deletion body in the full runner.
-  await pool.query(
-    await readFile(new URL("../../db/migrations/048_workspace_reply_templates.sql", import.meta.url), "utf8"),
-  );
+  // Migration 048 redefines the workspace deletion body, and 061 holds the latest body of all three in the full runner.
+  for (const file of ["048_workspace_reply_templates.sql", "061_segment_target_snapshots.sql"])
+    await pool.query(await readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8"));
   assert.deepEqual(await functions(), current);
   assert.deepEqual(EXPORTED_TABLES.instagram_inbox_read_state, { scope: "workspace" });
   const foreignKeys = await pool.query(

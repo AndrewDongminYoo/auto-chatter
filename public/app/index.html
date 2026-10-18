@@ -17,6 +17,7 @@
     <script src="./flow-editor-model.js" defer></script>
     <script src="./flow-editor.js" defer></script>
     <script src="./condition-tree-model.js" defer></script>
+    <script src="./segment-snapshots.js" defer></script>
     <script src="./app.js" defer></script>
   </head>
   <body>
@@ -947,6 +948,35 @@
               <button id="segment-archive" class="secondary" disabled>필터 보관</button>
             </div>
             <p id="segments-status" class="hint" role="status" aria-live="polite"></p>
+            <div id="segment-snapshots" hidden>
+              <div class="contacts-filter">
+                <button
+                  id="segment-snapshot-create"
+                  type="button"
+                  class="secondary"
+                  aria-describedby="segment-snapshot-help"
+                  disabled
+                >
+                  대상 고정
+                </button>
+              </div>
+              <p id="segment-snapshot-help" class="hint">
+                선택한 저장된 필터에 지금 맞는 댓글 참여자의 식별자를 명단으로 고정합니다. 메시지를 보내지 않으며,
+                나중에 발송할 때 24시간 응답 창·수신 거부·동의를 다시 확인합니다. 저장된 필터 조건을 쓰므로, 필터를
+                수정하면서 저장하지 않은 변경이 있으면 고정할 수 없습니다. 고정한 명단은 바뀌지 않으며, 계정·이용자
+                데이터를 삭제하면 해당 행만 빠지고 기록한 인원 수는 그대로 남습니다.
+              </p>
+              <p id="segment-snapshot-status" class="hint" role="status" aria-live="polite"></p>
+              <ul id="segment-snapshot-list" class="hint"></ul>
+              <div id="segment-snapshot-detail" hidden>
+                <p id="segment-snapshot-summary" class="hint"></p>
+                <ul id="segment-snapshot-members" class="hint"></ul>
+                <div class="contacts-filter">
+                  <button id="segment-snapshot-more" type="button" class="secondary" hidden>명단 더 보기</button>
+                  <button id="segment-snapshot-download" type="button" class="secondary" disabled>명단 CSV</button>
+                </div>
+              </div>
+            </div>
             <details class="segment-save">
               <summary>사용자 정의 필드</summary>
               <p class="hint">
