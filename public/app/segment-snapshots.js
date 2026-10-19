@@ -1,11 +1,14 @@
 // Frozen target lists of a saved segment (#35). Freezing records who matches now and sends nothing; the list, its
 // member pages and its CSV show identifiers only. app.js calls sync() from segmentControls() with the selected saved
 // segment and whether a freeze must wait (a segment request in flight or an unsaved edit of that segment).
+// With no saved segment selected, the list shows every snapshot of the workspace, archived segments' included, with
+// the usage the freeze limits count (#233); archiving the selected segment clears the selection and so lands here.
 function createSegmentSnapshots({ api, node, connectionLabel }) {
   const byId = (id) => document.getElementById(id);
   const section = byId("segment-snapshots");
   const create = byId("segment-snapshot-create");
   const status = byId("segment-snapshot-status");
+  const usage = byId("segment-snapshot-usage");
   const list = byId("segment-snapshot-list");
   const detail = byId("segment-snapshot-detail");
   const summary = byId("segment-snapshot-summary");
@@ -14,9 +17,10 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
   const download = byId("segment-snapshot-download");
   const messages = {
     snapshot_too_large: "필터에 맞는 연락처가 5,000명을 넘어 고정하지 않았습니다. 조건을 좁혀 다시 시도해 주세요.",
-    snapshot_limit_reached: "작업 공간에 고정한 대상이 최대 200개라 더 고정할 수 없습니다.",
+    snapshot_limit_reached:
+      "작업 공간에 고정한 대상이 최대 200개라 더 고정할 수 없습니다. 고정한 명단은 데이터 내보내기에 함께 담기고 관리자도 지울 수 없어 둔 한도입니다. 고정한 대상은 작업 공간 데이터를 삭제할 때만 지워집니다.",
     snapshot_members_limit_reached:
-      "작업 공간에 저장한 명단이 모두 합쳐 20,000명을 넘게 되어 고정하지 않았습니다. 데이터 내보내기를 계속 쓸 수 있도록 둔 한도입니다.",
+      "작업 공간에 저장한 명단이 모두 합쳐 20,000행을 넘게 되어 고정하지 않았습니다. 고정한 명단은 데이터 내보내기에 함께 담기고 관리자도 지울 수 없어 둔 한도입니다. 저장한 명단은 계정·이용자·작업 공간 데이터를 삭제할 때만 지워집니다.",
     snapshot_not_found: "고정한 대상을 찾을 수 없습니다. 목록을 다시 불러와 주세요.",
     role_forbidden: "소유자와 관리자만 대상을 고정하고 볼 수 있습니다.",
   };
@@ -33,6 +37,8 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
   let openRequest = 0;
   // Only the latest list request may fill the list, so a list read before a freeze never replaces the one read after it.
   let listRequest = 0;
+  // Only the latest usage request may fill the usage line.
+  let usageRequest = 0;
 
   function time(value) {
     try {
@@ -63,6 +69,7 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
     create.removeAttribute("aria-busy");
     closeDetail();
     list.replaceChildren();
+    usage.textContent = "";
     status.textContent = message;
     controls();
   }
@@ -80,27 +87,33 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
     timeZone = zone;
     section.hidden = !permitted;
     controls();
+    // No segment is selected after a reset, and sync() loads only on a change, so the workspace list starts here.
+    if (permitted) void load();
   }
   function sync(selected, mustWait) {
     blocked = mustWait;
     if ((selected?.id ?? "") !== (segment?.id ?? "")) {
       segment = selected;
-      invalidate(segment ? "" : "저장된 필터를 고르면 그 필터로 고정한 대상을 볼 수 있습니다.");
-      if (segment && permitted) void load();
+      invalidate();
+      if (permitted) void load();
       return;
     }
     // The same segment, possibly renamed by a saved edit.
     segment = selected;
     controls();
   }
-  function render(snapshots) {
+  // The workspace list names each snapshot by the segment name stored in it and marks a segment archived now.
+  function render(snapshots, workspaceWide) {
     list.replaceChildren(
       ...snapshots.map((snapshot) => {
         const item = node("li", "");
+        const origin = workspaceWide
+          ? `"${snapshot.segment_name}" 필터${snapshot.segment_archived ? " · 보관됨" : ""} · `
+          : "";
         item.append(
           node(
             "span",
-            `${time(snapshot.as_of)} 기준 · 대상 ${count(snapshot.member_count)}명 · 검사한 연락처 ${count(snapshot.counts.evaluated)}명 `,
+            `${origin}${time(snapshot.as_of)} 기준 · 대상 ${count(snapshot.member_count)}명 · 검사한 연락처 ${count(snapshot.counts.evaluated)}명 `,
           ),
         );
         const view = node("button", "명단 보기", "secondary");
@@ -111,15 +124,40 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
       }),
     );
   }
+  function showUsage(value) {
+    usage.textContent = `고정한 대상 ${count(value.snapshots)}/${count(value.max_snapshots)}개 · 저장한 명단 ${count(value.stored_members)}/${count(value.max_stored_members)}행`;
+  }
+  // The usage line after a freeze attempt; the per-segment list carries no usage. A failure leaves the line empty.
+  async function loadUsage() {
+    const current = generation;
+    const request = ++usageRequest;
+    try {
+      const result = await api("/api/segment-snapshots");
+      if (current === generation && request === usageRequest) showUsage(result.usage);
+    } catch {
+      if (current === generation && request === usageRequest) usage.textContent = "";
+    }
+  }
+  async function loadWorkspace(current, request) {
+    const result = await api("/api/segment-snapshots");
+    if (current !== generation || request !== listRequest) return;
+    render(result.snapshots, true);
+    usageRequest++;
+    showUsage(result.usage);
+    status.textContent = result.snapshots.length
+      ? `작업 공간에 고정한 대상 ${count(result.snapshots.length)}개. 보관한 필터의 대상도 볼 수 있으며, 새로 고정하려면 저장된 필터를 고르세요.`
+      : "작업 공간에 고정한 대상이 아직 없습니다. 저장된 필터를 고르면 그 필터에 지금 맞는 연락처를 고정할 수 있습니다.";
+  }
   async function load(message) {
     const current = generation;
     const request = ++listRequest;
-    const id = segment.id;
+    const id = segment?.id;
     if (!message) status.textContent = "고정한 대상을 불러오고 있습니다…";
     try {
+      if (!id) return await loadWorkspace(current, request);
       const result = await api(`/api/contact-segments/${id}/snapshots`);
       if (current !== generation || request !== listRequest) return;
-      render(result.snapshots);
+      render(result.snapshots, false);
       status.textContent =
         message ??
         (result.snapshots.length
@@ -174,11 +212,17 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
     try {
       const saved = await api(`/api/contact-segments/${target.id}/snapshots`, "POST");
       if (current !== generation) return;
-      await load(
-        `${time(saved.as_of)} 기준으로 ${count(saved.member_count)}명을 고정했습니다. 메시지는 보내지 않았으며, 발송할 때 수신 가능 여부를 다시 확인합니다.`,
-      );
+      await Promise.all([
+        load(
+          `${time(saved.as_of)} 기준으로 ${count(saved.member_count)}명을 고정했습니다. 메시지는 보내지 않았으며, 발송할 때 수신 가능 여부를 다시 확인합니다.`,
+        ),
+        loadUsage(),
+      ]);
     } catch (error) {
-      if (current === generation) status.textContent = messages[error.code] || error.message;
+      if (current !== generation) return;
+      status.textContent = messages[error.code] || error.message;
+      // A refused freeze shows how much of each limit is in use.
+      if (error.code === "snapshot_limit_reached" || error.code === "snapshot_members_limit_reached") await loadUsage();
     } finally {
       if (current === generation) {
         busy = false;

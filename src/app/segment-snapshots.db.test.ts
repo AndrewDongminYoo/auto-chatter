@@ -13,6 +13,7 @@ import {
   createSegmentSnapshot,
   getSegmentSnapshot,
   listSegmentSnapshots,
+  listWorkspaceSegmentSnapshots,
 } from "./segment-snapshots.ts";
 import { EXPORTED_TABLES } from "./workspace-export.ts";
 import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
@@ -571,6 +572,110 @@ test("archived, missing and foreign segments and snapshots are not found; agents
   assert.equal(removed.status, 403);
   assert.deepEqual(await removed.json(), { error: "workspace_required" });
   assert.deepEqual(await tableCounts(), { snapshots: 2, members: 1 });
+});
+
+test("the workspace list reaches archived segments' snapshots, newest first, with the usage the freeze limits count", async () => {
+  const usage = async (actor = ownerId) => {
+    const response = await request(actor, "GET", "/api/segment-snapshots");
+    assert.equal(response.status, 200);
+    return (await response.json()) as {
+      snapshots: (Record<string, unknown> & { id: string; segment_archived: boolean })[];
+      usage: Record<string, number>;
+    };
+  };
+  const stored = async () =>
+    Number(
+      (await pool.query("SELECT count(*) FROM instagram_segment_snapshot_members WHERE workspace_id=$1", [workspace]))
+        .rows[0].count,
+    );
+  // An empty workspace still answers with its usage.
+  assert.deepEqual(await usage(), {
+    snapshots: [],
+    usage: { snapshots: 0, stored_members: 0, max_snapshots: 200, max_stored_members: 20_000 },
+  });
+  await comment("a", "2026-10-09T00:00:00Z");
+  await comment("b", "2026-10-09T00:00:00Z");
+  await comment("c", "2026-10-09T00:00:00Z", C2);
+  const everyone = await createContactSegment(pool, owner, { name: "Everyone" });
+  const second = await createContactSegment(pool, owner, { name: "Second", connection_id: C2 });
+  const first = await createSegmentSnapshot(pool, owner, everyone.id, undefined);
+  const middle = await createSegmentSnapshot(pool, owner, second.id, undefined);
+  const latest = await createSegmentSnapshot(pool, owner, second.id, undefined);
+  // Pin the creation times, so the order does not depend on the clock between the three inserts.
+  for (const [id, at] of [
+    [first.id, "2026-10-10T01:00:00Z"],
+    [middle.id, "2026-10-10T02:00:00Z"],
+    [latest.id, "2026-10-10T03:00:00Z"],
+  ])
+    await pool.query("UPDATE instagram_segment_snapshots SET created_at=$2 WHERE id=$1", [id, at]);
+  await archiveContactSegment(pool, owner, everyone.id);
+  // Another workspace's snapshot never appears, and its member rows never count.
+  await comment("f1", "2026-10-09T00:00:00Z", FC, foreign);
+  const outsider = { id: outsiderId, email: "outsider@example.test" };
+  const foreignSegment = await createContactSegment(pool, outsider, { name: "Foreign" });
+  const foreignSnapshot = await createSegmentSnapshot(pool, outsider, foreignSegment.id, undefined);
+
+  const listed = await usage();
+  assert.deepEqual(
+    listed.snapshots.map((item) => [item.id, item.segment_name, item.segment_archived]),
+    [
+      [latest.id, "Second", false],
+      [middle.id, "Second", false],
+      [first.id, "Everyone", true],
+    ],
+  );
+  // The items carry the per-segment list's summary fields unchanged, plus segment_archived (both as JSON).
+  const perSegment = JSON.parse(
+    JSON.stringify([
+      ...(await listSegmentSnapshots(pool, owner, second.id)),
+      ...(await listSegmentSnapshots(pool, owner, everyone.id)),
+    ]),
+  );
+  assert.deepEqual(
+    listed.snapshots.map(({ segment_archived: _archived, ...item }) => item),
+    perSegment,
+  );
+  assert.deepEqual(listed.usage, { snapshots: 3, stored_members: 5, max_snapshots: 200, max_stored_members: 20_000 });
+  assert.equal(listed.usage.stored_members, await stored());
+  assert.deepEqual(
+    (await usage(outsiderId)).snapshots.map((item) => item.id),
+    [foreignSnapshot.id],
+  );
+
+  // A person deletion and a connection deletion free member rows; the snapshots and their stored counts stay.
+  await pool.query("SELECT public.delete_person_data($1,$2,$3,'comment_sender','a')", [workspace, C, ownerId]);
+  assert.deepEqual((await usage()).usage, {
+    snapshots: 3,
+    stored_members: 4,
+    max_snapshots: 200,
+    max_stored_members: 20_000,
+  });
+  await pool.query("UPDATE instagram_connections SET active=false WHERE id=$1", [C2]);
+  await pool.query("SELECT public.delete_connection_data($1,$2,$3,'101')", [workspace, C2, ownerId]);
+  const after = await usage();
+  assert.deepEqual(after.usage, { snapshots: 3, stored_members: 1, max_snapshots: 200, max_stored_members: 20_000 });
+  assert.equal(after.usage.stored_members, await stored());
+  assert.deepEqual(
+    after.snapshots.map((item) => item.member_count),
+    [1, 1, 3],
+  );
+
+  // Agents are refused, and any query key is refused before the role read.
+  const refused = await request(agentId, "GET", "/api/segment-snapshots");
+  assert.equal(refused.status, 403);
+  assert.deepEqual(await refused.json(), { error: "role_forbidden" });
+  for (const path of ["/api/segment-snapshots?after=x", "/api/segment-snapshots?segment_id=" + second.id]) {
+    const response = await request(ownerId, "GET", path);
+    assert.equal(response.status, 400, path);
+    assert.deepEqual(await response.json(), { error: "invalid_snapshot_request" }, path);
+  }
+  const unread = {
+    query: async () => assert.fail("a refused query string must not read the database"),
+  } as unknown as Pool;
+  await assert.rejects(listWorkspaceSegmentSnapshots(unread, owner, new URLSearchParams("x=1")), {
+    status: 400,
+    message: "invalid_snapshot_request",
+  });
 });
 
 test("a snapshot holding its connection lock makes delete_connection_data wait, which then removes its members", async () => {

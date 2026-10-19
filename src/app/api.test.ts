@@ -3106,6 +3106,7 @@ test("segment snapshot routes refuse cross-origin writes, malformed IDs, queries
     ["/api/segment-snapshots/123", "GET"],
     [`/api/segment-snapshots/${segmentId}?after=bad!`, "GET"],
     [`/api/segment-snapshots/${segmentId}?page=2`, "GET"],
+    ["/api/segment-snapshots?x=1", "GET"],
   ]) {
     const response = await send(path, method);
     assert.equal(response.status, 400, path);

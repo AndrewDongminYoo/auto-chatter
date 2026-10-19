@@ -88,6 +88,7 @@ import {
   exportSegmentSnapshotCsv,
   getSegmentSnapshot,
   listSegmentSnapshots,
+  listWorkspaceSegmentSnapshots,
 } from "./segment-snapshots.ts";
 import { failureCode, logOperation } from "./operations-log.ts";
 import { operationsHealth } from "./operations-health.ts";
@@ -643,6 +644,9 @@ export async function appApi(
           },
         });
       }
+      // Every snapshot of the workspace, archived segments' included, with the usage the freeze limits count.
+      if (url.pathname === "/api/segment-snapshots" && request.method === "GET")
+        return json(await listWorkspaceSegmentSnapshots(pool, user, url.searchParams));
       const segmentSnapshot = /^\/api\/segment-snapshots\/([a-f0-9-]+)$/.exec(url.pathname);
       if (segmentSnapshot && request.method === "GET")
         return json(await getSegmentSnapshot(pool, user, segmentSnapshot[1]!, url.searchParams));

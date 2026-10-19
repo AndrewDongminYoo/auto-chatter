@@ -43,6 +43,9 @@ const utc = (column: string) => `to_char(${column} AT TIME ZONE 'UTC','YYYY-MM-D
 const summary = (prefix = "s.") =>
   `${prefix}id,${prefix}segment_id,${prefix}segment_name,${utc(`${prefix}as_of`)} AS as_of,${prefix}counts,${prefix}member_count,${prefix}created_at`;
 const SUMMARY = summary();
+// The member rows the workspace ($1) stores now across its snapshots: what the freeze limit and the usage both count.
+const STORED_MEMBERS = `(SELECT count(*)::int FROM instagram_segment_snapshot_members m
+   WHERE m.workspace_id=$1 AND m.snapshot_id IN (SELECT id FROM instagram_segment_snapshots WHERE workspace_id=$1))`;
 
 // Create takes an empty body (the dashboard sends none) or exactly {}.
 export function parseSnapshotRequest(input: unknown): void {
@@ -101,10 +104,7 @@ export async function createSegmentSnapshot(
     // Stored member rows are counted, not member_count, so rows a deletion removed no longer count.
     const existing = (
       await client.query<{ snapshots: number; members: number }>(
-        `SELECT count(*)::int AS snapshots,
-           (SELECT count(*)::int FROM instagram_segment_snapshot_members m
-            WHERE m.workspace_id=$1 AND m.snapshot_id IN (SELECT id FROM instagram_segment_snapshots WHERE workspace_id=$1)) AS members
-         FROM instagram_segment_snapshots WHERE workspace_id=$1`,
+        `SELECT count(*)::int AS snapshots,${STORED_MEMBERS} AS members FROM instagram_segment_snapshots WHERE workspace_id=$1`,
         [workspace],
       )
     ).rows[0]!;
@@ -181,6 +181,42 @@ export async function listSegmentSnapshots(pool: Pool, user: User, segmentId: st
   );
   if (!result.rows[0]) throw new ApiError(404, "segment_not_found");
   return result.rows.filter((row) => row.id !== null).map(({ found: _found, ...snapshot }) => snapshot);
+}
+
+// Every snapshot of the workspace, newest first, with whether its segment is archived now, and the usage the freeze
+// limits count. One statement reads both, so the list and the usage share one snapshot. usage.snapshots is the list's
+// length, which equals the freeze check's count because the (segment_id, workspace_id) foreign key keeps every
+// snapshot's segment in its workspace. The workspace keeps at most perWorkspace snapshots, so there is no pagination.
+export async function listWorkspaceSegmentSnapshots(
+  pool: Pool,
+  user: User,
+  options: URLSearchParams = new URLSearchParams(),
+) {
+  if (options.size) throw new ApiError(400, "invalid_snapshot_request");
+  const workspace = await workspaceFor(pool, user, "admin");
+  const rows = (
+    await pool.query(
+      `SELECT usage.stored_members,${SUMMARY},segment.archived AS segment_archived
+       FROM (SELECT ${STORED_MEMBERS} AS stored_members) usage
+       LEFT JOIN (
+         instagram_segment_snapshots s
+         JOIN instagram_contact_segments segment ON segment.workspace_id=s.workspace_id AND segment.id=s.segment_id
+       ) ON s.workspace_id=$1
+       ORDER BY s.created_at DESC,s.id DESC`,
+      [workspace],
+    )
+  ).rows;
+  const snapshots = rows.filter((row) => row.id !== null).map(({ stored_members: _stored, ...snapshot }) => snapshot);
+  const { perWorkspace, maxStoredMembers } = SEGMENT_SNAPSHOT_LIMITS;
+  return {
+    snapshots,
+    usage: {
+      snapshots: snapshots.length,
+      stored_members: rows[0]!.stored_members as number,
+      max_snapshots: perWorkspace,
+      max_stored_members: maxStoredMembers,
+    },
+  };
 }
 
 // The summary, the definition copy and one page of the stored members. stored_member_count counts the rows still
