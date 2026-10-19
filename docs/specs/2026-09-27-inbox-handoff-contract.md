@@ -79,6 +79,9 @@ Meta가 식별자 연결의 유효기간을 이렇게 정했다는 뜻이 아닙
 
 ## 출처와 검증 한계
 
+2026-10-19 [#17 정책과 로컬 수용 근거](../notes/2026-10-19-issue17-policy-evidence.md)는 이 식별자 계약과 이후 상담 전환 구현을 이슈의 세 완료 조건에 대조합니다.
+기존 정책을 유지하며 실계정·운영 미검증 상태와 식별자 병합·분리의 별도 범위를 남깁니다.
+
 현재 코드의 `src/instagram/reply-worker.ts`·`src/instagram/inbox.ts`·`src/app/inbox.ts`와 `db/schema.sql`을 기준으로 작성했습니다.
 2026-09-27 조회한 [Meta Send API](https://www.postman.com/meta/instagram/folder/uxudqu0/send-api)는 메시지 수신자의 선대화 조건을 안내합니다.
 이 조건을 댓글 식별자만으로 충족했다고 간주하지 않습니다.
