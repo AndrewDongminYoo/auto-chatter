@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
-import { lockWorkspaceForMember, workspaceFor } from "./settings.ts";
+import { lockWorkspaceForMember, roleAllows, workspaceFor, type WorkspaceRole } from "./settings.ts";
 import { validateFieldCondition } from "./contact-fields.ts";
 import { contactCsvRow, contactCsvScalar } from "./contact-csv.ts";
 import {
@@ -265,6 +265,75 @@ export async function getSegmentSnapshot(
           )
         : null,
   };
+}
+
+// Compare only still-stored keys with the current saved definition. All reads share one read-only snapshot,
+// including membership, the definition and both sets; no deleted identity is reconstructed and no key is returned.
+export async function compareSegmentSnapshot(
+  pool: Pool,
+  user: User,
+  snapshotId: string,
+  options: URLSearchParams = new URLSearchParams(),
+) {
+  if (!isUuid(snapshotId) || options.size) throw new ApiError(400, "invalid_snapshot_request");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    const membership = (
+      await client.query<{ workspace_id: string; role: WorkspaceRole }>(
+        "SELECT workspace_id,role FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL",
+        [user.id],
+      )
+    ).rows[0];
+    if (!membership) throw new ApiError(403, "workspace_required");
+    if (!roleAllows(membership.role, "admin")) throw new ApiError(403, "role_forbidden");
+    const workspace = membership.workspace_id;
+    const snapshot = (
+      await client.query(
+        `SELECT s.segment_id,${utc("s.as_of")} AS snapshot_as_of,s.member_count,
+           (s.definition->>'version')::int AS snapshot_segment_version,segment.version AS segment_version,segment.archived
+         FROM instagram_segment_snapshots s
+         JOIN instagram_contact_segments segment ON segment.workspace_id=s.workspace_id AND segment.id=s.segment_id
+         WHERE s.workspace_id=$1 AND s.id=$2`,
+        [workspace, snapshotId],
+      )
+    ).rows[0];
+    if (!snapshot) throw new ApiError(404, "snapshot_not_found");
+    if (snapshot.archived) throw new ApiError(404, "segment_not_found");
+    const conditions = await savedSegmentConditions(client, workspace, snapshot.segment_id);
+    for (const condition of contactConditionFields(conditions))
+      await validateFieldCondition(client, workspace, condition);
+    const sql = segmentConditionSql(workspace, conditions, "statement_timestamp()", null);
+    const result = (
+      await client.query(
+        `WITH ${sql.evaluation}, selected AS MATERIALIZED (
+           SELECT e.connection_id,e.sender_id ${sql.contactScope}
+           AND ($4::uuid IS NULL OR (e.connection_id,e.sender_id COLLATE "C")>($4::uuid,$5::text COLLATE "C"))
+           AND ${sql.matches}
+           GROUP BY e.connection_id,e.sender_id HAVING ${sql.activityMatches}
+         ), baseline AS (
+           SELECT connection_id,sender_id FROM instagram_segment_snapshot_members
+           WHERE workspace_id=$1 AND snapshot_id=$${sql.values.length + 1}::uuid
+         )
+         SELECT (SELECT ${utc("as_of")} FROM evaluation) AS compared_at,
+           count(b.connection_id)::text AS baseline,count(c.connection_id)::text AS current,
+           count(*) FILTER (WHERE b.connection_id IS NULL)::text AS added,
+           count(*) FILTER (WHERE c.connection_id IS NULL)::text AS removed,
+           count(*) FILTER (WHERE b.connection_id IS NOT NULL AND c.connection_id IS NOT NULL)::text AS retained
+         FROM baseline b FULL JOIN selected c USING(connection_id,sender_id)`,
+        [...sql.values, snapshotId],
+      )
+    ).rows[0]!;
+    await client.query("COMMIT");
+    const { compared_at, ...counts } = result;
+    const { archived: _archived, member_count, ...metadata } = snapshot;
+    return { snapshot_id: snapshotId, ...metadata, compared_at, counts: { original: String(member_count), ...counts } };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 // The stored members as CSV, with the v1 contact CSV's quoting and identifier marker. At most 5,000 rows.

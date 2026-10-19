@@ -64,6 +64,167 @@ function harness(api: (path: string, method?: string) => Promise<unknown>) {
 }
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
+const comparison = {
+  snapshot_id: "s2",
+  segment_id: segmentA.id,
+  snapshot_as_of: "2026-10-18T03:00:00.000000Z",
+  compared_at: "2026-10-19T03:00:00.000000Z",
+  snapshot_segment_version: 1,
+  segment_version: 2,
+  counts: { original: "3", baseline: "2", current: "2", added: "1", removed: "1", retained: "1" },
+};
+async function comparisonHarness(read: () => Promise<unknown>) {
+  const h = harness(async (path) => {
+    if (path.endsWith("/comparison")) return read();
+    if (path === "/api/segment-snapshots/s2")
+      return { snapshot: { ...summary("s2", "VIP"), stored_member_count: 2 }, members: [], after: null };
+    return workspaceList;
+  });
+  h.controller.configure("admin", "Asia/Seoul");
+  await settle();
+  await h.get("segment-snapshot-list").children[0]!.children[1]!.dispatch("click");
+  await settle();
+  return h;
+}
+
+test("comparison shows added and removed members, the remaining baseline and both versions, then clears a failed refresh", async () => {
+  let fail = false;
+  let calls = 0;
+  const h = await comparisonHarness(async () => {
+    calls++;
+    if (fail) throw { code: "segment_not_found" };
+    return comparison;
+  });
+  await h.get("segment-snapshot-compare").dispatch("click");
+  assert.equal(calls, 1);
+  const text = h.get("segment-snapshot-comparison").textContent;
+  for (const pattern of [/추가 1명/, /제외 1명/, /유지 1명/, /원래 3명/, /남은.*2명/, /현재.*2명/, /버전 1/, /버전 2/])
+    assert.match(text, pattern);
+  fail = true;
+  await h.get("segment-snapshot-compare").dispatch("click");
+  assert.equal(h.get("segment-snapshot-comparison").textContent, "");
+  assert.match(h.get("segment-snapshot-status").textContent, /보관|찾을 수/);
+  assert.equal(h.get("segment-snapshot-detail").hidden, false);
+  assert.equal(h.get("segment-snapshot-download").disabled, false);
+});
+
+test("comparison ignores replies after another snapshot opens or the session resets", async () => {
+  let resolve!: (value: unknown) => void;
+  const h = await comparisonHarness(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  const pending = h.get("segment-snapshot-compare").dispatch("click");
+  await h.get("segment-snapshot-list").children[0]!.children[1]!.dispatch("click");
+  await settle();
+  resolve(comparison);
+  await pending;
+  assert.equal(h.get("segment-snapshot-comparison").textContent, "");
+  const again = h.get("segment-snapshot-compare").dispatch("click");
+  h.controller.reset();
+  resolve(comparison);
+  await again;
+  assert.equal(h.get("segment-snapshot-comparison").textContent, "");
+  assert.equal(h.get("segment-snapshot-detail").hidden, true);
+});
+
+test("unsaved edits block comparison and changing the saved version clears its result and pending response", async () => {
+  let read: () => Promise<unknown> = async () => comparison;
+  const h = await comparisonHarness(() => read());
+  // A selection change closes the detail. Select the saved filter and open its snapshot again.
+  h.controller.sync({ ...segmentA, version: 1 }, false);
+  await settle();
+  await h.get("segment-snapshot-list").children[0]!.children[1]!.dispatch("click");
+  await settle();
+  await h.get("segment-snapshot-compare").dispatch("click");
+  assert.match(h.get("segment-snapshot-comparison").textContent, /유지/);
+  h.controller.sync({ ...segmentA, version: 2 }, false);
+  assert.equal(h.get("segment-snapshot-comparison").textContent, "");
+  let resolve!: (value: unknown) => void;
+  read = () =>
+    new Promise((done) => {
+      resolve = done;
+    });
+  const pending = h.get("segment-snapshot-compare").dispatch("click");
+  h.controller.sync({ ...segmentA, version: 3 }, false);
+  resolve(comparison);
+  await pending;
+  assert.equal(h.get("segment-snapshot-comparison").textContent, "");
+  const unsaved = h.get("segment-snapshot-compare").dispatch("click");
+  h.controller.sync({ ...segmentA, version: 3 }, true);
+  assert.equal(h.get("segment-snapshot-compare").disabled, true);
+  resolve(comparison);
+  await unsaved;
+  assert.equal(h.get("segment-snapshot-comparison").textContent, "");
+});
+
+test("the dashboard name input invalidates comparison through the real segment controls integration", async () => {
+  let read: () => Promise<unknown> = async () => comparison;
+  const h = await comparisonHarness(() => read());
+  h.controller.sync({ ...segmentA, version: 1 }, false);
+  await settle();
+  await h.get("segment-snapshot-list").children[0]!.children[1]!.dispatch("click");
+  await settle();
+  await h.get("segment-snapshot-compare").dispatch("click");
+  let onInput!: () => void;
+  const form = {
+    elements: { name: { value: "VIP" } },
+    querySelector: () => h.get("save-button"),
+    addEventListener: (_name: string, listener: () => void) => {
+      onInput = listener;
+    },
+  };
+  const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
+  // Run the dashboard's actual callback, its controls, and its unsaved-change predicate, not a test copy.
+  const part = (from: string, to: string) => {
+    const start = source.indexOf(from);
+    const end = source.indexOf(to, start);
+    assert.ok(start >= 0 && end > start, `dashboard integration source missing: ${from}`);
+    return source.slice(start, end);
+  };
+  const context = vm.createContext({
+    byId: (id: string) => (id === "segment-save" ? form : h.get(id)),
+    segmentSnapshots: h.controller,
+    segmentNameDirty: false,
+    segmentBusy: false,
+    editingSegment: { id: segmentA.id, loadedName: "VIP", inputs: 0, loadedTree: null },
+    segmentConditionInputs: 0,
+    draftConditionTree: null,
+    contactFields: [],
+    segmentTreeSame: () => true,
+    conditionTreeControls: () => {},
+    contactExportControls: () => {},
+    currentRole: "admin",
+    activeSegmentId: segmentA.id,
+    contactSegments: [{ ...segmentA, version: 1 }],
+  });
+  vm.runInContext(
+    part("function segmentEditChanged()", "// True when the draft's group") +
+      part("function segmentControls()", "// Leaves edit mode.") +
+      part('byId("segment-save").addEventListener("input"', 'byId("segment-save").addEventListener("submit"'),
+    context,
+  );
+  form.elements.name.value = "Renamed";
+  onInput();
+  assert.equal(h.get("segment-snapshot-compare").disabled, true, "editing only the name must block comparison");
+  assert.equal(h.get("segment-snapshot-comparison").textContent, "");
+  form.elements.name.value = "VIP";
+  onInput();
+  let resolve!: (value: unknown) => void;
+  read = () =>
+    new Promise((done) => {
+      resolve = done;
+    });
+  const pending = h.get("segment-snapshot-compare").dispatch("click");
+  form.elements.name.value = "Another name";
+  onInput();
+  resolve(comparison);
+  await pending;
+  assert.equal(h.get("segment-snapshot-comparison").textContent, "");
+});
+
 test("with no saved segment selected, admins see every workspace snapshot, archived ones marked, and the usage", async () => {
   const requests: string[] = [];
   const h = harness(async (path) => {

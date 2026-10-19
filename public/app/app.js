@@ -3557,8 +3557,8 @@ async function saveSegmentEdit(editing, payload, generation) {
 }
 byId("segment-save").addEventListener("input", () => {
   segmentNameDirty = Boolean(byId("segment-save").elements.name.value);
-  // A changed name is an unsaved edit too, which holds the segment export.
-  contactExportControls();
+  // A changed name is an unsaved edit too, which holds the segment export and invalidates a comparison.
+  segmentControls();
 });
 byId("segment-save").addEventListener("submit", (event) => {
   event.preventDefault();
