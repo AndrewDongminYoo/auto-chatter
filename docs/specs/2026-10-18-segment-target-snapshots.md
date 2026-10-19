@@ -108,6 +108,7 @@ READ COMMITTED에서는 그 문장의 스냅샷이 읽는 데이터의 시점이
 - `GET /api/contact-segments/<id>/snapshots`는 그 세그먼트의 고정 대상 요약을 최신순으로 반환합니다(`{snapshots: [...]}`). 보관한 세그먼트도 목록을 반환하고, 없거나 다른 작업 공간의 세그먼트는 404 `segment_not_found`입니다.
 - `GET /api/segment-snapshots/<snapshot_id>`는 `{snapshot, members, after}`를 반환합니다. `snapshot`은 요약에 `definition`, `created_by`, 지금 남아 있는 명단 행 수 `stored_member_count`를 더한 객체입니다. `members`는 `(connection_id, sender_id COLLATE "C")` 순서의 50행이고 각 행은 `connection_id`와 `sender_id`만 가집니다. 다음 페이지는 불투명한 커서 `after`로 읽으며, `after` 외의 키·중복 키·잘못된 커서는 400 `invalid_snapshot_request`입니다.
 - `GET /api/segment-snapshots/<snapshot_id>/members.csv`는 명단 CSV입니다.
+- `GET /api/segment-snapshots`는 작업 공간의 모든 고정 대상과 사용량을 반환합니다(`{snapshots: [...], usage: {snapshots, stored_members, max_snapshots, max_stored_members}}`, [#233](https://github.com/AndrewDongminYoo/auto-chatter/issues/233)). `snapshots`는 세그먼트별 목록과 같은 요약에 지금 세그먼트가 보관됐는지를 나타내는 `segment_archived`를 더한 항목을 최신순(`created_at`, `id` 내림차순)으로 담으며, 보관한 세그먼트의 고정 대상도 포함하고 다른 작업 공간의 고정 대상은 포함하지 않습니다. 작업 공간의 고정 대상은 200개를 넘지 않으므로 페이지를 나누지 않습니다. `usage.stored_members`는 [만들기](#만들기)의 한도 검사와 같은 SQL 조각으로 지금 남아 있는 명단 행을 셉니다. `usage.snapshots`는 반환한 목록의 개수이며, 고정 대상의 `(segment_id, workspace_id)` 외래 키가 모든 고정 대상의 세그먼트를 같은 작업 공간에 두므로 한도 검사가 세는 작업 공간의 고정 대상 행 수와 같습니다. `max_snapshots`와 `max_stored_members`는 `SEGMENT_SNAPSHOT_LIMITS`의 값입니다. 네 값은 모두 작은 정수이므로 JSON 숫자입니다. 목록과 사용량은 한 SQL 문장으로 읽으므로 같은 스냅샷을 쓰고, `snapshots`의 개수는 `usage.snapshots`와 같습니다. 질의 문자열에 키가 하나라도 있으면 데이터베이스를 읽기 전에 400 `invalid_snapshot_request`입니다. 읽기 전용이며 쓰기 한도를 쓰지 않습니다.
 
 서버는 계정 이름을 반환하지 않습니다.
 화면은 이미 불러온 연결 목록의 현재 계정 이름(`@username`)으로 연결 ID를 표시하며, 이름은 고정 대상에 저장하지 않습니다.
@@ -140,6 +141,15 @@ UTF-8 BOM과 모든 칸을 큰따옴표로 감싸는 v1 연락처 CSV의 행 형
 두 테이블은 [작업 공간 내보내기](2026-09-30-workspace-export.md)의 `EXPORTED_TABLES`에 있고 제외하는 열은 없으며, 명단 행이 내보내기 한도에서 차지하는 몫은 [저장 한도](#저장-한도)가 제한합니다.
 작업 공간 이동 검사(`currentWorkspaceMovable`과 `deploy/assign-workspace-owner.sql`)는 고정 대상이 있는 작업 공간을 비어 있지 않은 것으로 봅니다.
 
+### 관리자 삭제와 만료를 두지 않는 결정
+
+2026-10-19 운영자 결정([#233](https://github.com/AndrewDongminYoo/auto-chatter/issues/233))에 따라 지금은 관리자가 고정 대상을 지우는 경로와 만료 작업을 두지 않고, 한도와 그 이유만 화면에 밝힙니다.
+한 작업 공간은 고정 대상 200개와 명단 행 20,000행까지 저장하며, 이유와 계산은 [저장 한도](#저장-한도)에 있습니다.
+명단 행은 작업 공간 내보내기에 함께 담기고 서버 역할은 지울 수 없으므로, 한도에 닿은 작업 공간은 더 고정할 수 없습니다.
+용량을 되돌리는 경로는 위 세 삭제 함수뿐입니다.
+연결·이용자 단위 삭제는 명단 행만 지우므로 명단 행 한도만 되돌리고, 작업 공간 삭제는 고정 대상과 명단 행을 모두 지웁니다.
+보존 정책이 바뀌지 않으므로 `/privacy` 문구는 바꾸지 않습니다.
+
 ## 화면
 
 소유자와 관리자는 연락처의 저장된 필터 선택 아래에서 "대상 고정"을 사용합니다.
@@ -147,7 +157,15 @@ UTF-8 BOM과 모든 칸을 큰따옴표로 감싸는 v1 연락처 CSV의 행 형
 선택한 세그먼트의 고정 대상 목록은 작업 공간 시간대의 기준 시각, 대상 인원, 검사한 연락처 수를 표시합니다.
 "명단 보기"는 요약과 50행씩의 명단, "명단 더 보기", "명단 CSV"를 표시하며, 삭제로 빠진 행이 있으면 남은 인원과 함께 알립니다.
 세그먼트 내보내기 버튼처럼 세그먼트 요청이 진행 중이거나 수정 중인 필터에 저장하지 않은 변경이 있으면 고정할 수 없습니다.
-세션 변경, 작업 공간 재로딩, 세그먼트 선택 변경과 보관은 목록·상세·진행 중인 요청을 무효화하고 늦은 응답을 무시합니다.
+저장된 필터를 고르지 않았으면 소유자와 관리자에게 작업 공간의 모든 고정 대상 목록(`GET /api/segment-snapshots`)을 보여 줍니다.
+각 항목은 고정 대상에 저장한 세그먼트 이름, 지금 보관된 세그먼트이면 "보관됨" 표시, 작업 공간 시간대의 기준 시각, 대상 인원, 검사한 연락처 수를 표시하며, "명단 보기"로 같은 상세·"명단 더 보기"·"명단 CSV"를 엽니다.
+선택한 세그먼트를 보관하면 선택이 풀리므로 이 목록에서 보관한 세그먼트의 고정 대상을 계속 볼 수 있습니다.
+저장된 필터를 고르면 지금처럼 그 세그먼트의 목록만 보여 줍니다.
+작업 공간 목록과 고정 시도 뒤에는 사용량을 "고정한 대상 N/200개 · 저장한 명단 M/20,000행" 형식의 텍스트로 보여 줍니다.
+세그먼트별 목록 응답에는 사용량이 없으므로, 고정에 성공했거나 두 한도 가운데 하나로 거절된 뒤 `GET /api/segment-snapshots`를 한 번 더 읽습니다.
+`snapshot_limit_reached`와 `snapshot_members_limit_reached` 안내는 한도의 이유(명단이 데이터 내보내기에 함께 담기고 관리자도 지울 수 없음)를 알립니다.
+`snapshot_limit_reached` 안내는 고정 대상이 작업 공간 데이터를 삭제할 때만 지워진다고 알리고, `snapshot_members_limit_reached` 안내는 저장한 명단이 계정·이용자·작업 공간 데이터를 삭제할 때만 지워진다고 알립니다.
+세션 변경, 작업 공간 재로딩, 세그먼트 선택 변경과 보관은 목록·상세·사용량·진행 중인 요청을 무효화하고 늦은 응답을 무시합니다.
 화면은 텍스트로만 값을 쓰고 새 `confirm`·`alert`·`prompt`를 추가하지 않습니다.
 
 ## 배포 순서
