@@ -984,7 +984,7 @@ test("segment export selects exactly the contact list's segment contacts for eve
   changeQuery = exportClock;
   const clocks: unknown[] = [];
   afterQuery = async (_client, sql) => {
-    // The clock follows the predicate's 19 values and the batch size.
+    // The clock follows the predicate's 19 values and the row limit.
     if (sql.includes("evaluation AS MATERIALIZED")) assert.match(sql, /SELECT \$21::timestamptz AS as_of/);
   };
   const full = records((await csv.exportContactCsv(tracked(), user)).body);
@@ -1017,14 +1017,14 @@ test("segment export selects exactly the contact list's segment contacts for eve
       full.filter((row) => selected.has(`${row.connection_id}:${row.sender_id}`)),
     );
   }
-  // Every batch of every export evaluated the window at that export's exported_at.
-  assert.ok(clocks.length > definitions.length);
+  // Every export evaluated the window once, at its exported_at.
+  assert.equal(clocks.length, definitions.length);
   assert.deepEqual(new Set(clocks), new Set([asOf]));
 });
 
 test("segment export evaluates one as_of for all batches even while the clock moves", async () => {
   await segmentFixture();
-  // A relative window over the real clock, wide enough that every contact is in it and each batch evaluates it.
+  // A relative window over the real clock, wide enough that every contact is in it; the selection evaluates it once.
   const segment = await createContactSegment(pool, user, { name: "recent", last_comment_days: 366 });
   const clocks: unknown[] = [];
   changeQuery = (query) => {
@@ -1035,10 +1035,120 @@ test("segment export evaluates one as_of for all batches even while the clock mo
     if (sql.includes("evaluation AS MATERIALIZED")) await pool.query("SELECT pg_sleep(0.01)");
   };
   const exported = await csv.exportContactCsv(tracked(), user, { batchSize: 1 }, segment.id);
-  assert.equal(clocks.length, 8);
+  assert.equal(clocks.length, 1);
+  assert.equal(detailReads(), 7);
   assert.equal(records(exported.body).length, 7);
   assert.deepEqual(new Set(clocks), new Set([exported.exportedAt]));
   assert.ok(statements.some((sql) => sql.includes("instagram_contact_segments")));
+});
+
+// count tagged members and one untagged contact; zero-padded sender IDs sort the same in every collation.
+async function memberFixture(count: number) {
+  await pool.query(
+    `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at)
+     SELECT $1::uuid,$2::uuid,'c'||n,'media','m'||lpad(n::text,3,'0'),'RAW COMMENT SECRET','2026-10-09T00:00:00Z'::timestamptz + n * interval '1 second'
+     FROM generate_series(1,$3::int) n
+     UNION ALL SELECT $1::uuid,$2::uuid,'outside','media','outside','x','2026-10-09T00:00:00Z'::timestamptz`,
+    [workspace, connection, count],
+  );
+  // Every third member has a second comment, so the counts and the first and last times differ between rows.
+  await pool.query(
+    `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at)
+     SELECT $1,$2,'d'||n,'media','m'||lpad(n::text,3,'0'),'x','2026-10-09T06:00:00Z'::timestamptz + n * interval '1 second'
+     FROM generate_series(3,$3::int,3) n`,
+    [workspace, connection, count],
+  );
+  await pool.query(
+    `INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags)
+     SELECT $1,$2,'m'||lpad(n::text,3,'0'),ARRAY['member','b'||(n%2)] FROM generate_series(1,$3::int) n`,
+    [workspace, connection, count],
+  );
+  return createContactSegment(pool, user, { name: "Members", tag: "member" });
+}
+async function listAll(segmentId: string) {
+  const contacts: { connection_id: string; sender_id: string }[] = [];
+  let after: string | null = null;
+  do {
+    const options = new URLSearchParams({ segment_id: segmentId, ...(after ? { after } : {}) });
+    const page = await listContacts(listClock(), user, options);
+    contacts.push(...page.contacts);
+    after = page.after;
+  } while (after);
+  return contacts;
+}
+// The selection is the one statement that evaluates the predicate; each detail read carries the key list.
+const evaluations = () => statements.filter((sql) => sql.includes("evaluation AS MATERIALIZED")).length;
+const detailReads = () => statements.filter((sql) => sql.includes("unnest($2::uuid[],$3::text[])")).length;
+
+for (const count of [0, 1, 25, 26, 51])
+  test(`segment export of ${count} members selects once and reads the rows in ${Math.ceil(count / 25)} key batches`, async () => {
+    const segment = await memberFixture(count);
+    changeQuery = exportClock;
+    const full = records((await csv.exportContactCsv(tracked(), user)).body);
+    const listed = await listAll(segment.id);
+    assert.equal(listed.length, count);
+    statements.length = 0;
+    const exported = await csv.exportContactCsv(tracked(), user, {}, segment.id);
+    assert.equal(evaluations(), 1);
+    assert.equal(detailReads(), Math.ceil(count / 25));
+    const rows = records(exported.body);
+    assert.deepEqual(
+      pairs(rows.map((row) => ({ connection_id: row.connection_id!, sender_id: decodeContactScalar(row.sender_id!) }))),
+      pairs(listed),
+    );
+    // The same v1 rows as the full export, in its order, filtered to the segment.
+    assert.deepEqual(
+      rows,
+      full.filter((row) => row.sender_id !== "'outside"),
+    );
+  });
+
+test("segment export refuses more than maxRows members before any detail read and exports exactly maxRows", async () => {
+  const segment = await memberFixture(3);
+  await assert.rejects(csv.exportContactCsv(tracked(), user, { maxRows: 2, batchSize: 2 }, segment.id), {
+    status: 422,
+    message: "contact_export_too_large",
+  });
+  assert.equal(evaluations(), 1);
+  assert.equal(detailReads(), 0);
+  assert.ok(statements.includes("ROLLBACK"));
+  assert.equal(statements.includes("COMMIT"), false);
+  statements.length = 0;
+  changeQuery = exportClock;
+  const listed = await listAll(segment.id);
+  const exported = await csv.exportContactCsv(tracked(), user, { maxRows: 3, batchSize: 2 }, segment.id);
+  assert.equal(exported.exportedAt, asOf);
+  assert.equal(evaluations(), 1);
+  assert.equal(detailReads(), 2);
+  assert.deepEqual(
+    pairs(
+      records(exported.body).map((row) => ({
+        connection_id: row.connection_id!,
+        sender_id: decodeContactScalar(row.sender_id!),
+      })),
+    ),
+    pairs(listed),
+  );
+  assert.equal(listed.length, 3);
+});
+
+test("segment selection counts toward the export deadline and a timeout destroys the client", async () => {
+  const segment = await memberFixture(1);
+  // The selection turns off the transaction's statement_timeout, so only the selection's own read timeout can stop it.
+  changeQuery = (query) =>
+    query.text.includes("evaluation AS MATERIALIZED")
+      ? { ...query, text: "SET LOCAL statement_timeout = 0; SELECT pg_sleep(5)", values: [] }
+      : query;
+  const started = performance.now();
+  await assert.rejects(csv.exportContactCsv(tracked(), user, { timeoutMs: 100 }, segment.id), {
+    status: 503,
+    message: "contact_export_timeout",
+  });
+  // The timed reader stops the selection itself; it does not wait for the 5-second statement.
+  assert.ok(performance.now() - started < 2000);
+  assert.equal(detailReads(), 0);
+  assert.equal(statements.includes("COMMIT"), false);
+  assert.deepEqual(releases, [true]);
 });
 
 test("segment export answers segment_not_found for archived missing and foreign segments, and refuses agent and removed members", async () => {

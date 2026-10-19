@@ -354,11 +354,11 @@ test("DM activity segments save, edit, evaluate, export at one clock and archive
   assert.deepEqual(selected.dm_activity_window, dmWindow);
   const preview = await listContacts(listClock(), owner, query({ segment_id: segment.id, preview: "true" }));
   assert.deepEqual(preview.excluded, { dm_identity: "5", dm_activity: "3", tag: "0", field: "0", both: "0" });
-  // The export evaluates the window once at exported_at for every batch and selects the list's contacts.
+  // The export evaluates the window once, at exported_at, and selects the list's contacts.
   exportClocks.length = 0;
   const exported = await exportContactCsv(exportClock(), owner, { batchSize: 1 }, segment.id);
   assert.equal(exported.exportedAt, asOf);
-  assert.ok(exportClocks.length > 1);
+  assert.equal(exportClocks.length, 1);
   assert.deepEqual(new Set(exportClocks), new Set([asOf]));
   const [header, ...rows] = parseContactCsv(exported.body);
   assert.deepEqual(header, [...CONTACT_CSV_HEADER]);
