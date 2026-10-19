@@ -111,7 +111,8 @@ async function acquire(pool: Pool, milliseconds: number): Promise<PoolClient> {
 // Trusted internal limits support smaller resource budgets; HTTP never accepts an override.
 // An admitted snapshot may finish after a concurrent deletion/removal. It changes no stored data.
 // With segmentId, only the contacts the saved segment selects are exported. The segment is read in the same
-// snapshot and its activity window is evaluated once, at exported_at, for every batch.
+// snapshot, one statement evaluates its predicate at exported_at and returns only the member keys, and the rows are
+// then read by key in batches.
 export async function exportContactCsv(
   pool: Pool,
   user: User,
@@ -164,37 +165,8 @@ export async function exportContactCsv(
       )
     ).rows[0]!.exported_at;
     const buffer = new ContactCsvBuffer(limits.maxRows, limits.maxBytes);
-    // The segment batch keeps the contact list's parameter positions (the cursor in $4 and $5), then the batch size
-    // and the evaluation clock, so its predicate is the list's text. Their positions follow the predicate's values,
-    // whose count does not depend on the clock or the cursor.
-    const conditionValues = segment ? segmentConditionSql(workspace, segment, "NULL", null).values.length : 0;
-    const batchPosition = conditionValues + 1,
-      clockPosition = conditionValues + 2;
-    let after: CsvContact | undefined;
-    while (true) {
-      const cursor = after ? { connection_id: after.connection_id, sender_id: after.sender_id } : null;
-      const selected = segment && segmentConditionSql(workspace, segment, `$${clockPosition}::timestamptz`, cursor);
-      const contacts = selected
-        ? {
-            text: `WITH ${selected.evaluation}, contacts AS (
-           SELECT e.connection_id,e.sender_id,min(e.created_at) AS first_at,max(e.created_at) AS last_at,count(*)::text AS comment_count
-           ${selected.contactScope}
-           AND ($4::uuid IS NULL OR (e.connection_id,e.sender_id COLLATE "C")>($4::uuid,$5::text COLLATE "C"))
-           AND ${selected.matches}
-           GROUP BY e.connection_id,e.sender_id HAVING ${selected.activityMatches}
-           ORDER BY e.connection_id,e.sender_id COLLATE "C" LIMIT $${batchPosition}
-         )`,
-            values: [...selected.values, limits.batchSize, exportedAt],
-          }
-        : {
-            text: `WITH contacts AS (
-           SELECT e.connection_id,e.sender_id,min(e.created_at) AS first_at,max(e.created_at) AS last_at,count(*)::text AS comment_count
-           FROM instagram_comment_events e JOIN instagram_connections c ON c.id=e.connection_id AND c.workspace_id=e.workspace_id
-           WHERE e.workspace_id=$1 AND ($2::uuid IS NULL OR (e.connection_id,e.sender_id COLLATE "C")>($2::uuid,$3::text COLLATE "C"))
-           GROUP BY e.connection_id,e.sender_id ORDER BY e.connection_id,e.sender_id COLLATE "C" LIMIT $4
-         )`,
-            values: [workspace, cursor?.connection_id ?? null, cursor?.sender_id ?? null, limits.batchSize],
-          };
+    // The v1 rows of a contacts CTE, in the export order. $1 is the workspace.
+    async function readRows(contacts: { text: string; values: unknown[] }) {
       const rows = (
         await query<CsvContact>(
           `${contacts.text}
@@ -232,8 +204,57 @@ export async function exportContactCsv(
         ]);
         remaining();
       }
-      if (rows.length < limits.batchSize) break;
-      after = rows.at(-1)!;
+      return rows;
+    }
+    if (segment) {
+      // One statement evaluates the predicate, with the contact list's parameter positions (the cursor in $4 and $5,
+      // NULL here), then the row limit and the evaluation clock, so its predicate is the list's text. Their positions
+      // follow the predicate's values, whose count does not depend on the clock or the cursor. It returns only the
+      // member keys, in the export order, at most one more than the row limit.
+      const conditionValues = segmentConditionSql(workspace, segment, "NULL", null).values.length;
+      const selected = segmentConditionSql(workspace, segment, `$${conditionValues + 2}::timestamptz`, null);
+      const keys = (
+        await query<{ connection_id: string; sender_id: string }>(
+          `WITH ${selected.evaluation}
+           SELECT e.connection_id,e.sender_id
+           ${selected.contactScope}
+           AND ($4::uuid IS NULL OR (e.connection_id,e.sender_id COLLATE "C")>($4::uuid,$5::text COLLATE "C"))
+           AND ${selected.matches}
+           GROUP BY e.connection_id,e.sender_id HAVING ${selected.activityMatches}
+           ORDER BY e.connection_id,e.sender_id COLLATE "C" LIMIT $${conditionValues + 1}`,
+          [...selected.values, limits.maxRows + 1, exportedAt],
+        )
+      ).rows;
+      if (keys.length > limits.maxRows) throw new ApiError(422, "contact_export_too_large");
+      // The rows of the next keys, read by key without the predicate. The row SQL's order is the selection's order.
+      for (let start = 0; start < keys.length; start += limits.batchSize) {
+        const batch = keys.slice(start, start + limits.batchSize);
+        await readRows({
+          text: `WITH contacts AS (
+           SELECT e.connection_id,e.sender_id,min(e.created_at) AS first_at,max(e.created_at) AS last_at,count(*)::text AS comment_count
+           FROM unnest($2::uuid[],$3::text[]) AS k(connection_id,sender_id)
+           JOIN instagram_comment_events e ON e.workspace_id=$1 AND e.connection_id=k.connection_id AND e.sender_id=k.sender_id
+           JOIN instagram_connections c ON c.id=e.connection_id AND c.workspace_id=e.workspace_id
+           GROUP BY e.connection_id,e.sender_id
+         )`,
+          values: [workspace, batch.map((key) => key.connection_id), batch.map((key) => key.sender_id)],
+        });
+      }
+    } else {
+      let after: CsvContact | undefined;
+      while (true) {
+        const rows = await readRows({
+          text: `WITH contacts AS (
+           SELECT e.connection_id,e.sender_id,min(e.created_at) AS first_at,max(e.created_at) AS last_at,count(*)::text AS comment_count
+           FROM instagram_comment_events e JOIN instagram_connections c ON c.id=e.connection_id AND c.workspace_id=e.workspace_id
+           WHERE e.workspace_id=$1 AND ($2::uuid IS NULL OR (e.connection_id,e.sender_id COLLATE "C")>($2::uuid,$3::text COLLATE "C"))
+           GROUP BY e.connection_id,e.sender_id ORDER BY e.connection_id,e.sender_id COLLATE "C" LIMIT $4
+         )`,
+          values: [workspace, after?.connection_id ?? null, after?.sender_id ?? null, limits.batchSize],
+        });
+        if (rows.length < limits.batchSize) break;
+        after = rows.at(-1)!;
+      }
     }
     const body = buffer.finish();
     remaining();

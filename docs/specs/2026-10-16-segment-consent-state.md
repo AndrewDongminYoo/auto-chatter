@@ -107,7 +107,7 @@ DM 활동은 두 번째 PR로 아래 [DM 활동](#dm-활동)에서 추가했습�
 - 생성·수정은 같은 파서로 쌍을 받고, 응답은 쌍이 있을 때만 두 키를 포함합니다.
   수정의 변경 없음 검사에 두 열을 포함합니다.
 - 목록·미리보기·`segment_id` 조회·세그먼트 CSV 내보내기가 같은 술어(`segmentConditionSql`의 `$16`·`$17`)를 사용합니다.
-  내보내기의 배치 크기와 시계 위치는 술어 값 개수에서 계산합니다.
+  내보내기의 행 한도와 시계 위치는 술어 값 개수에서 계산합니다.
 - 운영 DB는 전체 실행기로 migration 058을 적용한 뒤 새 코드를 배포해야 합니다.
 
 ### 비용과 비목표
@@ -133,7 +133,7 @@ DM 활동은 두 번째 PR로 아래 [DM 활동](#dm-활동)에서 추가했습�
   확인된 DM 상대 중 하나 이상의 마지막 저장 DM(같은 작업 공간·연결의 `instagram_inbox_messages.message_at` 최댓값, `text`와 `postback` 모두)이 `[as_of - N×24시간, as_of)` 안에 있으면 일치합니다.
   마지막 DM만 비교하므로, 기간 안의 DM이 있어도 더 나중 DM이 `as_of` 이후이면 일치하지 않습니다.
 - `as_of`는 문장 하나의 평가 시계(`evaluation.as_of`)입니다.
-  목록·미리보기는 `statement_timestamp()`, 세그먼트 CSV 내보내기는 `exported_at` 하나로 모든 묶음을 평가합니다.
+  목록·미리보기는 `statement_timestamp()`, 세그먼트 CSV 내보내기는 `exported_at` 하나로 한 번 평가합니다.
   `now()`나 두 번째 시계를 쓰지 않습니다.
   확인된 DM 대화 관계 자체는 연락처 상세와 같이 실제 현재 시각으로 새 근거를 판단하며 이 조건으로 바뀌지 않습니다.
 - 확인된 DM 대화가 없는 연락처는 일치하지 않습니다.
@@ -167,13 +167,13 @@ DM 활동은 두 번째 PR로 아래 [DM 활동](#dm-활동)에서 추가했습�
   수정의 변경 없음 검사에 이 열을 포함합니다.
 - 목록·미리보기·`segment_id` 조회·세그먼트 CSV 내보내기가 같은 술어(`segmentConditionSql`의 `$18`)를 사용합니다.
   `dm_verified`는 DM 동의(`$16`)나 DM 활동(`$18`)이 있을 때만 계산하고, 둘 다 없으면 비어 있습니다.
-  내보내기의 배치 크기와 시계 위치는 술어 값 개수에서 계산하므로 `$19`·`$20`이 됩니다.
+  내보내기의 행 한도와 시계 위치는 술어 값 개수에서 계산하므로 `$19`·`$20`이 됩니다.
 - 운영 DB는 전체 실행기로 migration 059를 적용한 뒤 새 코드를 배포해야 합니다.
 
 ### DM 활동 비용과 비목표
 
 - 확인된 DM 상대마다 그 대화의 마지막 받은 DM을 `ORDER BY message_at DESC LIMIT 1`로 한 번 읽으며, `instagram_inbox_messages_latest_idx`에서 한 번 찾습니다.
-  그래서 대화 기록이 길어도 그 기록을 모두 읽지 않습니다. 세그먼트 CSV 내보내기는 25명 배치마다 술어를 다시 실행하므로 이 차이가 배치 수만큼 쌓입니다([#228 리뷰](https://github.com/AndrewDongminYoo/auto-chatter/pull/228#discussion_r4305482605)).
-  배치마다 `dm_verified`를 다시 만드는 비용은 남아 있으며 [#229](https://github.com/AndrewDongminYoo/auto-chatter/issues/229)에서 다룹니다.
+  그래서 대화 기록이 길어도 그 기록을 모두 읽지 않습니다([#228 리뷰](https://github.com/AndrewDongminYoo/auto-chatter/pull/228#discussion_r4305482605)).
+  세그먼트 CSV 내보내기는 [#229](https://github.com/AndrewDongminYoo/auto-chatter/issues/229) 이후 술어와 `dm_verified`를 25명 묶음마다 다시 계산하지 않고 내보내기마다 한 번만 계산합니다.
   합성 데이터의 측정은 [검증 노트](../notes/2026-10-18-segment-dm-activity-verification.md)에 기록하며 페이지 크기로 비용이 제한된다고 주장하지 않습니다.
 - 고정·달력 DM 기간, 보낸 메시지 활동, 중첩 조건 언어, 발송 대상 지정, 캠페인, 새 전송 guard, 식별자 병합, 전송 쪽 연결 변경은 포함하지 않습니다.

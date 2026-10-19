@@ -442,11 +442,11 @@ test("tree segments save, edit with order as part of the definition, select, exp
     refused(400, "invalid_contact_request"),
   );
   await assert.rejects(listContacts(pool, outsider, bySegment), refused(404, "segment_not_found"));
-  // The export evaluates the tree once at exported_at for every batch and selects the list's contacts.
+  // The export evaluates the tree once, at exported_at, and selects the list's contacts.
   exportClocks.length = 0;
   const exported = await exportContactCsv(exportClock(), owner, { batchSize: 1 }, segment.id);
   assert.equal(exported.exportedAt, asOf);
-  assert.ok(exportClocks.length > 1);
+  assert.equal(exportClocks.length, 1);
   assert.deepEqual(new Set(exportClocks), new Set([asOf]));
   const [header, ...rows] = parseContactCsv(exported.body);
   assert.deepEqual(header, [...CONTACT_CSV_HEADER]);

@@ -453,7 +453,7 @@ export function segmentConditionSql(
   // lies in [as_of - $18 days, as_of), as last_comment_days reads the latest comment. Like DM consent, any verified
   // recipient may match, not necessarily the one that matches DM consent. It reads stored messages only: it opens
   // no messaging window and decides no delivery eligibility. The latest message is one probe of
-  // instagram_inbox_messages_latest_idx (migration 059), so a long history is not read in every export batch.
+  // instagram_inbox_messages_latest_idx (migration 059), so a long history is not read in full.
   const dmActivityMatches = `($18::int IS NULL OR (e.connection_id,e.sender_id) IN (SELECT dm.connection_id,dm.sender_id FROM dm_verified dm
     CROSS JOIN LATERAL (SELECT message.message_at AS last_message_at FROM instagram_inbox_messages message
       WHERE message.workspace_id=$1 AND message.connection_id=dm.connection_id AND message.recipient_id=dm.recipient_id
