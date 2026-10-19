@@ -2097,9 +2097,30 @@ test("workerd segment snapshots use restricted server privileges and refuse an a
     assert.equal(rows.length, 1);
     assert.ok(rows[0].includes(`"${connection}","'sender-1"`));
     assert.doesNotMatch(bytes.toString(), /sender-2|private comment|Snapshot leads/);
+    await pool.query("UPDATE instagram_contact_tags SET tags='{}' WHERE workspace_id=$1 AND connection_id=$2", [
+      workspace,
+      connection,
+    ]);
+    await pool.query(
+      "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-2',ARRAY['lead'])",
+      [workspace, connection],
+    );
+    const comparisonPath = `https://app.test/api/segment-snapshots/${snapshot.id}/comparison`;
+    const compared = await runtime.dispatchFetch(comparisonPath, { headers });
+    assert.equal(compared.status, 200, await compared.clone().text());
+    assert.deepEqual((await compared.json()).counts, {
+      original: "1",
+      baseline: "1",
+      current: "1",
+      added: "1",
+      removed: "1",
+      retained: "0",
+    });
+    assert.equal((await runtime.dispatchFetch(comparisonPath + "?after=x", { headers })).status, 400);
     // Freezing sends nothing.
     assert.equal((await pool.query("SELECT count(*)::int AS count FROM private_reply_outbox")).rows[0].count, 0);
     const foreignHeaders = { ...headers, cookie: "__Host-ac-access=foreign" };
+    assert.equal((await runtime.dispatchFetch(comparisonPath, { headers: foreignHeaders })).status, 404);
     assert.equal(
       (
         await runtime.dispatchFetch(`https://app.test/api/segment-snapshots/${snapshot.id}`, {
@@ -2114,6 +2135,7 @@ test("workerd segment snapshots use restricted server privileges and refuse an a
       [snapshotsPath, "GET"],
       [`https://app.test/api/segment-snapshots/${snapshot.id}`, "GET"],
       [`https://app.test/api/segment-snapshots/${snapshot.id}/members.csv`, "GET"],
+      [comparisonPath, "GET"],
     ]) {
       const denied = await runtime.dispatchFetch(path, { method, headers });
       assert.equal(denied.status, 403, path);

@@ -975,7 +975,14 @@
                 <div class="contacts-filter">
                   <button id="segment-snapshot-more" type="button" class="secondary" hidden>명단 더 보기</button>
                   <button id="segment-snapshot-download" type="button" class="secondary" disabled>명단 CSV</button>
+                  <button id="segment-snapshot-compare" type="button" class="secondary" disabled>
+                    현재 필터와 비교
+                  </button>
                 </div>
+                <p class="hint">
+                  현재 저장된 필터와 비교합니다. 선택한 필터에 저장하지 않은 변경이 있으면 비교할 수 없습니다.
+                </p>
+                <p id="segment-snapshot-comparison" class="hint" role="status" aria-live="polite"></p>
               </div>
             </div>
             <details class="segment-save">

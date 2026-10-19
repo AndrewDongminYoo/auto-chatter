@@ -10,6 +10,7 @@ import { parseContactCsv, decodeContactScalar } from "./contact-csv-test-utils.t
 import {
   SEGMENT_SNAPSHOT_CSV_HEADER,
   SEGMENT_SNAPSHOT_LIMITS,
+  compareSegmentSnapshot,
   createSegmentSnapshot,
   getSegmentSnapshot,
   listSegmentSnapshots,
@@ -235,8 +236,151 @@ async function lockWaiters(count: number) {
 const CONNECTION_LOCK =
   "SELECT id FROM instagram_connections WHERE workspace_id=$1 AND ($2::uuid IS NULL OR id=$2) ORDER BY id FOR SHARE";
 
+test("comparison counts changed membership even when the current total is unchanged", async () => {
+  await fixture();
+  const segment = await createContactSegment(pool, owner, { name: "Comparison", connection_id: C, tag: "lead" });
+  const snapshot = await createSegmentSnapshot(pool, owner, segment.id, undefined);
+  await saveContactTags(pool, owner, C, "a", { tags: [] });
+  await saveContactTags(pool, owner, C, "c", { tags: ["lead"] });
+  const response = await request(ownerId, "GET", `/api/segment-snapshots/${snapshot.id}/comparison`);
+  assert.equal(response!.status, 200, await response!.clone().text());
+  const result = await response!.json();
+  assert.deepEqual(result.counts, {
+    original: "2",
+    baseline: "2",
+    current: "2",
+    added: "1",
+    removed: "1",
+    retained: "1",
+  });
+  assert.equal(result.snapshot_id, snapshot.id);
+  assert.equal(result.segment_id, segment.id);
+  assert.equal(result.snapshot_as_of, snapshot.as_of);
+  assert.equal(result.snapshot_segment_version, 1);
+  assert.equal(result.segment_version, 1);
+  assert.match(result.compared_at, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/);
+  assert.deepEqual(Object.keys(result).sort(), [
+    "compared_at",
+    "counts",
+    "segment_id",
+    "segment_version",
+    "snapshot_as_of",
+    "snapshot_id",
+    "snapshot_segment_version",
+  ]);
+});
+
+test("comparison scopes keys by connection and workspace and counts empty or large current sets without truncation", async () => {
+  await comment("same", asOf);
+  await comment("same", asOf, C2);
+  await comment("same", asOf, FC, foreign);
+  const segment = await createContactSegment(pool, owner, { name: "Comparison scopes", tag: "lead" });
+  const snapshot = await createSegmentSnapshot(pool, owner, segment.id, undefined);
+  assert.deepEqual((await compareSegmentSnapshot(pool, owner, snapshot.id)).counts, {
+    original: "0",
+    baseline: "0",
+    current: "0",
+    added: "0",
+    removed: "0",
+    retained: "0",
+  });
+  await saveContactTags(pool, owner, C, "same", { tags: ["lead"] });
+  const frozen = await createSegmentSnapshot(pool, owner, segment.id, undefined);
+  await saveContactTags(pool, owner, C2, "same", { tags: ["lead"] });
+  assert.deepEqual((await compareSegmentSnapshot(pool, owner, frozen.id)).counts, {
+    original: "1",
+    baseline: "1",
+    current: "2",
+    added: "1",
+    removed: "0",
+    retained: "1",
+  });
+  // A definition edit can select more contacts than freezing permits. Comparison aggregates them all.
+  await pool.query("UPDATE instagram_contact_segments SET tag=NULL,version=version+1 WHERE id=$1", [segment.id]);
+  await pool.query(
+    `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+     SELECT $1,$2,'comparison-'||n,'media','bulk-'||n,'x' FROM generate_series(1,5001) n`,
+    [workspace, C],
+  );
+  const compared = await compareSegmentSnapshot(pool, owner, frozen.id);
+  assert.deepEqual(compared.counts, {
+    original: "1",
+    baseline: "1",
+    current: "5003",
+    added: "5002",
+    removed: "0",
+    retained: "1",
+  });
+  assert.equal(compared.snapshot_segment_version, 1);
+  assert.equal(compared.segment_version, 2);
+  assert.equal((await members(frozen.id)).length, 1);
+});
+
+test("comparison reads its definition and remaining baseline from one snapshot across an edit and person deletion", async () => {
+  await fixture();
+  const segment = await createContactSegment(pool, owner, {
+    name: "Comparison consistent",
+    connection_id: C,
+    tag: "lead",
+  });
+  const frozen = await createSegmentSnapshot(pool, owner, segment.id, undefined);
+  const savedBefore = (await pool.query("SELECT * FROM instagram_segment_snapshots WHERE id=$1", [frozen.id])).rows[0];
+  afterQuery = async (_client, sql) => {
+    if (!sql.startsWith("SELECT workspace_id,role")) return;
+    afterQuery = undefined;
+    await pool.query("UPDATE instagram_contact_segments SET tag='vip',version=version+1 WHERE id=$1", [segment.id]);
+    await pool.query("SELECT public.delete_person_data($1,$2,$3,'comment_sender','a')", [workspace, C, ownerId]);
+  };
+  const before = await compareSegmentSnapshot(tracked(), owner, frozen.id);
+  assert.equal(before.segment_version, 1, "the comparison must retain the definition from its initial read snapshot");
+  assert.deepEqual(before.counts, {
+    original: "2",
+    baseline: "2",
+    current: "2",
+    added: "0",
+    removed: "0",
+    retained: "2",
+  });
+  const next = await compareSegmentSnapshot(pool, owner, frozen.id);
+  assert.equal(next.segment_version, 2);
+  assert.deepEqual(next.counts, {
+    original: "2",
+    baseline: "1",
+    current: "1",
+    added: "1",
+    removed: "1",
+    retained: "0",
+  });
+  assert.deepEqual(
+    (await pool.query("SELECT * FROM instagram_segment_snapshots WHERE id=$1", [frozen.id])).rows[0],
+    savedBefore,
+  );
+  assert.deepEqual(pairs(await members(frozen.id)), ["b"]);
+});
+
+test("comparison rejects invalid queries, foreign or missing snapshots, non-admins, removed members and archived segments", async () => {
+  const segment = await createContactSegment(pool, owner, { name: "Comparison access" });
+  const frozen = await createSegmentSnapshot(pool, owner, segment.id, undefined);
+  const url = `/api/segment-snapshots/${frozen.id}/comparison`;
+  for (const suffix of ["?after=x", "?x=1&x=2"])
+    assert.equal((await request(ownerId, "GET", url + suffix)).status, 400);
+  assert.equal((await request(ownerId, "GET", "/api/segment-snapshots/not-a-uuid/comparison")).status, 400);
+  assert.equal((await request(ownerId, "GET", `/api/segment-snapshots/${randomUUID()}/comparison`)).status, 404);
+  assert.equal((await request(outsiderId, "GET", url)).status, 404);
+  assert.equal((await request(agentId, "GET", url)).status, 403);
+  await pool.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [adminId, ownerId]);
+  assert.equal((await request(adminId, "GET", url)).status, 403);
+  await archiveContactSegment(pool, owner, segment.id);
+  const archived = await request(ownerId, "GET", url);
+  assert.equal(archived.status, 404);
+  assert.deepEqual(await archived.json(), { error: "segment_not_found" });
+  assert.equal((await request(ownerId, "GET", `/api/segment-snapshots/${frozen.id}`)).status, 200);
+  assert.equal((await request(ownerId, "GET", `/api/segment-snapshots/${frozen.id}/members.csv`)).status, 200);
+});
+
 test("a snapshot's members and counts equal the segment list and preview at the same clock for every condition kind", async () => {
   const { score } = await fixture();
+  await pool.query("UPDATE instagram_inbox_messages SET message_at='2026-10-10T01:00:00Z'");
   const definitions: [Record<string, unknown>, string[]][] = [
     [{}, ["00123", "a", "b", "c", "d", "f", "second:e"]],
     [{ tag: "lead" }, ["a", "b", "second:e"]],
@@ -248,6 +392,7 @@ test("a snapshot's members and counts equal the segment list and preview at the 
     // The DM consent condition reads the verified bridge: a's recipient has the grant, b's has no record.
     [{ dm_consent_purpose: "marketing", dm_consent_state: "granted" }, ["a"]],
     [{ dm_consent_purpose: "marketing", dm_consent_state: "no_record" }, ["b"]],
+    [{ last_dm_days: 3 }, ["a", "b"]],
     [
       {
         condition_tree: {
@@ -282,6 +427,20 @@ test("a snapshot's members and counts equal the segment list and preview at the 
     assert.equal(String(saved.member_count), preview.total);
     const stored = await members(saved.id);
     assert.deepEqual(pairs(stored), pairs(listed.contacts), JSON.stringify(definition));
+    const comparison = await compareSegmentSnapshot(tracked(), owner, saved.id);
+    assert.equal(comparison.compared_at, asOf);
+    assert.deepEqual(
+      comparison.counts,
+      {
+        original: String(expected.length),
+        baseline: String(expected.length),
+        current: String(expected.length),
+        added: "0",
+        removed: "0",
+        retained: String(expected.length),
+      },
+      JSON.stringify(definition),
+    );
     // The definition copy is the segment API's item without its ID and name, version included.
     const row = (
       await pool.query("SELECT definition,created_by FROM instagram_segment_snapshots WHERE id=$1", [saved.id])

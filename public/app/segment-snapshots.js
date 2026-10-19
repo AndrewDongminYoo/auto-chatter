@@ -15,6 +15,8 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
   const members = byId("segment-snapshot-members");
   const more = byId("segment-snapshot-more");
   const download = byId("segment-snapshot-download");
+  const compare = byId("segment-snapshot-compare");
+  const comparison = byId("segment-snapshot-comparison");
   const messages = {
     snapshot_too_large: "필터에 맞는 연락처가 5,000명을 넘어 고정하지 않았습니다. 조건을 좁혀 다시 시도해 주세요.",
     snapshot_limit_reached:
@@ -22,6 +24,8 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
     snapshot_members_limit_reached:
       "작업 공간에 저장한 명단이 모두 합쳐 20,000행을 넘게 되어 고정하지 않았습니다. 고정한 명단은 데이터 내보내기에 함께 담기고 관리자도 지울 수 없어 둔 한도입니다. 저장한 명단은 계정·이용자·작업 공간 데이터를 삭제할 때만 지워집니다.",
     snapshot_not_found: "고정한 대상을 찾을 수 없습니다. 목록을 다시 불러와 주세요.",
+    segment_not_found:
+      "원래 필터가 보관되었거나 찾을 수 없어 비교하지 못했습니다. 고정한 명단과 CSV는 계속 볼 수 있습니다.",
     role_forbidden: "소유자와 관리자만 대상을 고정하고 볼 수 있습니다.",
   };
   let generation = 0;
@@ -39,6 +43,8 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
   let listRequest = 0;
   // Only the latest usage request may fill the usage line.
   let usageRequest = 0;
+  let comparisonRequest = 0;
+  let comparing = false;
 
   function time(value) {
     try {
@@ -52,8 +58,17 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
     create.disabled = !permitted || !segment || blocked || busy;
     more.disabled = busy;
     download.disabled = !opened || busy;
+    compare.disabled = !opened || busy || blocked || comparing;
+  }
+  function clearComparison() {
+    comparisonRequest++;
+    if (comparing) status.textContent = "";
+    comparing = false;
+    comparison.textContent = "";
+    compare.removeAttribute("aria-busy");
   }
   function closeDetail() {
+    clearComparison();
     opened = null;
     after = null;
     detail.hidden = true;
@@ -91,6 +106,7 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
     if (permitted) void load();
   }
   function sync(selected, mustWait) {
+    if (mustWait || selected?.version !== segment?.version) clearComparison();
     blocked = mustWait;
     if ((selected?.id ?? "") !== (segment?.id ?? "")) {
       segment = selected;
@@ -198,6 +214,40 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
       if (current === generation && request === openRequest) status.textContent = messages[error.code] || error.message;
     }
   }
+  compare.addEventListener("click", async () => {
+    if (compare.disabled || !opened) return;
+    clearComparison();
+    const current = generation;
+    const id = opened.id;
+    const request = comparisonRequest;
+    comparing = true;
+    compare.setAttribute("aria-busy", "true");
+    controls();
+    status.textContent = "현재 저장된 필터와 비교하고 있습니다…";
+    try {
+      const result = await api(`/api/segment-snapshots/${id}/comparison`);
+      if (current !== generation || opened?.id !== id || request !== comparisonRequest) return;
+      const counts = result.counts;
+      comparison.textContent =
+        `${time(result.snapshot_as_of)} 고정 당시 버전 ${result.snapshot_segment_version} · 원래 ${count(counts.original)}명, 남은 기준 명단 ${count(counts.baseline)}명. ` +
+        `${time(result.compared_at)} 현재 저장된 필터 버전 ${result.segment_version} · 현재 대상 ${count(counts.current)}명. ` +
+        `추가 ${count(counts.added)}명 · 제외 ${count(counts.removed)}명 · 유지 ${count(counts.retained)}명. ` +
+        (result.snapshot_segment_version !== result.segment_version
+          ? "필터 버전이 달라 비교에는 필터 수정의 영향도 포함될 수 있습니다. "
+          : "") +
+        "삭제 후 남은 명단과 현재 저장된 필터를 비교한 결과입니다. 발송 가능한 인원 수가 아닙니다.";
+      status.textContent = "";
+    } catch (error) {
+      if (current === generation && opened?.id === id && request === comparisonRequest)
+        status.textContent = messages[error.code] || error.message;
+    } finally {
+      if (current === generation && request === comparisonRequest) {
+        comparing = false;
+        compare.removeAttribute("aria-busy");
+        controls();
+      }
+    }
+  });
   create.addEventListener("click", async () => {
     if (create.disabled || !segment) return;
     const current = generation;

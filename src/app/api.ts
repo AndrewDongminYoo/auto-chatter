@@ -84,6 +84,7 @@ import { recordConsentEvent } from "./channel-consent.ts";
 import { deleteConnectionData, listDataDeletions } from "./data-deletion.ts";
 import { exportWorkspace } from "./workspace-export.ts";
 import {
+  compareSegmentSnapshot,
   createSegmentSnapshot,
   exportSegmentSnapshotCsv,
   getSegmentSnapshot,
@@ -647,6 +648,9 @@ export async function appApi(
       // Every snapshot of the workspace, archived segments' included, with the usage the freeze limits count.
       if (url.pathname === "/api/segment-snapshots" && request.method === "GET")
         return json(await listWorkspaceSegmentSnapshots(pool, user, url.searchParams));
+      const snapshotComparison = /^\/api\/segment-snapshots\/([^/]+)\/comparison$/.exec(url.pathname);
+      if (snapshotComparison && request.method === "GET")
+        return json(await compareSegmentSnapshot(pool, user, snapshotComparison[1]!, url.searchParams));
       const segmentSnapshot = /^\/api\/segment-snapshots\/([a-f0-9-]+)$/.exec(url.pathname);
       if (segmentSnapshot && request.method === "GET")
         return json(await getSegmentSnapshot(pool, user, segmentSnapshot[1]!, url.searchParams));
