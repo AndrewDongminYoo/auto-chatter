@@ -40,6 +40,10 @@ node --test --test-name-pattern="seven-day boundary" src/instagram/reply-policy.
 - Package scripts do not load `.env`; export variables into the shell first (`.env.example` lists the Meta ones).
 - Trunk (`.trunk/trunk.yaml`) runs prettier, markdownlint, yamllint, osv-scanner and trufflehog. The pre-commit format hook is disabled and `trunk check` runs on pre-push, so run `trunk fmt` yourself before committing.
 - Never enable sends, create cloud resources, or publish as part of tests.
+- For full-dashboard segment acceptance, build the Worker and run `TEST_DATABASE_URL=postgres://postgres@127.0.0.1:<port>/automations_test node scripts/segment-acceptance.mjs` against a fresh disposable cluster.
+  This manual fixture serves the real assets and Worker with a restricted DB role, mocks only external auth, and refuses a nonempty public schema or existing application roles.
+  It binds HTTPS to loopback, blocks other outbound HTTP, and keeps sends off; see the [acceptance procedure and limits](docs/notes/2026-10-20-segment-integrated-acceptance-verification.md).
+  It is not part of the automated test scripts and must not share a cluster with a running DB test.
 
 ## Code conventions forced by the runtime
 
