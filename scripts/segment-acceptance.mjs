@@ -30,7 +30,8 @@ const pool = new Pool({ connectionString: databaseUrl.href });
 let runtime;
 try {
   const { rows } = await pool.query(
-    "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' LIMIT 1",
+    // Namespace dependencies cover functions, types and other non-relation objects too.
+    "SELECT 1 FROM pg_depend WHERE refclassid='pg_namespace'::regclass AND refobjid='public'::regnamespace LIMIT 1",
   );
   assert.equal(rows.length, 0, "Acceptance requires an empty public schema; use a fresh disposable cluster");
   // The access script changes cluster roles too; refuse an existing server role before applying it.
