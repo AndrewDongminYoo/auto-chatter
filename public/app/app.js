@@ -25,6 +25,21 @@ const contactCsvPreview = createContactCsvPreview({
 const form = byId("rule-form");
 let connections = [];
 let contactsGeneration = 0;
+// Invalidate contact disclosures on cross-tab sessions and BFCache restoration.
+const invalidateContactSession = () => {
+  contactsSaving = false;
+  clearContactResults();
+};
+try {
+  const contactSessionChannel = new BroadcastChannel("auto-chatter-session");
+  contactSessionChannel.addEventListener("message", invalidateContactSession);
+} catch {
+  // Same-tab session reset and server authorization still apply without BroadcastChannel.
+}
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) invalidateContactSession();
+});
+// End contact session listeners.
 let contactsExportGeneration = 0;
 let contactsExportBusy = false;
 // The saved segment whose export is in flight, so archiving that segment cancels it.
@@ -377,6 +392,9 @@ const errors = {
     "작업 공간 내보내기 한도(데이터 50,000건 또는 20 MiB)를 넘었습니다. 파일을 만들지 않았습니다. 서비스 운영자에게 문의해 주세요.",
   workspace_export_rate_limited: "데이터 내보내기 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
   workspace_export_unavailable: "지금은 데이터를 내보낼 수 없습니다. 잠시 후 다시 시도해 주세요.",
+  invalid_identity_link_request: "식별자 연결 요청을 확인한 뒤 다시 불러와 주세요.",
+  identity_link_conflict: "연결 상태가 변경됐습니다. 최신 내용을 확인해 주세요.",
+  identity_link_evidence_changed: "연결 근거가 변경됐습니다. 최신 내용을 확인해 주세요.",
   invalid_contact_request: "연락처 필터를 확인한 뒤 다시 불러와 주세요.",
   contact_not_found: "연락처에 접근할 수 없습니다. 목록을 다시 불러와 주세요.",
   invalid_segment: "필터 이름은 1–60자이며 계정과 태그 조건을 확인해 주세요.",
@@ -2539,7 +2557,15 @@ function contactDetail(contact) {
       conversations.append(row);
     }
     if (!detail.conversations.length) conversations.append(node("p", "현재 조회에서 표시할 대화가 없습니다.", "hint"));
-    content.replaceChildren(facts, fields, pause, consent, conversations);
+    const identityRequest = requestId;
+    const identityLinks = createContactIdentityLinks({
+      api,
+      node,
+      contact,
+      isCurrent: () =>
+        identityRequest === requestId && generation === contactsGeneration && details.isConnected && details.open,
+    });
+    content.replaceChildren(facts, fields, pause, consent, conversations, identityLinks);
   }
   async function load(next = false) {
     const id = ++requestId;

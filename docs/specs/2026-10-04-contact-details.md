@@ -5,7 +5,8 @@
 [#25](https://github.com/AndrewDongminYoo/auto-chatter/issues/25)의 읽기 전용 하위 범위입니다.
 기존 댓글 연락처 카드에 상세 보기를 더하고, 태그·활성 필드·중지 사유·현재 동의 기록·확인된 저장 DM 대화 요약을 함께 조회합니다.
 [#17](https://github.com/AndrewDongminYoo/auto-chatter/issues/17)과 [#27](https://github.com/AndrewDongminYoo/auto-chatter/issues/27)은 열린 상태이며, 이 변경으로 #25 전체를 완료 처리하지 않습니다.
-식별자 병합·분리, 원장 재계산, CSV 가져오기·내보내기, 동의 쓰기, 스키마 변경과 발송은 포함하지 않습니다.
+이 문서의 원래 구현에는 식별자 병합·분리, 원장 재계산, CSV 가져오기·내보내기, 동의 쓰기, 스키마 변경과 발송을 포함하지 않았습니다.
+후속 [식별자 연결·분리 계약](2026-10-21-contact-identity-links.md)은 같은 연결의 공급자 근거에 대한 운영자 확인·해제만 추가하며, 이 문서의 원본 조회와 동의 범위를 유지합니다.
 
 ## 읽기 계약
 

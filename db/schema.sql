@@ -343,6 +343,47 @@ CREATE TABLE IF NOT EXISTS instagram_contact_automation (
   FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id)
 );
 
+-- Operator confirmation is advisory; it never replaces provider identity or consent evidence.
+CREATE TABLE IF NOT EXISTS instagram_contact_identity_link_events (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  workspace_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  recipient_id text NOT NULL CHECK(recipient_id ~ '^[0-9]{1,40}$'),
+  sender_id text NOT NULL CHECK(sender_id ~ '^[0-9]{1,40}$'),
+  previous_sender_id text CHECK(previous_sender_id ~ '^[0-9]{1,40}$'),
+  previous_state text CHECK(previous_state IN ('confirmed','detached')),
+  action text NOT NULL CHECK(action IN ('confirm','detach')),
+  version integer NOT NULL CHECK(version>0),
+  evidence_reply_id bigint CHECK(evidence_reply_id>0),
+  request_key uuid NOT NULL,
+  actor_id uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(workspace_id,request_key),
+  UNIQUE(id,workspace_id,connection_id,recipient_id),
+  FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id),
+  CHECK((action='confirm')=(evidence_reply_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS instagram_contact_identity_link_events_contact_idx
+  ON instagram_contact_identity_link_events(workspace_id,connection_id,sender_id);
+CREATE TABLE IF NOT EXISTS instagram_contact_identity_links (
+  workspace_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  recipient_id text NOT NULL CHECK(recipient_id ~ '^[0-9]{1,40}$'),
+  sender_id text NOT NULL CHECK(sender_id ~ '^[0-9]{1,40}$'),
+  state text NOT NULL CHECK(state IN ('confirmed','detached')),
+  version integer NOT NULL CHECK(version>0),
+  evidence_reply_id bigint CHECK(evidence_reply_id>0),
+  last_event_id bigint NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(workspace_id,connection_id,recipient_id),
+  FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id),
+  FOREIGN KEY(last_event_id,workspace_id,connection_id,recipient_id)
+    REFERENCES instagram_contact_identity_link_events(id,workspace_id,connection_id,recipient_id),
+  CHECK((state='confirmed')=(evidence_reply_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS instagram_contact_identity_links_contact_idx
+  ON instagram_contact_identity_links(workspace_id,connection_id,sender_id,recipient_id);
+
 CREATE TABLE IF NOT EXISTS instagram_contact_tags (
   workspace_id uuid NOT NULL,
   connection_id uuid NOT NULL,
@@ -1367,6 +1408,13 @@ BEGIN
   DELETE FROM public.instagram_unmatched_replies WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_unmatched_replies', affected);
+  DELETE FROM public.instagram_contact_identity_links WHERE workspace_id=p_workspace AND connection_id=p_connection;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_contact_identity_links', affected);
+  DELETE FROM public.instagram_contact_identity_link_events WHERE workspace_id=p_workspace AND connection_id=p_connection;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_contact_identity_link_events', affected);
+
   DELETE FROM public.instagram_contact_automation WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_automation', affected);
@@ -1641,6 +1689,13 @@ BEGIN
   WHERE workspace_id=p_workspace AND connection_id=p_connection AND sender_id=ANY(recipients);
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_unmatched_replies', affected);
+  DELETE FROM public.instagram_contact_identity_links WHERE workspace_id=p_workspace AND connection_id=p_connection AND (sender_id=ANY(senders) OR recipient_id=ANY(recipients) OR last_event_id IN (SELECT id FROM public.instagram_contact_identity_link_events WHERE workspace_id=p_workspace AND connection_id=p_connection AND (sender_id=ANY(senders) OR previous_sender_id=ANY(senders) OR recipient_id=ANY(recipients))));
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_contact_identity_links', affected);
+  DELETE FROM public.instagram_contact_identity_link_events WHERE workspace_id=p_workspace AND connection_id=p_connection AND (sender_id=ANY(senders) OR previous_sender_id=ANY(senders) OR recipient_id=ANY(recipients));
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_contact_identity_link_events', affected);
+
   DELETE FROM public.instagram_contact_automation
   WHERE workspace_id=p_workspace AND connection_id=p_connection AND sender_id=ANY(senders);
   GET DIAGNOSTICS affected = ROW_COUNT;
@@ -1849,6 +1904,13 @@ BEGIN
   DELETE FROM public.instagram_unmatched_replies WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_unmatched_replies', affected);
+  DELETE FROM public.instagram_contact_identity_links WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_contact_identity_links', affected);
+  DELETE FROM public.instagram_contact_identity_link_events WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_contact_identity_link_events', affected);
+
   DELETE FROM public.instagram_contact_automation WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_automation', affected);

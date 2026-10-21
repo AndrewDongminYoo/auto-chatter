@@ -118,7 +118,7 @@ There is no atomic transaction spanning PostgreSQL and Meta: a setting change af
 The Worker delegates `/api/*` to `appApi` in `src/app/api.ts`; the modules beside it own auth, OAuth, token refresh, secrets, contacts, fields, inbox, handoff, manual replies and consent.
 Every non-GET `/api/*` request must be same-origin (`requireSameOrigin`); routes other than `/api/auth/*` require a verified session and scope data to the caller's workspace, and each one names its least role through `workspaceFor` ([roles](docs/specs/2026-09-30-workspace-roles.md)).
 Signed-in writes outside `/api/auth/*` spend fixed default per-user and per-workspace limits in `appApi` before any route handler (per-user before the database opens), and `GET /api/inbox` spends its own before `listInbox`, all counted by the `AuthLimiter` Durable Object through `durableLimits`; a member's `POST /api/workspace` (the dashboard bootstrap) spends neither write limit and member removal skips the workspace one, and unlike the fail-closed auth and #166 allowances these limits fail open with one fixed log code ([spec](docs/specs/2026-10-12-api-request-limits.md)).
-`public/app/` is a build-free static client (`app.js`, `inbox.js`, `reply-templates.js`, `manual-reply-reports.js`, `flow-run-reports.js`, `handoff-reports.js`, `contact-csv-preview.js`, `segment-snapshots.js`) served by Wrangler assets.
+`public/app/` is a build-free static client (`app.js`, `inbox.js`, `reply-templates.js`, `manual-reply-reports.js`, `flow-run-reports.js`, `handoff-reports.js`, `contact-csv-preview.js`, `segment-snapshots.js`, `contact-identity-links.js`) served by Wrangler assets.
 The auth client wraps injected fetch in a standalone call because workerd rejects a native fetch invoked with the client object as its receiver.
 
 **Follow flow** (`follow-flow.ts`, `message-events.ts`):
@@ -138,6 +138,12 @@ A verified Meta deauthorize callback disconnects the matching connections like t
 The cron and the manual status check share one webhook subscription check and store a display-only loss record per token; cadence, recording rules and deploy order are in the [token refresh spec](docs/specs/2026-09-28-instagram-token-refresh.md#웹후크-구독-유실-표시-179).
 
 ## Feature invariants
+
+**Operator identity confirmations** ([spec](docs/specs/2026-10-21-contact-identity-links.md)): `agent` can read current confirmations and verified candidates; `admin` can confirm or detach with an exact displayed version and request key.
+Confirmation requires the current `verifiedDmRecipientsSql` evidence ID, while detachment remains available after evidence loss.
+These records never merge original identities, move consent, change delivery guards, or expand person-deletion traversal.
+The read response supplies fresh `can_edit`; the client discards responses after contact or session changes.
+Migration 062 includes both tables in access controls, exports and all three deletion paths.
 
 Each feature's contract lives in its spec; the lines below are the invariants a code change most easily breaks.
 None of the stored contact, segment, field or inbox records proves messaging consent or delivery eligibility, and none of these features grants DELETE privileges to server roles.

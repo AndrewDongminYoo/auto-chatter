@@ -17,6 +17,7 @@ REVOKE UPDATE ON instagram_inbox_label_events FROM automations_app;
 REVOKE UPDATE ON instagram_inbox_notes FROM automations_app;
 REVOKE UPDATE ON instagram_inbox_reminder_events FROM automations_app;
 REVOKE UPDATE ON channel_consent_events FROM automations_app;
+REVOKE UPDATE ON instagram_contact_identity_link_events FROM automations_app;
 REVOKE UPDATE ON flow_versions FROM automations_app;
 REVOKE UPDATE ON flow_step_runs FROM automations_app;
 REVOKE UPDATE ON instagram_segment_snapshots FROM automations_app;

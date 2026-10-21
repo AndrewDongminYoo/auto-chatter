@@ -183,6 +183,18 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      VALUES($1,$2,'900',$3,'queued',$4,gen_random_uuid())`,
     [workspace, connection, manual, user],
   );
+  const identityEvent = (
+    await pool.query(
+      `INSERT INTO instagram_contact_identity_link_events(workspace_id,connection_id,recipient_id,sender_id,action,version,evidence_reply_id,request_key,actor_id)
+     VALUES($1,$2,'900','123','confirm',1,1,gen_random_uuid(),$3) RETURNING id`,
+      [workspace, connection, user],
+    )
+  ).rows[0].id;
+  await pool.query(
+    `INSERT INTO instagram_contact_identity_links(workspace_id,connection_id,recipient_id,sender_id,state,version,evidence_reply_id,last_event_id)
+     VALUES($1,$2,'900','123','confirmed',1,1,$3)`,
+    [workspace, connection, identityEvent],
+  );
   const consent = (
     await pool.query(
       `INSERT INTO channel_consent_events(request_key,workspace_id,connection_id,channel,identity_kind,identity_value,purpose,decision,evidence_kind,evidence_reference,occurred_at,actor_id)

@@ -840,7 +840,11 @@ test("migration 035 replays, the export lists the rules, and a rule alone keeps 
   await pool.query(migration);
   await pool.query(migration);
   // Migration 048 redefines the workspace deletion body, and 061 holds the latest body of all three in the full runner.
-  for (const file of ["048_workspace_reply_templates.sql", "061_segment_target_snapshots.sql"])
+  for (const file of [
+    "048_workspace_reply_templates.sql",
+    "061_segment_target_snapshots.sql",
+    "062_contact_identity_links.sql",
+  ])
     await pool.query(await readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8"));
   assert.deepEqual(await functions(), current);
   assert.deepEqual(EXPORTED_TABLES.instagram_inbox_label_rules, { scope: "workspace" });
