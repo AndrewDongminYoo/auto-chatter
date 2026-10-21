@@ -139,6 +139,12 @@ The cron and the manual status check share one webhook subscription check and st
 
 ## Feature invariants
 
+**Campaign drafts** ([spec](docs/specs/2026-10-21-campaign-drafts.md)): administrator-only planning records reference existing target snapshots and contain plain text, never send requests or eligibility claims.
+Creation uses a client UUID scoped to the workspace plus the original normalized request hash; replay returns current state without undoing edits or archival.
+Writes recheck membership under the workspace lock, enforce a total limit of 100 including archived drafts, and require the displayed version for edits and archival.
+Reads distinguish original and remaining member counts; person and connection deletion only reduce the referenced membership.
+Migration 063 adds workspace deletion and restricted access; exports omit the internal request hash, and both workspace move checks retain drafts.
+
 **Operator identity confirmations** ([spec](docs/specs/2026-10-21-contact-identity-links.md)): `agent` can read current confirmations and verified candidates; `admin` can confirm or detach with an exact displayed version and request key.
 Confirmation requires the current `verifiedDmRecipientsSql` evidence ID, while detachment remains available after evidence loss.
 These records never merge original identities, move consent, change delivery guards, or expand person-deletion traversal.

@@ -646,6 +646,22 @@ CREATE TABLE IF NOT EXISTS instagram_segment_snapshots (
 );
 CREATE INDEX IF NOT EXISTS instagram_segment_snapshots_segment_idx
   ON instagram_segment_snapshots(workspace_id,segment_id,created_at DESC,id DESC);
+CREATE TABLE IF NOT EXISTS campaign_drafts (
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  id uuid NOT NULL,
+  snapshot_id uuid NOT NULL,
+  name text NOT NULL CHECK(length(btrim(name)) BETWEEN 1 AND 60),
+  body text NOT NULL CHECK(length(btrim(body)) BETWEEN 1 AND 1000),
+  create_request_hash text NOT NULL CHECK(create_request_hash ~ '^[a-f0-9]{64}$'),
+  version integer NOT NULL DEFAULT 1 CHECK(version>0),
+  archived boolean NOT NULL DEFAULT false,
+  created_by uuid NOT NULL,
+  updated_by uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY(workspace_id,id),
+  FOREIGN KEY(snapshot_id,workspace_id) REFERENCES instagram_segment_snapshots(id,workspace_id)
+);
 CREATE TABLE IF NOT EXISTS instagram_segment_snapshot_members (
   snapshot_id uuid NOT NULL,
   workspace_id uuid NOT NULL,
@@ -1924,6 +1940,9 @@ BEGIN
   DELETE FROM public.instagram_segment_snapshot_members WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_segment_snapshot_members', affected);
+  DELETE FROM public.campaign_drafts WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('campaign_drafts', affected);
   DELETE FROM public.instagram_segment_snapshots WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_segment_snapshots', affected);

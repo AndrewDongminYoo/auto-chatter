@@ -11,7 +11,7 @@ const testUrl = new URL(databaseUrl);
 if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
   throw new Error("Database tests require a local automations_test database");
 
-// The concurrent acceptance test needs eight creators, an acceptor, a blocker and a lock observer.
+// The concurrent acceptance test needs nine creators, an acceptor, a blocker and a lock observer.
 const pool = new Pool({ connectionString: databaseUrl, max: 12 });
 const owner = { id: "11111111-1111-4111-8111-111111111111", email: "owner@example.test" };
 const admin = { id: "22222222-2222-4222-8222-222222222222", email: "admin@example.test" };
@@ -419,6 +419,15 @@ test("creations that resolved the old workspace before an acceptance moved the u
     ["/api/contact-segments", { name: "late segment" }],
     ["/api/inbox/labels", { name: "late label" }],
     ["/api/inbox/reply-templates", { name: "late template", body: "text" }],
+    [
+      "/api/campaign-drafts",
+      {
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        snapshot_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        name: "Late draft",
+        body: "text",
+      },
+    ],
     ["/api/webhooks/endpoints", { name: "late endpoint", url: "https://hooks.example.test/in" }],
     // The membership recheck comes before the label lookup, so a rule is refused before its (absent) label is read.
     [
@@ -451,6 +460,7 @@ test("creations that resolved the old workspace before an acceptance moved the u
       + (SELECT count(*) FROM instagram_inbox_labels WHERE workspace_id=$1)
       + (SELECT count(*) FROM instagram_inbox_label_rules WHERE workspace_id=$1)
       + (SELECT count(*) FROM workspace_reply_templates WHERE workspace_id=$1)
+      + (SELECT count(*) FROM campaign_drafts WHERE workspace_id=$1)
       + (SELECT count(*) FROM webhook_endpoints WHERE workspace_id=$1)
       + (SELECT count(*) FROM webhook_signing_keys WHERE workspace_id=$1)
       + (SELECT count(*) FROM workspace_invites WHERE workspace_id=$1) AS n`,
