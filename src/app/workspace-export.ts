@@ -19,6 +19,8 @@ export const EXPORTED_TABLES: Record<string, { scope: "self" | "workspace" | "co
   // Kept DM text is removed after 15 minutes and is not exported in the meantime either.
   instagram_unmatched_replies: { scope: "workspace", omit: ["message_text"] },
   instagram_contact_automation: { scope: "workspace" },
+  instagram_contact_identity_links: { scope: "workspace" },
+  instagram_contact_identity_link_events: { scope: "workspace" },
   instagram_contact_tags: { scope: "workspace" },
   instagram_contact_segments: { scope: "workspace" },
   // A target snapshot holds identifiers and counts only; its members are exported as their own table.

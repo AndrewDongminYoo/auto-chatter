@@ -1,3 +1,4 @@
+import { changeIdentityLink, listIdentityLinks } from "./contact-identity-links.ts";
 import { contactDetails } from "./contact-details.ts";
 import { exportContactCsv } from "./contact-csv.ts";
 import { CONTACT_IMPORT_REQUEST_BYTES, previewContactCsv } from "./contact-csv-preview.ts";
@@ -654,6 +655,28 @@ export async function appApi(
       const segmentSnapshot = /^\/api\/segment-snapshots\/([a-f0-9-]+)$/.exec(url.pathname);
       if (segmentSnapshot && request.method === "GET")
         return json(await getSegmentSnapshot(pool, user, segmentSnapshot[1]!, url.searchParams));
+      const identityLink = /^\/api\/connections\/([a-f0-9-]+)\/contacts\/([^/]+)\/identity-links(?:\/([^/]+))?$/.exec(
+        url.pathname,
+      );
+      if (
+        identityLink &&
+        ((request.method === "GET" && !identityLink[3]) || (request.method === "POST" && identityLink[3]))
+      ) {
+        let sender: string;
+        let recipient: string | undefined;
+        try {
+          sender = decodeURIComponent(identityLink[2]!);
+          recipient = identityLink[3] === undefined ? undefined : decodeURIComponent(identityLink[3]);
+        } catch {
+          throw new ApiError(400, "invalid_identity_link_request");
+        }
+        if (request.method === "GET")
+          return json(await listIdentityLinks(pool, user, identityLink[1]!, sender, url.searchParams));
+        if (url.searchParams.size) throw new ApiError(400, "invalid_identity_link_request");
+        return json(
+          await changeIdentityLink(pool, user, identityLink[1]!, sender, recipient!, await readJson(request, 2048)),
+        );
+      }
       const automation = /^\/api\/connections\/([a-f0-9-]+)\/contacts\/([^/]+)\/automation$/.exec(url.pathname);
       if (automation && request.method === "PUT") {
         let senderId: string;

@@ -1156,7 +1156,11 @@ test("migration 031 replays and, with the later migrations, leaves the deletion 
     for (const sql of later) await pool.query(sql);
   }
   // Migration 048 redefines the workspace deletion body, and 061 holds the latest body of all three in the full runner.
-  for (const file of ["048_workspace_reply_templates.sql", "061_segment_target_snapshots.sql"])
+  for (const file of [
+    "048_workspace_reply_templates.sql",
+    "061_segment_target_snapshots.sql",
+    "062_contact_identity_links.sql",
+  ])
     await pool.query(await readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8"));
   assert.deepEqual(await functions(), current);
   assert.deepEqual(await webhookCounts(), { endpoints: 1, keys: 1, deliveries: 2, audit: 1 });
