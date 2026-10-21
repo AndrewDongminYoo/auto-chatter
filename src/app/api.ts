@@ -1,3 +1,4 @@
+import { createCampaignDraft, getCampaignDraft, listCampaignDrafts, updateCampaignDraft } from "./campaign-drafts.ts";
 import { changeIdentityLink, listIdentityLinks } from "./contact-identity-links.ts";
 import { contactDetails } from "./contact-details.ts";
 import { exportContactCsv } from "./contact-csv.ts";
@@ -655,6 +656,30 @@ export async function appApi(
       const segmentSnapshot = /^\/api\/segment-snapshots\/([a-f0-9-]+)$/.exec(url.pathname);
       if (segmentSnapshot && request.method === "GET")
         return json(await getSegmentSnapshot(pool, user, segmentSnapshot[1]!, url.searchParams));
+      const campaignDraft = /^\/api\/campaign-drafts(?:\/([^/]+)(\/archive)?)?$/.exec(url.pathname);
+      if (campaignDraft) {
+        if (url.searchParams.size) throw new ApiError(400, "invalid_campaign_draft");
+        if (!campaignDraft[1] && request.method === "GET") return json(await listCampaignDrafts(pool, user));
+        if (!campaignDraft[1] && request.method === "POST") {
+          const result = await createCampaignDraft(pool, user, await readJson(request, 8192));
+          return json(result.draft, result.created ? 201 : 200);
+        }
+        if (campaignDraft[1] && !campaignDraft[2] && request.method === "GET")
+          return json(await getCampaignDraft(pool, user, campaignDraft[1]));
+        if (
+          campaignDraft[1] &&
+          ((!campaignDraft[2] && request.method === "PUT") || (campaignDraft[2] && request.method === "POST"))
+        )
+          return json(
+            await updateCampaignDraft(
+              pool,
+              user,
+              campaignDraft[1],
+              await readJson(request, 8192),
+              Boolean(campaignDraft[2]),
+            ),
+          );
+      }
       const identityLink = /^\/api\/connections\/([a-f0-9-]+)\/contacts\/([^/]+)\/identity-links(?:\/([^/]+))?$/.exec(
         url.pathname,
       );

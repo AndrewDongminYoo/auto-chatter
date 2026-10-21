@@ -62,5 +62,6 @@ BEGIN;
 \ir ../db/migrations/060_segment_condition_tree.sql
 \ir ../db/migrations/061_segment_target_snapshots.sql
 \ir ../db/migrations/062_contact_identity_links.sql
+\ir ../db/migrations/063_campaign_drafts.sql
 \ir supabase-access.sql
 COMMIT;

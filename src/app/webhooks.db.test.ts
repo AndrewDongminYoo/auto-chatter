@@ -1160,6 +1160,7 @@ test("migration 031 replays and, with the later migrations, leaves the deletion 
     "048_workspace_reply_templates.sql",
     "061_segment_target_snapshots.sql",
     "062_contact_identity_links.sql",
+    "063_campaign_drafts.sql",
   ])
     await pool.query(await readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8"));
   assert.deepEqual(await functions(), current);

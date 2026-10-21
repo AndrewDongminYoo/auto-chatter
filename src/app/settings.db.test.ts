@@ -2684,9 +2684,9 @@ test("segment migration upgrades and replays while retaining saved filters", asy
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    // Target snapshots (061) reference the segments, so they are dropped with them inside this rolled-back transaction.
+    // Snapshots (061) and campaign drafts (063) depend on segments; remove them only in this rolled-back migration fixture.
     await client.query(
-      "DROP TABLE instagram_segment_snapshot_members,instagram_segment_snapshots,instagram_contact_segments",
+      "DROP TABLE campaign_drafts,instagram_segment_snapshot_members,instagram_segment_snapshots,instagram_contact_segments",
     );
     const migration = await readFile(new URL("../../db/migrations/009_contact_segments.sql", import.meta.url), "utf8");
     await client.query(migration);

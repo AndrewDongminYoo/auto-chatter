@@ -87,6 +87,11 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
     "INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,'123')",
     [snapshot, workspace, connection],
   );
+  await pool.query(
+    `INSERT INTO campaign_drafts(id,workspace_id,snapshot_id,name,body,create_request_hash,created_by,updated_by)
+     VALUES(gen_random_uuid(),$1,$2,'Campaign','Draft message',repeat('0',64),$3,$3)`,
+    [workspace, snapshot, user],
+  );
   const field = (
     await pool.query(
       "INSERT INTO instagram_contact_fields(workspace_id,name,type) VALUES($1,'city','text') RETURNING id",
