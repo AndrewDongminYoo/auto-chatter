@@ -147,6 +147,7 @@ Migration 063 adds workspace deletion and restricted access; exports omit the in
 The contacts view manages drafts through `public/app/campaign-drafts.js`: unknown writes retain an immutable request for explicit retry, conflicts preserve inputs until an explicit reload, and session/workspace changes discard protected data and late responses.
 Archived drafts are read-only and still count toward capacity; snapshot counts never imply send eligibility.
 Session invalidation advances the workspace-load generation and exposes the existing reload action; a membership response is checked against that generation before configuring the card.
+The shared API wrapper checks the request's workspace generation before starting a 401 refresh and again before replaying the original request, so a retired session cannot automatically replay pending input.
 Session broadcasts carry a per-document source marker so a local login does not invalidate its own new bootstrap; successful local login clears protected state synchronously before broadcasting.
 
 **Operator identity confirmations** ([spec](docs/specs/2026-10-21-contact-identity-links.md)): `agent` can read current confirmations and verified candidates; `admin` can confirm or detach with an exact displayed version and request key.
