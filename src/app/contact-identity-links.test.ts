@@ -150,6 +150,8 @@ test("actual dashboard session listeners invalidate contacts on cross-tab change
   let channelListener!: () => void;
   let pageListener!: (event: { persisted: boolean }) => void;
   let invalidations = 0;
+  let campaignInvalidations = 0;
+  const retryLoad = { hidden: true };
   class Channel {
     constructor(name: string) {
       assert.equal(name, "auto-chatter-session");
@@ -159,6 +161,9 @@ test("actual dashboard session listeners invalidate contacts on cross-tab change
     }
   }
   const runtime = {
+    campaignDrafts: { reset: () => campaignInvalidations++ },
+    notice: () => {},
+    byId: (id: string) => (id === "workspace" ? { hidden: false } : retryLoad),
     contactsSaving: true,
     BroadcastChannel: Channel,
     window: {
@@ -176,6 +181,8 @@ test("actual dashboard session listeners invalidate contacts on cross-tab change
   assert.equal(invalidations, 1);
   pageListener({ persisted: true });
   assert.equal(invalidations, 2);
+  assert.equal(campaignInvalidations, 2, "session events clear campaign messages too");
+  assert.equal(retryLoad.hidden, false, "a cleared campaign screen must offer a fresh workspace load");
   assert.equal(runtime.contactsSaving, false, "session invalidation releases stale saves");
 });
 

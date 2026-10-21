@@ -19,6 +19,7 @@
     <script src="./condition-tree-model.js" defer></script>
     <script src="./segment-snapshots.js" defer></script>
     <script src="./contact-identity-links.js" defer></script>
+    <script src="./campaign-drafts.js" defer></script>
     <script src="./app.js" defer></script>
   </head>
   <body>
@@ -1273,6 +1274,62 @@
             <p id="contacts-status" class="hint" role="status" aria-live="polite"></p>
             <div id="contacts-list" class="contacts-list"></div>
             <button id="contacts-more" class="secondary" hidden>연락처 더 보기</button>
+          </section>
+          <section id="campaign-drafts-section" class="card" aria-labelledby="campaign-drafts-title" hidden>
+            <div class="section-heading">
+              <h2 id="campaign-drafts-title">캠페인 초안</h2>
+              <div class="form-actions">
+                <button id="campaign-draft-refresh" type="button" class="secondary">목록 새로고침</button>
+                <button id="campaign-draft-new" type="button" class="secondary">새 초안</button>
+              </div>
+            </div>
+            <p id="campaign-draft-help" class="hint">
+              고정한 대상에 보낼 메시지를 초안으로 저장합니다. 저장하거나 보관해도 메시지는 전송되지 않습니다. 발송
+              동의·응답 창·비용을 확인하거나 예약하는 기능은 아직 제공하지 않습니다.
+            </p>
+            <p id="campaign-draft-capacity" class="hint"></p>
+            <p id="campaign-draft-list-status" class="hint" role="status" aria-live="polite"></p>
+            <div id="campaign-draft-list" role="group" aria-label="저장한 캠페인 초안"></div>
+            <h3 id="campaign-draft-editor-title" tabindex="-1">새 초안</h3>
+            <form
+              id="campaign-draft-form"
+              aria-labelledby="campaign-draft-editor-title"
+              aria-describedby="campaign-draft-help"
+            >
+              <label
+                >고정한 대상<select name="snapshot_id" required>
+                  <option value="">고정한 대상 선택</option>
+                </select></label
+              >
+              <p class="hint">
+                대상이 없으면 위에서 저장된 필터를 선택한 뒤 ‘대상 고정’을 누르고 목록을 새로고침하세요. 보관된 필터의
+                고정 대상도 사용할 수 있습니다.
+              </p>
+              <label>초안 이름<input name="name" required placeholder="예: 가을 신상품 안내" /></label>
+              <label
+                >메시지<textarea
+                  name="body"
+                  rows="5"
+                  maxlength="1000"
+                  required
+                  aria-describedby="campaign-draft-text-help campaign-draft-count"
+                ></textarea>
+              </label>
+              <p id="campaign-draft-text-help" class="hint">
+                일반 텍스트만 저장합니다. 변수 문법은 사용할 수 없습니다. 이모지는 글자 수를 둘 이상 차지할 수 있습니다.
+              </p>
+              <p id="campaign-draft-count" class="hint">0 / 1,000</p>
+              <p id="campaign-draft-summary" class="hint"></p>
+              <div class="form-actions">
+                <button id="campaign-draft-save" type="submit">초안 저장</button>
+                <button id="campaign-draft-reload" type="button" class="secondary" hidden>
+                  저장된 값 다시 불러오기
+                </button>
+                <button id="campaign-draft-archive" type="button" class="secondary" hidden>초안 보관</button>
+              </div>
+            </form>
+            <p id="campaign-draft-status" class="hint" role="status" aria-live="polite"></p>
+            <p class="hint">보관한 초안은 조회만 할 수 있으며 100개 저장 한도에 계속 포함됩니다.</p>
           </section>
         </div>
         <div id="view-settings" class="view" data-view="settings" role="region" aria-label="설정" tabindex="-1" hidden>
