@@ -2002,3 +2002,24 @@ section {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
+
+.campaign-draft-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--color-border);
+}
+.campaign-draft-card h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  flex: 1 1 180px;
+  margin: 0;
+}
+#campaign-drafts-section .form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

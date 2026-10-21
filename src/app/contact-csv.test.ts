@@ -19,6 +19,7 @@ function previewHarness(
   channels: BroadcastChannel[],
   channelAvailable = true,
   reloadContacts?: () => unknown,
+  sessionSource?: string,
 ) {
   class Element extends EventTarget {
     textContent = "";
@@ -65,6 +66,7 @@ function previewHarness(
       return element;
     },
     reloadContacts,
+    sessionSource,
   });
   controller.configure("admin");
   return {
@@ -609,4 +611,69 @@ test("an acquisition rejection after the absolute budget reports export timeout"
     status: 503,
     message: "contact_export_timeout",
   });
+});
+
+test("same-document login broadcasts do not invalidate the dashboard bootstrap but another document does", async () => {
+  const channels: BroadcastChannel[] = [];
+  let invalidations = 0;
+  try {
+    const preview = previewHarness(async () => previewRows, channels, true, undefined, "document-a");
+    const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
+    const block = source.match(
+      /\/\/ Invalidate contact disclosures on cross-tab sessions and BFCache restoration\.[\s\S]*?\/\/ End contact session listeners\./,
+    )?.[0];
+    assert.ok(block);
+    const context = vm.createContext({
+      contactSessionSource: "document-a",
+      segmentsGeneration: 0,
+      workspaceGeneration: 0,
+      contactsSaving: false,
+      campaignDrafts: {
+        reset: () => {
+          invalidations++;
+        },
+      },
+      clearContactResults: () => {},
+      notice: () => {},
+      byId: () => ({ hidden: false }),
+      BroadcastChannel: class extends BroadcastChannel {
+        constructor(name: string) {
+          super(name);
+          channels.push(this);
+        }
+      },
+      window: { addEventListener: () => {} },
+    });
+    vm.runInContext(block, context);
+    const receiver = channels.at(-1)!;
+    const nextMessage = () => new Promise((resolve) => receiver.addEventListener("message", resolve, { once: true }));
+    const ownMessage = nextMessage();
+    preview.controller.sessionChanged();
+    await ownMessage;
+    assert.equal(invalidations, 0, "the two channel objects in one document must not cancel its own login");
+    const sender = new BroadcastChannel("auto-chatter-session");
+    channels.push(sender);
+    const otherMessage = nextMessage();
+    sender.postMessage({ source: "document-b" });
+    await otherMessage;
+    assert.equal(invalidations, 1, "other-document changes must still clear protected state");
+  } finally {
+    for (const channel of channels) channel.close();
+  }
+});
+
+test("successful same-document login clears protected data before broadcasting the session change", async () => {
+  const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("async function api(");
+  const end = source.indexOf("\n}\n", start);
+  assert.ok(start >= 0 && end > start);
+  const actions: string[] = [];
+  const context = vm.createContext({
+    fetch: async () => Response.json({}),
+    invalidateContactSession: () => actions.push("local reset"),
+    contactCsvPreview: { sessionChanged: () => actions.push("broadcast") },
+  });
+  vm.runInContext(source.slice(start, end + 3), context);
+  await context.api("/api/auth/login", "POST", { email: "fixture@example.test", password: "synthetic" });
+  assert.deepEqual(actions, ["local reset", "broadcast"]);
 });
