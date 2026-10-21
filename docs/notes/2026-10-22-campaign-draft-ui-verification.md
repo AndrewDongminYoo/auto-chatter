@@ -98,3 +98,16 @@ Oracle 조회 실패는 설정 장애가 아니었습니다.
 필터 작업의 완료 처리와 수명 주기를 공유하지 않도록 작업 공간 조회 전용 세대를 사용합니다.
 세션 무효화는 이 세대만 증가시키며, 기존 필터 작업의 세대와 잠금 해제 처리는 유지됩니다.
 최종 관련 회귀 검사 42개가 통과했습니다.
+
+## Automatic retry session boundary
+
+The final scoped security coverage critic identified a separate unreviewed path: the shared API wrapper could replay a retired request after a 401 and shared authentication refresh.
+This was a source-grounded coverage question, not a confirmed security finding.
+A regression against the previous source failed with `Missing expected rejection` when a session changed before the first 401 response.
+The wrapper now checks the captured workspace generation before starting refresh and again before replaying the original request.
+The regression covers a session change before the 401 response, during pending refresh, and an unchanged session that must still refresh and retry exactly once.
+The affected CSV/API test file passes after the repair.
+The original audit candidate is retained as incomplete; the pushed replacement requires fresh current-head audit coverage, hosted review and CI.
+
+Fresh ordinary implementation verification passed: `corepack pnpm check-types`, `corepack pnpm test` (386 passed), `corepack pnpm build:cloudflare` (dry run), and explicit-path `trunk check --no-fix`.
+These checks validate the implementation and are not OS-sandboxed security-audit evidence.

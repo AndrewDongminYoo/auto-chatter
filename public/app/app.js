@@ -515,6 +515,7 @@ const errors = {
 };
 
 async function api(path, method = "GET", body, retry = true, asText = false) {
+  const requestSession = workspaceGeneration;
   let response;
   try {
     response = await fetch(path, {
@@ -531,10 +532,16 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
     contactCsvPreview.sessionChanged();
   }
   if (response.status === 401 && retry && !path.startsWith("/api/auth/")) {
+    const requireCurrentSession = () => {
+      if (requestSession !== workspaceGeneration)
+        throw new Error("로그인 상태가 변경되었습니다. 작업 공간을 다시 불러온 뒤 시도해 주세요.");
+    };
+    requireCurrentSession();
     refreshPromise ??= api("/api/auth/refresh", "POST", undefined, false).finally(() => {
       refreshPromise = undefined;
     });
     await refreshPromise;
+    requireCurrentSession();
     return api(path, method, body, false, asText);
   }
   if (response.status === 401) resetSession();

@@ -669,6 +669,7 @@ test("successful same-document login clears protected data before broadcasting t
   assert.ok(start >= 0 && end > start);
   const actions: string[] = [];
   const context = vm.createContext({
+    workspaceGeneration: 0,
     fetch: async () => Response.json({}),
     invalidateContactSession: () => actions.push("local reset"),
     contactCsvPreview: { sessionChanged: () => actions.push("broadcast") },
@@ -676,4 +677,64 @@ test("successful same-document login clears protected data before broadcasting t
   vm.runInContext(source.slice(start, end + 3), context);
   await context.api("/api/auth/login", "POST", { email: "fixture@example.test", password: "synthetic" });
   assert.deepEqual(actions, ["local reset", "broadcast"]);
+});
+
+test("retired session requests do not automatically replay after a 401 or shared refresh", async () => {
+  const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("async function api(");
+  const end = source.indexOf("\n}\n", start);
+  assert.ok(start >= 0 && end > start);
+  for (const transition of ["before401", "duringRefresh", "unchanged"]) {
+    const requests: string[] = [];
+    let finishFirst!: () => void;
+    let finishRefresh!: () => void;
+    let markRefresh!: () => void;
+    const first = new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    });
+    const refresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    });
+    const refreshStarted = new Promise<void>((resolve) => {
+      markRefresh = resolve;
+    });
+    const context = vm.createContext({
+      workspaceGeneration: 0,
+      refreshPromise: undefined,
+      errors: {},
+      fetch: async (path: string) => {
+        requests.push(path);
+        if (requests.length === 1) {
+          await first;
+          return Response.json({ error: "session_required" }, { status: 401 });
+        }
+        if (path === "/api/auth/refresh") {
+          markRefresh();
+          await refresh;
+        }
+        return Response.json({});
+      },
+    });
+    vm.runInContext(source.slice(start, end + 3), context);
+    const pending = context.api("/api/campaign-drafts/draft/archive", "POST", { expected_version: 1 });
+    if (transition === "before401") context.workspaceGeneration++;
+    finishFirst();
+    if (transition !== "before401") {
+      await refreshStarted;
+      if (transition === "duringRefresh") context.workspaceGeneration++;
+    }
+    finishRefresh();
+    if (transition === "unchanged") {
+      await pending;
+      assert.deepEqual(requests, [
+        "/api/campaign-drafts/draft/archive",
+        "/api/auth/refresh",
+        "/api/campaign-drafts/draft/archive",
+      ]);
+    } else {
+      await assert.rejects(pending, /로그인 상태가 변경/);
+      assert.equal(requests.filter((path) => path.endsWith("/archive")).length, 1);
+      assert.equal(requests.length, transition === "before401" ? 1 : 2);
+    }
+  }
 });

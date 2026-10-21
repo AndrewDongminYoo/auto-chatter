@@ -102,3 +102,6 @@ API 검증 결과는 [구현 검증](../notes/2026-10-21-campaign-drafts-verific
 개인 `auto-chatter`의 `campaign draft`, `plan entitlements` 및 축소 검색에서 관련 Oracle 결과는 \[no precedent found\]였습니다.
 Provider sourceCommit은 `c1681868ac634e4b2414874716bb75a7864113c4`이며 원본 최신성은 미확인입니다.
 현재 이슈·고정 대상·요금제 계약을 제안 근거로 사용하며 선례 조회를 방향 승인으로 취급하지 않습니다.
+
+The shared API wrapper checks the captured workspace generation before starting authentication refresh after a 401 and before replaying the original request.
+A session invalidated in either interval must reject the retired request without replaying its original input; an unchanged session retains the existing one-refresh retry.
