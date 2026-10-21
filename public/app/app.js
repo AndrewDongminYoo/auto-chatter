@@ -1,4 +1,5 @@
 const byId = (id) => document.getElementById(id);
+const contactSessionSource = crypto.randomUUID();
 const manualReports = createManualReplyReports({ api, node });
 const flowReports = createFlowRunReports({ api, node });
 const handoffReports = createHandoffReports({ api, node });
@@ -15,6 +16,7 @@ const segmentSnapshots = createSegmentSnapshots({
 const contactCsvPreview = createContactCsvPreview({
   api,
   node,
+  sessionSource: contactSessionSource,
   // An applied import reloads the list like a saved tag does, and never over an unsaved contact draft;
   // it returns whether it reloaded so the import status can say when the list still shows old tags.
   reloadContacts: () => {
@@ -26,8 +28,10 @@ const contactCsvPreview = createContactCsvPreview({
 const form = byId("rule-form");
 let connections = [];
 let contactsGeneration = 0;
+let workspaceGeneration = 0;
 // Invalidate contact disclosures on cross-tab sessions and BFCache restoration.
 const invalidateContactSession = () => {
+  workspaceGeneration++;
   campaignDrafts.reset();
   contactsSaving = false;
   clearContactResults();
@@ -38,7 +42,9 @@ const invalidateContactSession = () => {
 };
 try {
   const contactSessionChannel = new BroadcastChannel("auto-chatter-session");
-  contactSessionChannel.addEventListener("message", invalidateContactSession);
+  contactSessionChannel.addEventListener("message", (event) => {
+    if (event.data?.source !== contactSessionSource) invalidateContactSession();
+  });
 } catch {
   // Same-tab session reset and server authorization still apply without BroadcastChannel.
 }
@@ -246,6 +252,7 @@ window.addEventListener("beforeunload", (event) => {
   }
 });
 function resetSession() {
+  workspaceGeneration++;
   campaignDrafts.reset();
   contactCsvPreview.sessionChanged();
   segmentSnapshots.reset();
@@ -519,7 +526,10 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
   } catch {
     throw new Error("서버에 연결하지 못했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.");
   }
-  if (response.ok && path === "/api/auth/login") contactCsvPreview.sessionChanged();
+  if (response.ok && path === "/api/auth/login") {
+    invalidateContactSession();
+    contactCsvPreview.sessionChanged();
+  }
   if (response.status === 401 && retry && !path.startsWith("/api/auth/")) {
     refreshPromise ??= api("/api/auth/refresh", "POST", undefined, false).finally(() => {
       refreshPromise = undefined;
@@ -1254,13 +1264,15 @@ async function loadWorkspace() {
   flowReports.reset();
   handoffReports.reset();
   invalidateContactExport();
-  const generation = segmentsGeneration;
+  const generation = segmentsGeneration,
+    workspaceSession = workspaceGeneration;
   const me = await api("/api/me");
-  if (generation !== segmentsGeneration) return;
+  if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
   currentUserId = me.user?.id;
   if (pendingInvite) await acceptPendingInvite();
-  if (generation !== segmentsGeneration) return;
+  if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
   const membership = await api("/api/workspace", "POST");
+  if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
   currentRole = membership.role;
   contactCsvPreview.configure(currentRole);
   workspaceTimeZone = membership.time_zone ?? undefined;
@@ -1284,9 +1296,9 @@ async function loadWorkspace() {
   }
   byId("members-section").hidden = currentRole !== "owner";
   if (currentRole === "owner") void loadMembers();
-  if (generation !== segmentsGeneration) return;
+  if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
   const [accounts, settings] = await Promise.all([api("/api/connections"), api("/api/rules")]);
-  if (generation !== segmentsGeneration) return;
+  if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
   connections = accounts.connections;
   manualReports.configure(currentRole, workspaceTimeZone, connections);
   void flowReports.configure(currentRole, workspaceTimeZone, connections);
@@ -1373,10 +1385,11 @@ async function loadWorkspace() {
         )
       )
         return;
-      const generation = segmentsGeneration;
+      const generation = segmentsGeneration,
+        workspaceSession = workspaceGeneration;
       void action(inboxToggle, async () => {
         const result = await api(`/api/connections/${account.id}/inbox`, "PUT", { enabled: !account.inbox_enabled });
-        if (generation !== segmentsGeneration) return;
+        if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
         account.inbox_enabled = result.enabled;
         notice(result.enabled ? "이 계정의 새 DM 보관을 켰습니다." : "새 DM 보관을 껐습니다. 기존 기록은 유지됩니다.");
       }).then(() => {
@@ -1576,12 +1589,12 @@ async function loadWorkspace() {
   flowEditor.initialize();
   void loadContactSegments();
   await loadContactFields();
-  if (generation !== segmentsGeneration) return;
+  if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
   if (!contactsDirty.size && !contactsSaving) void loadContacts();
   try {
     await loadActivity();
   } catch (error) {
-    if (generation !== segmentsGeneration) return;
+    if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
     if (error.status === 401) throw error;
     byId("activity").replaceChildren(
       emptyState(

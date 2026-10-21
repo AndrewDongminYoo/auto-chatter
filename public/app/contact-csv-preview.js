@@ -1,4 +1,4 @@
-function createContactCsvPreview({ api, node, reloadContacts }) {
+function createContactCsvPreview({ api, node, reloadContacts, sessionSource }) {
   const byId = (id) => document.getElementById(id);
   const section = byId("contacts-import");
   const form = byId("contacts-import-form");
@@ -245,7 +245,7 @@ function createContactCsvPreview({ api, node, reloadContacts }) {
     invalidate: () => invalidate(true),
     sessionChanged() {
       configure(undefined);
-      sessionChannel?.postMessage("changed");
+      sessionChannel?.postMessage({ source: sessionSource });
     },
   };
 }

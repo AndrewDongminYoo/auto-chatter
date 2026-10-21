@@ -386,3 +386,82 @@ test("a rate-limited retry cannot forget the id of an earlier ambiguous create",
   );
   assert.equal(h.fields.body.disabled, false);
 });
+
+test("session invalidation prevents a pending workspace bootstrap from reconfiguring campaign data", async () => {
+  const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("async function loadWorkspace() {");
+  const end = source.indexOf("\n}\n", start);
+  const invalidationStart = source.indexOf("const invalidateContactSession = () => {");
+  const invalidationEnd = source.indexOf("\n};", invalidationStart);
+  assert.ok(start >= 0 && end > start && invalidationStart >= 0 && invalidationEnd > invalidationStart);
+  for (const pausedAt of ["/api/me", "/api/workspace"]) {
+    let release!: (value: unknown) => void;
+    let configurations = 0;
+    const elements = new Map<string, { hidden: boolean; elements: { time_zone: { value: string } } }>();
+    const noOp = () => {};
+    const controller = { reset: noOp, configure: noOp };
+    const context = vm.createContext({
+      segmentsGeneration: 0,
+      workspaceGeneration: 0,
+      editingSegment: null,
+      pendingInvite: null,
+      currentUserId: undefined,
+      currentRole: undefined,
+      workspaceTimeZone: undefined,
+      workspacePlan: undefined,
+      contactCsvPreview: controller,
+      segmentSnapshots: controller,
+      manualReports: controller,
+      flowReports: controller,
+      handoffReports: controller,
+      campaignDrafts: {
+        reset: noOp,
+        configure: () => {
+          configurations++;
+        },
+      },
+      segmentControls: noOp,
+      invalidateContactExport: noOp,
+      planControls: noOp,
+      timeZoneControls: noOp,
+      loadOperations: noOp,
+      loadWebhooks: noOp,
+      clearContactResults: noOp,
+      notice: noOp,
+      contactsSaving: false,
+      byId: (id: string) => {
+        if (!elements.has(id)) elements.set(id, { hidden: false, elements: { time_zone: { value: "" } } });
+        return elements.get(id)!;
+      },
+      api: async (path: string) => {
+        if (path === pausedAt)
+          return new Promise((resolve) => {
+            release = resolve;
+          });
+        if (path === "/api/me") return { user: { id: "old-user" } };
+        if (path === "/api/workspace") return { role: "admin", workspace_id: "old-workspace", time_zone: "UTC" };
+        // The unwanted configure sink occurs before these unrelated later reads.
+        throw new Error("fixture stops after campaign configuration");
+      },
+    });
+    vm.runInContext(
+      source.slice(start, end + 3) +
+        "\n" +
+        source.slice(invalidationStart, invalidationEnd + 3) +
+        "\nglobalThis.invalidate = invalidateContactSession;",
+      context,
+    );
+    const pending = context.loadWorkspace().catch((error: Error) => {
+      if (error.message !== "fixture stops after campaign configuration") throw error;
+    });
+    await draftSettle();
+    context.invalidate();
+    release(
+      pausedAt === "/api/me"
+        ? { user: { id: "old-user" } }
+        : { role: "admin", workspace_id: "old-workspace", time_zone: "UTC" },
+    );
+    await pending;
+    assert.equal(configurations, 0, `${pausedAt} response from before invalidation must not restore campaign data`);
+  }
+});

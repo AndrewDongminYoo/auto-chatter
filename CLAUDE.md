@@ -146,7 +146,8 @@ Reads distinguish original and remaining member counts; person and connection de
 Migration 063 adds workspace deletion and restricted access; exports omit the internal request hash, and both workspace move checks retain drafts.
 The contacts view manages drafts through `public/app/campaign-drafts.js`: unknown writes retain an immutable request for explicit retry, conflicts preserve inputs until an explicit reload, and session/workspace changes discard protected data and late responses.
 Archived drafts are read-only and still count toward capacity; snapshot counts never imply send eligibility.
-Session invalidation exposes the existing workspace reload action before the card can return with fresh server authorization.
+Session invalidation advances the workspace-load generation and exposes the existing reload action; a membership response is checked against that generation before configuring the card.
+Session broadcasts carry a per-document source marker so a local login does not invalidate its own new bootstrap; successful local login clears protected state synchronously before broadcasting.
 
 **Operator identity confirmations** ([spec](docs/specs/2026-10-21-contact-identity-links.md)): `agent` can read current confirmations and verified candidates; `admin` can confirm or detach with an exact displayed version and request key.
 Confirmation requires the current `verifiedDmRecipientsSql` evidence ID, while detachment remains available after evidence loss.
