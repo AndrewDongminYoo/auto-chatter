@@ -615,7 +615,6 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
     requireCurrentSession();
     return api(path, method, body, false, asText);
   }
-  if (response.status === 401) resetSession();
   if (asText && response.ok) {
     const result = await response.text();
     if (protectedRequest) requireCurrentSession();
@@ -625,9 +624,12 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
   try {
     result = await response.json();
   } catch {
+    if (protectedRequest) requireCurrentSession();
+    if (response.status === 401) resetSession();
     throw new Error("서버 응답을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.");
   }
-  if (protectedRequest && response.ok) requireCurrentSession();
+  if (protectedRequest) requireCurrentSession();
+  if (response.status === 401) resetSession();
   if (!response.ok) {
     const error = new Error(errors[result.error] ?? "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
     error.status = response.status;

@@ -74,6 +74,7 @@ let forceUnauthorized = false,
 let heldAuthPath = "/api/auth/refresh";
 const protectedReleases = [];
 let protectedReadArrived;
+let errorArrived, releaseError;
 const provider = async (input, init) => {
   const url = new URL(input),
     body = init.body ? JSON.parse(init.body) : undefined;
@@ -147,6 +148,21 @@ const server = https.createServer(
           return;
         }
         if (!account) return json(res, 401, { error: "login_required" });
+        if (url.pathname === "/api/stale-error-probe") {
+          res.writeHead(409, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+          res.flushHeaders();
+          await new Promise((resolve) => {
+            releaseError = resolve;
+            errorArrived();
+          });
+          return res.end(
+            JSON.stringify({
+              error: "version_conflict",
+              segment: { name: "previous-session-private" },
+              rows: [{ value: "previous-session-private" }],
+            }),
+          );
+        }
         if (url.pathname === "/api/shared-read-probe") {
           await new Promise((resolve) => {
             protectedReleases.push(resolve);
@@ -427,6 +443,26 @@ try {
     );
     assert.equal(await a.evaluate(async () => (await api("/api/workspace")).role), "agent");
     events.push({ event: "explicit_document_reload_adopted_B" });
+    const errorStarted = new Promise((resolve) => {
+      errorArrived = resolve;
+    });
+    await a.evaluate(() => {
+      window.errorProbe = api("/api/stale-error-probe", "POST", {}, false).then(
+        () => ({ ok: true }),
+        (error) => ({ ok: false, message: error.message, segment: error.segment, rows: error.rows }),
+      );
+    });
+    await errorStarted;
+    await login(b, "A");
+    releaseError();
+    const errorResult = await a.evaluate(() => window.errorProbe);
+    assert.equal(errorResult.ok, false);
+    assert.match(errorResult.message, /로그인 상태가 변경되었습니다/);
+    assert.equal(errorResult.segment, undefined);
+    assert.equal(errorResult.rows, undefined);
+    events.push({ event: "late_protected_error_discarded", status: 409, exposed_fields: 0 });
+    await login(b, "B");
+    assert.equal(await principal(b), users.B.id);
   }
   const screenshot = await b.screenshot();
   const output = {

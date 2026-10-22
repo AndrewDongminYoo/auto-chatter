@@ -281,3 +281,59 @@ test("explicit reload replaces a stale document instead of adopting the new sess
   assert.equal(reloads, 1);
   await assert.rejects(a.api("/api/protected-write", "POST", {}), /로그인 상태가 변경/);
 });
+
+test("late protected error bodies do not expose another session's structured data", async () => {
+  for (const status of [409, 422, 401]) {
+    const h = tabs();
+    const started = deferred();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const a = h.make(async () => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(value) {
+          controller = value;
+        },
+      });
+      started.resolve();
+      return new Response(stream, { status });
+    });
+    const b = h.make();
+    const pending = a.api("/api/protected-write", "POST", {}, false);
+    const rejected = assert.rejects(pending, (error: unknown) => {
+      assert.ok(error && typeof error === "object");
+      assert.match((error as Error).message, /로그인 상태가 변경/);
+      for (const key of ["segment", "reminder", "rows", "counts"]) assert.equal(Reflect.get(error, key), undefined);
+      return true;
+    });
+    void rejected.catch(() => {});
+    await started.promise;
+    await b.api("/api/auth/login", "POST", {});
+    controller.enqueue(
+      new TextEncoder().encode(
+        JSON.stringify({
+          error: "version_conflict",
+          segment: { name: "A-private" },
+          reminder: { text: "A-private" },
+          rows: [{ value: "A-private" }],
+          counts: { total: 1 },
+        }),
+      ),
+    );
+    controller.close();
+    await rejected;
+  }
+});
+
+test("unchanged protected error responses retain their status and structured fields", async () => {
+  for (const status of [401, 409, 422]) {
+    const h = tabs();
+    const tab = h.make(async () =>
+      Response.json({ error: "version_conflict", segment: { name: "current session" } }, { status }),
+    );
+    await assert.rejects(tab.api("/api/protected-write", "POST", {}, false), (error: unknown) => {
+      assert.ok(error && typeof error === "object");
+      assert.equal(Reflect.get(error, "status"), status);
+      assert.equal(Reflect.get(error, "segment").name, "current session");
+      return true;
+    });
+  }
+});
