@@ -514,28 +514,99 @@ const errors = {
     "비밀번호는 변경됐지만 다른 세션 종료를 확인하지 못했습니다. 새 비밀번호로 로그인한 뒤 계정 상태를 확인해 주세요.",
 };
 
+function authSessionRevision() {
+  try {
+    return localStorage.getItem("auto-chatter-auth-session") ?? "";
+  } catch {
+    return null;
+  }
+}
+
+// Bind this document's UI to its accepted session, not to whichever account wrote
+// storage most recently. Other documents' broadcasts may not have arrived yet.
+let acceptedAuthRevision = authSessionRevision();
+
 async function api(path, method = "GET", body, retry = true, asText = false) {
   const requestSession = workspaceGeneration;
-  let response;
-  try {
-    response = await fetch(path, {
-      method,
-      credentials: "same-origin",
-      headers: body === undefined ? {} : { "Content-Type": "application/json" },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-  } catch {
-    throw new Error("서버에 연결하지 못했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.");
+  const requestRevision = acceptedAuthRevision;
+  const requireCurrentSession = () => {
+    if (
+      requestSession !== workspaceGeneration ||
+      requestRevision !== authSessionRevision() ||
+      requestRevision?.startsWith("pending:")
+    )
+      throw new Error("로그인 상태가 변경되었습니다. 작업 공간을 다시 불러온 뒤 시도해 주세요.");
+  };
+  const refresh = path === "/api/auth/refresh";
+  const changesCookies =
+    method === "POST" &&
+    ["/api/auth/login", "/api/auth/refresh", "/api/auth/logout", "/api/auth/reset-password"].includes(path);
+  const protectedRequest = !path.startsWith("/api/auth/");
+  const locks = globalThis.navigator?.locks;
+  const storageUnavailable = () => {
+    if (refresh) resetSession();
+    const error = new Error("브라우저 저장소를 사용할 수 없습니다. 저장소를 허용한 뒤 다시 로그인해 주세요.");
+    error.status = 401;
+    error.code = "login_required";
+    return error;
+  };
+  const send = async () => {
+    if (refresh || protectedRequest) requireCurrentSession();
+    let transition;
+    if (changesCookies && locks?.request) {
+      try {
+        // A pending marker also retires requests started during this transition. If the
+        // completion write fails, the marker remains and queued refresh/replay stays blocked.
+        transition = refresh ? undefined : crypto.randomUUID();
+        localStorage.setItem("auto-chatter-auth-session", refresh ? requestRevision : `pending:${transition}`);
+      } catch {
+        throw storageUnavailable();
+      }
+    }
+    let response;
+    try {
+      response = await fetch(path, {
+        method,
+        credentials: "same-origin",
+        headers: body === undefined ? {} : { "Content-Type": "application/json" },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    } catch {
+      throw new Error("서버에 연결하지 못했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.");
+    }
+    // Publish the cookie transition before releasing the origin-wide lock. A queued refresh
+    // must see it even when the other document's BroadcastChannel event has not arrived.
+    if (transition || (refresh && response.status === 401)) {
+      try {
+        localStorage.setItem("auto-chatter-auth-session", `ready:${transition ?? crypto.randomUUID()}`);
+      } catch {
+        invalidateContactSession();
+        contactCsvPreview.sessionChanged();
+        throw storageUnavailable();
+      }
+    }
+    if (response.ok && path === "/api/auth/login") {
+      acceptedAuthRevision = transition ? `ready:${transition}` : authSessionRevision();
+      invalidateContactSession();
+      contactCsvPreview.sessionChanged();
+    }
+    return response;
+  };
+  if (refresh && (!locks?.request || requestRevision === null)) {
+    resetSession();
+    const error = new Error("로그인 상태를 안전하게 갱신할 수 없습니다. 다시 로그인해 주세요.");
+    error.status = 401;
+    error.code = "login_required";
+    throw error;
   }
-  if (response.ok && path === "/api/auth/login") {
-    invalidateContactSession();
-    contactCsvPreview.sessionChanged();
-  }
+  // Fetch resolves after the browser applies response headers, including Set-Cookie.
+  // Do not cancel an older fetch and assume its cookie effects have been cancelled.
+  const response =
+    (changesCookies || protectedRequest) && locks?.request
+      ? await locks.request("auto-chatter-auth-cookies", { mode: changesCookies ? "exclusive" : "shared" }, send)
+      : await send();
   if (response.status === 401 && retry && !path.startsWith("/api/auth/")) {
-    const requireCurrentSession = () => {
-      if (requestSession !== workspaceGeneration)
-        throw new Error("로그인 상태가 변경되었습니다. 작업 공간을 다시 불러온 뒤 시도해 주세요.");
-    };
+    await response.body?.cancel();
     requireCurrentSession();
     refreshPromise ??= api("/api/auth/refresh", "POST", undefined, false).finally(() => {
       refreshPromise = undefined;
@@ -544,14 +615,21 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
     requireCurrentSession();
     return api(path, method, body, false, asText);
   }
-  if (response.status === 401) resetSession();
-  if (asText && response.ok) return response.text();
+  if (asText && response.ok) {
+    const result = await response.text();
+    if (protectedRequest) requireCurrentSession();
+    return result;
+  }
   let result;
   try {
     result = await response.json();
   } catch {
+    if (protectedRequest) requireCurrentSession();
+    if (response.status === 401) resetSession();
     throw new Error("서버 응답을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.");
   }
+  if (protectedRequest) requireCurrentSession();
+  if (response.status === 401) resetSession();
   if (!response.ok) {
     const error = new Error(errors[result.error] ?? "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
     error.status = response.status;
@@ -2180,6 +2258,12 @@ const instagramErrors = [
   "connection_limit_reached",
 ];
 async function start() {
+  if (acceptedAuthRevision !== authSessionRevision()) {
+    // An explicit reload discards the previous account's entire UI before adopting
+    // the new revision. Background loadWorkspace calls must never adopt it.
+    location.reload();
+    return;
+  }
   const instagramResult = new URLSearchParams(location.search).get("instagram");
   if (instagramErrors.includes(instagramResult)) {
     authLinkNotice = errors[instagramResult];
