@@ -21,7 +21,7 @@
     "@types/node": "26.6.5",
     "@types/pg": "8.23.1",
     "miniflare": "4.20260730.0",
-    "typescript": "5.9.3",
+    "typescript": "7.0.2",
     "wrangler": "4.116.0"
   },
   "dependencies": {
