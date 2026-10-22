@@ -672,7 +672,9 @@ test("successful same-document login clears protected data before broadcasting t
     workspaceGeneration: 0,
     localStorage: { getItem: () => "", setItem: () => {} },
     crypto,
-    navigator: { locks: { request: (_name: string, run: () => Promise<unknown>) => run() } },
+    navigator: {
+      locks: { request: (_name: string, _options: { mode: string }, run: () => Promise<unknown>) => run() },
+    },
     fetch: async () => Response.json({}),
     invalidateContactSession: () => actions.push("local reset"),
     contactCsvPreview: { sessionChanged: () => actions.push("broadcast") },
@@ -704,7 +706,9 @@ test("retired session requests do not automatically replay after a 401 or shared
     const context = vm.createContext({
       workspaceGeneration: 0,
       localStorage: { getItem: () => "", setItem: () => {} },
-      navigator: { locks: { request: (_name: string, run: () => Promise<unknown>) => run() } },
+      navigator: {
+        locks: { request: (_name: string, _options: { mode: string }, run: () => Promise<unknown>) => run() },
+      },
       refreshPromise: undefined,
       errors: {},
       fetch: async (path: string) => {

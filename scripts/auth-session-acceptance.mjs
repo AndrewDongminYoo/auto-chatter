@@ -71,6 +71,9 @@ const events = [],
 let forceUnauthorized = false,
   releaseRefresh,
   refreshArrived;
+let heldAuthPath = "/api/auth/refresh";
+const protectedReleases = [];
+let protectedReadArrived;
 const provider = async (input, init) => {
   const url = new URL(input),
     body = init.body ? JSON.parse(init.body) : undefined;
@@ -127,7 +130,7 @@ const server = https.createServer(
             },
             provider,
           );
-          if (url.pathname === "/api/auth/refresh" && refreshArrived) {
+          if (url.pathname === heldAuthPath && refreshArrived) {
             const arrived = refreshArrived;
             refreshArrived = undefined;
             await new Promise((resolve) => {
@@ -144,6 +147,13 @@ const server = https.createServer(
           return;
         }
         if (!account) return json(res, 401, { error: "login_required" });
+        if (url.pathname === "/api/shared-read-probe") {
+          await new Promise((resolve) => {
+            protectedReleases.push(resolve);
+            if (protectedReleases.length === 2) protectedReadArrived();
+          });
+          return json(res, 200, { synthetic: true });
+        }
         if (url.pathname === "/api/workspace")
           return json(res, 200, {
             role: account === "A" ? "admin" : "agent",
@@ -310,6 +320,114 @@ try {
     assert.equal(after, users.B.id, "Late refresh response must not roll shared cookies from B back to A");
   if (mode === "observe") assert.equal(rollback, true, "Observation must reproduce the proposed cookie rollback");
   events.push({ event: "assertions_passed", original_request_replays: afterCount - requestCount - 2 });
+  if (mode === "fixed") {
+    await login(a, "A");
+    // Hold B login and try a first write from A's old UI, without relying on broadcasts.
+    heldAuthPath = "/api/auth/login";
+    const loginArrived = new Promise((resolve) => {
+      refreshArrived = resolve;
+    });
+    await b.evaluate(({ email }) => {
+      window.transitionLogin = api("/api/auth/login", "POST", { email, password: "dummy-password-123" });
+    }, users.B);
+    await loginArrived;
+    const writePath = "/api/initial-protected-write-probe";
+    await a.evaluate((path) => {
+      window.initialWriteResult = null;
+      window.initialWrite = api(path, "POST", { text: "old account input" }).then(
+        () => {
+          window.initialWriteResult = { ok: true };
+        },
+        (error) => {
+          window.initialWriteResult = { ok: false, message: error.message };
+        },
+      );
+    }, writePath);
+    await a.waitForFunction(
+      async () =>
+        window.initialWriteResult !== null ||
+        (await navigator.locks.query()).pending.some((lock) => lock.name === "auto-chatter-auth-cookies"),
+    );
+    assert.equal(
+      events.filter((event) => event.event === "request" && event.path === writePath).length,
+      0,
+      "Initial protected write must not bypass the authentication transition lock",
+    );
+    releaseRefresh();
+    await b.evaluate(() => window.transitionLogin);
+    await a.evaluate(() => window.initialWrite);
+    const writeResult = await a.evaluate(() => window.initialWriteResult);
+    assert.equal(writeResult.ok, false);
+    assert.match(writeResult.message, /로그인 상태가 변경되었습니다/);
+    assert.equal(events.filter((event) => event.event === "request" && event.path === writePath).length, 0);
+    assert.equal(await principal(b), users.B.id);
+    events.push({ event: "initial_protected_write_blocked", requests: 0 });
+    // Both protected reads must hold shared locks concurrently, before response headers.
+    await login(a, "A");
+    await b.reload({ waitUntil: "domcontentloaded" });
+    await b.waitForFunction(
+      () => typeof api === "function" && document.querySelector("#startup").hidden && refreshPromise === undefined,
+    );
+    const bothReadsArrived = new Promise((resolve) => {
+      protectedReadArrived = resolve;
+    });
+    for (const tab of [a, b])
+      await tab.evaluate(() => {
+        window.sharedRead = api("/api/shared-read-probe");
+      });
+    await a.waitForFunction(
+      async () =>
+        (await navigator.locks.query()).held.filter(
+          (lock) => lock.name === "auto-chatter-auth-cookies" && lock.mode === "shared",
+        ).length === 2,
+    );
+    await bothReadsArrived;
+    assert.equal(protectedReleases.length, 2, "Protected reads must run concurrently under shared locks");
+    for (const release of protectedReleases) release();
+    for (const tab of [a, b]) await tab.evaluate(() => window.sharedRead);
+    events.push({ event: "concurrent_shared_reads_passed" });
+
+    // Do not rely on cross-document broadcasts: retain A's UI while B fully logs in.
+    await a.addInitScript(() => {
+      globalThis.BroadcastChannel = undefined;
+    });
+    await a.reload({ waitUntil: "domcontentloaded" });
+    await a.waitForFunction(
+      () => typeof api === "function" && document.querySelector("#startup").hidden && refreshPromise === undefined,
+    );
+    const oldGeneration = await a.evaluate(() => workspaceGeneration);
+    await login(b, "B");
+    assert.equal(await principal(b), users.B.id);
+    assert.equal(
+      await a.evaluate(() => workspaceGeneration),
+      oldGeneration,
+      "No broadcast invalidation should have occurred",
+    );
+    const completedPath = "/api/post-login-old-ui-write-probe";
+    const completedWrite = await a.evaluate(async (path) => {
+      try {
+        await api(path, "POST", { text: "old UI after completed B login" });
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, message: error.message };
+      }
+    }, completedPath);
+    assert.equal(completedWrite.ok, false);
+    assert.match(completedWrite.message, /로그인 상태가 변경되었습니다/);
+    assert.equal(events.filter((event) => event.event === "request" && event.path === completedPath).length, 0);
+    events.push({ event: "completed_login_stale_document_blocked", requests: 0, broadcast_invalidation: false });
+    await Promise.all([
+      a.waitForNavigation({ waitUntil: "domcontentloaded" }),
+      a.evaluate(() => {
+        void start();
+      }),
+    ]);
+    await a.waitForFunction(
+      () => typeof api === "function" && document.querySelector("#startup").hidden && refreshPromise === undefined,
+    );
+    assert.equal(await a.evaluate(async () => (await api("/api/workspace")).role), "agent");
+    events.push({ event: "explicit_document_reload_adopted_B" });
+  }
   const screenshot = await b.screenshot();
   const output = {
     mode,

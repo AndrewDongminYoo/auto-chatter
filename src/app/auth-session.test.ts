@@ -21,7 +21,12 @@ function tabs(options: { locks?: boolean; storage?: boolean; readOnlyStorage?: b
   const values = new Map<string, string>();
   let tail = Promise.resolve();
   const locks = {
-    request: (_name: string, run: () => Promise<unknown>) => {
+    request: (
+      _name: string,
+      options: { mode: string } | (() => Promise<unknown>),
+      callback?: () => Promise<unknown>,
+    ) => {
+      const run = typeof options === "function" ? options : callback!;
       const result = tail.then(run);
       tail = result.then(
         () => {},
@@ -183,4 +188,96 @@ test("a protected replay waits for a queued login and rejects its retired input"
   releaseLogin.resolve();
   await Promise.all([login!, rejected]);
   assert.equal(h.requests.filter((path) => path === "/api/protected-write").length, 1);
+});
+
+test("initial protected writes wait for account transitions and reject without sending", async () => {
+  for (const mutation of ["login", "logout", "reset-password"]) {
+    const h = tabs();
+    const started = deferred(),
+      release = deferred();
+    const b = h.make(async () => {
+      started.resolve();
+      await release.promise;
+      return Response.json({});
+    });
+    const a = h.make();
+    const transition = b.api(`/api/auth/${mutation}`, "POST", {});
+    await started.promise;
+    const write = a.api("/api/protected-write", "POST", { text: "old account input" });
+    const rejected = assert.rejects(write, /로그인 상태가 변경/);
+    void rejected.catch(() => {});
+    await setImmediate();
+    try {
+      assert.deepEqual(h.requests, [`/api/auth/${mutation}`], "initial write must wait for cookie transition");
+    } finally {
+      release.resolve();
+      await Promise.allSettled([transition, rejected]);
+    }
+    await rejected;
+  }
+});
+
+test("successful protected JSON and text bodies are discarded after an account transition", async () => {
+  for (const asText of [false, true]) {
+    const h = tabs();
+    const started = deferred();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const a = h.make(async () => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(value) {
+          controller = value;
+        },
+      });
+      started.resolve();
+      return new Response(stream);
+    });
+    const b = h.make();
+    const read = a.api("/api/protected-profile", "GET", undefined, true, asText);
+    const rejected = assert.rejects(read, /로그인 상태가 변경/);
+    void rejected.catch(() => {});
+    await started.promise;
+    await b.api("/api/auth/login", "POST", {});
+    controller.enqueue(new TextEncoder().encode(JSON.stringify({ marker: "old account data" })));
+    controller.close();
+    await rejected;
+  }
+});
+
+test("an old document cannot send new protected input after another document completes auth", async () => {
+  for (const mutation of ["login", "logout", "reset-password"]) {
+    const h = tabs();
+    const a = h.make(),
+      b = h.make();
+    await b.api(`/api/auth/${mutation}`, "POST", {});
+    await assert.rejects(a.api("/api/protected-write", "POST", { text: "old UI input" }), /로그인 상태가 변경/);
+    assert.deepEqual(h.requests, [`/api/auth/${mutation}`]);
+  }
+});
+
+test("a successful local login accepts its own new revision for protected requests", async () => {
+  const h = tabs();
+  const tab = h.make();
+  await tab.api("/api/auth/login", "POST", {});
+  await tab.api("/api/protected-profile");
+  assert.deepEqual(h.requests, ["/api/auth/login", "/api/protected-profile"]);
+});
+
+test("explicit reload replaces a stale document instead of adopting the new session in its UI", async () => {
+  const h = tabs();
+  const a = h.make(),
+    b = h.make();
+  await b.api("/api/auth/login", "POST", {});
+  const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("async function start(");
+  const end = source.indexOf("\n}\n", start);
+  let reloads = 0;
+  a.location = {
+    reload: () => {
+      reloads++;
+    },
+  };
+  vm.runInContext(source.slice(start, end + 3), a);
+  await a.start();
+  assert.equal(reloads, 1);
+  await assert.rejects(a.api("/api/protected-write", "POST", {}), /로그인 상태가 변경/);
 });

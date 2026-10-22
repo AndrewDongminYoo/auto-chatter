@@ -522,9 +522,13 @@ function authSessionRevision() {
   }
 }
 
+// Bind this document's UI to its accepted session, not to whichever account wrote
+// storage most recently. Other documents' broadcasts may not have arrived yet.
+let acceptedAuthRevision = authSessionRevision();
+
 async function api(path, method = "GET", body, retry = true, asText = false) {
   const requestSession = workspaceGeneration;
-  const requestRevision = authSessionRevision();
+  const requestRevision = acceptedAuthRevision;
   const requireCurrentSession = () => {
     if (
       requestSession !== workspaceGeneration ||
@@ -537,7 +541,7 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
   const changesCookies =
     method === "POST" &&
     ["/api/auth/login", "/api/auth/refresh", "/api/auth/logout", "/api/auth/reset-password"].includes(path);
-  const replay = !retry && !path.startsWith("/api/auth/");
+  const protectedRequest = !path.startsWith("/api/auth/");
   const locks = globalThis.navigator?.locks;
   const storageUnavailable = () => {
     if (refresh) resetSession();
@@ -547,7 +551,7 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
     return error;
   };
   const send = async () => {
-    if (refresh || replay) requireCurrentSession();
+    if (refresh || protectedRequest) requireCurrentSession();
     let transition;
     if (changesCookies && locks?.request) {
       try {
@@ -582,6 +586,7 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
       }
     }
     if (response.ok && path === "/api/auth/login") {
+      acceptedAuthRevision = transition ? `ready:${transition}` : authSessionRevision();
       invalidateContactSession();
       contactCsvPreview.sessionChanged();
     }
@@ -597,8 +602,8 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
   // Fetch resolves after the browser applies response headers, including Set-Cookie.
   // Do not cancel an older fetch and assume its cookie effects have been cancelled.
   const response =
-    (changesCookies || replay) && locks?.request
-      ? await locks.request("auto-chatter-auth-cookies", send)
+    (changesCookies || protectedRequest) && locks?.request
+      ? await locks.request("auto-chatter-auth-cookies", { mode: changesCookies ? "exclusive" : "shared" }, send)
       : await send();
   if (response.status === 401 && retry && !path.startsWith("/api/auth/")) {
     await response.body?.cancel();
@@ -611,13 +616,18 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
     return api(path, method, body, false, asText);
   }
   if (response.status === 401) resetSession();
-  if (asText && response.ok) return response.text();
+  if (asText && response.ok) {
+    const result = await response.text();
+    if (protectedRequest) requireCurrentSession();
+    return result;
+  }
   let result;
   try {
     result = await response.json();
   } catch {
     throw new Error("서버 응답을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.");
   }
+  if (protectedRequest && response.ok) requireCurrentSession();
   if (!response.ok) {
     const error = new Error(errors[result.error] ?? "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
     error.status = response.status;
@@ -2246,6 +2256,12 @@ const instagramErrors = [
   "connection_limit_reached",
 ];
 async function start() {
+  if (acceptedAuthRevision !== authSessionRevision()) {
+    // An explicit reload discards the previous account's entire UI before adopting
+    // the new revision. Background loadWorkspace calls must never adopt it.
+    location.reload();
+    return;
+  }
   const instagramResult = new URLSearchParams(location.search).get("instagram");
   if (instagramErrors.includes(instagramResult)) {
     authLinkNotice = errors[instagramResult];
