@@ -18,7 +18,7 @@
     "test:cloudflare": "pnpm build:cloudflare && node --test --test-concurrency=1 src/cloudflare/worker.db.test.ts src/cloudflare/access.db.test.ts src/cloudflare/runtime.db.test.mjs"
   },
   "devDependencies": {
-    "@types/node": "24.13.1",
+    "@types/node": "26.6.5",
     "@types/pg": "8.23.1",
     "miniflare": "4.20260730.0",
     "typescript": "5.9.3",

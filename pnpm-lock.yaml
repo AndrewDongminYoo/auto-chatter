@@ -17,20 +17,20 @@ importers:
         version: 8.23.0
     devDependencies:
       '@types/node':
-        specifier: 24.13.1
-        version: 24.13.1
+        specifier: 26.6.5
+        version: 26.6.5
       '@types/pg':
         specifier: 8.23.1
         version: 8.23.1
       miniflare:
         specifier: 4.20260730.0
-        version: 4.20260730.0(@types/node@24.13.1)
+        version: 4.20260730.0(@types/node@26.6.5)
       typescript:
         specifier: 5.9.3
         version: 5.9.3
       wrangler:
         specifier: 4.116.0
-        version: 4.116.0(@types/node@24.13.1)
+        version: 4.116.0(@types/node@26.6.5)
 
 packages:
 
@@ -428,8 +428,8 @@ packages:
   '@speed-highlight/core@1.2.24':
     resolution: {integrity: sha512-qeW2e1l78afw8VhRPfPQ1Gjj+KU5XFQ/OFV5ti6eTa9bruO7mJyZtA4vw0ofqmA3tKCkROE9xLk3VZoeRc98nw==}
 
-  '@types/node@24.13.1':
-    resolution: {integrity: sha512-RSpUJGmvsJ1ZeBehQZFhIdpsz+bIpES0nIQXko4Ybq+N+kX6XvOq3Jo+iJ82FWLdblFq85AsMikd3m35jgezYg==}
+  '@types/node@26.6.5':
+    resolution: {integrity: sha512-uMzsv9stDdofIZBx4UGh4Z9ZgXnGC9seRDscilBcTHAeOFk67MZg/k9bWVfO+bk4qZmG+l52hRnLwUiH2LnJTg==}
 
   '@types/pg@8.23.1':
     resolution: {integrity: sha512-fKVHpikPdg4GKks3JuLEhvwSyvwzF23hnabPy6DD8ljVbC7+6J5dQzdv4arV6jqq57djnMgs1HKBxX4P8aBI3A==}
@@ -553,8 +553,8 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
-  undici-types@7.18.2:
-    resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
+  undici-types@8.9.0:
+    resolution: {integrity: sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==}
 
   undici@7.30.1:
     resolution: {integrity: sha512-03KrMbjIFDWQR5RNPrSw3bd1r12JpyFQl9/yxjUbJtqkjmllqC5lFjZh6ujeuJCKr8EOQvRW872Oy/az+nLYxg==}
@@ -843,13 +843,13 @@ snapshots:
 
   '@speed-highlight/core@1.2.24': {}
 
-  '@types/node@24.13.1':
+  '@types/node@26.6.5':
     dependencies:
-      undici-types: 7.18.2
+      undici-types: 8.9.0
 
   '@types/pg@8.23.1':
     dependencies:
-      '@types/node': 24.13.1
+      '@types/node': 26.6.5
       pg-protocol: 1.16.1
       pg-types: 2.2.0
 
@@ -895,10 +895,10 @@ snapshots:
 
   kleur@4.1.5: {}
 
-  miniflare@4.20260730.0(@types/node@24.13.1):
+  miniflare@4.20260730.0(@types/node@26.6.5):
     dependencies:
       '@cspotcode/source-map-support': 0.8.1
-      sharp: 0.35.5(@types/node@24.13.1)
+      sharp: 0.35.5(@types/node@26.6.5)
       undici: 7.30.1
       workerd: 1.20260730.1
       ws: 8.21.0
@@ -959,7 +959,7 @@ snapshots:
 
   semver@7.8.5: {}
 
-  sharp@0.35.5(@types/node@24.13.1):
+  sharp@0.35.5(@types/node@26.6.5):
     dependencies:
       '@img/colour': 1.1.0
       detect-libc: 2.1.2
@@ -990,7 +990,7 @@ snapshots:
       '@img/sharp-win32-arm64': 0.35.5
       '@img/sharp-win32-ia32': 0.35.5
       '@img/sharp-win32-x64': 0.35.5
-      '@types/node': 24.13.1
+      '@types/node': 26.6.5
 
   split2@4.2.0: {}
 
@@ -1001,7 +1001,7 @@ snapshots:
 
   typescript@5.9.3: {}
 
-  undici-types@7.18.2: {}
+  undici-types@8.9.0: {}
 
   undici@7.30.1: {}
 
@@ -1017,13 +1017,13 @@ snapshots:
       '@cloudflare/workerd-linux-arm64': 1.20260730.1
       '@cloudflare/workerd-windows-64': 1.20260730.1
 
-  wrangler@4.116.0(@types/node@24.13.1):
+  wrangler@4.116.0(@types/node@26.6.5):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.5.0
       '@cloudflare/unenv-preset': 2.16.1(unenv@2.0.0-rc.24)(workerd@1.20260730.1)
       blake3-wasm: 2.1.5
       esbuild: 0.28.1
-      miniflare: 4.20260730.0(@types/node@24.13.1)
+      miniflare: 4.20260730.0(@types/node@26.6.5)
       path-to-regexp: 6.3.0
       unenv: 2.0.0-rc.24
       workerd: 1.20260730.1
