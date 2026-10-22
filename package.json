@@ -22,9 +22,9 @@
     "@types/pg": "8.23.1",
     "miniflare": "4.20260730.0",
     "typescript": "5.9.3",
-    "wrangler": "4.116.0"
+    "wrangler": "4.151.2"
   },
   "dependencies": {
-    "pg": "8.23.0"
+    "pg": "8.23.1"
   }
 }
