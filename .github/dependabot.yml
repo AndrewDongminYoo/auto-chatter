@@ -20,6 +20,10 @@ updates:
           - "*"
   - package-ecosystem: npm
     directory: /
+    # Update this tested runtime pair together.
+    ignore:
+      - dependency-name: wrangler
+      - dependency-name: miniflare
     schedule:
       interval: weekly
       day: monday
