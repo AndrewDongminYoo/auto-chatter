@@ -148,6 +148,7 @@ The contacts view manages drafts through `public/app/campaign-drafts.js`: unknow
 Archived drafts are read-only and still count toward capacity; snapshot counts never imply send eligibility.
 Session invalidation advances the workspace-load generation and exposes the existing reload action; a membership response is checked against that generation before configuring the card.
 The shared API wrapper checks the request's workspace generation before starting a 401 refresh and again before replaying the original request, so a retired session cannot automatically replay pending input.
+Cookie-changing browser auth requests and protected retries share an origin-wide Web Lock. A shared pending/ready revision retires requests across documents before cookie changes and is checked again when a queued refresh or retry acquires the lock. Automatic refresh requires Web Locks and writable localStorage; storage-coordinated auth fails before fetching if its pending marker cannot be published. See the [cookie-ordering verification note](docs/notes/2026-10-22-auth-cookie-response-order.md) for fallback behavior and browser-lifecycle limits.
 Session broadcasts carry a per-document source marker so a local login does not invalidate its own new bootstrap; successful local login clears protected state synchronously before broadcasting.
 
 **Operator identity confirmations** ([spec](docs/specs/2026-10-21-contact-identity-links.md)): `agent` can read current confirmations and verified candidates; `admin` can confirm or detach with an exact displayed version and request key.

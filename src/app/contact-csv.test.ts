@@ -664,25 +664,28 @@ test("same-document login broadcasts do not invalidate the dashboard bootstrap b
 
 test("successful same-document login clears protected data before broadcasting the session change", async () => {
   const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
-  const start = source.indexOf("async function api(");
-  const end = source.indexOf("\n}\n", start);
+  const start = source.indexOf("function authSessionRevision(");
+  const end = source.indexOf("\nasync function action(", start);
   assert.ok(start >= 0 && end > start);
   const actions: string[] = [];
   const context = vm.createContext({
     workspaceGeneration: 0,
+    localStorage: { getItem: () => "", setItem: () => {} },
+    crypto,
+    navigator: { locks: { request: (_name: string, run: () => Promise<unknown>) => run() } },
     fetch: async () => Response.json({}),
     invalidateContactSession: () => actions.push("local reset"),
     contactCsvPreview: { sessionChanged: () => actions.push("broadcast") },
   });
-  vm.runInContext(source.slice(start, end + 3), context);
+  vm.runInContext(source.slice(start, end), context);
   await context.api("/api/auth/login", "POST", { email: "fixture@example.test", password: "synthetic" });
   assert.deepEqual(actions, ["local reset", "broadcast"]);
 });
 
 test("retired session requests do not automatically replay after a 401 or shared refresh", async () => {
   const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
-  const start = source.indexOf("async function api(");
-  const end = source.indexOf("\n}\n", start);
+  const start = source.indexOf("function authSessionRevision(");
+  const end = source.indexOf("\nasync function action(", start);
   assert.ok(start >= 0 && end > start);
   for (const transition of ["before401", "duringRefresh", "unchanged"]) {
     const requests: string[] = [];
@@ -700,6 +703,8 @@ test("retired session requests do not automatically replay after a 401 or shared
     });
     const context = vm.createContext({
       workspaceGeneration: 0,
+      localStorage: { getItem: () => "", setItem: () => {} },
+      navigator: { locks: { request: (_name: string, run: () => Promise<unknown>) => run() } },
       refreshPromise: undefined,
       errors: {},
       fetch: async (path: string) => {
@@ -715,7 +720,7 @@ test("retired session requests do not automatically replay after a 401 or shared
         return Response.json({});
       },
     });
-    vm.runInContext(source.slice(start, end + 3), context);
+    vm.runInContext(source.slice(start, end), context);
     const pending = context.api("/api/campaign-drafts/draft/archive", "POST", { expected_version: 1 });
     if (transition === "before401") context.workspaceGeneration++;
     finishFirst();
