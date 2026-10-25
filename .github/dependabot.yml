@@ -21,14 +21,23 @@ updates:
   - package-ecosystem: npm
     directory: /
     # Update this tested runtime pair together.
+    # update-types limits this to version updates; security updates still open.
     ignore:
       - dependency-name: wrangler
+        update-types:
+          - version-update:semver-patch
+          - version-update:semver-minor
+          - version-update:semver-major
       - dependency-name: miniflare
+        update-types:
+          - version-update:semver-patch
+          - version-update:semver-minor
+          - version-update:semver-major
     schedule:
       interval: weekly
       day: monday
       timezone: Asia/Seoul
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 2
     groups:
       npm-minor-patch:
         patterns:
@@ -46,7 +55,7 @@ updates:
       interval: weekly
       day: monday
       timezone: Asia/Seoul
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 2
     groups:
       docker-minor-patch:
         patterns:
@@ -64,7 +73,7 @@ updates:
       interval: weekly
       day: monday
       timezone: Asia/Seoul
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 2
     groups:
       docker-compose-minor-patch:
         patterns:
