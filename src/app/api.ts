@@ -1,4 +1,10 @@
-import { createCampaignDraft, getCampaignDraft, listCampaignDrafts, updateCampaignDraft } from "./campaign-drafts.ts";
+import {
+  createCampaignDraft,
+  getCampaignDraft,
+  listCampaignDrafts,
+  previewCampaignDraft,
+  updateCampaignDraft,
+} from "./campaign-drafts.ts";
 import { changeIdentityLink, listIdentityLinks } from "./contact-identity-links.ts";
 import { contactDetails } from "./contact-details.ts";
 import { exportContactCsv } from "./contact-csv.ts";
@@ -656,6 +662,12 @@ export async function appApi(
       const segmentSnapshot = /^\/api\/segment-snapshots\/([a-f0-9-]+)$/.exec(url.pathname);
       if (segmentSnapshot && request.method === "GET")
         return json(await getSegmentSnapshot(pool, user, segmentSnapshot[1]!, url.searchParams));
+      // Read-only eligibility and cost preview of one draft; it never sends or claims sendability.
+      const campaignPreview = /^\/api\/campaign-drafts\/([^/]+)\/preview$/.exec(url.pathname);
+      if (campaignPreview && request.method === "GET") {
+        if (url.searchParams.size) throw new ApiError(400, "invalid_campaign_draft");
+        return json(await previewCampaignDraft(pool, user, campaignPreview[1]!, env.SEND_ENABLED === "true"));
+      }
       const campaignDraft = /^\/api\/campaign-drafts(?:\/([^/]+)(\/archive)?)?$/.exec(url.pathname);
       if (campaignDraft) {
         if (url.searchParams.size) throw new ApiError(400, "invalid_campaign_draft");

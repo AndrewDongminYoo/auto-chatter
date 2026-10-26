@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
+import { verifiedDmRecipientsSql } from "./inbox-identity.ts";
 import { lockWorkspaceForMember, membershipFor } from "./settings.ts";
+import { instagramCapabilities } from "../instagram/channel-adapter.ts";
 
 const LIMIT = 100;
 function invalid(): never {
@@ -94,6 +96,87 @@ export async function listCampaignDrafts(pool: Pool, user: User) {
 export async function getCampaignDraft(pool: Pool, user: User, id: string) {
   id = uuid(id);
   return transaction(pool, user, false, (client, workspace) => detail(client, workspace, id));
+}
+// The preview reasons in evaluation order; each remaining member gets exactly one, the first that applies.
+export const CAMPAIGN_PREVIEW_REASONS = [
+  "connection_unavailable",
+  "contact_paused",
+  "no_dm_identity",
+  "opted_out",
+  "marketing_consent_required",
+  "reply_window_closed",
+  "candidate",
+] as const;
+const utc = (column: string) => `to_char(${column} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+// One statement and one clock (as_of). Stages 1-3 belong to the member; stages 4-6 belong to each verified DM
+// recipient, and the member takes the furthest stage any of its recipients reaches (7 is candidate). The
+// verified bridge reads its own freshness clock (now()), as the contact detail does. The bridge and the per-member
+// recipient stage are MATERIALIZED and joined, so neither runs again for each snapshot member. The bridge groups
+// per connection, so reading only the snapshot's connections gives the same rows for its members.
+const PREVIEW_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp() AS as_of),
+ draft AS (
+   SELECT d.id,d.version,d.archived,d.snapshot_id,s.member_count
+   FROM campaign_drafts d JOIN instagram_segment_snapshots s ON s.workspace_id=d.workspace_id AND s.id=d.snapshot_id
+   WHERE d.workspace_id=$1 AND d.id=$2
+ ), members AS (
+   SELECT m.connection_id,m.sender_id FROM instagram_segment_snapshot_members m JOIN draft ON m.snapshot_id=draft.snapshot_id
+   WHERE m.workspace_id=$1
+ ), verified AS MATERIALIZED (${verifiedDmRecipientsSql("workspace_id=$1 AND id IN (SELECT connection_id FROM members)")}),
+ recipients AS MATERIALIZED (
+   SELECT v.connection_id,v.sender_id,max(CASE
+     WHEN EXISTS(SELECT 1 FROM channel_consent_state state WHERE state.workspace_id=$1 AND state.connection_id=v.connection_id
+       AND state.channel='instagram' AND state.purpose IN ('marketing','service_reply') AND state.decision='revoke'
+       AND ((state.identity_kind='dm_recipient' AND state.identity_value=v.recipient_id)
+         OR (state.identity_kind='comment_sender' AND state.identity_value=v.sender_id))) THEN 4
+     WHEN NOT EXISTS(SELECT 1 FROM channel_consent_state state WHERE state.workspace_id=$1 AND state.connection_id=v.connection_id
+       AND state.channel='instagram' AND state.identity_kind='dm_recipient' AND state.identity_value=v.recipient_id
+       AND state.purpose='marketing' AND state.decision='grant' AND state.evidence_kind='explicit') THEN 5
+     WHEN NOT coalesce((SELECT max(message.message_at)<=evaluation.as_of AND evaluation.as_of-max(message.message_at)<interval '24 hours'
+       FROM instagram_inbox_messages message WHERE message.workspace_id=$1 AND message.connection_id=v.connection_id
+         AND message.recipient_id=v.recipient_id AND message.kind='text'),false) THEN 6
+     ELSE 7 END) AS stage
+   FROM verified v JOIN members m ON m.connection_id=v.connection_id AND m.sender_id=v.sender_id CROSS JOIN evaluation
+   GROUP BY v.connection_id,v.sender_id
+ ), staged AS (
+   SELECT CASE
+     WHEN NOT coalesce(c.active AND c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>evaluation.as_of,false) THEN 1
+     WHEN coalesce(a.paused OR a.handoff_paused,false) THEN 2
+     ELSE coalesce(r.stage,3)
+   END AS stage
+   FROM members m CROSS JOIN evaluation
+   LEFT JOIN instagram_connections c ON c.workspace_id=$1 AND c.id=m.connection_id
+   LEFT JOIN instagram_contact_automation a ON a.workspace_id=$1 AND a.connection_id=m.connection_id AND a.sender_id=m.sender_id
+   LEFT JOIN recipients r ON r.connection_id=m.connection_id AND r.sender_id=m.sender_id
+ )
+ SELECT draft.id AS draft_id,draft.version AS draft_version,draft.snapshot_id,draft.archived,
+   draft.member_count::text AS original_member_count,${utc("evaluation.as_of")} AS as_of,
+   (SELECT count(*) FROM staged)::text AS remaining_member_count,
+   ${CAMPAIGN_PREVIEW_REASONS.map((reason, index) => `(SELECT count(*) FROM staged WHERE stage=${index + 1})::text AS ${reason}`).join(",")}
+ FROM draft CROSS JOIN evaluation`;
+// Read-only: it writes nothing and its candidate count is not a claim that anyone can be sent to (#35).
+export async function previewCampaignDraft(pool: Pool, user: User, id: string, globalSendEnabled: boolean) {
+  return transaction(pool, user, false, async (client, workspace) => {
+    if (!isUuid(id)) throw new ApiError(404, "campaign_draft_not_found");
+    const row = (await client.query(PREVIEW_SQL, [workspace, id.toLowerCase()])).rows[0];
+    if (!row) throw new ApiError(404, "campaign_draft_not_found");
+    const counts = Object.fromEntries(CAMPAIGN_PREVIEW_REASONS.map((reason) => [reason, row[reason] as string]));
+    return {
+      draft_id: row.draft_id,
+      draft_version: row.draft_version,
+      snapshot_id: row.snapshot_id,
+      archived: row.archived,
+      as_of: row.as_of,
+      original_member_count: row.original_member_count,
+      remaining_member_count: row.remaining_member_count,
+      counts,
+      candidate_meaning: "passed_recorded_conditions_at_as_of",
+      sendability_claimed: false,
+      estimated_provider_calls: counts.candidate,
+      plan_broadcast_limit: null,
+      channel_marketing_supported: instagramCapabilities("cloudflare_oauth").operations.marketing.supported,
+      global_send_enabled: globalSendEnabled,
+    };
+  });
 }
 export async function createCampaignDraft(pool: Pool, user: User, input: unknown) {
   const draft = parseCampaignDraft(input);
