@@ -527,6 +527,20 @@ Worker를 버전 `bd9ed6d9-daea-4d84-a47a-226ebfdafdbd`로 배포했고, 15:59:3
 `scheduled_steps`를 11:38:52Z, 11:40:19Z, 11:41:31Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. `stale_recovery`, `wake`, `webhook_delivery`는 발송이 꺼져 있어 이번에도 실행되지 않았습니다.
 세 단계의 마지막 성공 시각은 날짜까지 다시 읽은 결과 2026-10-07 00:43:49Z이며, 그 뒤로는 실행된 적이 없습니다. Worker는 `SEND_ENABLED`가 `true`일 때만 이 세 단계를 실행합니다(`src/cloudflare/index.ts`의 `scheduled`). 처음 기록에는 시각만 출력하는 조회 결과를 보고 날짜를 2026-10-18로 잘못 적었고, 2026-10-19에 날짜를 확인해 고쳤습니다.
 로그인한 세션으로 요청하지 않았으므로 DM 조건, 중첩 조건 그룹, 그룹 편집기, 세그먼트 CSV 내보내기, 대상 스냅샷의 화면과 API는 운영에서 실행하지 않았습니다.
+
+2026-10-26 13:48Z에는 운영자의 "운영 반영 진행하고" 요청에 따라 `main` 커밋 `fb0e8b2`를 적용했습니다. 이 커밋에는 앞 기록 이후의 PR #236~#244, #251, #253~#258이 들어 있으며, 그중 migration은 PR #241(운영자 식별자 연결 확인, migration 062)과 PR #242(캠페인 초안, migration 063)뿐입니다.
+배포 전 활성 Worker 버전은 2026-10-19 06:53Z에 만든 `0be5a01a-bcac-4743-8b17-80972dcee4e8`이었습니다. 이 버전의 배포 기록은 이 문서에 없습니다.
+적용 전 조회에서 운영 DB는 061까지 적용된 상태였고(`instagram_segment_snapshots` 있음, `instagram_contact_identity_links`·`campaign_drafts` 없음, public 테이블 47개), 작업 공간 3개·고정 대상 0개·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-26-migration-063/public-pre-062-063.dump`(307,913바이트, SHA-256 `9982f8d40a6c99322d8a95979a26e7d7321f66685b7e63f4f02ff2fc7641d8ed`)에 저장했고, 목록 읽기에서 데이터 테이블 47개를 확인했습니다.
+앞과 같은 Session pooler와 TLS `verify-full`로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE는 188건이었습니다.
+적용 후 public 테이블은 50개가 되었습니다. 새 테이블 `campaign_drafts`, `instagram_contact_identity_links`, `instagram_contact_identity_link_events`는 RLS가 켜져 있고, `auto_chatter_server`는 앞의 두 테이블에 SELECT·INSERT·UPDATE, 감사 테이블에 SELECT·INSERT만 가졌습니다.
+`delete_connection_data`, `delete_person_data`, `delete_workspace_data`의 본문이 모두 식별자 연결 테이블을 다루고, `campaign_drafts`는 작업 공간 범위이므로 `delete_workspace_data`만 다룹니다. 서버 역할의 테이블 DELETE·TRUNCATE 권한, `anon`·`authenticated`의 public 테이블 권한, RLS가 꺼진 public 테이블은 모두 0개였습니다.
+배포 전 `main`의 `fb0e8b2` CI가 통과한 것을 확인했습니다.
+이어서 Worker를 버전 `4790f0f4-38c1-45e8-8c05-7c6175691a0a`로 배포했고, 13:50:50Z부터 100% 활성 상태임을 조회했습니다. `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+공개 점검은 `campaign-drafts.js`·`contact-identity-links.js`가 늘어 23개 항목입니다(정적 파일 18개, 공개 페이지 3개, 잘못된 확인 토큰과 서명 없는 웹후크 요청의 403 2개). 배포 전에는 바뀐 `index.html`·`app.js`·`styles.css`·`contact-csv-preview.js`·`segment-snapshots.js`의 해시와 새 두 파일의 404로 7개가 실패했고, 배포 뒤 13:53:00Z의 점검에서는 23개가 모두 통과했습니다.
+`scheduled_steps`를 13:53:02Z, 13:54:07Z, 13:55:12Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. `stale_recovery`, `wake`, `webhook_delivery`의 마지막 성공은 계속 2026-10-07 00:43:49Z입니다.
+배포 전 버전에서 기록된 실패도 남아 있습니다: `early_reply_reconcile`(2026-10-23 00:44:39Z), `flow_resume`(2026-10-25 18:42:26Z), `kept_reply_cleanup`(2026-10-25 23:51:22Z), `alerts`(2026-10-25 03:00:37Z)가 `unexpected_error`, `cron`이 `step_failed`(2026-10-25 23:51:24Z)였고, 모두 다음 실행에서 성공했으며 경보는 켜지지 않았습니다. 원인은 조사하지 않았습니다.
+로그인한 세션으로 요청하지 않았으므로 식별자 연결 확인, 캠페인 초안과 그 미리보기의 화면과 API는 운영에서 실행하지 않았습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
