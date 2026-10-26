@@ -111,7 +111,8 @@ const utc = (column: string) => `to_char(${column} AT TIME ZONE 'UTC','YYYY-MM-D
 // One statement and one clock (as_of). Stages 1-3 belong to the member; stages 4-6 belong to each verified DM
 // recipient, and the member takes the furthest stage any of its recipients reaches (7 is candidate). The
 // verified bridge reads its own freshness clock (now()), as the contact detail does. The bridge and the per-member
-// recipient stage are MATERIALIZED and joined, so neither runs again for each snapshot member.
+// recipient stage are MATERIALIZED and joined, so neither runs again for each snapshot member. The bridge groups
+// per connection, so reading only the snapshot's connections gives the same rows for its members.
 const PREVIEW_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp() AS as_of),
  draft AS (
    SELECT d.id,d.version,d.archived,d.snapshot_id,s.member_count
@@ -120,7 +121,7 @@ const PREVIEW_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp
  ), members AS (
    SELECT m.connection_id,m.sender_id FROM instagram_segment_snapshot_members m JOIN draft ON m.snapshot_id=draft.snapshot_id
    WHERE m.workspace_id=$1
- ), verified AS MATERIALIZED (${verifiedDmRecipientsSql("workspace_id=$1")}),
+ ), verified AS MATERIALIZED (${verifiedDmRecipientsSql("workspace_id=$1 AND id IN (SELECT connection_id FROM members)")}),
  recipients AS MATERIALIZED (
    SELECT v.connection_id,v.sender_id,max(CASE
      WHEN EXISTS(SELECT 1 FROM channel_consent_state state WHERE state.workspace_id=$1 AND state.connection_id=v.connection_id
