@@ -22,7 +22,8 @@ API 검증 결과는 [구현 검증](../notes/2026-10-21-campaign-drafts-verific
 이름은 NFC 정규화 후 1–60자, 본문은 기존 상담 답장 템플릿과 같은 1–1,000 UTF-16 코드 단위 제한을 적용하며 빈 내용과 NUL을 거절합니다.
 `{{` 또는 `}}`가 있는 본문은 미해결 템플릿으로 거절합니다.
 이 길이는 로컬 초안 저장 제약이며 공급자별 발송 가능성 검증을 대신하지 않습니다.
-템플릿 선택·치환, 수신자별 개인화, 요금·동의·응답 창 미리보기, 예약·실행 승인, outbox 생성, 일괄 발송은 후속 범위입니다.
+템플릿 선택·치환, 수신자별 개인화, 예약·실행 승인, outbox 생성, 일괄 발송은 후속 범위입니다.
+요금·동의·응답 창 미리보기는 2026-10-26에 읽기 전용 API로 추가했으며 [발송 조건·비용 미리보기](#발송-조건비용-미리보기)를 따릅니다.
 초기 API 변경에는 화면을 포함하지 않았습니다.
 이후 추가한 관리 화면은 아래 계약을 따릅니다.
 
@@ -57,6 +58,84 @@ API 검증 결과는 [구현 검증](../notes/2026-10-21-campaign-drafts-verific
 잘못된 요청은 400, 권한 부족은 403, 없거나 다른 작업 공간의 대상은 같은 404, 버전·상태·ID 충돌과 저장 한도는 409로 구분합니다.
 재시도·버전 검사·한도·참조 확인은 한 트랜잭션으로 처리합니다.
 기존 공개 API는 변경하지 않습니다.
+
+## 발송 조건·비용 미리보기
+
+2026-10-26 운영자가 계획을 승인했습니다(마케팅 목적과 별도의 채널 미지원 표시, 공급자 호출 수와 정의되지 않은 한도, API만).
+검증 결과는 [미리보기 검증](../notes/2026-10-26-campaign-draft-preview-verification.md)에 기록합니다.
+
+`GET /api/campaign-drafts/:id/preview`는 초안 하나의 고정 대상 중 지금 남아 있는 명단이 기록된 발송 조건을 몇 명 통과하는지와 발송에 필요한 공급자 호출 수를 반환합니다.
+아무것도 보내거나 쓰지 않으며, `private_reply_outbox`, `instagram_manual_replies`, `channel_consent_events`, `channel_consent_state`, `instagram_segment_snapshot_members`, `campaign_drafts`를 바꾸지 않습니다.
+새 테이블과 migration은 없습니다.
+활성 `admin` 이상만 허용하며 기존 세션·동일 출처·요청 한도 처리와 `no-store` 응답을 다른 초안 API와 같이 사용합니다.
+쿼리 문자열이 있으면 400입니다.
+없거나 다른 작업 공간의 초안, UUID 형식이 아닌 ID는 같은 `404 campaign_draft_not_found`입니다.
+역할 검사가 ID 확인보다 먼저이므로 `agent`는 어떤 ID로도 403을 받습니다.
+보관된 초안도 미리볼 수 있습니다.
+
+### 평가
+
+관리자 멤버십 조회를 포함한 하나의 `REPEATABLE READ READ ONLY` 트랜잭션 안에서 SQL 한 문장으로 평가합니다.
+평가 시각은 그 문장의 `statement_timestamp()` 하나이며 응답의 `as_of`(마이크로초 UTC ISO 문자열)로 반환합니다.
+대상은 호출자 작업 공간에서 초안의 `snapshot_id`에 남아 있는 `instagram_segment_snapshot_members` 행입니다.
+개인·연결 삭제로 줄어든 명단은 복원하지 않으며, 사유별 수의 합은 항상 `remaining_member_count`와 같습니다.
+
+각 대상은 아래 순서에서 처음 해당하는 사유 하나만 받습니다.
+
+1. `connection_unavailable`: 대상의 연결이 `active`가 아니거나, `send_enabled`가 거짓이거나, 저장된 토큰(`access_token_encrypted`)이 없거나, `token_expires_at`이 `as_of` 이하이거나 비어 있습니다. Cloudflare 수동 답장·팔로우 발송 guard가 읽는 연결 열과 같습니다. 연결별 일시 중지(`send_paused_until`)와 수동 답장의 `inbox_enabled`는 발송 시점에 다시 검사하므로 미리보기 사유에 넣지 않습니다.
+2. `contact_paused`: (작업 공간, 연결, 댓글 작성자)의 `instagram_contact_automation.paused` 또는 `handoff_paused`가 참입니다.
+3. `no_dm_identity`: `src/app/inbox-identity.ts`의 `verifiedDmRecipientsSql`이 같은 연결에서 이 댓글 작성자의 확인된 DM 수신자를 하나도 반환하지 않습니다. 두 작성자가 나눠 쓰는 수신자는 모호하므로 어느 쪽에도 확인되지 않습니다. 이 함수는 근거 최신성 판정에 자체 시계 `now()`를 사용하며, 같은 트랜잭션 안에서 읽습니다.
+4. `opted_out`: 수신자별로, `channel_consent_state`에 `purpose`가 `marketing` 또는 `service_reply`이고 `decision='revoke'`인 현재 상태가 그 DM 수신자(`dm_recipient`) 또는 댓글 작성자(`comment_sender`)에 있으면 그 수신자는 수신 거부입니다. `purpose=all` 철회는 투영에서 두 목적 행으로 저장되므로 같은 검사로 잡힙니다. 따라서 댓글 작성자의 철회는 모든 수신자를 막고, 수신자 하나의 철회는 그 수신자만 막습니다. 이 판정은 발송 guard(`deliveryRecipientOptedOut`)와 범위가 다릅니다. guard는 확인 여부와 무관하게 연결된 모든 수신자의 `service_reply` 철회 하나로 댓글 작성자 전체를 막고, 미리보기는 확인된 수신자별로 두 목적의 철회를 봅니다. 발송 guard는 발송 시점에 따로 적용됩니다.
+5. `marketing_consent_required`: 그 DM 수신자에게 `purpose='marketing'`, `decision='grant'`, `evidence_kind='explicit'`인 현재 상태가 없습니다. `evaluateChannelConsent`의 정확한 범위 규칙에 따라 메시지를 받을 `dm_recipient` 식별자만 보며, 댓글 작성자의 마케팅 동의나 `import`·`comment` 근거의 동의는 인정하지 않습니다.
+6. `reply_window_closed`: 그 DM 수신자의 가장 최근에 저장된 `kind='text'` 받은 DM이 `as_of` 이전 24시간 안에 없습니다. `as_of - message_at`이 정확히 24시간이면 닫힌 것이고, 가장 최근 텍스트 DM이 `as_of`보다 미래이면 그보다 이른 DM이 24시간 안에 있어도 닫힌 것으로 봅니다. 버튼 응답(`postback`)은 창을 열지 않습니다. `manual-reply-worker.ts`와 `evaluateWindow`의 규칙과 같습니다.
+7. `candidate`: 위 검사를 모두 통과했습니다.
+
+확인된 DM 수신자가 여럿인 댓글 작성자는 수신자마다 4–6단계를 평가하고, 가장 멀리 간 수신자의 단계를 대상의 단계로 삼습니다.
+따라서 수신자 하나라도 4–6을 모두 통과하면 `candidate`이며, 그렇지 않으면 가장 멀리 간 수신자가 처음 실패한 사유를 받습니다.
+예를 들어 한 수신자가 수신 거부이고 다른 수신자가 동의는 있지만 창이 닫혔다면 `reply_window_closed`입니다.
+
+### 응답
+
+```json
+{
+  "draft_id": "…",
+  "draft_version": 1,
+  "snapshot_id": "…",
+  "archived": false,
+  "as_of": "2026-10-26T09:00:00.000000Z",
+  "original_member_count": "13",
+  "remaining_member_count": "13",
+  "counts": {
+    "connection_unavailable": "1",
+    "contact_paused": "2",
+    "no_dm_identity": "2",
+    "opted_out": "3",
+    "marketing_consent_required": "3",
+    "reply_window_closed": "1",
+    "candidate": "1"
+  },
+  "candidate_meaning": "passed_recorded_conditions_at_as_of",
+  "sendability_claimed": false,
+  "estimated_provider_calls": "1",
+  "plan_broadcast_limit": null,
+  "channel_marketing_supported": false,
+  "global_send_enabled": false
+}
+```
+
+모든 수는 10진수 문자열입니다.
+`candidate`는 `as_of`에 기록된 조건을 통과했다는 뜻이며 발송할 수 있다는 뜻이 아닙니다. 응답은 이를 `candidate_meaning`과 `sendability_claimed: false`로 함께 표시합니다.
+발송 guard는 발송 시점에 모든 조건을 다시 검사합니다.
+`channel_marketing_supported`는 `instagramCapabilities("cloudflare_oauth").operations.marketing.supported`이며 현재 거짓입니다. Instagram 마케팅 발송은 지원하지 않습니다.
+`global_send_enabled`는 Worker의 `SEND_ENABLED`가 정확히 `"true"`인지입니다.
+두 표시는 사유별 수와 따로 반환하며 수를 바꾸지 않습니다.
+
+### 비용
+
+`estimated_provider_calls`는 `candidate` 수와 같습니다(후보 한 명당 발송 호출 한 번).
+`plan_broadcast_limit`은 `null`입니다. 어떤 요금제도 방송 한도를 정의하지 않으며 [#52](https://github.com/AndrewDongminYoo/auto-chatter/issues/52)·[#60](https://github.com/AndrewDongminYoo/auto-chatter/issues/60)이 그 정의를 맡습니다.
+이 API는 한도나 일일 상한을 적용하지 않습니다.
+Instagram 공급자 메시지 요금은 인용할 Meta 출처를 확인하지 않았으므로 알 수 없음으로 둡니다.
 
 ## 수용 기준
 
