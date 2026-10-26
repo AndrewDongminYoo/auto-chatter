@@ -2023,3 +2023,63 @@ section {
   flex-wrap: wrap;
   gap: 8px;
 }
+.campaign-draft-preview {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+.campaign-draft-preview h4 {
+  margin: 0 0 4px;
+}
+/* An empty live region stays rendered (never display: none) so later warnings are announced, but takes no space. */
+.campaign-draft-preview-warnings:empty {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.campaign-draft-preview-warnings p:last-child {
+  margin-bottom: 0;
+}
+.campaign-draft-preview-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px 16px;
+  margin: 12px 0;
+}
+.campaign-draft-preview-summary dt {
+  font-size: 0.875rem;
+}
+.campaign-draft-preview-summary dd {
+  margin: 2px 0 0;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.campaign-draft-preview-table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.campaign-draft-preview-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.campaign-draft-preview-table caption {
+  text-align: left;
+  font-size: 0.875rem;
+  padding-bottom: 6px;
+}
+.campaign-draft-preview-table th,
+.campaign-draft-preview-table td {
+  padding: 8px 4px;
+  border-top: 1px solid var(--color-border);
+  text-align: left;
+}
+.campaign-draft-preview-table td {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.campaign-draft-preview-table thead th:last-child {
+  text-align: right;
+}

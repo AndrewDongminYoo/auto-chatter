@@ -44,8 +44,11 @@ class DraftElement {
   type = "";
   children: DraftElement[] = [];
   listeners = new Map<string, (event: { preventDefault(): void }) => unknown>();
-  constructor(text = "") {
+  attributes = new Map<string, string>();
+  tagName: string;
+  constructor(text = "", tagName = "") {
     this.textContent = text;
+    this.tagName = tagName;
   }
   append(...items: DraftElement[]) {
     this.children.push(...items);
@@ -65,7 +68,16 @@ class DraftElement {
       ...child.querySelectorAll(selector),
     ]);
   }
-  setAttribute() {}
+  setAttribute(name: string, value: string) {
+    this.attributes.set(name, value);
+  }
+  getAttribute(name: string) {
+    return this.attributes.get(name) ?? null;
+  }
+  // Every text node below this element, as a reader of the rendered card would meet it.
+  allText(): string {
+    return [this.textContent, ...this.children.map((child) => child.allText())].join(" ");
+  }
   focused = false;
   focus() {
     this.focused = true;
@@ -82,6 +94,31 @@ const savedDraft = {
   stored_member_count: 2,
   created_at: "2026-10-21T03:00:00Z",
   updated_at: "2026-10-21T03:00:00Z",
+};
+// The preview API's real shape; counts are decimal strings and as_of carries microseconds.
+const previewResponse = {
+  draft_id: input.id,
+  draft_version: 3,
+  snapshot_id: input.snapshot_id,
+  archived: false,
+  as_of: "2026-10-21T03:00:00.123456Z",
+  original_member_count: "4",
+  remaining_member_count: "9007199254741014",
+  counts: {
+    connection_unavailable: "1",
+    contact_paused: "2",
+    no_dm_identity: "3",
+    opted_out: "4",
+    marketing_consent_required: "5",
+    reply_window_closed: "6",
+    candidate: "9007199254740993",
+  },
+  candidate_meaning: "passed_recorded_conditions_at_as_of",
+  sendability_claimed: false,
+  estimated_provider_calls: "9007199254740993",
+  plan_broadcast_limit: null as string | null,
+  channel_marketing_supported: false,
+  global_send_enabled: false,
 };
 type DraftApi = (path: string, method?: string, body?: Record<string, unknown>) => Promise<unknown>;
 function draftHarness(override?: DraftApi) {
@@ -127,6 +164,7 @@ function draftHarness(override?: DraftApi) {
         ],
       };
     if (path === "/api/campaign-drafts" && method === "GET") return { drafts: [savedDraft] };
+    if (path.endsWith("/preview")) return structuredClone(previewResponse);
     if (method === "GET") return savedDraft;
     return { ...savedDraft, ...body, version: 4, archived: path.endsWith("/archive") };
   };
@@ -139,13 +177,21 @@ function draftHarness(override?: DraftApi) {
   const script = new URL("../../public/app/campaign-drafts.js", import.meta.url);
   vm.runInContext(existsSync(script) ? readFileSync(script, "utf8") : "", context);
   assert.equal(typeof context.createCampaignDrafts, "function", "campaign draft controller is missing");
-  const controller = context.createCampaignDrafts({ api, node: (_tag: string, text = "") => new DraftElement(text) });
+  const requests: string[] = [];
+  const controller = context.createCampaignDrafts({
+    api: (path: string, method?: string, body?: Record<string, unknown>) => {
+      requests.push(path);
+      return api(path, method, body);
+    },
+    node: (tag: string, text = "") => new DraftElement(text, tag),
+  });
   return {
     controller,
     get,
     fields,
     form,
     writes,
+    requests,
     refuseDiscard: () => {
       allowDiscard = false;
     },
@@ -464,4 +510,301 @@ test("session invalidation prevents a pending workspace bootstrap from reconfigu
     await pending;
     assert.equal(configurations, 0, `${pausedAt} response from before invalidation must not restore campaign data`);
   }
+});
+
+// Preview UI (#35 follow-up): an explicit read that never claims anyone can be sent to.
+const previewIds = [
+  "campaign-draft-preview",
+  "campaign-draft-preview-warnings",
+  "campaign-draft-preview-status",
+  "campaign-draft-preview-summary",
+  "campaign-draft-preview-rows",
+];
+const previewText = (h: ReturnType<typeof draftHarness>) =>
+  previewIds.map((id) => h.get(id).allText()).join(" ") + h.get("campaign-draft-preview-run").textContent;
+const previewRequests = (h: ReturnType<typeof draftHarness>) =>
+  h.requests.filter((path) => path.endsWith("/preview")).length;
+const runPreview = (h: ReturnType<typeof draftHarness>) => h.get("campaign-draft-preview-run").dispatch("click");
+const rendered = (h: ReturnType<typeof draftHarness>) =>
+  !h.get("campaign-draft-preview-result").hidden && h.get("campaign-draft-preview-rows").children.length > 0;
+
+test("the preview is fetched only by its button, once per click, and renders warnings, reasons and decimal counts", async () => {
+  const h = await adminDraft();
+  assert.equal(h.get("campaign-draft-preview").hidden, true, "a new draft has no stored conditions to preview");
+  await openSaved(h);
+  assert.equal(h.get("campaign-draft-preview").hidden, false);
+  assert.equal(previewRequests(h), 0, "opening a draft must not fetch the preview");
+  await runPreview(h);
+  assert.deepEqual(
+    h.requests.filter((path) => path.endsWith("/preview")),
+    [`/api/campaign-drafts/${input.id}/preview`],
+  );
+  assert.deepEqual(
+    h.get("campaign-draft-preview-warnings").children.map((child) => child.textContent),
+    ["Instagram 마케팅 발송은 아직 지원하지 않습니다.", "서비스 전체 발송이 꺼져 있습니다."],
+  );
+  const rows = h.get("campaign-draft-preview-rows").children;
+  assert.deepEqual(
+    rows.map((row) => row.children.map((cell) => [cell.tagName, cell.textContent])),
+    [
+      ["연결 발송 불가", "1"],
+      ["자동화 중지", "2"],
+      ["확인된 DM 대화 없음", "3"],
+      ["수신 거부", "4"],
+      ["마케팅 동의 없음", "5"],
+      ["24시간 응답 창 닫힘", "6"],
+      ["조건 통과", "9,007,199,254,740,993"],
+    ].map(([label, count]) => [
+      ["th", label],
+      ["td", `${count}명`],
+    ]),
+  );
+  for (const row of rows) {
+    assert.equal(row.tagName, "tr");
+    assert.equal(row.children[0]!.getAttribute("scope"), "row");
+  }
+  const summary = h.get("campaign-draft-preview-summary").allText();
+  assert.match(summary, /원래 인원\s+4명/);
+  assert.match(summary, /현재 남은 인원\s+9,007,199,254,741,014명/, "counts beyond 2^53 must not round");
+  assert.match(summary, /예상 공급자 호출 수\s+9,007,199,254,740,993회/);
+  assert.match(summary, /요금제 일괄 발송 한도\s+정해지지 않음/);
+  assert.match(summary, /2026\. 10\. 21\. 오후 12:00:00 \(Asia\/Seoul\)/, "as_of uses the workspace time zone");
+  assert.doesNotMatch(previewText(h), /Invalid|NaN|undefined|null/);
+  assert.doesNotMatch(previewText(h), /발송\s*가능/);
+  await runPreview(h);
+  assert.equal(previewRequests(h), 2, "each click reads the preview again");
+});
+
+test("the preview hides warnings that do not apply and shows a defined plan limit as given", async () => {
+  const h = await adminDraft(async (path) => {
+    if (path.endsWith("/preview"))
+      return {
+        ...previewResponse,
+        channel_marketing_supported: true,
+        global_send_enabled: true,
+        plan_broadcast_limit: "12345678901234567890",
+      };
+  });
+  await openSaved(h);
+  await runPreview(h);
+  assert.equal(h.get("campaign-draft-preview-warnings").children.length, 0);
+  assert.match(
+    h.get("campaign-draft-preview-summary").allText(),
+    /요금제 일괄 발송 한도\s+12,345,678,901,234,567,890명/,
+  );
+  assert.doesNotMatch(previewText(h), /발송\s*가능/);
+});
+
+test("the preview button reports a busy state while its read is pending", async () => {
+  let release!: (value: unknown) => void;
+  const h = await adminDraft(async (path) => {
+    if (path.endsWith("/preview"))
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+  });
+  await openSaved(h);
+  const button = h.get("campaign-draft-preview-run");
+  assert.equal(button.disabled, false);
+  const pending = runPreview(h);
+  assert.equal(button.disabled, true);
+  assert.equal(button.getAttribute("aria-busy"), "true");
+  release(structuredClone(previewResponse));
+  await pending;
+  assert.equal(button.disabled, false);
+  assert.equal(button.getAttribute("aria-busy"), "false");
+  assert.equal(rendered(h), true);
+});
+
+test("an unsaved edit disables the preview because it reads only the stored draft", async () => {
+  const h = await adminDraft();
+  await openSaved(h);
+  h.fields.body.value = "Unsaved";
+  await h.form.dispatch("input");
+  assert.equal(h.get("campaign-draft-preview-run").disabled, true);
+  await runPreview(h);
+  assert.equal(previewRequests(h), 0);
+});
+
+test("an archived draft can be previewed", async () => {
+  const h = await adminDraft(async (path) => {
+    if (path.endsWith("/preview")) return { ...previewResponse, draft_version: 4, archived: true };
+  });
+  await openSaved(h);
+  await h.get("campaign-draft-archive").dispatch("click");
+  assert.equal(h.fields.body.disabled, true);
+  assert.equal(h.get("campaign-draft-preview-run").disabled, false);
+  await runPreview(h);
+  assert.equal(rendered(h), true);
+});
+
+type PreviewHarness = Awaited<ReturnType<typeof adminDraft>>;
+// Each entry carries the version of the draft that is open after the invalidation (the harness's writes return
+// version 4), so the late response matches the open draft and only the invalidation itself can discard it.
+const invalidations: [string, (h: PreviewHarness) => Promise<unknown> | void, number][] = [
+  ["no invalidation (control)", () => {}, 3],
+  [
+    "an input change",
+    (h) => {
+      h.fields.body.value = "Edited";
+      return h.form.dispatch("input");
+    },
+    3,
+  ],
+  ["a save", (h) => h.form.dispatch("submit"), 4],
+  ["an archive", (h) => h.get("campaign-draft-archive").dispatch("click"), 4],
+  ["opening another draft", (h) => openSaved(h), 3],
+  ["starting a new draft", (h) => h.get("campaign-draft-new").dispatch("click"), 3],
+  ["a session reset", (h) => h.controller.reset(), 3],
+  ["a workspace change", (h) => h.controller.configure("admin", "workspace-b", "UTC"), 3],
+];
+for (const [name, invalidate, version] of invalidations)
+  test(`a preview response that arrives after ${name} ${name.startsWith("no ") ? "renders" : "is discarded"}`, async () => {
+    let release!: (value: unknown) => void;
+    let pause = true;
+    const h = await adminDraft(async (path) => {
+      if (path.endsWith("/preview") && pause)
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+    });
+    await openSaved(h);
+    const pending = runPreview(h);
+    pause = false;
+    await invalidate(h);
+    release({ ...structuredClone(previewResponse), draft_version: version });
+    await pending;
+    await draftSettle();
+    const control = name.startsWith("no ");
+    assert.equal(rendered(h), control);
+    assert.equal(h.get("campaign-draft-preview-warnings").children.length, control ? 2 : 0);
+    // A discarded response leaves no trace; the mismatch notice would mean only the version check stopped it.
+    assert.equal(h.get("campaign-draft-preview-status").textContent, "");
+  });
+
+for (const [name, invalidate] of invalidations.slice(1))
+  test(`a preview already on screen is cleared by ${name}`, async () => {
+    const h = await adminDraft();
+    await openSaved(h);
+    await runPreview(h);
+    assert.equal(rendered(h), true);
+    await invalidate(h);
+    await draftSettle();
+    assert.equal(rendered(h), false);
+    assert.equal(h.get("campaign-draft-preview-warnings").children.length, 0);
+    assert.equal(h.get("campaign-draft-preview-summary").children.length, 0);
+  });
+
+for (const [name, button] of [
+  ["a save", "submit"],
+  ["an archive", "campaign-draft-archive"],
+] as const)
+  test(`a preview response that arrives while ${name} is pending is discarded`, async () => {
+    let releasePreview!: (value: unknown) => void;
+    let releaseWrite!: (value: unknown) => void;
+    const h = await adminDraft(async (path, method) => {
+      if (path.endsWith("/preview"))
+        return new Promise((resolve) => {
+          releasePreview = resolve;
+        });
+      if (method !== "GET")
+        return new Promise((resolve) => {
+          releaseWrite = resolve;
+        });
+    });
+    await openSaved(h);
+    const pendingPreview = runPreview(h);
+    const pendingWrite =
+      button === "submit" ? h.form.dispatch("submit") : h.get("campaign-draft-archive").dispatch("click");
+    // The open draft still has version 3 here, so only the write's invalidation can discard this response.
+    releasePreview(structuredClone(previewResponse));
+    await pendingPreview;
+    assert.equal(rendered(h), false);
+    assert.equal(h.get("campaign-draft-preview-status").textContent, "");
+    releaseWrite({ ...savedDraft, version: 4, archived: button !== "submit" });
+    await pendingWrite;
+    await draftSettle();
+    assert.equal(rendered(h), false);
+  });
+
+test("the app's other-tab session signal and BFCache restoration reset the campaign controller", () => {
+  // Those triggers reach the preview only through campaignDrafts.reset(), which the tests above exercise.
+  const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("const invalidateContactSession = () => {");
+  const body = source.slice(start, source.indexOf("\n};", start));
+  assert.match(body, /campaignDrafts\.reset\(\)/);
+  assert.match(source, /addEventListener\("message"[\s\S]{0,120}invalidateContactSession\(\)/);
+  assert.match(source, /addEventListener\("pageshow"[\s\S]{0,80}event\.persisted\) invalidateContactSession\(\)/);
+});
+
+test("a preview of another draft or another version never renders", async () => {
+  for (const mismatch of [{ draft_version: 2 }, { draft_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" }]) {
+    const h = await adminDraft(async (path) => {
+      if (path.endsWith("/preview")) return { ...previewResponse, ...mismatch };
+    });
+    await openSaved(h);
+    await runPreview(h);
+    assert.equal(rendered(h), false);
+    assert.equal(h.get("campaign-draft-preview-warnings").children.length, 0);
+    assert.match(h.get("campaign-draft-preview-status").textContent, /다시 불러온/);
+    assert.equal(h.get("campaign-draft-preview-run").disabled, false);
+  }
+});
+
+test("preview errors use the campaign messages and leave another click available", async () => {
+  for (const [failure, expected] of [
+    [{ code: "campaign_draft_not_found", status: 404 }, /초안을 찾을 수 없습니다/],
+    [{ code: "rate_limited", status: 429 }, /요청이 많습니다/],
+    [new Error("network lost"), /불러오지 못했습니다/],
+    [{ ...previewResponse, counts: { ...previewResponse.counts, candidate: 7 } }, /불러오지 못했습니다/],
+  ] as const) {
+    let fail = true;
+    const h = await adminDraft(async (path) => {
+      if (!path.endsWith("/preview") || !fail) return;
+      if ("draft_id" in failure) return failure;
+      throw failure;
+    });
+    await openSaved(h);
+    await runPreview(h);
+    assert.match(h.get("campaign-draft-preview-status").textContent, expected);
+    assert.equal(rendered(h), false);
+    assert.equal(h.get("campaign-draft-preview-run").disabled, false, "a read failure must not lock the button");
+    assert.equal(h.fields.body.disabled, false, "a read failure must not lock the editor");
+    fail = false;
+    await runPreview(h);
+    assert.equal(rendered(h), true);
+    assert.equal(h.get("campaign-draft-preview-status").textContent, "");
+  }
+});
+
+test("a new click clears the previous result before its own read finishes", async () => {
+  let release!: (value: unknown) => void;
+  let pause = false;
+  const h = await adminDraft(async (path) => {
+    if (path.endsWith("/preview") && pause)
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+  });
+  await openSaved(h);
+  await runPreview(h);
+  assert.equal(rendered(h), true);
+  pause = true;
+  const pending = runPreview(h);
+  assert.equal(rendered(h), false, "a stale result must not stay beside the loading state");
+  release(Promise.reject({ code: "rate_limited", status: 429 }));
+  await pending;
+  assert.equal(rendered(h), false);
+  assert.match(h.get("campaign-draft-preview-status").textContent, /요청이 많습니다/);
+});
+
+test("a preview refused by role clears protected campaign data", async () => {
+  const h = await adminDraft(async (path) => {
+    if (path.endsWith("/preview")) throw { code: "role_forbidden", status: 403 };
+  });
+  await openSaved(h);
+  await runPreview(h);
+  assert.equal(h.get("campaign-drafts-section").hidden, true);
+  assert.equal(h.fields.body.value, "");
+  assert.equal(rendered(h), false);
 });
