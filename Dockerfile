@@ -1,6 +1,7 @@
 FROM node:26-bookworm-slim AS dependencies
 WORKDIR /app
-RUN corepack enable
+# Node.js 25+ no longer bundles Corepack, so install the userland package before enabling it.
+RUN npm install -g corepack@0.36.0 && corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
