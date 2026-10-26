@@ -5,7 +5,8 @@ function createCampaignDrafts({ api, node }) {
   const endpoint = "/api/campaign-drafts";
   let generation = 0,
     listRequest = 0,
-    detailRequest = 0;
+    detailRequest = 0,
+    previewRequest = 0;
   let permitted = false,
     workspace,
     timeZone;
@@ -17,7 +18,18 @@ function createCampaignDrafts({ api, node }) {
     reading = false,
     saving = false,
     conflict = false,
-    unavailable = false;
+    unavailable = false,
+    previewing = false;
+  // The preview reasons in the API's evaluation order. "조건 통과" only means the recorded conditions passed at as_of.
+  const previewReasons = [
+    ["connection_unavailable", "연결 발송 불가"],
+    ["contact_paused", "자동화 중지"],
+    ["no_dm_identity", "확인된 DM 대화 없음"],
+    ["opted_out", "수신 거부"],
+    ["marketing_consent_required", "마케팅 동의 없음"],
+    ["reply_window_closed", "24시간 응답 창 닫힘"],
+    ["candidate", "조건 통과"],
+  ];
   const messages = {
     invalid_campaign_draft:
       "이름은 60자 이내, 본문은 1,000자 이내로 입력해 주세요. 변수 문법과 제어 문자는 사용할 수 없습니다.",
@@ -69,8 +81,65 @@ function createCampaignDrafts({ api, node }) {
       button.disabled = busy || Boolean(operation);
     byId("campaign-draft-form").setAttribute("aria-busy", String(reading || saving));
     byId("campaign-draft-count").textContent = `${fields.body.value.length.toLocaleString("ko-KR")} / 1,000`;
+    // The preview reads the stored draft, so it waits for unsaved edits to be saved.
+    const previewButton = byId("campaign-draft-preview-run");
+    byId("campaign-draft-preview").hidden = !editing;
+    previewButton.disabled =
+      !permitted || !editing || reading || saving || previewing || conflict || unavailable || hasChanges();
+    previewButton.textContent = previewing ? "확인하는 중…" : "발송 조건 미리보기";
+    previewButton.setAttribute("aria-busy", String(previewing));
+  }
+  // Retires any pending preview read through its request counter, like the list and detail reads.
+  function clearPreview() {
+    previewRequest++;
+    previewing = false;
+    byId("campaign-draft-preview-warnings").replaceChildren();
+    byId("campaign-draft-preview-status").textContent = "";
+    byId("campaign-draft-preview-summary").replaceChildren();
+    byId("campaign-draft-preview-rows").replaceChildren();
+    byId("campaign-draft-preview-result").hidden = true;
+  }
+  // Counts arrive as decimal strings; BigInt keeps values beyond 2^53 exact.
+  function decimal(value) {
+    if (typeof value !== "string" || !/^\d+$/.test(value)) throw new Error("invalid preview count");
+    return BigInt(value).toLocaleString("ko-KR");
+  }
+  function renderPreview(preview) {
+    // Build every node first so a malformed response changes nothing on screen.
+    const warnings = [];
+    if (preview.channel_marketing_supported !== true)
+      warnings.push(node("p", "Instagram 마케팅 발송은 아직 지원하지 않습니다."));
+    if (preview.global_send_enabled !== true) warnings.push(node("p", "서비스 전체 발송이 꺼져 있습니다."));
+    const asOf = new Date(preview.as_of);
+    if (Number.isNaN(asOf.getTime())) throw new Error("invalid preview time");
+    const summary = [
+      ["원래 인원", `${decimal(preview.original_member_count)}명`],
+      ["현재 남은 인원", `${decimal(preview.remaining_member_count)}명`],
+      ["예상 공급자 호출 수", `${decimal(preview.estimated_provider_calls)}회`],
+      [
+        "요금제 일괄 발송 한도",
+        preview.plan_broadcast_limit === null ? "정해지지 않음" : `${decimal(preview.plan_broadcast_limit)}명`,
+      ],
+      ["기준 시각", `${asOf.toLocaleString("ko-KR", { timeZone })} (${timeZone})`],
+    ].map(([label, value]) => {
+      const item = node("div", "");
+      item.append(node("dt", label), node("dd", value));
+      return item;
+    });
+    const rows = previewReasons.map(([reason, label]) => {
+      const row = node("tr", "");
+      const header = node("th", label);
+      header.setAttribute("scope", "row");
+      row.append(header, node("td", `${decimal(preview.counts?.[reason])}명`));
+      return row;
+    });
+    byId("campaign-draft-preview-warnings").replaceChildren(...warnings);
+    byId("campaign-draft-preview-summary").replaceChildren(...summary);
+    byId("campaign-draft-preview-rows").replaceChildren(...rows);
+    byId("campaign-draft-preview-result").hidden = false;
   }
   function clearEditor() {
+    clearPreview();
     editing = null;
     operation = null;
     conflict = false;
@@ -241,6 +310,7 @@ function createCampaignDrafts({ api, node }) {
         archive,
       };
     }
+    clearPreview();
     const session = generation,
       pending = operation;
     saving = true;
@@ -275,6 +345,47 @@ function createCampaignDrafts({ api, node }) {
       }
     }
   }
+  // A read: an unknown outcome only allows another click, so nothing here locks the editor or the button.
+  async function preview() {
+    if (
+      !permitted ||
+      !editing ||
+      reading ||
+      saving ||
+      previewing ||
+      operation ||
+      conflict ||
+      unavailable ||
+      hasChanges()
+    )
+      return;
+    clearPreview();
+    const session = generation,
+      request = previewRequest,
+      draft = editing;
+    previewing = true;
+    controls();
+    byId("campaign-draft-preview-status").textContent = "발송 조건을 확인하는 중…";
+    try {
+      const result = await api(`${endpoint}/${draft.id}/preview`);
+      if (session !== generation || request !== previewRequest) return;
+      if (result.draft_id !== editing?.id || result.draft_version !== editing.version) {
+        byId("campaign-draft-preview-status").textContent =
+          "초안이 다른 곳에서 변경되었습니다. 저장된 값을 다시 불러온 뒤 미리보기를 다시 눌러 주세요.";
+        return;
+      }
+      renderPreview(result);
+      byId("campaign-draft-preview-status").textContent = "";
+    } catch (error) {
+      if (session !== generation || request !== previewRequest || authorizationLost(error)) return;
+      byId("campaign-draft-preview-status").textContent = message(error);
+    } finally {
+      if (session === generation && request === previewRequest) {
+        previewing = false;
+        controls();
+      }
+    }
+  }
   function reset() {
     generation++;
     listRequest++;
@@ -294,7 +405,11 @@ function createCampaignDrafts({ api, node }) {
     event.preventDefault();
     return save();
   });
-  form.addEventListener("input", controls);
+  form.addEventListener("input", () => {
+    clearPreview();
+    controls();
+  });
+  byId("campaign-draft-preview-run").addEventListener("click", preview);
   byId("campaign-draft-archive").addEventListener("click", () => save(true));
   byId("campaign-draft-reload").addEventListener("click", () => editing && openDraft(editing.id));
   byId("campaign-draft-new").addEventListener("click", () => {
@@ -309,11 +424,20 @@ function createCampaignDrafts({ api, node }) {
     configure(role, workspaceId, zone) {
       const allowed = ["owner", "admin"].includes(role);
       if (!allowed || workspace !== workspaceId) reset();
+      // A same-workspace reload can bring a zone another admin stored; the preview's as_of text used the old one.
+      if (timeZone !== zone) clearPreview();
       permitted = allowed;
       workspace = workspaceId;
       timeZone = zone;
       controls();
       if (permitted) return load();
+    },
+    // A saved zone change: the preview's as_of and the snapshot option dates used the old zone. No reload.
+    timeZoneChanged(zone) {
+      timeZone = zone;
+      clearPreview();
+      options();
+      controls();
     },
   };
 }

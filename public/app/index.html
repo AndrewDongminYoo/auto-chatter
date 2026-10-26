@@ -1284,8 +1284,8 @@
               </div>
             </div>
             <p id="campaign-draft-help" class="hint">
-              고정한 대상에 보낼 메시지를 초안으로 저장합니다. 저장하거나 보관해도 메시지는 전송되지 않습니다. 발송
-              동의·응답 창·비용을 확인하거나 예약하는 기능은 아직 제공하지 않습니다.
+              고정한 대상에 보낼 메시지를 초안으로 저장합니다. 저장하거나 보관해도 메시지는 전송되지 않습니다. 저장한
+              초안의 발송 조건은 미리볼 수 있으며, 예약·승인·실제 발송 기능은 아직 제공하지 않습니다.
             </p>
             <p id="campaign-draft-capacity" class="hint"></p>
             <p id="campaign-draft-list-status" class="hint" role="status" aria-live="polite"></p>
@@ -1329,6 +1329,54 @@
               </div>
             </form>
             <p id="campaign-draft-status" class="hint" role="status" aria-live="polite"></p>
+            <section
+              id="campaign-draft-preview"
+              class="campaign-draft-preview"
+              aria-labelledby="campaign-draft-preview-title"
+              hidden
+            >
+              <h4 id="campaign-draft-preview-title">발송 조건</h4>
+              <p id="campaign-draft-preview-help" class="hint">
+                저장된 초안의 고정 대상을 지금 기록된 조건으로 나눠 봅니다. 메시지를 보내거나 예약하지 않습니다.
+                저장하지 않은 변경은 반영하지 않으므로 먼저 저장해 주세요.
+              </p>
+              <button
+                id="campaign-draft-preview-run"
+                type="button"
+                class="secondary"
+                aria-describedby="campaign-draft-preview-help"
+              >
+                발송 조건 미리보기
+              </button>
+              <div
+                id="campaign-draft-preview-warnings"
+                class="flow-alert warning campaign-draft-preview-warnings"
+                role="status"
+                aria-live="polite"
+              ></div>
+              <p id="campaign-draft-preview-status" class="hint" role="status" aria-live="polite"></p>
+              <div id="campaign-draft-preview-result" hidden>
+                <dl id="campaign-draft-preview-summary" class="campaign-draft-preview-summary"></dl>
+                <div class="campaign-draft-preview-table">
+                  <table>
+                    <caption>
+                      조건별 인원 · 각 인원은 처음 해당하는 조건 하나에만 셉니다
+                    </caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">조건</th>
+                        <th scope="col">인원</th>
+                      </tr>
+                    </thead>
+                    <tbody id="campaign-draft-preview-rows"></tbody>
+                  </table>
+                </div>
+                <p class="hint">
+                  조건 통과는 기준 시각에 기록된 조건을 모두 통과했다는 뜻입니다. 실제로 보낼 때는 연결·자동화 중지·수신
+                  거부·동의·응답 창을 모두 다시 확인합니다.
+                </p>
+              </div>
+            </section>
             <p class="hint">보관한 초안은 조회만 할 수 있으며 100개 저장 한도에 계속 포함됩니다.</p>
           </section>
         </div>
