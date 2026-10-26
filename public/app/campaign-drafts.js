@@ -424,11 +424,20 @@ function createCampaignDrafts({ api, node }) {
     configure(role, workspaceId, zone) {
       const allowed = ["owner", "admin"].includes(role);
       if (!allowed || workspace !== workspaceId) reset();
+      // A same-workspace reload can bring a zone another admin stored; the preview's as_of text used the old one.
+      if (timeZone !== zone) clearPreview();
       permitted = allowed;
       workspace = workspaceId;
       timeZone = zone;
       controls();
       if (permitted) return load();
+    },
+    // A saved zone change: the preview's as_of and the snapshot option dates used the old zone. No reload.
+    timeZoneChanged(zone) {
+      timeZone = zone;
+      clearPreview();
+      options();
+      controls();
     },
   };
 }

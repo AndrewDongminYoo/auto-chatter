@@ -568,7 +568,12 @@ test("the preview is fetched only by its button, once per click, and renders war
   assert.match(summary, /현재 남은 인원\s+9,007,199,254,741,014명/, "counts beyond 2^53 must not round");
   assert.match(summary, /예상 공급자 호출 수\s+9,007,199,254,740,993회/);
   assert.match(summary, /요금제 일괄 발송 한도\s+정해지지 않음/);
-  assert.match(summary, /2026\. 10\. 21\. 오후 12:00:00 \(Asia\/Seoul\)/, "as_of uses the workspace time zone");
+  // The day-period word (오후 or PM) comes from the runtime's ICU data, so build the expected text with the same formatter.
+  const asOf = new Date(previewResponse.as_of);
+  const seoulAsOf = asOf.toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
+  assert.ok(summary.includes(`${seoulAsOf} (Asia/Seoul)`), "as_of uses the workspace time zone");
+  assert.match(seoulAsOf, /12:00:00/, "03:00Z is 12:00 in Asia/Seoul");
+  assert.notEqual(seoulAsOf, asOf.toLocaleString("ko-KR", { timeZone: "UTC" }));
   assert.doesNotMatch(previewText(h), /Invalid|NaN|undefined|null/);
   assert.doesNotMatch(previewText(h), /발송\s*가능/);
   await runPreview(h);
@@ -657,6 +662,8 @@ const invalidations: [string, (h: PreviewHarness) => Promise<unknown> | void, nu
   ["starting a new draft", (h) => h.get("campaign-draft-new").dispatch("click"), 3],
   ["a session reset", (h) => h.controller.reset(), 3],
   ["a workspace change", (h) => h.controller.configure("admin", "workspace-b", "UTC"), 3],
+  ["a time zone change on reload", (h) => h.controller.configure("admin", "workspace-a", "UTC"), 3],
+  ["a saved time zone change", (h) => h.controller.timeZoneChanged("UTC"), 3],
 ];
 for (const [name, invalidate, version] of invalidations)
   test(`a preview response that arrives after ${name} ${name.startsWith("no ") ? "renders" : "is discarded"}`, async () => {
@@ -735,6 +742,32 @@ test("the app's other-tab session signal and BFCache restoration reset the campa
   assert.match(body, /campaignDrafts\.reset\(\)/);
   assert.match(source, /addEventListener\("message"[\s\S]{0,120}invalidateContactSession\(\)/);
   assert.match(source, /addEventListener\("pageshow"[\s\S]{0,80}event\.persisted\) invalidateContactSession\(\)/);
+});
+
+test("a saved time zone change renders later previews and snapshot dates in the new zone without reloading", async () => {
+  const h = await adminDraft();
+  await openSaved(h);
+  const before = h.requests.length;
+  h.controller.timeZoneChanged("UTC");
+  await draftSettle();
+  assert.equal(h.requests.length, before, "a zone change must not reload the draft list");
+  assert.equal(h.fields.snapshot_id.value, input.snapshot_id, "the selected snapshot survives the option rebuild");
+  assert.equal(h.controller.hasChanges(), false);
+  const snapshotDate = new Date("2026-10-21T03:00:00Z").toLocaleString("ko-KR", { timeZone: "UTC" });
+  assert.ok(h.fields.snapshot_id.children[1]!.textContent.includes(snapshotDate), "snapshot dates use the new zone");
+  await runPreview(h);
+  const utcAsOf = new Date(previewResponse.as_of).toLocaleString("ko-KR", { timeZone: "UTC" });
+  const summary = h.get("campaign-draft-preview-summary").allText();
+  assert.ok(summary.includes(`${utcAsOf} (UTC)`), "as_of uses the saved workspace time zone");
+  assert.doesNotMatch(summary, /Asia\/Seoul/);
+});
+
+test("the time zone save handler updates the campaign controller", () => {
+  const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
+  const start = source.indexOf('byId("time-zone-form").addEventListener("submit"');
+  const block = source.slice(source.indexOf("if (changed) {", start), source.indexOf("notice(", start));
+  assert.ok(start >= 0 && block.length > 0);
+  assert.match(block, /campaignDrafts\.timeZoneChanged\(workspaceTimeZone\)/);
 });
 
 test("a preview of another draft or another version never renders", async () => {

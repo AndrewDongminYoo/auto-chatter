@@ -2033,6 +2033,7 @@ byId("time-zone-form").addEventListener("submit", (event) => {
     // Reminder due times on screen are wall-clock values in the previous zone.
     if (changed) {
       inbox.timeZoneChanged();
+      campaignDrafts.timeZoneChanged(workspaceTimeZone);
       manualReports.configure(currentRole, workspaceTimeZone, connections);
       void flowReports.configure(currentRole, workspaceTimeZone, connections);
       handoffReports.configure(currentRole, workspaceTimeZone, connections);
