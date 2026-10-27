@@ -1052,6 +1052,26 @@ test("approval passes through a confirmation step that freezes the version, targ
   assert.equal(approvalShown(h), true);
 });
 
+for (const [name, act, archived] of [
+  ["save", (h: ApprovalHarness) => h.form.dispatch("submit"), false],
+  ["archive", (h: ApprovalHarness) => click(h, "campaign-draft-archive"), true],
+] as const) {
+  test(`a successful ${name} closes an open confirmation that froze the older version`, async () => {
+    const h = await adminDraft();
+    await openSaved(h);
+    await click(h, "campaign-approval-start");
+    assert.match(h.get("campaign-approval-confirm-summary").allText(), /버전 3/);
+    await act(h);
+    assert.equal(h.get("campaign-approval-confirm").hidden, true, "the confirmation showed version 3");
+    assert.equal(h.get("campaign-approval-confirm-summary").allText(), "");
+    await click(h, "campaign-approval-submit");
+    assert.equal(approvalWrites(h).length, 0, "a closed confirmation sends nothing");
+    if (archived) return;
+    await approveNow(h);
+    assert.equal(approvalWrites(h)[0]!.body!.expected_version, 4, "a new confirmation uses the saved version");
+  });
+}
+
 test("an immediate approval sends null as its schedule and the zone the screen knows", async () => {
   const h = await adminDraft();
   await openSaved(h);

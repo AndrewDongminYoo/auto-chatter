@@ -673,6 +673,8 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       const draft = await api(pending.path, pending.method, pending.body);
       if (session !== generation) return;
       showDraft(draft);
+      // Every edit and archive moves the version, so a confirmation opened before it shows a version the server refuses.
+      closeConfirmation();
       saved = draft.id;
       byId("campaign-draft-status").textContent = draft.archived
         ? "초안을 보관했습니다."
