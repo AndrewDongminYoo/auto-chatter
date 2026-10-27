@@ -74,7 +74,8 @@ test("Instagram capability variants describe implemented support without provide
     assert.equal(caps.templates.approved_message, false);
     for (const type of ["attachment", "provider_template"])
       assert.equal(checkCapability(caps, "manual_reply", type), false);
-    assert.equal(checkCapability(caps, "marketing", "text"), false);
+    assert.equal(checkCapability(caps, "marketing", "text"), surface === "cloudflare_oauth");
+    assert.equal(checkCapability(caps, "marketing", "attachment"), false);
     assert.equal(Object.isFrozen(caps.operations.manual_reply.content_types), true);
   }
 });

@@ -165,7 +165,7 @@ function failConsentRead(failAt: number): () => number {
 
 before(async () => {
   await pool.query(
-    "DROP TABLE IF EXISTS campaign_approval_events, campaign_approvals, campaign_drafts, instagram_contact_identity_links, instagram_contact_identity_link_events, workspace_reply_templates, webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_reminder_events, instagram_inbox_reminders, instagram_inbox_notes, instagram_inbox_label_events, instagram_inbox_label_rules, instagram_inbox_conversation_labels, instagram_inbox_labels, instagram_inbox_read_state, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_segment_snapshot_members, instagram_segment_snapshots, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+    "DROP TABLE IF EXISTS campaign_deliveries, campaign_runs, campaign_approval_events, campaign_approvals, campaign_drafts, instagram_contact_identity_links, instagram_contact_identity_link_events, workspace_reply_templates, webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_reminder_events, instagram_inbox_reminders, instagram_inbox_notes, instagram_inbox_label_events, instagram_inbox_label_rules, instagram_inbox_conversation_labels, instagram_inbox_labels, instagram_inbox_read_state, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_segment_snapshot_members, instagram_segment_snapshots, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
   );
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
 });
@@ -456,6 +456,7 @@ test("cron recovers a committed reply after queue publish failure", async () => 
     ).rows.map((row) => row.name),
     [
       "alerts",
+      "campaign_start",
       "cron",
       "early_reply_reconcile",
       "flow_resume",
@@ -654,6 +655,7 @@ test("a batched record write that fails once fails the run even when every row i
     "stale_recovery",
     "wake",
     "webhook_delivery",
+    "campaign_start",
   ];
   assert.deepEqual(
     logLines.map(({ correlation_id, ...line }) => line),
@@ -2739,6 +2741,77 @@ test("the cron delivers a queued flow webhook after the message steps, and only 
     (
       await pool.query(
         "SELECT failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name='webhook_delivery'",
+      )
+    ).rows,
+    [{ failure_code: null, succeeded: true }],
+  );
+  assert.equal(sends, 0);
+  assert.deepEqual(logLines, []);
+});
+
+test("campaign_start executes a due approval only while sending is on, and sends nothing", async () => {
+  await longLivedToken();
+  const workspace = "11111111-1111-4111-8111-111111111111";
+  const user = "44444444-4444-4444-8444-444444444444";
+  const segment = (
+    await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'Audience') RETURNING id", [
+      workspace,
+    ])
+  ).rows[0].id;
+  const snapshot = (
+    await pool.query(
+      `INSERT INTO instagram_segment_snapshots(workspace_id,segment_id,created_by,as_of,definition,segment_name,counts,member_count)
+       VALUES($1,$2,$3,now(),'{}','Audience','{}',1) RETURNING id`,
+      [workspace, segment, user],
+    )
+  ).rows[0].id;
+  await pool.query(
+    "INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,'sender-campaign')",
+    [snapshot, workspace, connectionId],
+  );
+  const draft = (
+    await pool.query(
+      `INSERT INTO campaign_drafts(id,workspace_id,snapshot_id,name,body,create_request_hash,created_by,updated_by)
+       VALUES(gen_random_uuid(),$1,$2,'Campaign','Hello',repeat('0',64),$3,$3) RETURNING id`,
+      [workspace, snapshot, user],
+    )
+  ).rows[0].id;
+  const approval = (
+    await pool.query(
+      `INSERT INTO campaign_approvals(workspace_id,id,draft_id,draft_version,snapshot_id,name,body,schedule_kind,
+         preview_as_of,preview_counts,create_request_hash,approved_by)
+       VALUES($1,gen_random_uuid(),$2,1,$3,'Campaign','Hello','immediate',now(),
+         '{"original_member_count":"1","remaining_member_count":"1","connection_unavailable":"0","contact_paused":"0",
+           "no_dm_identity":"1","opted_out":"0","marketing_consent_required":"0","reply_window_closed":"0","candidate":"0"}',
+         repeat('0',64),$4) RETURNING id`,
+      [workspace, draft, snapshot, user],
+    )
+  ).rows[0].id;
+  const approvalStatus = async () =>
+    (await pool.query("SELECT status FROM campaign_approvals WHERE id=$1", [approval])).rows[0].status;
+
+  env.SEND_ENABLED = "false";
+  await worker.scheduled({}, env);
+  assert.equal(await approvalStatus(), "approved");
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM campaign_runs")).rows[0].n, 0);
+  assert.equal(
+    (await pool.query("SELECT count(*)::int AS n FROM scheduled_steps WHERE name='campaign_start'")).rows[0].n,
+    0,
+  );
+
+  env.SEND_ENABLED = "true";
+  await worker.scheduled({}, env);
+  assert.equal(await approvalStatus(), "executed");
+  const runs = (await pool.query("SELECT approval_id,status,start_counts FROM campaign_runs")).rows;
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].approval_id, approval);
+  assert.equal(runs[0].status, "running");
+  assert.equal(runs[0].start_counts.no_dm_identity, "1");
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM campaign_deliveries")).rows[0].n, 0);
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name='campaign_start'",
       )
     ).rows,
     [{ failure_code: null, succeeded: true }],

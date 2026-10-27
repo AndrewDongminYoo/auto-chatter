@@ -120,7 +120,7 @@ API 검증 결과는 [구현 검증](../notes/2026-10-21-campaign-drafts-verific
   "sendability_claimed": false,
   "estimated_provider_calls": "1",
   "plan_broadcast_limit": null,
-  "channel_marketing_supported": false,
+  "channel_marketing_supported": true,
   "global_send_enabled": false
 }
 ```
@@ -128,7 +128,8 @@ API 검증 결과는 [구현 검증](../notes/2026-10-21-campaign-drafts-verific
 모든 수는 10진수 문자열입니다.
 `candidate`는 `as_of`에 기록된 조건을 통과했다는 뜻이며 발송할 수 있다는 뜻이 아닙니다. 응답은 이를 `candidate_meaning`과 `sendability_claimed: false`로 함께 표시합니다.
 발송 guard는 발송 시점에 모든 조건을 다시 검사합니다.
-`channel_marketing_supported`는 `instagramCapabilities("cloudflare_oauth").operations.marketing.supported`이며 현재 거짓입니다. Instagram 마케팅 발송은 지원하지 않습니다.
+`channel_marketing_supported`는 `instagramCapabilities("cloudflare_oauth").operations.marketing.supported`이며 2026-10-27부터 참입니다([캠페인 실행 계약](2026-10-27-campaign-runs.md#채널-capability)).
+참이어도 발송할 수 있다는 뜻은 아니며, 캠페인 발송에는 24시간 창과 정확한 명시적 마케팅 동의가 모두 필요합니다.
 `global_send_enabled`는 Worker의 `SEND_ENABLED`가 정확히 `"true"`인지입니다.
 두 표시는 사유별 수와 따로 반환하며 수를 바꾸지 않습니다.
 
@@ -148,14 +149,14 @@ migration 064는 코드 배포 전에 전체 실행기(`deploy/migrate-multi-use
 관리자가 초안 한 버전의 최종 실행 승인을 기록합니다.
 승인은 무엇을 승인했는지(초안 버전, 고정 대상, 이름·본문 사본, 승인 시점 미리보기)와 언제 실행할지(즉시 또는 작업 공간 현지 시각)만 저장합니다.
 아무것도 보내거나 큐에 넣거나 발송 예약을 만들지 않습니다.
-outbox 행·큐 메시지·cron 단계·발송이 없고, 응답은 항상 `delivery_available: false`입니다.
-`scheduled_at`에 도달해도 아무것도 바뀌지 않습니다.
-실제 발송은 [#36](https://github.com/AndrewDongminYoo/auto-chatter/issues/36)이 이 기록을 읽어 맡을 범위입니다.
-Instagram 마케팅 발송은 지원하지 않습니다(`channel_marketing_supported: false`).
+승인 API는 outbox 행·큐 메시지·발송을 만들지 않고, 응답은 항상 `delivery_available: false`입니다.
+2026-10-27부터 기한이 된 승인은 `campaign_start` cron 단계가 실행 하나를 시작하고 `executed`로 바꿉니다. 실행은 대기 중 발송 행만 쓰고 아무것도 보내지 않으며, 계약은 [캠페인 실행](2026-10-27-campaign-runs.md)이 맡습니다.
+실제 발송은 [#36](https://github.com/AndrewDongminYoo/auto-chatter/issues/36)의 발송 worker(PR ②)가 그 행을 읽어 맡을 범위입니다.
+Cloudflare OAuth 표면의 Instagram 마케팅 capability는 2026-10-27부터 지원(`channel_marketing_supported: true`)이며, Meta 정책 근거와 발송 조건은 캠페인 실행 계약이 맡습니다.
 
 ### 승인 저장
 
-`campaign_approvals`는 작업 공간, 클라이언트 UUID `id`, `draft_id`, `draft_version`, `snapshot_id`, 승인 시점 초안 `name`·`body` 사본, `schedule_kind`(`immediate`·`scheduled`), 절대 시각 `scheduled_at`과 해석한 시간대 `schedule_time_zone`(즉시이면 둘 다 NULL), 승인 시점 미리보기, `status`(`approved`·`cancelled`), 양의 정수 `version`, `approved_by`·`approved_at`, `cancelled_by`·`cancelled_at`, `updated_at`, 생성 요청 해시를 저장합니다.
+`campaign_approvals`는 작업 공간, 클라이언트 UUID `id`, `draft_id`, `draft_version`, `snapshot_id`, 승인 시점 초안 `name`·`body` 사본, `schedule_kind`(`immediate`·`scheduled`), 절대 시각 `scheduled_at`과 해석한 시간대 `schedule_time_zone`(즉시이면 둘 다 NULL), 승인 시점 미리보기, `status`(`approved`·`cancelled`, 065부터 `executed`), 양의 정수 `version`, `approved_by`·`approved_at`, `cancelled_by`·`cancelled_at`, `updated_at`, 생성 요청 해시를 저장합니다.
 미리보기는 `preview_as_of`(timestamptz)와 `preview_counts` jsonb 객체 하나로 저장합니다.
 객체에는 `original_member_count`, `remaining_member_count`와 일곱 사유의 수가 미리보기 API와 같은 10진 문자열로 들어 있으며, 응답은 이를 그대로 돌려줍니다.
 복합 외래 키로 초안과 고정 대상이 같은 작업 공간에 있어야 합니다.
@@ -182,6 +183,7 @@ CHECK 제약으로 예약 종류·시각·시간대의 짝과, 취소 상태일 
 
 버전이 다르면 `409 campaign_approval_conflict`, 취소된 승인에 대한 변경·재취소는 `409 campaign_approval_cancelled`이며 둘 다 응답의 `approval`에 현재 상태를 담습니다.
 응답에는 `preview: {as_of, original_member_count, remaining_member_count, counts}`, 예약 시각을 그 시간대의 벽시계로 보인 `schedule_local`, `delivery_available: false`가 포함됩니다.
+065부터는 실행의 `run_id`와 `run_status`(실행 전에는 `null`)도 포함하며, 실행된 승인의 예약 변경·취소는 `409 campaign_approval_executed`와 현재 승인입니다([캠페인 실행](2026-10-27-campaign-runs.md#승인의-실행-상태)).
 
 ### 승인 규칙
 
@@ -219,6 +221,7 @@ CHECK 제약으로 예약 종류·시각·시간대의 짝과, 취소 상태일 
 ### 데이터 경계
 
 작업 공간 삭제(`delete_workspace_data`)는 외래 키 순서대로 감사 기록, 승인, 초안, 고정 대상 순으로 지웁니다.
+065부터는 그 앞에 캠페인 발송 행과 실행을 지웁니다([캠페인 실행의 데이터 경계](2026-10-27-campaign-runs.md#데이터-경계)).
 연결·개인 삭제는 두 테이블을 건드리지 않습니다.
 두 테이블에는 댓글 작성자·DM 수신자 같은 대상 식별자나 연결 ID가 없고 고정 대상 ID와 집계만 있습니다.
 작업 공간 내보내기는 두 테이블을 포함하고 승인의 `create_request_hash`는 제외합니다.
@@ -248,6 +251,7 @@ CHECK 제약으로 예약 종류·시각·시간대의 짝과, 취소 상태일 
 사람은 현재 로그인한 사용자이면 ‘나’, 아니면 ‘다른 멤버’와 사용자 ID 앞 8자리로 표시합니다. 관리자는 멤버 목록을 읽을 수 없기 때문입니다.
 유효한 승인이 있으면 초안 입력·저장·보관을 잠그고, 수정하려면 먼저 승인을 취소하라고 안내합니다.
 취소된 승인은 조회만 하며 초안 잠금을 풉니다.
+실행된 승인(065)은 상태를 ‘실행 시작됨 · 발송 대상만 기록함’으로 보이고 초안 잠금을 풀며, 예약 변경·취소가 `campaign_approval_executed`로 거절되면 전용 안내를 보입니다. 실행 화면은 [#36](https://github.com/AndrewDongminYoo/auto-chatter/issues/36)의 PR ③입니다.
 
 유효한 승인에는 ‘예약 변경’과 ‘승인 취소’가 있으며, 둘 다 표시한 승인의 `expected_version`을 보냅니다.
 예약 입력은 승인의 시간대가 현재 작업 공간 시간대와 같을 때만 저장된 시각으로 채우고, 바뀌지 않은 예약은 보내지 않습니다.
@@ -315,6 +319,7 @@ CHECK 제약으로 예약 종류·시각·시간대의 짝과, 취소 상태일 
 조회 중에는 버튼을 비활성화하고 `aria-busy`를 표시합니다.
 
 결과 위에 두 사실을 사유별 수와 분리한 경고로 표시합니다: `channel_marketing_supported`가 거짓이면 ‘Instagram 마케팅 발송은 아직 지원하지 않습니다.’, `global_send_enabled`가 거짓이면 ‘서비스 전체 발송이 꺼져 있습니다.’입니다.
+2026-10-27부터 `channel_marketing_supported`가 참이므로 첫 경고는 표시되지 않습니다.
 경고 영역은 문서에 미리 둔 `role="status"` 실시간 영역이며, 기존 카드의 상태 줄과 같은 방식으로 안내됩니다.
 요약은 원래 인원, 현재 남은 인원, 예상 공급자 호출 수(`estimated_provider_calls`), 요금제 일괄 발송 한도(`null`이면 ‘정해지지 않음’)와 작업 공간 시간대로 표시한 기준 시각(`as_of`)입니다.
 사유별 표는 열 머리글(조건·인원)과 행 머리글이 있는 표이며, API 순서대로 연결 발송 불가·자동화 중지·확인된 DM 대화 없음·수신 거부·마케팅 동의 없음·24시간 응답 창 닫힘·조건 통과의 일곱 행을 보여 줍니다.

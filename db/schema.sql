@@ -680,7 +680,8 @@ CREATE TABLE IF NOT EXISTS campaign_approvals (
   preview_counts jsonb NOT NULL CHECK(jsonb_typeof(preview_counts)='object' AND preview_counts ?& ARRAY[
     'original_member_count','remaining_member_count','connection_unavailable','contact_paused','no_dm_identity',
     'opted_out','marketing_consent_required','reply_window_closed','candidate']),
-  status text NOT NULL DEFAULT 'approved' CHECK(status IN ('approved','cancelled')),
+  -- executed: the campaign_start cron step started its one run (#36); the run row is the execution record.
+  status text NOT NULL DEFAULT 'approved' CHECK(status IN ('approved','cancelled','executed')),
   version integer NOT NULL DEFAULT 1 CHECK(version>0),
   create_request_hash text NOT NULL CHECK(create_request_hash ~ '^[a-f0-9]{64}$'),
   approved_by uuid NOT NULL,
@@ -695,13 +696,20 @@ CREATE TABLE IF NOT EXISTS campaign_approvals (
     (schedule_kind='immediate' AND scheduled_at IS NULL AND schedule_time_zone IS NULL)
     OR (schedule_kind='scheduled' AND scheduled_at IS NOT NULL AND schedule_time_zone IS NOT NULL)),
   CONSTRAINT campaign_approval_cancelled CHECK(
-    (status='approved' AND cancelled_by IS NULL AND cancelled_at IS NULL)
+    (status IN ('approved','executed') AND cancelled_by IS NULL AND cancelled_at IS NULL)
     OR (status='cancelled' AND cancelled_by IS NOT NULL AND cancelled_at IS NOT NULL))
 );
 -- At most one approval in force per draft.
 CREATE UNIQUE INDEX IF NOT EXISTS campaign_approvals_active_draft
   ON campaign_approvals(workspace_id,draft_id) WHERE status='approved';
 CREATE INDEX IF NOT EXISTS campaign_approvals_list_idx ON campaign_approvals(workspace_id,approved_at DESC,id);
+-- When the campaign_start step last failed to start this approval; the step orders such approvals after the ones
+-- that never failed, so failing approvals cannot hold back the others.
+ALTER TABLE campaign_approvals ADD COLUMN IF NOT EXISTS start_failed_at timestamptz;
+-- The campaign_start step reads approvals in force with no failed start first, then by due time: the scheduled
+-- time, or the last schedule write (updated_at) of an immediate one.
+CREATE INDEX IF NOT EXISTS campaign_approvals_due_idx
+  ON campaign_approvals(start_failed_at NULLS FIRST,(coalesce(scheduled_at,updated_at)),id) WHERE status='approved';
 -- Append-only audit: one row per version, with the schedule in force after the change.
 CREATE TABLE IF NOT EXISTS campaign_approval_events (
   workspace_id uuid NOT NULL,
@@ -719,6 +727,69 @@ CREATE TABLE IF NOT EXISTS campaign_approval_events (
     (schedule_kind='immediate' AND scheduled_at IS NULL AND schedule_time_zone IS NULL)
     OR (schedule_kind='scheduled' AND scheduled_at IS NOT NULL AND schedule_time_zone IS NOT NULL))
 );
+-- One run per executed approval (#36): what was evaluated when the campaign_start step started it. The counts are
+-- the preview's nine decimal strings at started_at, which is that evaluation's as_of; they are never recomputed.
+CREATE TABLE IF NOT EXISTS campaign_runs (
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  approval_id uuid NOT NULL,
+  draft_id uuid NOT NULL,
+  draft_version integer NOT NULL CHECK(draft_version>0),
+  snapshot_id uuid NOT NULL,
+  started_at timestamptz NOT NULL,
+  start_counts jsonb NOT NULL CHECK(jsonb_typeof(start_counts)='object' AND start_counts ?& ARRAY[
+    'original_member_count','remaining_member_count','connection_unavailable','contact_paused','no_dm_identity',
+    'opted_out','marketing_consent_required','reply_window_closed','candidate']),
+  status text NOT NULL DEFAULT 'running' CHECK(status IN ('running','cancelled','completed')),
+  version integer NOT NULL DEFAULT 1 CHECK(version>0),
+  cancelled_by uuid,
+  cancelled_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY(workspace_id,id),
+  -- Approval IDs are client-supplied and unique only within a workspace.
+  CONSTRAINT campaign_runs_approval UNIQUE(workspace_id,approval_id),
+  FOREIGN KEY(workspace_id,approval_id) REFERENCES campaign_approvals(workspace_id,id),
+  CONSTRAINT campaign_run_cancelled CHECK(
+    (status IN ('running','completed') AND cancelled_by IS NULL AND cancelled_at IS NULL)
+    OR (status='cancelled' AND cancelled_by IS NOT NULL AND cancelled_at IS NOT NULL))
+);
+-- One row per candidate member at the start: the comment sender and the DM recipient chosen for it. The start
+-- writes only pending rows and a cancel only cancelled ones; the delivery worker (#36, PR 2) owns the others.
+CREATE TABLE IF NOT EXISTS campaign_deliveries (
+  workspace_id uuid NOT NULL,
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  run_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  sender_id text NOT NULL CHECK(length(btrim(sender_id))>0),
+  recipient_id text NOT NULL CHECK(recipient_id ~ '^[0-9]{1,40}$'),
+  status text NOT NULL DEFAULT 'pending'
+    CHECK(status IN ('pending','sending','sent','failed','blocked','unknown','cancelled')),
+  attempt_id uuid,
+  attempt_started_at timestamptz,
+  failure_code text CHECK(failure_code ~ '^[a-z][a-z0-9_]{0,63}$'),
+  provider_message_id text CHECK(length(btrim(provider_message_id))>0),
+  sent_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY(workspace_id,id),
+  -- The duplicate key: one row per member of a run.
+  CONSTRAINT campaign_deliveries_member UNIQUE(run_id,connection_id,sender_id),
+  FOREIGN KEY(workspace_id,run_id) REFERENCES campaign_runs(workspace_id,id),
+  FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id),
+  -- A pending row holds no attempt; a row that reached the provider keeps the attempt that sent it.
+  CONSTRAINT campaign_delivery_attempt CHECK(
+    (status IN ('pending','cancelled') OR (attempt_id IS NOT NULL AND attempt_started_at IS NOT NULL))
+    AND (status<>'pending' OR (attempt_id IS NULL AND attempt_started_at IS NULL))
+    AND ((attempt_id IS NULL)=(attempt_started_at IS NULL))),
+  CONSTRAINT campaign_delivery_sent CHECK(
+    (status='sent')=(provider_message_id IS NOT NULL AND sent_at IS NOT NULL)
+    AND (status='sent' OR (provider_message_id IS NULL AND sent_at IS NULL))),
+  CONSTRAINT campaign_delivery_failure CHECK(status NOT IN ('failed','blocked') OR failure_code IS NOT NULL)
+);
+-- Connection and person deletion find a comment sender's or a DM recipient's rows in every run.
+CREATE INDEX IF NOT EXISTS campaign_deliveries_sender_idx ON campaign_deliveries(workspace_id,connection_id,sender_id);
+CREATE INDEX IF NOT EXISTS campaign_deliveries_recipient_idx
+  ON campaign_deliveries(workspace_id,connection_id,recipient_id);
 CREATE TABLE IF NOT EXISTS instagram_segment_snapshot_members (
   snapshot_id uuid NOT NULL,
   workspace_id uuid NOT NULL,
@@ -1394,6 +1465,7 @@ BEGIN
     PERFORM 1 FROM public.instagram_follow_conversations WHERE connection_id=p_connection ORDER BY reply_id FOR UPDATE NOWAIT;
     PERFORM 1 FROM public.instagram_manual_replies WHERE connection_id=p_connection ORDER BY id FOR UPDATE NOWAIT;
     PERFORM 1 FROM public.webhook_deliveries WHERE connection_id=p_connection ORDER BY event_id FOR UPDATE NOWAIT;
+    PERFORM 1 FROM public.campaign_deliveries WHERE workspace_id=p_workspace AND connection_id=p_connection ORDER BY id FOR UPDATE NOWAIT;
   EXCEPTION WHEN lock_not_available THEN
     RAISE EXCEPTION 'sending_in_progress' USING ERRCODE='AC003';
   END;
@@ -1401,6 +1473,7 @@ BEGIN
     OR EXISTS(SELECT 1 FROM public.instagram_follow_conversations WHERE connection_id=p_connection AND status='sending')
     OR EXISTS(SELECT 1 FROM public.instagram_manual_replies WHERE connection_id=p_connection AND status='sending')
     OR EXISTS(SELECT 1 FROM public.webhook_deliveries WHERE connection_id=p_connection AND status='sending')
+    OR EXISTS(SELECT 1 FROM public.campaign_deliveries WHERE workspace_id=p_workspace AND connection_id=p_connection AND status='sending')
   THEN
     RAISE EXCEPTION 'sending_in_progress' USING ERRCODE='AC003';
   END IF;
@@ -1501,6 +1574,10 @@ BEGIN
   DELETE FROM public.instagram_segment_snapshot_members WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_segment_snapshot_members', affected);
+  -- The connection's campaign delivery rows; the runs and their stored start counts stay.
+  DELETE FROM public.campaign_deliveries WHERE workspace_id=p_workspace AND connection_id=p_connection;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('campaign_deliveries', affected);
   -- Follow rows first: confirmation ingestion locks them before writing a receipt.
   DELETE FROM public.instagram_follow_conversations WHERE connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
@@ -1582,6 +1659,7 @@ DECLARE
   recipients text[];
   replies bigint[];
   deliveries uuid[];
+  campaign_rows uuid[];
   deleted jsonb := '{}'::jsonb;
   retained jsonb;
   affected bigint;
@@ -1647,6 +1725,10 @@ BEGIN
     -- Webhook deliveries are keyed by the comment sender of the flow run that queued them.
     SELECT coalesce(array_agg(event_id), '{}') INTO deliveries FROM public.webhook_deliveries
     WHERE workspace_id=p_workspace AND connection_id=p_connection AND sender_id=ANY(senders);
+    -- Campaign delivery rows name both the comment sender and the DM recipient chosen for it.
+    SELECT coalesce(array_agg(id), '{}') INTO campaign_rows FROM public.campaign_deliveries
+    WHERE workspace_id=p_workspace AND connection_id=p_connection
+      AND (sender_id=ANY(senders) OR recipient_id=ANY(recipients));
 
     -- Lock the person's delivery rows before checking them. Workers claim with FOR UPDATE SKIP LOCKED,
     -- so a claim either committed first (and is seen as sending here) or skips these rows.
@@ -1656,6 +1738,13 @@ BEGIN
     PERFORM 1 FROM public.instagram_manual_replies
     WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients) FOR UPDATE;
     PERFORM 1 FROM public.webhook_deliveries WHERE event_id=ANY(deliveries) FOR UPDATE;
+    -- Campaign rows refuse instead of waiting, like the connection and workspace deletions: a delivery being
+    -- finalized may hold its row while it waits for a connection lock that conflicts with the one held here.
+    BEGIN
+      PERFORM 1 FROM public.campaign_deliveries WHERE workspace_id=p_workspace AND id=ANY(campaign_rows) ORDER BY id FOR UPDATE NOWAIT;
+    EXCEPTION WHEN lock_not_available THEN
+      RAISE EXCEPTION 'sending_in_progress' USING ERRCODE='AC003';
+    END;
   END LOOP;
   IF EXISTS(SELECT 1 FROM public.private_reply_outbox WHERE id=ANY(replies) AND status='sending')
     OR EXISTS(SELECT 1 FROM public.instagram_follow_conversations
@@ -1663,6 +1752,8 @@ BEGIN
     OR EXISTS(SELECT 1 FROM public.instagram_manual_replies
       WHERE workspace_id=p_workspace AND connection_id=p_connection AND status='sending' AND recipient_id=ANY(recipients))
     OR EXISTS(SELECT 1 FROM public.webhook_deliveries WHERE event_id=ANY(deliveries) AND status='sending')
+    OR EXISTS(SELECT 1 FROM public.campaign_deliveries
+      WHERE workspace_id=p_workspace AND id=ANY(campaign_rows) AND status='sending')
   THEN
     RAISE EXCEPTION 'sending_in_progress' USING ERRCODE='AC003';
   END IF;
@@ -1786,6 +1877,10 @@ BEGIN
   WHERE workspace_id=p_workspace AND connection_id=p_connection AND sender_id=ANY(senders);
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_segment_snapshot_members', affected);
+  -- The person's campaign delivery rows that were locked above; the runs and their start counts stay.
+  DELETE FROM public.campaign_deliveries WHERE workspace_id=p_workspace AND id=ANY(campaign_rows);
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('campaign_deliveries', affected);
   DELETE FROM public.instagram_follow_conversations
   WHERE connection_id=p_connection AND (reply_id=ANY(replies) OR recipient_id=ANY(recipients));
   GET DIAGNOSTICS affected = ROW_COUNT;
@@ -1909,13 +2004,15 @@ BEGIN
     PERFORM 1 FROM public.instagram_follow_conversations WHERE connection_id=ANY(connections) ORDER BY reply_id FOR UPDATE NOWAIT;
     PERFORM 1 FROM public.instagram_manual_replies WHERE workspace_id=p_workspace ORDER BY id FOR UPDATE NOWAIT;
     PERFORM 1 FROM public.webhook_deliveries WHERE workspace_id=p_workspace ORDER BY event_id FOR UPDATE NOWAIT;
+    PERFORM 1 FROM public.campaign_deliveries WHERE workspace_id=p_workspace ORDER BY id FOR UPDATE NOWAIT;
   EXCEPTION WHEN lock_not_available THEN
     RAISE EXCEPTION 'sending_in_progress' USING ERRCODE='AC003';
   END;
   IF EXISTS(SELECT 1 FROM public.private_reply_outbox WHERE workspace_id=p_workspace AND status='sending')
     OR EXISTS(SELECT 1 FROM public.instagram_follow_conversations WHERE connection_id=ANY(connections) AND status='sending')
     OR EXISTS(SELECT 1 FROM public.instagram_manual_replies WHERE workspace_id=p_workspace AND status='sending')
-    OR EXISTS(SELECT 1 FROM public.webhook_deliveries WHERE workspace_id=p_workspace AND status='sending') THEN
+    OR EXISTS(SELECT 1 FROM public.webhook_deliveries WHERE workspace_id=p_workspace AND status='sending')
+    OR EXISTS(SELECT 1 FROM public.campaign_deliveries WHERE workspace_id=p_workspace AND status='sending') THEN
     RAISE EXCEPTION 'sending_in_progress' USING ERRCODE='AC003';
   END IF;
   SELECT coalesce(array_agg(user_id ORDER BY user_id), '{}') INTO members
@@ -1997,6 +2094,13 @@ BEGIN
   DELETE FROM public.instagram_segment_snapshot_members WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_segment_snapshot_members', affected);
+  -- Campaign delivery rows point at their runs, and the runs at the approvals, so both go before the approvals.
+  DELETE FROM public.campaign_deliveries WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('campaign_deliveries', affected);
+  DELETE FROM public.campaign_runs WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('campaign_runs', affected);
   -- Campaign approvals and their audit point at the drafts and snapshots, so they go first.
   DELETE FROM public.campaign_approval_events WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;

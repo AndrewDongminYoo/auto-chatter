@@ -12,6 +12,7 @@ import {
   previewCampaignDraft,
   updateCampaignDraft,
 } from "./campaign-drafts.ts";
+import { cancelCampaignRun, getCampaignRun } from "./campaign-runs.ts";
 import { changeIdentityLink, listIdentityLinks } from "./contact-identity-links.ts";
 import { contactDetails } from "./contact-details.ts";
 import { exportContactCsv } from "./contact-csv.ts";
@@ -721,6 +722,16 @@ export async function appApi(
           const change = action === "schedule" ? rescheduleCampaignApproval : cancelCampaignApproval;
           const saved = await change(pool, user, id, await readJson(request, 8192));
           return saved.error ? json({ error: saved.error, approval: saved.approval }, 409) : json(saved.approval);
+        }
+      }
+      // A campaign run's read and cancel (#36). A cancel recalls only pending rows; nothing here sends.
+      const campaignRun = /^\/api\/campaign-runs\/([^/]+)(\/cancel)?$/.exec(url.pathname);
+      if (campaignRun) {
+        if (url.searchParams.size) throw new ApiError(400, "invalid_campaign_run");
+        if (!campaignRun[2] && request.method === "GET") return json(await getCampaignRun(pool, user, campaignRun[1]!));
+        if (campaignRun[2] && request.method === "POST") {
+          const saved = await cancelCampaignRun(pool, user, campaignRun[1]!, await readJson(request, 1024));
+          return saved.error ? json({ error: saved.error, run: saved.run }, 409) : json(saved.run);
         }
       }
       const identityLink = /^\/api\/connections\/([a-f0-9-]+)\/contacts\/([^/]+)\/identity-links(?:\/([^/]+))?$/.exec(

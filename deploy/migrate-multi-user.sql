@@ -64,5 +64,6 @@ BEGIN;
 \ir ../db/migrations/062_contact_identity_links.sql
 \ir ../db/migrations/063_campaign_drafts.sql
 \ir ../db/migrations/064_campaign_approvals.sql
+\ir ../db/migrations/065_campaign_runs.sql
 \ir supabase-access.sql
 COMMIT;

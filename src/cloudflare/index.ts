@@ -571,7 +571,8 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
     // for up to 15 minutes while a kept DM that may answer it is still unlinked.
     await step("early_reply_reconcile", () => reconcileUnmatchedReplies(pool));
     await step("flow_resume", () => resumeDueFlowRuns(pool));
-    // With sending off, stale recovery, wake and webhook delivery do not run and keep their last recorded times.
+    // With sending off, stale recovery, wake, webhook delivery and campaign start do not run and keep their last
+    // recorded times.
     if (env.SEND_ENABLED === "true") {
       await step("stale_recovery", async () => {
         await pool.query(
@@ -591,6 +592,9 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
           subrequestsLeft: () => CRON_SUBREQUEST_BUDGET - subrequests,
         });
       });
+      // Due campaign approvals start their run (#36): pending delivery rows only, with no provider call or queue
+      // message. It shares the global send switch, so with sending off no approval is executed.
+      await step("campaign_start", () => startDueCampaignRuns(pool, { correlationId }));
     }
     await flush(false);
     // The alerts step runs before the 'cron' row is written, so that row counts its failure too; a run whose
@@ -632,3 +636,4 @@ import {
 } from "../app/operations-log.ts";
 import { evaluateAlerts, recordStep, recordSteps, type StepOutcome } from "../app/operations-health.ts";
 import { CRON_SUBREQUEST_BUDGET, deliverDueWebhooks } from "../app/webhook-delivery.ts";
+import { startDueCampaignRuns } from "../app/campaign-runs.ts";

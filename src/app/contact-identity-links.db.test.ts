@@ -485,6 +485,7 @@ test("latest migration reproduces canonical deletion functions and can replay", 
   await pool.query(migration);
   await pool.query(await readFile(new URL("../../db/migrations/063_campaign_drafts.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/064_campaign_approvals.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/065_campaign_runs.sql", import.meta.url), "utf8"));
   assert.deepEqual(await definitions(), canonical);
   await ok(confirm());
   const result = (

@@ -1226,6 +1226,25 @@ test("a cancelled conflict shows the cancelled approval and unlocks the draft", 
   assertDraftLocked(h, false);
 });
 
+test("an executed conflict shows the executed approval, unlocks the draft and allows a new approval", async () => {
+  const executed = { ...storedApproval, status: "executed", run_id: "run-1", run_status: "running" };
+  const h = await adminDraft(
+    async (path) => {
+      if (path.endsWith("/cancel")) throw { status: 409, code: "campaign_approval_executed", approval: executed };
+    },
+    [storedApproval],
+  );
+  await openSaved(h);
+  await click(h, "campaign-approval-cancel");
+  assert.equal(h.get("campaign-approval-current-title").textContent, "최근 승인 · 실행 시작됨");
+  assert.match(h.get("campaign-approval-summary").allText(), /실행 시작됨 · 발송 대상만 기록함/);
+  assert.doesNotMatch(h.get("campaign-approval-summary").allText(), /취소\s/);
+  assert.match(h.get("campaign-approval-status").textContent, /이미 실행이 시작된 승인/);
+  assert.equal(h.get("campaign-approval-warnings").children.length, 0);
+  assertDraftLocked(h, false);
+  assert.equal(h.get("campaign-approval-start").disabled, false);
+});
+
 test("an approval that already exists elsewhere is shown and locks the draft", async () => {
   const h = await adminDraft(async (path, method) => {
     if (path.endsWith("/approvals") && method === "POST")

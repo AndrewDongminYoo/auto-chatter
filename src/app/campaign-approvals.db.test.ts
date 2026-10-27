@@ -622,7 +622,10 @@ test("approval writes leave delivery, consent and snapshot rows unchanged and su
     conn = randomUUID();
   await seedWorkspace(pool, ws, actor, conn, "approval-boundary");
   await pool.query("UPDATE workspaces SET time_zone='UTC' WHERE id=$1", [ws]);
-  const fixture = (await pool.query("SELECT id,draft_id FROM campaign_approvals WHERE workspace_id=$1", [ws])).rows[0];
+  // The fixture also holds an executed approval with its run; this test changes the one in force.
+  const fixture = (
+    await pool.query("SELECT id,draft_id FROM campaign_approvals WHERE workspace_id=$1 AND status='approved'", [ws])
+  ).rows[0];
   const tables = [
     "private_reply_outbox",
     "instagram_manual_replies",
@@ -773,6 +776,8 @@ test("migration 064 replays over stored approvals and reproduces the canonical w
   const sql = await readFile(new URL("../../db/migrations/064_campaign_approvals.sql", import.meta.url), "utf8");
   await pool.query(sql);
   await pool.query(sql);
+  // 065 redefines the function after 064, so the runner's order reproduces the canonical one.
+  await pool.query(await readFile(new URL("../../db/migrations/065_campaign_runs.sql", import.meta.url), "utf8"));
   assert.equal(await definition(), canonical);
   assert.equal((await expect(await request("GET", `/api/campaign-approvals/${saved.id}`))).version, 1);
   const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
