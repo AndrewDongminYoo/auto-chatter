@@ -1031,7 +1031,9 @@ test("migration 061 replays over stored snapshots and leaves the deletion functi
     "utf8",
   );
   // Back to the shape before 061: no tables and no segment key for them.
-  await pool.query("DROP TABLE campaign_drafts,instagram_segment_snapshot_members,instagram_segment_snapshots");
+  await pool.query(
+    "DROP TABLE campaign_approval_events,campaign_approvals,campaign_drafts,instagram_segment_snapshot_members,instagram_segment_snapshots",
+  );
   await pool.query("DROP INDEX instagram_contact_segments_id_workspace");
   await comment("a", "2026-10-09T00:00:00Z");
   const segment = await createContactSegment(pool, owner, { name: "Everyone" });

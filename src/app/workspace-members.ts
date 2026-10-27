@@ -178,6 +178,8 @@ async function currentWorkspaceMovable(client: PoolClient, workspace: string, us
        OR EXISTS(SELECT 1 FROM instagram_contact_segments WHERE workspace_id=$1)
        OR EXISTS(SELECT 1 FROM instagram_segment_snapshots WHERE workspace_id=$1)
        OR EXISTS(SELECT 1 FROM campaign_drafts WHERE workspace_id=$1)
+       OR EXISTS(SELECT 1 FROM campaign_approvals WHERE workspace_id=$1)
+       OR EXISTS(SELECT 1 FROM campaign_approval_events WHERE workspace_id=$1)
        OR EXISTS(SELECT 1 FROM instagram_inbox_labels WHERE workspace_id=$1)
        OR EXISTS(SELECT 1 FROM instagram_inbox_label_rules WHERE workspace_id=$1)
        OR EXISTS(SELECT 1 FROM workspace_reply_templates WHERE workspace_id=$1)

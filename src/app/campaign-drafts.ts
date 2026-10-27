@@ -41,7 +41,7 @@ export function parseCampaignDraft(input: unknown, editing = false) {
     expected_version: editing ? version(input.expected_version) : null,
   };
 }
-async function transaction<T>(
+export async function transaction<T>(
   pool: Pool,
   user: User,
   write: boolean,
@@ -76,6 +76,8 @@ async function detail(client: PoolClient, workspace: string, id: string) {
   if (!row) throw new ApiError(404, "campaign_draft_not_found");
   return row;
 }
+// The draft as GET /api/campaign-drafts/:id returns it; an approval conflict answers with it.
+export { detail as campaignDraftDetail };
 async function requireSnapshot(client: PoolClient, workspace: string, id: string) {
   const row = await client.query("SELECT id FROM instagram_segment_snapshots WHERE workspace_id=$1 AND id=$2", [
     workspace,
@@ -107,7 +109,7 @@ export const CAMPAIGN_PREVIEW_REASONS = [
   "reply_window_closed",
   "candidate",
 ] as const;
-const utc = (column: string) => `to_char(${column} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+export const utc = (column: string) => `to_char(${column} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 // One statement and one clock (as_of). Stages 1-3 belong to the member; stages 4-6 belong to each verified DM
 // recipient, and the member takes the furthest stage any of its recipients reaches (7 is candidate). The
 // verified bridge reads its own freshness clock (now()), as the contact detail does. The bridge and the per-member
@@ -153,22 +155,31 @@ const PREVIEW_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp
    (SELECT count(*) FROM staged)::text AS remaining_member_count,
    ${CAMPAIGN_PREVIEW_REASONS.map((reason, index) => `(SELECT count(*) FROM staged WHERE stage=${index + 1})::text AS ${reason}`).join(",")}
  FROM draft CROSS JOIN evaluation`;
+// Evaluates one draft's preview on the caller's transaction; null when the workspace has no such draft. The
+// approval transaction runs it too, so the stored preview is the same evaluation (#35).
+export async function evaluateCampaignPreview(client: PoolClient, workspace: string, id: string) {
+  const row = (await client.query(PREVIEW_SQL, [workspace, id])).rows[0];
+  if (!row) return null;
+  return {
+    draft_id: row.draft_id as string,
+    draft_version: row.draft_version as number,
+    snapshot_id: row.snapshot_id as string,
+    archived: row.archived as boolean,
+    as_of: row.as_of as string,
+    original_member_count: row.original_member_count as string,
+    remaining_member_count: row.remaining_member_count as string,
+    counts: Object.fromEntries(CAMPAIGN_PREVIEW_REASONS.map((reason) => [reason, row[reason] as string])),
+  };
+}
 // Read-only: it writes nothing and its candidate count is not a claim that anyone can be sent to (#35).
 export async function previewCampaignDraft(pool: Pool, user: User, id: string, globalSendEnabled: boolean) {
   return transaction(pool, user, false, async (client, workspace) => {
     if (!isUuid(id)) throw new ApiError(404, "campaign_draft_not_found");
-    const row = (await client.query(PREVIEW_SQL, [workspace, id.toLowerCase()])).rows[0];
-    if (!row) throw new ApiError(404, "campaign_draft_not_found");
-    const counts = Object.fromEntries(CAMPAIGN_PREVIEW_REASONS.map((reason) => [reason, row[reason] as string]));
+    const preview = await evaluateCampaignPreview(client, workspace, id.toLowerCase());
+    if (!preview) throw new ApiError(404, "campaign_draft_not_found");
+    const { counts } = preview;
     return {
-      draft_id: row.draft_id,
-      draft_version: row.draft_version,
-      snapshot_id: row.snapshot_id,
-      archived: row.archived,
-      as_of: row.as_of,
-      original_member_count: row.original_member_count,
-      remaining_member_count: row.remaining_member_count,
-      counts,
+      ...preview,
       candidate_meaning: "passed_recorded_conditions_at_as_of",
       sendability_claimed: false,
       estimated_provider_calls: counts.candidate,
@@ -227,6 +238,16 @@ export async function updateCampaignDraft(pool: Pool, user: User, id: string, in
     ).rows[0];
     if (!current) throw new ApiError(404, "campaign_draft_not_found");
     if (current.archived || current.version !== expected) throw new ApiError(409, "campaign_draft_conflict");
+    // An approval in force freezes the draft; approval creation takes the same workspace and draft locks (#35).
+    if (
+      (
+        await client.query(
+          "SELECT 1 FROM campaign_approvals WHERE workspace_id=$1 AND draft_id=$2 AND status='approved'",
+          [workspace, id],
+        )
+      ).rowCount
+    )
+      throw new ApiError(409, "approval_active");
     if (draft) {
       await requireSnapshot(client, workspace, draft.snapshot_id);
       await client.query(
