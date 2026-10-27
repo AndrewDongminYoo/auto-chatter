@@ -206,7 +206,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
   });
   try {
     await pool.query(
-      "DROP TABLE IF EXISTS campaign_approval_events, campaign_approvals, campaign_drafts, workspace_reply_templates, webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_reminder_events, instagram_inbox_reminders, instagram_inbox_notes, instagram_inbox_label_events, instagram_inbox_label_rules, instagram_inbox_conversation_labels, instagram_inbox_labels, instagram_inbox_read_state, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_segment_snapshot_members, instagram_segment_snapshots, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS campaign_deliveries, campaign_runs, campaign_approval_events, campaign_approvals, campaign_drafts, workspace_reply_templates, webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_reminder_events, instagram_inbox_reminders, instagram_inbox_notes, instagram_inbox_label_events, instagram_inbox_label_rules, instagram_inbox_conversation_labels, instagram_inbox_labels, instagram_inbox_read_state, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_segment_snapshot_members, instagram_segment_snapshots, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
@@ -467,10 +467,109 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
     await pool.query(
       "INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES ('runtime-expired','44444444-4444-4444-8444-444444444444','11111111-1111-4111-8111-111111111111',now()-interval '1 second'),('runtime-live','44444444-4444-4444-8444-444444444444','11111111-1111-4111-8111-111111111111',now()+interval '10 minutes')",
     );
+    // A due campaign approval whose one member is a candidate: a fresh provider-acknowledged reply bridges the
+    // comment sender to DM recipient 9001, who wrote a minute ago and gave an explicit marketing grant.
+    const campaignWorkspace = "11111111-1111-4111-8111-111111111111";
+    const campaignConnection = "22222222-2222-4222-8222-222222222222";
+    const campaignUser = "44444444-4444-4444-8444-444444444444";
+    const campaignEvent = (
+      await pool.query(
+        `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+         VALUES($1,$2,'comment-campaign','media-campaign','sender-campaign','hello') RETURNING id`,
+        [campaignWorkspace, campaignConnection],
+      )
+    ).rows[0].id;
+    await pool.query(
+      `INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled)
+       VALUES('55555555-5555-4555-8555-555555555555',$1,$2,'media-campaign','hello','reply',false)`,
+      [campaignWorkspace, campaignConnection],
+    );
+    await pool.query(
+      `INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,
+         private_reply_text,recipient_id,status,provider_message_id,sent_at)
+       VALUES($1,$2,$3,'55555555-5555-4555-8555-555555555555','comment-campaign','media-campaign','sender-campaign',
+         'reply','9001','sent','acknowledged',now())`,
+      [campaignWorkspace, campaignConnection, campaignEvent],
+    );
+    await pool.query(
+      `INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at)
+       VALUES($1,$2,'9001','dm-campaign','hi','text',now()-interval '1 minute')`,
+      [campaignWorkspace, campaignConnection],
+    );
+    const grant = (
+      await pool.query(
+        `INSERT INTO channel_consent_events(request_key,workspace_id,connection_id,channel,identity_kind,identity_value,
+           purpose,decision,evidence_kind,evidence_reference,occurred_at,actor_id)
+         VALUES(gen_random_uuid(),$1,$2,'instagram','dm_recipient','9001','marketing','grant','explicit','runtime',now(),$3)
+         RETURNING id`,
+        [campaignWorkspace, campaignConnection, campaignUser],
+      )
+    ).rows[0].id;
+    await pool.query(
+      `INSERT INTO channel_consent_state(workspace_id,connection_id,channel,identity_kind,identity_value,purpose,decision,
+         evidence_kind,occurred_at,recorded_at,last_event_id)
+       SELECT workspace_id,connection_id,channel,identity_kind,identity_value,purpose,decision,evidence_kind,occurred_at,
+         recorded_at,id FROM channel_consent_events WHERE id=$1`,
+      [grant],
+    );
+    const campaignSegment = (
+      await pool.query(
+        "INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'Campaign audience') RETURNING id",
+        [campaignWorkspace],
+      )
+    ).rows[0].id;
+    const campaignSnapshot = (
+      await pool.query(
+        `INSERT INTO instagram_segment_snapshots(workspace_id,segment_id,created_by,as_of,definition,segment_name,counts,member_count)
+         VALUES($1,$2,$3,now(),'{}','Campaign audience','{}',1) RETURNING id`,
+        [campaignWorkspace, campaignSegment, campaignUser],
+      )
+    ).rows[0].id;
+    await pool.query(
+      `INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id)
+       VALUES($1,$2,$3,'sender-campaign')`,
+      [campaignSnapshot, campaignWorkspace, campaignConnection],
+    );
+    const campaignDraft = (
+      await pool.query(
+        `INSERT INTO campaign_drafts(id,workspace_id,snapshot_id,name,body,create_request_hash,created_by,updated_by)
+         VALUES(gen_random_uuid(),$1,$2,'Campaign','Hello',repeat('0',64),$3,$3) RETURNING id`,
+        [campaignWorkspace, campaignSnapshot, campaignUser],
+      )
+    ).rows[0].id;
+    const campaignApproval = (
+      await pool.query(
+        `INSERT INTO campaign_approvals(workspace_id,id,draft_id,draft_version,snapshot_id,name,body,schedule_kind,
+           preview_as_of,preview_counts,create_request_hash,approved_by)
+         VALUES($1,gen_random_uuid(),$2,1,$3,'Campaign','Hello','immediate',now(),
+           '{"original_member_count":"1","remaining_member_count":"1","connection_unavailable":"0","contact_paused":"0",
+             "no_dm_identity":"0","opted_out":"0","marketing_consent_required":"0","reply_window_closed":"0","candidate":"1"}',
+           repeat('0',64),$4) RETURNING id`,
+        [campaignWorkspace, campaignDraft, campaignSnapshot, campaignUser],
+      )
+    ).rows[0].id;
     await consumer.scheduled({ scheduledTime: Date.now(), cron: "* * * * *" });
     assert.deepEqual((await pool.query("SELECT state_hash FROM instagram_oauth_states")).rows, [
       { state_hash: "runtime-live" },
     ]);
+    // The restricted server role started the run: the locks, the run and its one pending row, the executed approval.
+    assert.equal(
+      (await pool.query("SELECT status FROM campaign_approvals WHERE id=$1", [campaignApproval])).rows[0].status,
+      "executed",
+    );
+    const campaignRun = (await pool.query("SELECT id,status,start_counts FROM campaign_runs")).rows;
+    assert.deepEqual(
+      campaignRun.map((run) => [run.status, run.start_counts.candidate]),
+      [["running", "1"]],
+    );
+    assert.deepEqual(
+      (
+        await pool.query("SELECT sender_id,recipient_id,status FROM campaign_deliveries WHERE run_id=$1", [
+          campaignRun[0].id,
+        ])
+      ).rows,
+      [{ sender_id: "sender-campaign", recipient_id: "9001", status: "pending" }],
+    );
     assert.equal(sends, 3);
     assert.equal(webhookRequests.length, 1);
     const [webhookRequest] = webhookRequests;
@@ -505,6 +604,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
       ).rows.map((row) => row.name),
       [
         "alerts",
+        "campaign_start",
         "cron",
         "early_reply_reconcile",
         "flow_resume",
@@ -2148,6 +2248,44 @@ test("workerd segment snapshots use restricted server privileges and refuse an a
     assert.equal(cancelled.status, 200, await cancelled.clone().text());
     assert.equal((await cancelled.json()).status, "cancelled");
     assert.equal((await pool.query("SELECT count(*)::int AS count FROM campaign_approval_events")).rows[0].count, 3);
+    // A run that campaign_start would have written is read and cancelled under the restricted role.
+    const executedApproval = (
+      await pool.query(
+        `INSERT INTO campaign_approvals(workspace_id,id,draft_id,draft_version,snapshot_id,name,body,schedule_kind,
+           preview_as_of,preview_counts,create_request_hash,approved_by,status)
+         SELECT workspace_id,gen_random_uuid(),draft_id,draft_version,snapshot_id,name,body,'immediate',preview_as_of,
+           preview_counts,repeat('1',64),approved_by,'executed' FROM campaign_approvals WHERE id=$1 RETURNING id`,
+        [approvalId],
+      )
+    ).rows[0].id;
+    const runId = (
+      await pool.query(
+        `INSERT INTO campaign_runs(workspace_id,approval_id,draft_id,draft_version,snapshot_id,started_at,start_counts)
+         SELECT workspace_id,id,draft_id,draft_version,snapshot_id,now(),preview_counts FROM campaign_approvals WHERE id=$1
+         RETURNING id`,
+        [executedApproval],
+      )
+    ).rows[0].id;
+    await pool.query(
+      `INSERT INTO campaign_deliveries(workspace_id,run_id,connection_id,sender_id,recipient_id)
+       VALUES($1,$2,$3,'sender-1','9001')`,
+      [workspace, runId, connection],
+    );
+    const runPath = `https://app.test/api/campaign-runs/${runId}`;
+    const runRead = await runtime.dispatchFetch(runPath, { headers });
+    assert.equal(runRead.status, 200, await runRead.clone().text());
+    assert.equal((await runRead.json()).delivery_counts.pending, "1");
+    const runCancel = await runtime.dispatchFetch(runPath + "/cancel", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ expected_version: 1 }),
+    });
+    assert.equal(runCancel.status, 200, await runCancel.clone().text());
+    const runCancelled = await runCancel.json();
+    assert.deepEqual(
+      [runCancelled.status, runCancelled.delivery_counts.cancelled, runCancelled.sending_recalled],
+      ["cancelled", "1", false],
+    );
     const archivedCampaign = await runtime.dispatchFetch(campaignPath + "/archive", {
       method: "POST",
       headers,
@@ -2213,6 +2351,7 @@ test("workerd segment snapshots use restricted server privileges and refuse an a
       ["https://app.test/api/campaign-drafts", "GET"],
       [approvalPath, "GET"],
       ["https://app.test/api/campaign-approvals", "GET"],
+      [runPath, "GET"],
     ]) {
       const denied = await runtime.dispatchFetch(path, { method, headers });
       assert.equal(denied.status, 403, path);

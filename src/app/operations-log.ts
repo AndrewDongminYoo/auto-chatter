@@ -14,6 +14,7 @@ export const OPERATION_STEPS = [
   "stale_recovery",
   "wake",
   "webhook_delivery",
+  "campaign_start",
   "alerts",
 ] as const;
 export type OperationStep = (typeof OPERATION_STEPS)[number];
@@ -80,12 +81,21 @@ export class SubscriptionCheckFailedError extends Error {
   }
 }
 
+// At least one due campaign approval could not start its run (#36); each failure was logged with its own code.
+export class CampaignStartFailedError extends Error {
+  constructor() {
+    super("Campaign run start failed");
+    this.name = "CampaignStartFailedError";
+  }
+}
+
 // A fixed failure code for an error, read from its class and error code only; the message is never used
 // because SQL and provider messages can carry submitted content.
 export function failureCode(error: unknown): string {
   if (error instanceof ConfigurationError) return "not_configured";
   if (error instanceof TokenRefreshFailedError) return "token_refresh_failed";
   if (error instanceof SubscriptionCheckFailedError) return "subscription_check_failed";
+  if (error instanceof CampaignStartFailedError) return "campaign_start_failed";
   const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
   if (typeof code === "string" && /^[0-9A-Z]{5}$/.test(code))
     // SQLSTATE classes 08 (connection exception) and 57 (operator intervention) mean the database is unreachable.

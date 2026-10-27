@@ -693,6 +693,7 @@ DB 커밋 뒤 Queue 발행 실패는 200을 반환하고 고정 오류 문구를
 첫 발송을 별도로 승인한 뒤 기존 Compose 발송 워커를 중지하고 `SEND_ENABLED=true`로 전환합니다.
 OAuth로 연결한 계정의 유효한 토큰, `active=true`, `send_enabled=true`와 대상 규칙의 `enabled=true`도 확인합니다.
 Cron은 기존 pending 행도 처리하므로 활성화 전에 backlog를 검토합니다.
+migration 065 뒤에는 남은 캠페인 승인도 첫 Cron에서 실행을 시작하므로, 전환 직전에 [기존 승인 점검 절차](../specs/2026-10-27-campaign-runs.md#이미-있는-승인과-배포-순서)를 따릅니다.
 
 기존 발송 상태와 속도 제한 backoff를 유지합니다.
 Queue 알림 재시도와 Meta 발송 재시도는 별개입니다.

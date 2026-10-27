@@ -112,10 +112,12 @@ export const CAMPAIGN_PREVIEW_REASONS = [
 export const utc = (column: string) => `to_char(${column} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 // One statement and one clock (as_of). Stages 1-3 belong to the member; stages 4-6 belong to each verified DM
 // recipient, and the member takes the furthest stage any of its recipients reaches (7 is candidate). The
-// verified bridge reads its own freshness clock (now()), as the contact detail does. The bridge and the per-member
-// recipient stage are MATERIALIZED and joined, so neither runs again for each snapshot member. The bridge groups
-// per connection, so reading only the snapshot's connections gives the same rows for its members.
-const PREVIEW_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp() AS as_of),
+// verified bridge reads its own freshness clock (now()), as the contact detail does. The bridge, the per-recipient
+// stage and the per-member recipient stage are MATERIALIZED and joined, so none runs again for each snapshot member.
+// The bridge groups per connection, so reading only the snapshot's connections gives the same rows for its members.
+// A candidate's chosen recipient is its stage-7 recipient with the most recent stored text DM (then the lowest ID);
+// the preview ignores it and a run start writes it (#36), so both read the predicates from this one text.
+const EVALUATION_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp() AS as_of),
  draft AS (
    SELECT d.id,d.version,d.archived,d.snapshot_id,s.member_count
    FROM campaign_drafts d JOIN instagram_segment_snapshots s ON s.workspace_id=d.workspace_id AND s.id=d.snapshot_id
@@ -124,8 +126,8 @@ const PREVIEW_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp
    SELECT m.connection_id,m.sender_id FROM instagram_segment_snapshot_members m JOIN draft ON m.snapshot_id=draft.snapshot_id
    WHERE m.workspace_id=$1
  ), verified AS MATERIALIZED (${verifiedDmRecipientsSql("workspace_id=$1 AND id IN (SELECT connection_id FROM members)")}),
- recipients AS MATERIALIZED (
-   SELECT v.connection_id,v.sender_id,max(CASE
+ recipient_stages AS MATERIALIZED (
+   SELECT v.connection_id,v.sender_id,v.recipient_id,latest.message_at AS last_text_at,CASE
      WHEN EXISTS(SELECT 1 FROM channel_consent_state state WHERE state.workspace_id=$1 AND state.connection_id=v.connection_id
        AND state.channel='instagram' AND state.purpose IN ('marketing','service_reply') AND state.decision='revoke'
        AND ((state.identity_kind='dm_recipient' AND state.identity_value=v.recipient_id)
@@ -133,14 +135,18 @@ const PREVIEW_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp
      WHEN NOT EXISTS(SELECT 1 FROM channel_consent_state state WHERE state.workspace_id=$1 AND state.connection_id=v.connection_id
        AND state.channel='instagram' AND state.identity_kind='dm_recipient' AND state.identity_value=v.recipient_id
        AND state.purpose='marketing' AND state.decision='grant' AND state.evidence_kind='explicit') THEN 5
-     WHEN NOT coalesce((SELECT max(message.message_at)<=evaluation.as_of AND evaluation.as_of-max(message.message_at)<interval '24 hours'
-       FROM instagram_inbox_messages message WHERE message.workspace_id=$1 AND message.connection_id=v.connection_id
-         AND message.recipient_id=v.recipient_id AND message.kind='text'),false) THEN 6
-     ELSE 7 END) AS stage
+     WHEN NOT coalesce(latest.message_at<=evaluation.as_of AND evaluation.as_of-latest.message_at<interval '24 hours',false) THEN 6
+     ELSE 7 END AS stage
    FROM verified v JOIN members m ON m.connection_id=v.connection_id AND m.sender_id=v.sender_id CROSS JOIN evaluation
-   GROUP BY v.connection_id,v.sender_id
+   CROSS JOIN LATERAL (SELECT max(message.message_at) AS message_at
+     FROM instagram_inbox_messages message WHERE message.workspace_id=$1 AND message.connection_id=v.connection_id
+       AND message.recipient_id=v.recipient_id AND message.kind='text') latest
+ ), recipients AS MATERIALIZED (
+   SELECT connection_id,sender_id,max(stage) AS stage,
+     (array_agg(recipient_id ORDER BY last_text_at DESC,recipient_id) FILTER (WHERE stage=7))[1] AS recipient_id
+   FROM recipient_stages GROUP BY connection_id,sender_id
  ), staged AS (
-   SELECT CASE
+   SELECT m.connection_id,m.sender_id,r.recipient_id,CASE
      WHEN NOT coalesce(c.active AND c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>evaluation.as_of,false) THEN 1
      WHEN coalesce(a.paused OR a.handoff_paused,false) THEN 2
      ELSE coalesce(r.stage,3)
@@ -153,13 +159,16 @@ const PREVIEW_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp
  SELECT draft.id AS draft_id,draft.version AS draft_version,draft.snapshot_id,draft.archived,
    draft.member_count::text AS original_member_count,${utc("evaluation.as_of")} AS as_of,
    (SELECT count(*) FROM staged)::text AS remaining_member_count,
-   ${CAMPAIGN_PREVIEW_REASONS.map((reason, index) => `(SELECT count(*) FROM staged WHERE stage=${index + 1})::text AS ${reason}`).join(",")}
+   ${CAMPAIGN_PREVIEW_REASONS.map((reason, index) => `(SELECT count(*) FROM staged WHERE stage=${index + 1})::text AS ${reason}`).join(",")}`;
+const PREVIEW_SQL = `${EVALUATION_SQL}
  FROM draft CROSS JOIN evaluation`;
-// Evaluates one draft's preview on the caller's transaction; null when the workspace has no such draft. The
-// approval transaction runs it too, so the stored preview is the same evaluation (#35).
-export async function evaluateCampaignPreview(client: PoolClient, workspace: string, id: string) {
-  const row = (await client.query(PREVIEW_SQL, [workspace, id])).rows[0];
-  if (!row) return null;
+// The same evaluation with each candidate's key and chosen recipient, so the counts and the rows come from one
+// statement and one snapshot.
+const START_SQL = `${EVALUATION_SQL},
+   (SELECT coalesce(json_agg(json_build_array(connection_id,sender_id,recipient_id) ORDER BY connection_id,sender_id),'[]')
+    FROM staged WHERE stage=${CAMPAIGN_PREVIEW_REASONS.indexOf("candidate") + 1}) AS candidates
+ FROM draft CROSS JOIN evaluation`;
+function previewOf(row: Record<string, any>) {
   return {
     draft_id: row.draft_id as string,
     draft_version: row.draft_version as number,
@@ -170,6 +179,23 @@ export async function evaluateCampaignPreview(client: PoolClient, workspace: str
     remaining_member_count: row.remaining_member_count as string,
     counts: Object.fromEntries(CAMPAIGN_PREVIEW_REASONS.map((reason) => [reason, row[reason] as string])),
   };
+}
+// Evaluates one draft's preview on the caller's transaction; null when the workspace has no such draft. The
+// approval transaction runs it too, so the stored preview is the same evaluation (#35).
+export async function evaluateCampaignPreview(client: PoolClient, workspace: string, id: string) {
+  const row = (await client.query(PREVIEW_SQL, [workspace, id])).rows[0];
+  return row ? previewOf(row) : null;
+}
+// The preview plus every candidate's connection, comment sender and chosen DM recipient, for a run start (#36).
+export async function evaluateCampaignStart(client: PoolClient, workspace: string, id: string) {
+  const row = (await client.query(START_SQL, [workspace, id])).rows[0];
+  if (!row) return null;
+  const candidates = (row.candidates as [string, string, string][]).map(([connection_id, sender_id, recipient_id]) => ({
+    connection_id,
+    sender_id,
+    recipient_id,
+  }));
+  return { ...previewOf(row), candidates };
 }
 // Read-only: it writes nothing and its candidate count is not a claim that anyone can be sent to (#35).
 export async function previewCampaignDraft(pool: Pool, user: User, id: string, globalSendEnabled: boolean) {

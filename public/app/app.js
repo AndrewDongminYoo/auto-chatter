@@ -717,6 +717,7 @@ const deletedLabels = {
   instagram_contact_tags: "연락처 태그",
   instagram_contact_field_values: "연락처 필드 값",
   instagram_segment_snapshot_members: "고정한 발송 대상 명단",
+  campaign_deliveries: "캠페인 발송",
   channel_consent_state: "동의 허용 상태",
   channel_consent_events: "동의 허용 기록",
 };

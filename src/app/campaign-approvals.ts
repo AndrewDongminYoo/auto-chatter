@@ -12,7 +12,7 @@ import { dueLocalSql, localDueSql } from "./inbox-reminders.ts";
 import { SCHEDULE_MIN_AHEAD, scheduleLocal } from "./manual-replies.ts";
 
 // Execution approvals record what an administrator approved and when it should run. Nothing here queues, schedules
-// or sends a message; delivery (#36) will read these records.
+// or sends a message; the campaign_start step (campaign-runs.ts, #36) starts one run per due approval.
 const LIMIT = 100;
 // The inbox scheduled-reply bounds (docs/specs/2026-10-16-inbox-scheduled-replies.md) are at least one minute ahead
 // and before that recipient's reply window ends. An approval has no single recipient, so only the fixed lower bound
@@ -55,7 +55,9 @@ export function parseCancelRequest(input: unknown) {
 const COLUMNS = `a.id,a.draft_id,a.draft_version,a.snapshot_id,a.name,a.schedule_kind,${utc("a.scheduled_at")} AS scheduled_at,
   a.schedule_time_zone,${dueLocalSql("a.scheduled_at", "a.schedule_time_zone")} AS schedule_local,
   ${utc("a.preview_as_of")} AS preview_as_of,a.preview_counts,a.status,a.version,a.approved_by,a.approved_at,
-  a.cancelled_by,a.cancelled_at,a.updated_at`;
+  a.cancelled_by,a.cancelled_at,a.updated_at,
+  (SELECT r.id FROM campaign_runs r WHERE r.workspace_id=a.workspace_id AND r.approval_id=a.id) AS run_id,
+  (SELECT r.status FROM campaign_runs r WHERE r.workspace_id=a.workspace_id AND r.approval_id=a.id) AS run_status`;
 function shape(row: Record<string, any>) {
   const { preview_as_of, preview_counts, body, ...rest } = row;
   return {
@@ -226,11 +228,12 @@ export async function approveCampaignDraft(pool: Pool, user: User, draftId: stri
 export type ApprovalChange =
   | { error: null; approval: Awaited<ReturnType<typeof detail>> }
   | {
-      error: "campaign_approval_conflict" | "campaign_approval_cancelled";
+      error: "campaign_approval_conflict" | "campaign_approval_cancelled" | "campaign_approval_executed";
       approval: Awaited<ReturnType<typeof detail>>;
     };
 
-// Locks an approval for a change; a cancelled approval or a stale version answers with the current state.
+// Locks an approval for a change; a cancelled or executed approval or a stale version answers with the current state.
+// An executed approval started its run (#36), so its schedule can no longer change and it can no longer be cancelled.
 async function lockForChange(client: PoolClient, workspace: string, id: string, expected: number) {
   if (!isUuid(id)) throw new ApiError(404, "campaign_approval_not_found");
   id = id.toLowerCase();
@@ -243,6 +246,8 @@ async function lockForChange(client: PoolClient, workspace: string, id: string, 
   if (!row) throw new ApiError(404, "campaign_approval_not_found");
   if (row.status === "cancelled")
     return { id, error: "campaign_approval_cancelled" as const, approval: await detail(client, workspace, id) };
+  if (row.status === "executed")
+    return { id, error: "campaign_approval_executed" as const, approval: await detail(client, workspace, id) };
   if (row.version !== expected)
     return { id, error: "campaign_approval_conflict" as const, approval: await detail(client, workspace, id) };
   return { id, error: null };

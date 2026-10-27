@@ -110,6 +110,37 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      VALUES($1,$2,1,'created',$3,'scheduled',$4,'Asia/Seoul')`,
     [workspace, approval.id, user, approval.scheduled_at],
   );
+  const counts = JSON.stringify({
+    original_member_count: "1",
+    remaining_member_count: "1",
+    connection_unavailable: "0",
+    contact_paused: "0",
+    no_dm_identity: "0",
+    opted_out: "0",
+    marketing_consent_required: "0",
+    reply_window_closed: "0",
+    candidate: "1",
+  });
+  const executed = (
+    await pool.query(
+      `INSERT INTO campaign_approvals(workspace_id,id,draft_id,draft_version,snapshot_id,name,body,schedule_kind,
+         preview_as_of,preview_counts,create_request_hash,approved_by,status)
+       VALUES($1,gen_random_uuid(),$2,1,$3,'Campaign','Draft message','immediate',now(),$5,repeat('0',64),$4,'executed')
+       RETURNING id`,
+      [workspace, draft, snapshot, user, counts],
+    )
+  ).rows[0].id;
+  const campaignRun = (
+    await pool.query(
+      `INSERT INTO campaign_runs(workspace_id,approval_id,draft_id,draft_version,snapshot_id,started_at,start_counts)
+       VALUES($1,$2,$3,1,$4,now(),$5) RETURNING id`,
+      [workspace, executed, draft, snapshot, counts],
+    )
+  ).rows[0].id;
+  await pool.query(
+    "INSERT INTO campaign_deliveries(workspace_id,run_id,connection_id,sender_id,recipient_id) VALUES($1,$2,$3,'123','900')",
+    [workspace, campaignRun, connection],
+  );
   const field = (
     await pool.query(
       "INSERT INTO instagram_contact_fields(workspace_id,name,type) VALUES($1,'city','text') RETURNING id",

@@ -17,7 +17,10 @@ const capabilities = (surface: Surface): ChannelCapabilities =>
       comment_private_reply: operation(true),
       follow_reply: operation(surface !== "node_facebook"),
       manual_reply: operation(surface === "cloudflare_oauth"),
-      marketing: operation(false),
+      // Promotional text inside the 24-hour standard messaging window is allowed on the Instagram API with
+      // Instagram Login (Meta messaging policy, docs/specs/2026-10-27-campaign-runs.md). Only the Cloudflare OAuth
+      // surface sends campaigns; message tags, Sponsored Messages and One-Time Notifications are not used.
+      marketing: operation(surface === "cloudflare_oauth"),
     }),
     templates: Object.freeze({ confirmation_postback: surface !== "node_facebook", approved_message: false }),
   });

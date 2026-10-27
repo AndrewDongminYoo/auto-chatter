@@ -63,6 +63,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     campaign_approval_conflict:
       "다른 곳에서 승인이 변경되었습니다. 현재 승인을 표시합니다. 확인한 뒤 다시 시도해 주세요.",
     campaign_approval_cancelled: "이미 취소된 승인입니다. 현재 상태를 표시합니다.",
+    campaign_approval_executed: "이미 실행이 시작된 승인이라 바꾸거나 취소할 수 없습니다. 현재 상태를 표시합니다.",
     campaign_schedule_timezone_changed:
       "작업 공간 시간대가 다른 곳에서 바뀌었습니다. 페이지를 새로고침해 바뀐 시간대를 확인한 뒤 다시 시도해 주세요.",
     campaign_schedule_out_of_range: "예약 시각은 현재보다 1분 이상 뒤여야 합니다. 시각을 다시 선택해 주세요.",
@@ -243,16 +244,22 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     value.schedule_kind === "immediate" ? "즉시" : instant(value.scheduled_at, value.schedule_time_zone);
   function renderApproval(value) {
     // Build every node first so a malformed response changes nothing on screen.
-    if (!["approved", "cancelled"].includes(value?.status) || !Number.isInteger(value.version))
+    if (!["approved", "cancelled", "executed"].includes(value?.status) || !Number.isInteger(value.version))
       throw new Error("invalid approval");
     const active = value.status === "approved";
+    // An executed approval started its run (#36); the run screen is not part of this page yet.
+    const executed = value.status === "executed";
     const entries = [
-      ["상태", active ? "승인됨 · 기록만 하며 발송하지 않음" : "취소됨"],
+      [
+        "상태",
+        active ? "승인됨 · 기록만 하며 발송하지 않음" : executed ? "실행 시작됨 · 발송 대상만 기록함" : "취소됨",
+      ],
       ["승인한 초안", `${value.name} · 버전 ${value.draft_version}`],
       ["실행 시점", scheduleText(value)],
       ["승인", `${instant(value.approved_at, timeZone)} · ${member(value.approved_by)}`],
     ];
-    if (!active) entries.push(["취소", `${instant(value.cancelled_at, timeZone)} · ${member(value.cancelled_by)}`]);
+    if (value.status === "cancelled")
+      entries.push(["취소", `${instant(value.cancelled_at, timeZone)} · ${member(value.cancelled_by)}`]);
     entries.push(
       ["승인 시점 원래 인원", `${decimal(value.preview?.original_member_count)}명`],
       ["승인 시점 남은 인원", `${decimal(value.preview?.remaining_member_count)}명`],
@@ -271,7 +278,11 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
         : [];
     approval = value;
     approvalLoaded = true;
-    byId("campaign-approval-current-title").textContent = active ? "유효한 승인" : "최근 승인 · 취소됨";
+    byId("campaign-approval-current-title").textContent = active
+      ? "유효한 승인"
+      : executed
+        ? "최근 승인 · 실행 시작됨"
+        : "최근 승인 · 취소됨";
     byId("campaign-approval-warnings").replaceChildren(...warnings);
     byId("campaign-approval-summary").replaceChildren(...summary);
     byId("campaign-approval-rows").replaceChildren(...rows);

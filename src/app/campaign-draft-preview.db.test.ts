@@ -273,7 +273,7 @@ test("each member gets exactly one reason, and the first applicable reason wins"
   assert.match(body.as_of, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/);
   assert.equal(body.estimated_provider_calls, "1");
   assert.equal(body.plan_broadcast_limit, null);
-  assert.equal(body.channel_marketing_supported, false);
+  assert.equal(body.channel_marketing_supported, true);
   assert.equal(body.global_send_enabled, false);
   assert.equal(body.candidate_meaning, "passed_recorded_conditions_at_as_of");
   assert.equal(body.sendability_claimed, false);
