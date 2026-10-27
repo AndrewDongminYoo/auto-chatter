@@ -14,7 +14,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
   const client = await pool.connect();
   try {
     await client.query(
-      "DROP TABLE IF EXISTS campaign_drafts, instagram_contact_identity_links, instagram_contact_identity_link_events, webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_reminder_events, instagram_inbox_reminders, instagram_inbox_notes, instagram_inbox_label_events, workspace_reply_templates, instagram_inbox_label_rules, instagram_inbox_conversation_labels, instagram_inbox_labels, instagram_inbox_read_state, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_segment_snapshot_members, instagram_segment_snapshots, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS campaign_approval_events, campaign_approvals, campaign_drafts, instagram_contact_identity_links, instagram_contact_identity_link_events, webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_reminder_events, instagram_inbox_reminders, instagram_inbox_notes, instagram_inbox_label_events, workspace_reply_templates, instagram_inbox_label_rules, instagram_inbox_conversation_labels, instagram_inbox_labels, instagram_inbox_read_state, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_segment_snapshot_members, instagram_segment_snapshots, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await client.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await client.query(
@@ -57,6 +57,9 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("DELETE FROM instagram_inbox_label_rules"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM workspace_reply_templates"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM campaign_drafts"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM campaign_approvals"), { code: "42501" });
+    await assert.rejects(client.query("UPDATE campaign_approval_events SET kind=kind"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM campaign_approval_events"), { code: "42501" });
     await assert.rejects(client.query("UPDATE instagram_inbox_notes SET body=body"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_notes"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_reminders"), { code: "42501" });
@@ -136,6 +139,8 @@ test("Supabase roles cannot read product data; the server role has DML without D
         "instagram_segment_snapshots",
         "instagram_segment_snapshot_members",
         "campaign_drafts",
+        "campaign_approvals",
+        "campaign_approval_events",
         "workspace_members",
         "instagram_oauth_states",
         "instagram_connections",
@@ -302,6 +307,9 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("DELETE FROM instagram_inbox_label_rules"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM workspace_reply_templates"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM campaign_drafts"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM campaign_approvals"), { code: "42501" });
+    await assert.rejects(client.query("UPDATE campaign_approval_events SET kind=kind"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM campaign_approval_events"), { code: "42501" });
     await assert.rejects(client.query("UPDATE instagram_inbox_notes SET body=body"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_notes"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_reminders"), { code: "42501" });
@@ -455,6 +463,9 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("DELETE FROM instagram_inbox_label_rules"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM workspace_reply_templates"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM campaign_drafts"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM campaign_approvals"), { code: "42501" });
+    await assert.rejects(client.query("UPDATE campaign_approval_events SET kind=kind"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM campaign_approval_events"), { code: "42501" });
     await assert.rejects(client.query("UPDATE instagram_inbox_notes SET body=body"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_notes"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_inbox_reminders"), { code: "42501" });

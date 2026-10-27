@@ -1,4 +1,11 @@
 import {
+  approveCampaignDraft,
+  cancelCampaignApproval,
+  getCampaignApproval,
+  listCampaignApprovals,
+  rescheduleCampaignApproval,
+} from "./campaign-approvals.ts";
+import {
   createCampaignDraft,
   getCampaignDraft,
   listCampaignDrafts,
@@ -691,6 +698,30 @@ export async function appApi(
               Boolean(campaignDraft[2]),
             ),
           );
+      }
+      // Execution approvals are records only: no outbox row, queue message or send (#35, #36).
+      const draftApproval = /^\/api\/campaign-drafts\/([^/]+)\/approvals$/.exec(url.pathname);
+      if (draftApproval && request.method === "POST") {
+        if (url.searchParams.size) throw new ApiError(400, "invalid_campaign_approval");
+        const result = await approveCampaignDraft(pool, user, draftApproval[1]!, await readJson(request, 8192));
+        if (result.error === "campaign_draft_conflict") return json({ error: result.error, draft: result.draft }, 409);
+        if (result.error === "approval_exists") return json({ error: result.error, approval: result.approval }, 409);
+        return json(result.approval, result.created ? 201 : 200);
+      }
+      const campaignApproval = /^\/api\/campaign-approvals(?:\/([^/]+)(?:\/(schedule|cancel))?)?$/.exec(url.pathname);
+      if (campaignApproval) {
+        if (url.searchParams.size) throw new ApiError(400, "invalid_campaign_approval");
+        const [, id, action] = campaignApproval;
+        if (!id && request.method === "GET") return json(await listCampaignApprovals(pool, user));
+        if (id && !action && request.method === "GET") return json(await getCampaignApproval(pool, user, id));
+        if (
+          id &&
+          ((action === "schedule" && request.method === "PUT") || (action === "cancel" && request.method === "POST"))
+        ) {
+          const change = action === "schedule" ? rescheduleCampaignApproval : cancelCampaignApproval;
+          const saved = await change(pool, user, id, await readJson(request, 8192));
+          return saved.error ? json({ error: saved.error, approval: saved.approval }, 409) : json(saved.approval);
+        }
       }
       const identityLink = /^\/api\/connections\/([a-f0-9-]+)\/contacts\/([^/]+)\/identity-links(?:\/([^/]+))?$/.exec(
         url.pathname,

@@ -87,10 +87,28 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
     "INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,'123')",
     [snapshot, workspace, connection],
   );
+  const draft = (
+    await pool.query(
+      `INSERT INTO campaign_drafts(id,workspace_id,snapshot_id,name,body,create_request_hash,created_by,updated_by)
+       VALUES(gen_random_uuid(),$1,$2,'Campaign','Draft message',repeat('0',64),$3,$3) RETURNING id`,
+      [workspace, snapshot, user],
+    )
+  ).rows[0].id;
+  const approval = (
+    await pool.query(
+      `INSERT INTO campaign_approvals(workspace_id,id,draft_id,draft_version,snapshot_id,name,body,schedule_kind,scheduled_at,
+         schedule_time_zone,preview_as_of,preview_counts,create_request_hash,approved_by)
+       VALUES($1,gen_random_uuid(),$2,1,$3,'Campaign','Draft message','scheduled',now()+interval '1 hour','Asia/Seoul',now(),
+         '{"original_member_count":"1","remaining_member_count":"1","connection_unavailable":"1","contact_paused":"0",
+           "no_dm_identity":"0","opted_out":"0","marketing_consent_required":"0","reply_window_closed":"0","candidate":"0"}',
+         repeat('0',64),$4) RETURNING id,scheduled_at`,
+      [workspace, draft, snapshot, user],
+    )
+  ).rows[0];
   await pool.query(
-    `INSERT INTO campaign_drafts(id,workspace_id,snapshot_id,name,body,create_request_hash,created_by,updated_by)
-     VALUES(gen_random_uuid(),$1,$2,'Campaign','Draft message',repeat('0',64),$3,$3)`,
-    [workspace, snapshot, user],
+    `INSERT INTO campaign_approval_events(workspace_id,approval_id,version,kind,actor_id,schedule_kind,scheduled_at,schedule_time_zone)
+     VALUES($1,$2,1,'created',$3,'scheduled',$4,'Asia/Seoul')`,
+    [workspace, approval.id, user, approval.scheduled_at],
   );
   const field = (
     await pool.query(

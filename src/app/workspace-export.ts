@@ -8,6 +8,8 @@ import { roleAllows, type WorkspaceRole } from "./settings.ts";
 export const EXPORTED_TABLES: Record<string, { scope: "self" | "workspace" | "connection"; omit?: string[] }> = {
   workspaces: { scope: "self" },
   campaign_drafts: { scope: "workspace", omit: ["create_request_hash"] },
+  campaign_approvals: { scope: "workspace", omit: ["create_request_hash"] },
+  campaign_approval_events: { scope: "workspace" },
   workspace_members: { scope: "workspace" },
   workspace_invites: { scope: "workspace", omit: ["token_hash"] },
   instagram_connections: { scope: "workspace", omit: ["access_token_encrypted"] },

@@ -63,16 +63,16 @@ function reason(value: unknown): string {
 const columns =
   "id,text,status,failure_code,safe_to_retry,handoff_version,retry_of,created_at,sent_at,provider_message_id,resolved_at,created_by,scheduled_at,schedule_time_zone,schedule_version";
 
-function scheduleLocal(value: unknown): string {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value))
-    throw new ApiError(400, "invalid_reply_schedule");
+// A wall-clock "YYYY-MM-DDTHH:MM" that exists on the calendar; campaign approvals share it with their own code.
+export function scheduleLocal(value: unknown, code = "invalid_reply_schedule"): string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) throw new ApiError(400, code);
   const instant = new Date(`${value}:00Z`);
   if (
     !Number.isFinite(instant.getTime()) ||
     instant.toISOString().slice(0, 16) !== value ||
     instant.getUTCFullYear() < 2000
   )
-    throw new ApiError(400, "invalid_reply_schedule");
+    throw new ApiError(400, code);
   return value;
 }
 
@@ -94,10 +94,12 @@ async function lockScheduleMember(client: PoolClient, workspace: string, user: U
   return member.role;
 }
 
+// The only fixed schedule bound; the upper bound is the recipient's reply window. Campaign approvals share it.
+export const SCHEDULE_MIN_AHEAD = "1 minute";
 async function readSchedule(client: PoolClient, workspace: string, local: string) {
   return (
     await client.query<{ scheduled_at: Date; time_zone: string; future: boolean }>(
-      `SELECT scheduled_at,time_zone,scheduled_at>=clock_timestamp()+interval '1 minute' AS future
+      `SELECT scheduled_at,time_zone,scheduled_at>=clock_timestamp()+interval '${SCHEDULE_MIN_AHEAD}' AS future
        FROM (SELECT ${localDueSql("$2", "w.time_zone")} AS scheduled_at,
          w.time_zone FROM workspaces w WHERE w.id=$1) converted`,
       [workspace, local],

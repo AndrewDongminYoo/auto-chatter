@@ -662,6 +662,63 @@ CREATE TABLE IF NOT EXISTS campaign_drafts (
   PRIMARY KEY(workspace_id,id),
   FOREIGN KEY(snapshot_id,workspace_id) REFERENCES instagram_segment_snapshots(id,workspace_id)
 );
+-- An administrator's final execution approval of one draft version: copies of what was approved, the preview at
+-- that moment and when it should run. Nothing reads these rows to send; delivery (#36) is separate.
+CREATE TABLE IF NOT EXISTS campaign_approvals (
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  id uuid NOT NULL,
+  draft_id uuid NOT NULL,
+  draft_version integer NOT NULL CHECK(draft_version>0),
+  snapshot_id uuid NOT NULL,
+  name text NOT NULL CHECK(length(btrim(name)) BETWEEN 1 AND 60),
+  body text NOT NULL CHECK(length(btrim(body)) BETWEEN 1 AND 1000),
+  schedule_kind text NOT NULL CHECK(schedule_kind IN ('immediate','scheduled')),
+  scheduled_at timestamptz,
+  schedule_time_zone text,
+  preview_as_of timestamptz NOT NULL,
+  -- The nine preview counts as decimal strings, exactly as the preview API returns them.
+  preview_counts jsonb NOT NULL CHECK(jsonb_typeof(preview_counts)='object' AND preview_counts ?& ARRAY[
+    'original_member_count','remaining_member_count','connection_unavailable','contact_paused','no_dm_identity',
+    'opted_out','marketing_consent_required','reply_window_closed','candidate']),
+  status text NOT NULL DEFAULT 'approved' CHECK(status IN ('approved','cancelled')),
+  version integer NOT NULL DEFAULT 1 CHECK(version>0),
+  create_request_hash text NOT NULL CHECK(create_request_hash ~ '^[a-f0-9]{64}$'),
+  approved_by uuid NOT NULL,
+  approved_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  cancelled_by uuid,
+  cancelled_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY(workspace_id,id),
+  FOREIGN KEY(workspace_id,draft_id) REFERENCES campaign_drafts(workspace_id,id),
+  FOREIGN KEY(snapshot_id,workspace_id) REFERENCES instagram_segment_snapshots(id,workspace_id),
+  CONSTRAINT campaign_approval_schedule CHECK(
+    (schedule_kind='immediate' AND scheduled_at IS NULL AND schedule_time_zone IS NULL)
+    OR (schedule_kind='scheduled' AND scheduled_at IS NOT NULL AND schedule_time_zone IS NOT NULL)),
+  CONSTRAINT campaign_approval_cancelled CHECK(
+    (status='approved' AND cancelled_by IS NULL AND cancelled_at IS NULL)
+    OR (status='cancelled' AND cancelled_by IS NOT NULL AND cancelled_at IS NOT NULL))
+);
+-- At most one approval in force per draft.
+CREATE UNIQUE INDEX IF NOT EXISTS campaign_approvals_active_draft
+  ON campaign_approvals(workspace_id,draft_id) WHERE status='approved';
+CREATE INDEX IF NOT EXISTS campaign_approvals_list_idx ON campaign_approvals(workspace_id,approved_at DESC,id);
+-- Append-only audit: one row per version, with the schedule in force after the change.
+CREATE TABLE IF NOT EXISTS campaign_approval_events (
+  workspace_id uuid NOT NULL,
+  approval_id uuid NOT NULL,
+  version integer NOT NULL CHECK(version>0),
+  kind text NOT NULL CHECK(kind IN ('created','schedule_changed','cancelled')),
+  actor_id uuid NOT NULL,
+  schedule_kind text NOT NULL CHECK(schedule_kind IN ('immediate','scheduled')),
+  scheduled_at timestamptz,
+  schedule_time_zone text,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY(workspace_id,approval_id,version),
+  FOREIGN KEY(workspace_id,approval_id) REFERENCES campaign_approvals(workspace_id,id),
+  CONSTRAINT campaign_approval_event_schedule CHECK(
+    (schedule_kind='immediate' AND scheduled_at IS NULL AND schedule_time_zone IS NULL)
+    OR (schedule_kind='scheduled' AND scheduled_at IS NOT NULL AND schedule_time_zone IS NOT NULL))
+);
 CREATE TABLE IF NOT EXISTS instagram_segment_snapshot_members (
   snapshot_id uuid NOT NULL,
   workspace_id uuid NOT NULL,
@@ -1940,6 +1997,13 @@ BEGIN
   DELETE FROM public.instagram_segment_snapshot_members WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_segment_snapshot_members', affected);
+  -- Campaign approvals and their audit point at the drafts and snapshots, so they go first.
+  DELETE FROM public.campaign_approval_events WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('campaign_approval_events', affected);
+  DELETE FROM public.campaign_approvals WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('campaign_approvals', affected);
   DELETE FROM public.campaign_drafts WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('campaign_drafts', affected);

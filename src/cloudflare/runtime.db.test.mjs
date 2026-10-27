@@ -206,7 +206,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
   });
   try {
     await pool.query(
-      "DROP TABLE IF EXISTS campaign_drafts, workspace_reply_templates, webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_reminder_events, instagram_inbox_reminders, instagram_inbox_notes, instagram_inbox_label_events, instagram_inbox_label_rules, instagram_inbox_conversation_labels, instagram_inbox_labels, instagram_inbox_read_state, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_segment_snapshot_members, instagram_segment_snapshots, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
+      "DROP TABLE IF EXISTS campaign_approval_events, campaign_approvals, campaign_drafts, workspace_reply_templates, webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_reminder_events, instagram_inbox_reminders, instagram_inbox_notes, instagram_inbox_label_events, instagram_inbox_label_rules, instagram_inbox_conversation_labels, instagram_inbox_labels, instagram_inbox_read_state, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_segment_snapshot_members, instagram_segment_snapshots, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
     );
     await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
@@ -2110,6 +2110,44 @@ test("workerd segment snapshots use restricted server privileges and refuse an a
         .status,
       404,
     );
+    // An execution approval is written, rescheduled and cancelled under the restricted role, and sends nothing.
+    const approvalId = randomUUID();
+    const approvalPath = `https://app.test/api/campaign-approvals/${approvalId}`;
+    const approved = await runtime.dispatchFetch(campaignPath + "/approvals", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        id: approvalId,
+        expected_version: 2,
+        schedule_local: null,
+        expected_time_zone: "Asia/Seoul",
+      }),
+    });
+    assert.equal(approved.status, 201, await approved.clone().text());
+    const approvedBody = await approved.json();
+    assert.equal(approvedBody.delivery_available, false);
+    assert.equal(approvedBody.preview.original_member_count, "1");
+    const frozenEdit = await runtime.dispatchFetch(campaignPath, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ snapshot_id: snapshot.id, name: "Frozen", body: "No send", expected_version: 2 }),
+    });
+    assert.equal(frozenEdit.status, 409);
+    assert.equal((await frozenEdit.json()).error, "approval_active");
+    const rescheduled = await runtime.dispatchFetch(approvalPath + "/schedule", {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ expected_version: 1, schedule_local: null, expected_time_zone: "Asia/Seoul" }),
+    });
+    assert.equal(rescheduled.status, 200, await rescheduled.clone().text());
+    const cancelled = await runtime.dispatchFetch(approvalPath + "/cancel", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ expected_version: 2 }),
+    });
+    assert.equal(cancelled.status, 200, await cancelled.clone().text());
+    assert.equal((await cancelled.json()).status, "cancelled");
+    assert.equal((await pool.query("SELECT count(*)::int AS count FROM campaign_approval_events")).rows[0].count, 3);
     const archivedCampaign = await runtime.dispatchFetch(campaignPath + "/archive", {
       method: "POST",
       headers,
@@ -2173,6 +2211,8 @@ test("workerd segment snapshots use restricted server privileges and refuse an a
       [comparisonPath, "GET"],
       [campaignPath, "GET"],
       ["https://app.test/api/campaign-drafts", "GET"],
+      [approvalPath, "GET"],
+      ["https://app.test/api/campaign-approvals", "GET"],
     ]) {
       const denied = await runtime.dispatchFetch(path, { method, headers });
       assert.equal(denied.status, 403, path);
