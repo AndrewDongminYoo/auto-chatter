@@ -571,6 +571,22 @@ Worker를 버전 `cb7e7d5e-d26e-479b-b7da-04e44024adcf`로 배포했고, 05:39:0
 `scheduled_steps`를 05:40:38Z, 05:41:43Z, 05:42:48Z에 조회했습니다. 앞의 두 조회에서는 발송과 무관한 8개 단계의 마지막 성공이 모두 배포 전인 05:37:11~12Z에 머물렀고, 세 번째 조회에서 모두 배포 뒤의 05:42:31~35Z로 갱신됐습니다. 배포 이후의 실패 기록과 경보는 없었습니다.
 따라서 05:38Z부터 05:41Z까지 약 4분 동안 cron 기록이 없었습니다. 앞선 배포들에서는 배포 1~2분 안에 성공이 갱신됐으며, 이 공백의 원인은 조사하지 않았습니다.
 로그인한 세션으로 요청하지 않았으므로 실행 승인 화면은 운영에서 실행하지 않았습니다.
+
+2026-10-27 08:52Z에는 운영자의 "운영 DB 조회, 백업, migration 065 적용, Worker 배포를 승인합니다" 요청에 따라 `main` 커밋 `b18b6c8`을 적용했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #268(앞 기록, 문서만)과 PR #269(캠페인 실행과 수신자별 발송 행, migration 065)입니다.
+적용 전 조회에서 운영 DB는 064까지 적용된 상태였고(`campaign_approvals` 있음, `campaign_runs`·`campaign_deliveries` 없음, public 테이블 52개), 캠페인 승인은 상태와 관계없이 0개, 발송 중 행은 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
+따라서 [캠페인 실행 계약](../specs/2026-10-27-campaign-runs.md#이미-있는-승인과-배포-순서)이 정한 기존 `approved` 승인의 확인과 취소 결정은 이번 적용에서 다룰 대상이 없었습니다. `SEND_ENABLED`를 켜기 직전에 같은 조회를 다시 합니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-27-migration-065/public-pre-065.dump`(338,651바이트, SHA-256 `6929efe00c2e11e52461f81682f0cd9a30131891a14c0627c6429d8f565d17fd`)에 저장했고, 목록 읽기에서 데이터 테이블 52개를 확인했습니다.
+같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE는 196건이었습니다.
+적용 후 public 테이블은 54개가 되었습니다. 새 테이블 `campaign_runs`와 `campaign_deliveries`는 RLS가 켜져 있고, `auto_chatter_server`는 두 테이블에 SELECT·INSERT·UPDATE만 가졌습니다.
+`campaign_approvals`의 상태 CHECK에 `executed`가 들어갔고 `start_failed_at` 열이 생겼으며, 세 테이블의 색인과 고유 제약 이름은 `db/schema.sql`과 같았습니다. 세 삭제 함수는 모두 `campaign_deliveries`를 다룹니다.
+서버 역할의 테이블 DELETE·TRUNCATE 권한, `anon`·`authenticated`의 public 테이블 권한, RLS가 꺼진 public 테이블은 모두 0개였습니다.
+배포 전 `main`의 `b18b6c8` CI가 통과한 것을 확인했습니다.
+이어서 Worker를 버전 `f4947ceb-d58f-4164-af47-46a9dcc8b25e`로 배포했고, 08:54:12Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `cb7e7d5e-d26e-479b-b7da-04e44024adcf`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+23개 항목의 공개 점검은 배포 전에는 바뀐 `app.js`·`campaign-drafts.js`의 해시만 달라 21개가 통과했고, 배포 뒤 08:54:39Z의 점검에서는 23개가 모두 통과했습니다.
+`scheduled_steps`를 08:55:52Z, 08:56:57Z, 08:58:02Z에 조회했습니다. 발송과 무관한 8개 단계는 첫 조회부터 모두 배포 뒤의 성공 시각(08:55:11~12Z)으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
+`SEND_ENABLED`가 거짓이므로 새 단계 `campaign_start`는 실행되지 않았고 `scheduled_steps`에 행이 없습니다.
+`cron` 행의 마지막 실패는 배포 전인 08:42:32Z의 `step_failed`였고, 그 시각에 실패를 기록한 개별 단계 행은 없었습니다. 10-23부터 간헐적으로 남은 단계별 `unexpected_error`와 함께 원인은 조사하지 않았습니다.
+로그인한 세션으로 요청하지 않았으므로 실행 조회·취소 API는 운영에서 실행하지 않았습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
