@@ -22,7 +22,9 @@ API 검증 결과는 [구현 검증](../notes/2026-10-21-campaign-drafts-verific
 이름은 NFC 정규화 후 1–60자, 본문은 기존 상담 답장 템플릿과 같은 1–1,000 UTF-16 코드 단위 제한을 적용하며 빈 내용과 NUL을 거절합니다.
 `{{` 또는 `}}`가 있는 본문은 미해결 템플릿으로 거절합니다.
 이 길이는 로컬 초안 저장 제약이며 공급자별 발송 가능성 검증을 대신하지 않습니다.
-템플릿 선택·치환, 수신자별 개인화, 예약·실행 승인, outbox 생성, 일괄 발송은 후속 범위입니다.
+2026-10-27에 최종 실행 승인과 예약 시각 기록을 [실행 승인](#실행-승인) API로 추가했습니다.
+템플릿 선택·치환, 수신자별 개인화, outbox 생성, 일괄 발송은 후속 범위입니다.
+승인 화면과 초안 편집기의 `409 approval_active` 안내는 다음 화면 PR의 범위이고, 캠페인 단위 예약 상한을 둘지는 운영자가 정할 후속 결정입니다.
 요금·동의·응답 창 미리보기는 2026-10-26에 읽기 전용 API로 추가했으며 [발송 조건·비용 미리보기](#발송-조건비용-미리보기)를 따릅니다.
 초기 API 변경에는 화면을 포함하지 않았습니다.
 이후 추가한 관리 화면은 아래 계약을 따릅니다.
@@ -136,6 +138,91 @@ API 검증 결과는 [구현 검증](../notes/2026-10-21-campaign-drafts-verific
 `plan_broadcast_limit`은 `null`입니다. 어떤 요금제도 방송 한도를 정의하지 않으며 [#52](https://github.com/AndrewDongminYoo/auto-chatter/issues/52)·[#60](https://github.com/AndrewDongminYoo/auto-chatter/issues/60)이 그 정의를 맡습니다.
 이 API는 한도나 일일 상한을 적용하지 않습니다.
 Instagram 공급자 메시지 요금은 인용할 Meta 출처를 확인하지 않았으므로 알 수 없음으로 둡니다.
+
+## 실행 승인
+
+2026-10-27 운영자가 계획을 승인했습니다(기록 전용 승인, 템플릿 제외와 후속 분리, 서버 먼저·화면은 다음 PR).
+검증 결과는 [실행 승인 검증](../notes/2026-10-27-campaign-approvals-verification.md)에 기록합니다.
+migration 064는 코드 배포 전에 전체 실행기(`deploy/migrate-multi-user.sql`)로 적용해야 합니다.
+
+관리자가 초안 한 버전의 최종 실행 승인을 기록합니다.
+승인은 무엇을 승인했는지(초안 버전, 고정 대상, 이름·본문 사본, 승인 시점 미리보기)와 언제 실행할지(즉시 또는 작업 공간 현지 시각)만 저장합니다.
+아무것도 보내거나 큐에 넣거나 발송 예약을 만들지 않습니다.
+outbox 행·큐 메시지·cron 단계·발송이 없고, 응답은 항상 `delivery_available: false`입니다.
+`scheduled_at`에 도달해도 아무것도 바뀌지 않습니다.
+실제 발송은 [#36](https://github.com/AndrewDongminYoo/auto-chatter/issues/36)이 이 기록을 읽어 맡을 범위입니다.
+Instagram 마케팅 발송은 지원하지 않습니다(`channel_marketing_supported: false`).
+
+### 승인 저장
+
+`campaign_approvals`는 작업 공간, 클라이언트 UUID `id`, `draft_id`, `draft_version`, `snapshot_id`, 승인 시점 초안 `name`·`body` 사본, `schedule_kind`(`immediate`·`scheduled`), 절대 시각 `scheduled_at`과 해석한 시간대 `schedule_time_zone`(즉시이면 둘 다 NULL), 승인 시점 미리보기, `status`(`approved`·`cancelled`), 양의 정수 `version`, `approved_by`·`approved_at`, `cancelled_by`·`cancelled_at`, `updated_at`, 생성 요청 해시를 저장합니다.
+미리보기는 `preview_as_of`(timestamptz)와 `preview_counts` jsonb 객체 하나로 저장합니다.
+객체에는 `original_member_count`, `remaining_member_count`와 일곱 사유의 수가 미리보기 API와 같은 10진 문자열로 들어 있으며, 응답은 이를 그대로 돌려줍니다.
+복합 외래 키로 초안과 고정 대상이 같은 작업 공간에 있어야 합니다.
+CHECK 제약으로 예약 종류·시각·시간대의 짝과, 취소 상태일 때만 취소 열이 채워지는 것을 강제합니다.
+`(workspace_id, draft_id) WHERE status='approved'` 부분 유일 색인으로 초안마다 유효한 승인은 최대 하나입니다.
+
+`campaign_approval_events`는 버전마다 한 행인 추가 전용 감사 기록입니다.
+생성(`created`)·예약 변경(`schedule_changed`)·취소(`cancelled`)마다 행위자, 종류, 만들어진 버전과 변경 후 예약 값을 남깁니다.
+서버 역할은 승인 테이블에 SELECT·INSERT·UPDATE, 감사 테이블에 SELECT·INSERT만 가지며, 두 테이블 모두 DELETE가 없고 RLS를 켜며 외부 API 역할은 접근할 수 없습니다.
+승인 수에는 별도 저장 한도를 두지 않습니다.
+목록은 최신 100개로 제한합니다.
+
+### 승인 API
+
+모든 API는 활성 `admin` 이상만 허용하며, 기존 동일 출처 검사·쓰기 한도·`no-store`를 초안 API와 같이 사용합니다.
+역할 검사가 ID 확인보다 먼저이므로 `agent`는 어떤 ID로도 403입니다.
+없거나 다른 작업 공간의 ID와 UUID 형식이 아닌 ID는 같은 404, 형식이 틀린 본문과 쿼리 문자열은 400입니다.
+
+- `POST /api/campaign-drafts/:id/approvals`: `{id, expected_version, schedule_local | null, expected_time_zone}`. 생성은 201입니다. 소문자 `id`, 초안 ID, `expected_version`, `schedule_local`, `expected_time_zone`을 고정 순서로 JSON 직렬화한 SHA-256 해시를 저장하고, 같은 `id`의 같은 요청 재시도는 200과 현재 상태를 반환하며 이후 변경·취소를 되돌리지 않습니다. 같은 `id`의 다른 요청은 `409 campaign_approval_id_conflict`입니다.
+- `GET /api/campaign-approvals`: 최신 승인 순(`approved_at DESC, id`) 최대 100개 요약이며 본문과 감사 기록은 제외합니다.
+- `GET /api/campaign-approvals/:id`: 본문과 감사 기록(`events`)을 포함한 상세입니다.
+- `PUT /api/campaign-approvals/:id/schedule`: `{expected_version, schedule_local | null, expected_time_zone}`로 `approved` 승인의 예약만 바꾸고 버전을 1 올립니다. 승인한 초안 버전·사본·미리보기는 바뀌지 않습니다.
+- `POST /api/campaign-approvals/:id/cancel`: `{expected_version}`으로 취소하고 버전을 1 올립니다.
+
+버전이 다르면 `409 campaign_approval_conflict`, 취소된 승인에 대한 변경·재취소는 `409 campaign_approval_cancelled`이며 둘 다 응답의 `approval`에 현재 상태를 담습니다.
+응답에는 `preview: {as_of, original_member_count, remaining_member_count, counts}`, 예약 시각을 그 시간대의 벽시계로 보인 `schedule_local`, `delivery_available: false`가 포함됩니다.
+
+### 승인 규칙
+
+승인 트랜잭션은 작업 공간 행(`lockWorkspaceForMember`)과 초안 행을 잠급니다.
+같은 `id`의 기존 승인을 가장 먼저 확인하므로 재시도는 이후 초안·시간대·시각이 바뀌어도 현재 상태를 돌려줍니다.
+보관되지 않았고 현재 버전이 `expected_version`과 같은 초안만 승인할 수 있으며, 아니면 `409 campaign_draft_conflict`이고 응답의 `draft`에 `GET /api/campaign-drafts/:id`와 같은 현재 초안을 담습니다.
+유효한 승인이 이미 있으면 `409 approval_exists`이고 응답의 `approval`에 그 승인의 상세를 담습니다.
+두 경우 모두 아무것도 쓰지 않습니다.
+같은 `id`의 다른 요청(`campaign_approval_id_conflict`)은 버전 충돌이 아니므로 오류 코드만 반환합니다.
+같은 트랜잭션 안에서 [미리보기](#발송-조건비용-미리보기)와 같은 평가(`src/app/campaign-drafts.ts`의 `PREVIEW_SQL`)를 실행해 그 결과를 저장하므로, 저장된 미리보기는 그 순간의 미리보기 API와 같습니다.
+이후 개인·연결 삭제로 명단이 줄어도 저장된 미리보기는 승인 시점 값을 유지합니다.
+
+### 예약 시각
+
+`schedule_local`은 `YYYY-MM-DDTHH:mm`이며 PostgreSQL이 현재 작업 공간 `time_zone`으로 해석합니다(`localDueSql`, `timestamp AT TIME ZONE`, 상담 예약 답장·리마인더와 같은 규칙).
+일광 절약 시간 공백에 걸린 시각은 변경 전 오프셋으로 읽어 벽시계로 한 시간 뒤에 저장되고, 겹치는 시각은 나중 시점으로 읽습니다.
+`expected_time_zone`이 현재 작업 공간 시간대와 다르면 즉시 승인이든 예약이든 `409 campaign_schedule_timezone_changed`입니다.
+`null`은 즉시이며 `scheduled_at`과 `schedule_time_zone`을 비웁니다.
+이후 작업 공간 시간대를 바꿔도 저장된 `scheduled_at`과 `schedule_time_zone`은 움직이지 않습니다.
+
+허용 범위는 [상담 예약 답장](2026-10-16-inbox-scheduled-replies.md) 계약을 따릅니다.
+그 계약의 고정 경계는 현재보다 최소 1분 뒤(포함)라는 하한 하나이며, 승인도 같은 상수(`src/app/manual-replies.ts`의 `SCHEDULE_MIN_AHEAD`)를 씁니다.
+그 계약의 상한은 수신자 한 명의 답장 창 종료(미포함)입니다.
+승인에는 수신자 한 명이 없으므로 이 상한은 승인 시점에 미리보기의 `reply_window_closed` 수로만 나타나며, 고정 상한을 새로 두지 않습니다.
+수신자별 창은 [#36](https://github.com/AndrewDongminYoo/auto-chatter/issues/36)이 발송 시점에 대상마다 적용해야 합니다.
+1분 하한보다 이른 시각은 `400 campaign_schedule_out_of_range`입니다.
+
+### 초안 변경
+
+유효한 승인이 있는 초안의 `PUT /api/campaign-drafts/:id`와 보관은 `409 approval_active`입니다.
+내용을 바꾸려면 승인을 취소하고 수정한 뒤 다시 승인합니다.
+초안 수정·보관과 승인 생성은 같은 작업 공간 잠금과 초안 행 잠금 아래에서 검사하므로 섞이지 않습니다.
+승인이 먼저면 수정이 `approval_active`, 수정이 먼저면 승인이 `campaign_draft_conflict`를 받습니다.
+
+### 데이터 경계
+
+작업 공간 삭제(`delete_workspace_data`)는 외래 키 순서대로 감사 기록, 승인, 초안, 고정 대상 순으로 지웁니다.
+연결·개인 삭제는 두 테이블을 건드리지 않습니다.
+두 테이블에는 댓글 작성자·DM 수신자 같은 대상 식별자나 연결 ID가 없고 고정 대상 ID와 집계만 있습니다.
+작업 공간 내보내기는 두 테이블을 포함하고 승인의 `create_request_hash`는 제외합니다.
+두 작업 공간 이동 검사(`currentWorkspaceMovable`, `deploy/assign-workspace-owner.sql`)는 두 테이블의 행을 비어 있지 않음으로 셉니다.
 
 ## 수용 기준
 
