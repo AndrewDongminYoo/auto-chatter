@@ -3,7 +3,8 @@ const contactSessionSource = crypto.randomUUID();
 const manualReports = createManualReplyReports({ api, node });
 const flowReports = createFlowRunReports({ api, node });
 const handoffReports = createHandoffReports({ api, node });
-const campaignDrafts = createCampaignDrafts({ api, node });
+// Approvers are labelled "나" only for the signed-in user; admins cannot read the member list.
+const campaignDrafts = createCampaignDrafts({ api, node, userId: () => currentUserId });
 // Members are shown by the account's current username from the loaded connection list; the server returns IDs only.
 const segmentSnapshots = createSegmentSnapshots({
   api,
@@ -640,6 +641,9 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
     error.reminder = result.reminder;
     // A stale segment edit carries the saved segment (409).
     error.segment = result.segment;
+    // A refused campaign approval write carries the current approval, or the current draft (409).
+    error.approval = result.approval;
+    error.draft = result.draft;
     // A rejected (422) or stale (409) CSV import carries the fresh per-row check result.
     error.checked_at = result.checked_at;
     error.counts = result.counts;

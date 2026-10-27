@@ -2083,3 +2083,30 @@ section {
 .campaign-draft-preview-table thead th:last-child {
   text-align: right;
 }
+.campaign-approval h5 {
+  margin: 12px 0 4px;
+  font-size: 1rem;
+}
+.campaign-approval-schedule {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 12px 0;
+}
+.campaign-approval-schedule > * {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.campaign-approval-schedule input,
+.campaign-approval-schedule select {
+  max-width: 100%;
+}
+.campaign-approval-confirm {
+  margin-top: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+.campaign-approval-confirm h5 {
+  margin-top: 0;
+}
