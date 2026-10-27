@@ -52,14 +52,16 @@ DB 검사는 `src/app/campaign-runs.db.test.ts`(16개)이며 실제 API(`appApi`
 - 테스트 DB의 `campaign_runs_approval`을 `UNIQUE(approval_id)`로 되돌리면 작업 공간 단위 고유성 검사가 실패했습니다.
 - 개인 삭제의 발송 행 잠금에서 `NOWAIT`를 지우면 삭제 검사가 10초 뒤 `the person deletion waited for the held row`로 실패했습니다.
 
-원래대로 되돌린 뒤 14개 모두 통과했습니다.
+구현을 원래대로 되돌린 뒤, 리뷰를 받은 커밋 `0f19d21`에서 `campaign-runs.db.test.ts`만 따로 실행했고 16개 검사가 모두 통과했습니다.
 
 ## 실행 결과
+
+`test:db`는 리뷰를 받은 커밋 `0f19d21`에서 다시 실행한 결과입니다. 나머지 세 결과는 그 커밋과 내용이 같은, 커밋 직전의 작업 트리에서 얻었습니다.
 
 ```log
 corepack pnpm check-types                                                                            exit 0
 corepack pnpm test                                                                                   exit 0  tests 479 pass 479 fail 0
-TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5445/automations_test corepack pnpm test:db          exit 0  tests 784 pass 784 fail 0
+TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5445/automations_test corepack pnpm test:db          exit 0  tests 786 pass 786 fail 0
 TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5445/automations_test corepack pnpm test:cloudflare  exit 0  tests 81 pass 81 fail 0
 ```
 
