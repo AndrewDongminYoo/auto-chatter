@@ -1285,7 +1285,7 @@
             </div>
             <p id="campaign-draft-help" class="hint">
               고정한 대상에 보낼 메시지를 초안으로 저장합니다. 저장하거나 보관해도 메시지는 전송되지 않습니다. 저장한
-              초안의 발송 조건은 미리볼 수 있으며, 예약·승인·실제 발송 기능은 아직 제공하지 않습니다.
+              초안의 발송 조건을 미리보고 실행 승인을 기록할 수 있지만, 실제 발송 기능은 아직 제공하지 않습니다.
             </p>
             <p id="campaign-draft-capacity" class="hint"></p>
             <p id="campaign-draft-list-status" class="hint" role="status" aria-live="polite"></p>
@@ -1320,6 +1320,10 @@
               </p>
               <p id="campaign-draft-count" class="hint">0 / 1,000</p>
               <p id="campaign-draft-summary" class="hint"></p>
+              <p id="campaign-draft-approval-lock" class="flow-alert warning" hidden>
+                실행 승인이 유효한 초안이라 수정하거나 보관할 수 없습니다. 수정하려면 아래 실행 승인에서 먼저 승인을
+                취소해 주세요.
+              </p>
               <div class="form-actions">
                 <button id="campaign-draft-save" type="submit">초안 저장</button>
                 <button id="campaign-draft-reload" type="button" class="secondary" hidden>
@@ -1375,6 +1379,89 @@
                   조건 통과는 기준 시각에 기록된 조건을 모두 통과했다는 뜻입니다. 실제로 보낼 때는 연결·자동화 중지·수신
                   거부·동의·응답 창을 모두 다시 확인합니다.
                 </p>
+              </div>
+            </section>
+            <section
+              id="campaign-approval"
+              class="campaign-draft-preview campaign-approval"
+              aria-labelledby="campaign-approval-title"
+              hidden
+            >
+              <h4 id="campaign-approval-title">실행 승인</h4>
+              <p id="campaign-approval-help" class="hint">
+                저장된 초안의 현재 버전과 실행 시점을 최종 승인으로 기록합니다. 실제 발송은 아직 지원하지 않으므로
+                승인해도 메시지를 보내거나 발송을 예약하지 않습니다. 승인이 유효한 동안에는 초안을 수정·보관할 수
+                없습니다.
+              </p>
+              <div
+                id="campaign-approval-warnings"
+                class="flow-alert warning campaign-draft-preview-warnings"
+                role="status"
+                aria-live="polite"
+              ></div>
+              <p id="campaign-approval-status" class="hint" role="status" aria-live="polite"></p>
+              <div id="campaign-approval-current" hidden>
+                <h5 id="campaign-approval-current-title" tabindex="-1"></h5>
+                <dl id="campaign-approval-summary" class="campaign-draft-preview-summary"></dl>
+                <div class="campaign-draft-preview-table">
+                  <table>
+                    <caption>
+                      승인 시점 조건별 인원 · 각 인원은 처음 해당하는 조건 하나에만 셉니다
+                    </caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">조건</th>
+                        <th scope="col">인원</th>
+                      </tr>
+                    </thead>
+                    <tbody id="campaign-approval-rows"></tbody>
+                  </table>
+                </div>
+                <p class="hint">
+                  승인 시점에 기록된 수이며 이후 바뀌어도 고치지 않습니다. 조건 통과는 그 시각에 기록된 조건을 모두
+                  통과했다는 뜻이고, 실제로 보낼 때는 모든 조건을 다시 확인합니다.
+                </p>
+              </div>
+              <div class="campaign-approval-schedule">
+                <label
+                  >실행 시점<select id="campaign-approval-timing">
+                    <option value="now">즉시</option>
+                    <option value="later">예약</option>
+                  </select></label
+                >
+                <div id="campaign-approval-schedule-fields" hidden>
+                  <label
+                    >예약 시각<input
+                      id="campaign-approval-schedule"
+                      type="datetime-local"
+                      aria-describedby="campaign-approval-schedule-help"
+                  /></label>
+                  <p id="campaign-approval-schedule-help" class="hint"></p>
+                </div>
+              </div>
+              <div class="form-actions">
+                <button id="campaign-approval-start" type="button">실행 승인</button>
+                <button id="campaign-approval-reschedule" type="button" class="secondary" hidden>예약 변경</button>
+                <button id="campaign-approval-cancel" type="button" class="secondary" hidden>승인 취소</button>
+                <button id="campaign-approval-refresh" type="button" class="secondary">승인 상태 새로고침</button>
+              </div>
+              <div
+                id="campaign-approval-confirm"
+                class="campaign-approval-confirm"
+                role="group"
+                aria-labelledby="campaign-approval-confirm-title"
+                hidden
+              >
+                <h5 id="campaign-approval-confirm-title" tabindex="-1">승인 내용 확인</h5>
+                <dl id="campaign-approval-confirm-summary" class="campaign-draft-preview-summary"></dl>
+                <p class="flow-alert warning">
+                  실제 발송은 아직 지원하지 않습니다. 승인하면 이 내용과 승인 시점의 조건별 인원만 기록되며, 메시지를
+                  보내거나 발송을 예약하지 않습니다.
+                </p>
+                <div class="form-actions">
+                  <button id="campaign-approval-submit" type="button">승인 기록</button>
+                  <button id="campaign-approval-back" type="button" class="secondary">돌아가기</button>
+                </div>
               </div>
             </section>
             <p class="hint">보관한 초안은 조회만 할 수 있으며 100개 저장 한도에 계속 포함됩니다.</p>

@@ -1,4 +1,4 @@
-function createCampaignDrafts({ api, node }) {
+function createCampaignDrafts({ api, node, userId = () => undefined }) {
   const byId = (id) => document.getElementById(id);
   const form = byId("campaign-draft-form");
   const fields = form.elements;
@@ -6,7 +6,8 @@ function createCampaignDrafts({ api, node }) {
   let generation = 0,
     listRequest = 0,
     detailRequest = 0,
-    previewRequest = 0;
+    previewRequest = 0,
+    approvalRequest = 0;
   let permitted = false,
     workspace,
     timeZone;
@@ -20,6 +21,16 @@ function createCampaignDrafts({ api, node }) {
     conflict = false,
     unavailable = false,
     previewing = false;
+  // The open draft's execution approval. Until a read for this draft succeeds the state is unknown, which keeps the
+  // approve control off; `approval` is then the draft's newest approval in the list order (in force or cancelled).
+  let approvalLoaded = false,
+    approval = null,
+    approvalReading = false,
+    approving = false,
+    // An approval write whose outcome is unknown or throttled: only this exact request may be sent again.
+    approvalOperation = null,
+    // The approval request shown in the confirmation step before it is sent.
+    staged = null;
   // The preview reasons in the API's evaluation order. "조건 통과" only means the recorded conditions passed at as_of.
   const previewReasons = [
     ["connection_unavailable", "연결 발송 불가"],
@@ -41,27 +52,72 @@ function createCampaignDrafts({ api, node }) {
       "초안은 보관된 항목을 포함해 100개까지 저장할 수 있습니다. 보관해도 한도가 늘어나지 않습니다. 기존 초안을 수정해 주세요.",
     role_forbidden: "소유자와 관리자만 캠페인 초안을 관리할 수 있습니다. 작업 공간 소유자에게 권한을 확인해 주세요.",
     rate_limited: "요청이 많습니다. 잠시 후 다시 시도해 주세요.",
+    approval_active:
+      "다른 곳에서 이 초안의 실행 승인이 기록되었습니다. 입력은 유지됩니다. 수정하거나 보관하려면 먼저 승인을 취소해 주세요.",
   };
   const message = (error) => messages[error.code] || "불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
-  function hasChanges() {
-    if (operation || saving) return true;
+  const approvalMessages = {
+    approval_exists: "다른 곳에서 이 초안의 실행 승인이 먼저 기록되었습니다. 현재 승인을 표시합니다.",
+    campaign_draft_conflict:
+      "다른 곳에서 초안이 변경되었거나 보관되었습니다. 저장된 초안을 다시 표시했습니다. 내용을 확인한 뒤 다시 승인해 주세요.",
+    campaign_approval_conflict:
+      "다른 곳에서 승인이 변경되었습니다. 현재 승인을 표시합니다. 확인한 뒤 다시 시도해 주세요.",
+    campaign_approval_cancelled: "이미 취소된 승인입니다. 현재 상태를 표시합니다.",
+    campaign_schedule_timezone_changed:
+      "작업 공간 시간대가 다른 곳에서 바뀌었습니다. 페이지를 새로고침해 바뀐 시간대를 확인한 뒤 다시 시도해 주세요.",
+    campaign_schedule_out_of_range: "예약 시각은 현재보다 1분 이상 뒤여야 합니다. 시각을 다시 선택해 주세요.",
+    invalid_campaign_approval: "실행 시점을 확인해 주세요. 예약은 날짜와 시각을 모두 선택해야 합니다.",
+    campaign_approval_not_found: "승인을 찾을 수 없습니다. 승인 상태를 새로고침해 주세요.",
+    campaign_approval_id_conflict: "승인 요청을 확인하지 못했습니다. 승인 상태를 새로고침한 뒤 다시 시도해 주세요.",
+  };
+  const approvalMessage = (error) => approvalMessages[error.code] || message(error);
+  function draftChanged() {
     return editing
       ? fields.name.value !== editing.name ||
           fields.body.value !== editing.body ||
           fields.snapshot_id.value !== editing.snapshot_id
       : Boolean(fields.name.value || fields.body.value || fields.snapshot_id.value);
   }
+  function hasChanges() {
+    if (operation || saving || approvalOperation || approving) return true;
+    return draftChanged();
+  }
   const canDiscard = () => !hasChanges() || confirm("저장하지 않은 캠페인 초안 변경 사항을 버릴까요?");
+  const approvalActive = () => approval?.status === "approved";
+  const timing = () => byId("campaign-approval-timing");
+  const scheduleInput = () => byId("campaign-approval-schedule");
+  // null is "즉시"; a scheduled time is the datetime-local value the server parses (YYYY-MM-DDTHH:MM, no seconds).
+  const scheduleChoice = () => (timing().value === "later" ? scheduleInput().value : null);
+  const scheduleReady = () => {
+    const choice = scheduleChoice();
+    return choice === null || /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(choice);
+  };
+  // A schedule change that equals the approval in force would only bump its version.
+  const scheduleChanged = () => {
+    const choice = scheduleChoice();
+    if (choice === null) return approval.schedule_kind !== "immediate";
+    return !(
+      approval.schedule_kind === "scheduled" &&
+      approval.schedule_time_zone === timeZone &&
+      approval.schedule_local === choice
+    );
+  };
   function controls() {
-    const busy = loading || reading || saving;
-    const locked = !permitted || busy || Boolean(operation) || Boolean(editing?.archived) || unavailable;
+    const busy = loading || reading || saving || approving;
+    const pending = Boolean(operation || approvalOperation);
+    // A draft with an approval in force, or whose approval is being read or written, is read-only.
+    const approvalLock =
+      Boolean(editing) && (approvalActive() || approvalReading || Boolean(approvalOperation) || approving);
+    const locked = !permitted || busy || pending || Boolean(editing?.archived) || unavailable || approvalLock;
     for (const key of ["name", "body", "snapshot_id"]) fields[key].disabled = locked;
+    byId("campaign-draft-approval-lock").hidden = !editing || !approvalActive();
     byId("campaign-draft-save").disabled =
       !permitted ||
       busy ||
       conflict ||
       unavailable ||
       Boolean(editing?.archived) ||
+      approvalLock ||
       (!editing && !operation && drafts.length >= 100);
     byId("campaign-draft-save").textContent = saving
       ? "저장 중…"
@@ -71,14 +127,13 @@ function createCampaignDrafts({ api, node }) {
           ? "수정 저장"
           : "초안 저장";
     byId("campaign-draft-archive").hidden = !editing || editing.archived;
-    byId("campaign-draft-archive").disabled = !permitted || busy || Boolean(operation) || conflict || unavailable;
+    byId("campaign-draft-archive").disabled = !permitted || busy || pending || conflict || unavailable || approvalLock;
     byId("campaign-draft-reload").hidden = !editing;
-    byId("campaign-draft-reload").disabled = !permitted || busy || Boolean(operation);
-    byId("campaign-draft-new").disabled = !permitted || busy || Boolean(operation);
-    byId("campaign-draft-refresh").disabled = !permitted || busy || Boolean(operation);
+    byId("campaign-draft-reload").disabled = !permitted || busy || pending;
+    byId("campaign-draft-new").disabled = !permitted || busy || pending;
+    byId("campaign-draft-refresh").disabled = !permitted || busy || pending;
     byId("campaign-drafts-section").hidden = !permitted;
-    for (const button of byId("campaign-draft-list").querySelectorAll("button"))
-      button.disabled = busy || Boolean(operation);
+    for (const button of byId("campaign-draft-list").querySelectorAll("button")) button.disabled = busy || pending;
     byId("campaign-draft-form").setAttribute("aria-busy", String(reading || saving));
     byId("campaign-draft-count").textContent = `${fields.body.value.length.toLocaleString("ko-KR")} / 1,000`;
     // The preview reads the stored draft, so it waits for unsaved edits to be saved.
@@ -88,6 +143,58 @@ function createCampaignDrafts({ api, node }) {
       !permitted || !editing || reading || saving || previewing || conflict || unavailable || hasChanges();
     previewButton.textContent = previewing ? "확인하는 중…" : "발송 조건 미리보기";
     previewButton.setAttribute("aria-busy", String(previewing));
+    approvalControls(busy);
+  }
+  function approvalControls(busy) {
+    const kind = approvalOperation?.kind;
+    const active = approvalActive();
+    const idle = permitted && Boolean(editing) && !busy && !approvalReading && !approvalOperation;
+    byId("campaign-approval").hidden = !editing;
+    byId("campaign-approval").setAttribute("aria-busy", String(approvalReading || approving));
+    // The approve control needs the stored, unarchived, unchanged draft and a read that found no approval in force.
+    const canApprove =
+      idle &&
+      !editing.archived &&
+      !operation &&
+      !conflict &&
+      !unavailable &&
+      !draftChanged() &&
+      approvalLoaded &&
+      !active &&
+      !staged &&
+      scheduleReady();
+    const inputsLocked = !idle || Boolean(staged) || !approvalLoaded || (!active && Boolean(editing?.archived));
+    timing().disabled = inputsLocked;
+    scheduleInput().disabled = inputsLocked;
+    byId("campaign-approval-schedule-fields").hidden = timing().value !== "later";
+    byId("campaign-approval-schedule-help").textContent =
+      `${timeZone || ""} 기준 작업 공간 현지 시각입니다. 현재보다 1분 이상 뒤의 시각을 선택해 주세요.`;
+    const confirmVisible = Boolean(staged) || kind === "create";
+    const start = byId("campaign-approval-start");
+    start.hidden = active || confirmVisible;
+    start.disabled = !canApprove;
+    const submit = byId("campaign-approval-submit");
+    byId("campaign-approval-confirm").hidden = !confirmVisible;
+    submit.disabled = !permitted || busy || approvalReading || (kind !== "create" && !staged);
+    submit.textContent =
+      approving && kind === "create" ? "승인 기록 중…" : kind === "create" ? "같은 요청 재시도" : "승인 기록";
+    submit.setAttribute("aria-busy", String(approving && kind === "create"));
+    byId("campaign-approval-back").hidden = kind === "create";
+    byId("campaign-approval-back").disabled = approving;
+    for (const [id, action, label, busyLabel] of [
+      ["campaign-approval-reschedule", "schedule", "예약 변경", "변경하는 중…"],
+      ["campaign-approval-cancel", "cancel", "승인 취소", "취소하는 중…"],
+    ]) {
+      const button = byId(id);
+      button.hidden = !active && kind !== action;
+      button.disabled =
+        kind === action
+          ? !permitted || busy || approvalReading
+          : !idle || !active || (action === "schedule" && (!scheduleReady() || !scheduleChanged()));
+      button.textContent = approving && kind === action ? busyLabel : kind === action ? "같은 요청 재시도" : label;
+      button.setAttribute("aria-busy", String(approving && kind === action));
+    }
+    byId("campaign-approval-refresh").disabled = !permitted || !editing || busy || approvalReading;
   }
   // Retires any pending preview read through its request counter, like the list and detail reads.
   function clearPreview() {
@@ -104,6 +211,92 @@ function createCampaignDrafts({ api, node }) {
     if (typeof value !== "string" || !/^\d+$/.test(value)) throw new Error("invalid preview count");
     return BigInt(value).toLocaleString("ko-KR");
   }
+  // One table row per reason, in the API order, with a row header; the preview and the stored approval share it.
+  const reasonRows = (counts) =>
+    previewReasons.map(([reason, label]) => {
+      const row = node("tr", "");
+      const header = node("th", label);
+      header.setAttribute("scope", "row");
+      row.append(header, node("td", `${decimal(counts?.[reason])}명`));
+      return row;
+    });
+  const definitions = (entries) =>
+    entries.map(([label, value]) => {
+      const item = node("div", "");
+      item.append(node("dt", label), node("dd", value));
+      return item;
+    });
+  function instant(value, zone) {
+    const date = new Date(value);
+    if (typeof value !== "string" || Number.isNaN(date.getTime())) throw new Error("invalid approval time");
+    return `${date.toLocaleString("ko-KR", { timeZone: zone })} (${zone})`;
+  }
+  const member = (id) => (id && id === userId() ? "나" : `다른 멤버 (${String(id).slice(0, 8)})`);
+  const snapshotLabel = (id) => {
+    const snapshot = snapshots.find((item) => item.id === id);
+    return snapshot
+      ? `${snapshot.segment_name} · ${new Date(snapshot.as_of).toLocaleString("ko-KR", { timeZone })} · 고정 당시 ${snapshot.member_count}명`
+      : "목록에서 찾을 수 없는 고정 대상";
+  };
+  // Scheduled times show in the zone the approval stored, which a later workspace zone change does not move.
+  const scheduleText = (value) =>
+    value.schedule_kind === "immediate" ? "즉시" : instant(value.scheduled_at, value.schedule_time_zone);
+  function renderApproval(value) {
+    // Build every node first so a malformed response changes nothing on screen.
+    if (!["approved", "cancelled"].includes(value?.status) || !Number.isInteger(value.version))
+      throw new Error("invalid approval");
+    const active = value.status === "approved";
+    const entries = [
+      ["상태", active ? "승인됨 · 기록만 하며 발송하지 않음" : "취소됨"],
+      ["승인한 초안", `${value.name} · 버전 ${value.draft_version}`],
+      ["실행 시점", scheduleText(value)],
+      ["승인", `${instant(value.approved_at, timeZone)} · ${member(value.approved_by)}`],
+    ];
+    if (!active) entries.push(["취소", `${instant(value.cancelled_at, timeZone)} · ${member(value.cancelled_by)}`]);
+    entries.push(
+      ["승인 시점 원래 인원", `${decimal(value.preview?.original_member_count)}명`],
+      ["승인 시점 남은 인원", `${decimal(value.preview?.remaining_member_count)}명`],
+      ["조건 기준 시각", instant(value.preview?.as_of, timeZone)],
+    );
+    const summary = definitions(entries);
+    const rows = reasonRows(value.preview?.counts);
+    const warnings =
+      active && value.delivery_available !== true
+        ? [
+            node(
+              "p",
+              "실제 발송은 아직 지원하지 않습니다. 이 승인은 기록일 뿐이며 메시지를 보내거나 예약하지 않습니다.",
+            ),
+          ]
+        : [];
+    approval = value;
+    approvalLoaded = true;
+    byId("campaign-approval-current-title").textContent = active ? "유효한 승인" : "최근 승인 · 취소됨";
+    byId("campaign-approval-warnings").replaceChildren(...warnings);
+    byId("campaign-approval-summary").replaceChildren(...summary);
+    byId("campaign-approval-rows").replaceChildren(...rows);
+    byId("campaign-approval-current").hidden = false;
+    // The schedule inputs start from the approval in force; a time in another zone is not offered as this zone's.
+    const sameZone = value.schedule_kind === "scheduled" && value.schedule_time_zone === timeZone;
+    timing().value = active && value.schedule_kind === "scheduled" ? "later" : "now";
+    scheduleInput().value = active && sameZone ? value.schedule_local : "";
+  }
+  // Forgets the shown approval and retires a pending approval read; a pending write keeps its own request.
+  function clearApproval() {
+    approvalRequest++;
+    approvalReading = false;
+    approvalLoaded = false;
+    approval = null;
+    // An unsent confirmation used the old draft state or zone; an unresolved create keeps its summary for the retry.
+    staged = null;
+    if (approvalOperation?.kind !== "create") byId("campaign-approval-confirm-summary").replaceChildren();
+    byId("campaign-approval-current").hidden = true;
+    byId("campaign-approval-current-title").textContent = "";
+    byId("campaign-approval-warnings").replaceChildren();
+    byId("campaign-approval-summary").replaceChildren();
+    byId("campaign-approval-rows").replaceChildren();
+    byId("campaign-approval-status").textContent = "";
+  }
   function renderPreview(preview) {
     // Build every node first so a malformed response changes nothing on screen.
     const warnings = [];
@@ -112,7 +305,7 @@ function createCampaignDrafts({ api, node }) {
     if (preview.global_send_enabled !== true) warnings.push(node("p", "서비스 전체 발송이 꺼져 있습니다."));
     const asOf = new Date(preview.as_of);
     if (Number.isNaN(asOf.getTime())) throw new Error("invalid preview time");
-    const summary = [
+    const summary = definitions([
       ["원래 인원", `${decimal(preview.original_member_count)}명`],
       ["현재 남은 인원", `${decimal(preview.remaining_member_count)}명`],
       ["예상 공급자 호출 수", `${decimal(preview.estimated_provider_calls)}회`],
@@ -121,18 +314,8 @@ function createCampaignDrafts({ api, node }) {
         preview.plan_broadcast_limit === null ? "정해지지 않음" : `${decimal(preview.plan_broadcast_limit)}명`,
       ],
       ["기준 시각", `${asOf.toLocaleString("ko-KR", { timeZone })} (${timeZone})`],
-    ].map(([label, value]) => {
-      const item = node("div", "");
-      item.append(node("dt", label), node("dd", value));
-      return item;
-    });
-    const rows = previewReasons.map(([reason, label]) => {
-      const row = node("tr", "");
-      const header = node("th", label);
-      header.setAttribute("scope", "row");
-      row.append(header, node("td", `${decimal(preview.counts?.[reason])}명`));
-      return row;
-    });
+    ]);
+    const rows = reasonRows(preview.counts);
     byId("campaign-draft-preview-warnings").replaceChildren(...warnings);
     byId("campaign-draft-preview-summary").replaceChildren(...summary);
     byId("campaign-draft-preview-rows").replaceChildren(...rows);
@@ -140,6 +323,10 @@ function createCampaignDrafts({ api, node }) {
   }
   function clearEditor() {
     clearPreview();
+    approvalOperation = null;
+    clearApproval();
+    timing().value = "now";
+    scheduleInput().value = "";
     editing = null;
     operation = null;
     conflict = false;
@@ -212,7 +399,7 @@ function createCampaignDrafts({ api, node }) {
     return true;
   }
   async function load() {
-    if (!permitted || saving || reading || operation) return;
+    if (!permitted || saving || reading || operation || approving) return;
     const session = generation,
       request = ++listRequest;
     loading = true;
@@ -241,7 +428,8 @@ function createCampaignDrafts({ api, node }) {
     }
   }
   async function openDraft(id) {
-    if (!permitted || loading || saving || reading || operation || !canDiscard()) return;
+    if (!permitted || loading || saving || reading || operation || approvalOperation || approving || !canDiscard())
+      return;
     const session = generation,
       request = ++detailRequest;
     clearEditor();
@@ -264,6 +452,169 @@ function createCampaignDrafts({ api, node }) {
         controls();
       }
     }
+    if (session === generation && request === detailRequest && editing?.id === id) await loadApproval();
+  }
+  // The approval list (newest first) holds the summaries with the stored counts; the draft's first entry is its
+  // newest approval. An approval older than the list's 100 entries is not found here; approving then answers
+  // approval_exists with it.
+  async function loadApproval() {
+    if (!permitted || !editing || approving) return;
+    clearApproval();
+    const session = generation,
+      request = approvalRequest,
+      draftId = editing.id;
+    approvalReading = true;
+    controls();
+    byId("campaign-approval-status").textContent = "승인 상태를 불러오는 중…";
+    const current = () => session === generation && request === approvalRequest && editing?.id === draftId;
+    try {
+      const result = await api("/api/campaign-approvals");
+      if (!current()) return;
+      const found = result.approvals.find((item) => item.draft_id === draftId);
+      if (found) renderApproval(found);
+      else approvalLoaded = true;
+      byId("campaign-approval-status").textContent = "";
+    } catch (error) {
+      if (!current() || authorizationLost(error)) return;
+      approvalLoaded = false;
+      approval = null;
+      byId("campaign-approval-current").hidden = true;
+      byId("campaign-approval-status").textContent =
+        `승인 상태를 확인하지 못해 승인할 수 없습니다. ${message(error)} ‘승인 상태 새로고침’을 눌러 주세요.`;
+    } finally {
+      if (current()) {
+        approvalReading = false;
+        controls();
+      }
+    }
+  }
+  // The confirmation step freezes the request it shows; sending it never rereads the inputs or the zone.
+  function startApproval() {
+    if (byId("campaign-approval-start").disabled) return;
+    staged = {
+      path: `${endpoint}/${editing.id}/approvals`,
+      body: { expected_version: editing.version, schedule_local: scheduleChoice(), expected_time_zone: timeZone },
+    };
+    byId("campaign-approval-confirm-summary").replaceChildren(
+      ...definitions([
+        ["초안", `${editing.name} · 버전 ${editing.version}`],
+        ["고정 대상", snapshotLabel(editing.snapshot_id)],
+        [
+          "실행 시점",
+          staged.body.schedule_local === null
+            ? "즉시"
+            : `${staged.body.schedule_local.replace("T", " ")} (${staged.body.expected_time_zone})`,
+        ],
+      ]),
+    );
+    byId("campaign-approval-status").textContent = "";
+    controls();
+    byId("campaign-approval-confirm-title").focus();
+  }
+  // An unresolved create keeps its summary: the retry panel must still show what it sends.
+  function closeConfirmation() {
+    staged = null;
+    if (approvalOperation?.kind !== "create") byId("campaign-approval-confirm-summary").replaceChildren();
+  }
+  async function sendApproval(kind) {
+    if (!permitted || !editing || approving || approvalReading) return;
+    if (approvalOperation) {
+      if (approvalOperation.kind !== kind) return;
+    } else if (kind === "create") {
+      if (!staged) return;
+      approvalOperation = {
+        kind,
+        path: staged.path,
+        method: "POST",
+        body: { id: crypto.randomUUID(), ...staged.body },
+      };
+    } else {
+      if (byId(kind === "schedule" ? "campaign-approval-reschedule" : "campaign-approval-cancel").disabled) return;
+      if (kind === "cancel" && !confirm("이 실행 승인을 취소할까요? 취소한 승인은 다시 되돌릴 수 없습니다.")) return;
+      approvalOperation =
+        kind === "schedule"
+          ? {
+              kind,
+              path: `/api/campaign-approvals/${approval.id}/schedule`,
+              method: "PUT",
+              body: {
+                expected_version: approval.version,
+                schedule_local: scheduleChoice(),
+                expected_time_zone: timeZone,
+              },
+            }
+          : {
+              kind,
+              path: `/api/campaign-approvals/${approval.id}/cancel`,
+              method: "POST",
+              body: { expected_version: approval.version },
+            };
+    }
+    // A read started before this write could otherwise render the state from before it.
+    approvalRequest++;
+    approvalReading = false;
+    const session = generation,
+      pending = approvalOperation;
+    let reload = false,
+      done = false;
+    approving = true;
+    controls();
+    byId("campaign-approval-status").textContent =
+      kind === "create" ? "승인을 기록하는 중…" : kind === "schedule" ? "예약을 변경하는 중…" : "승인을 취소하는 중…";
+    try {
+      const result = await api(pending.path, pending.method, pending.body);
+      if (session !== generation) return;
+      renderApproval(result);
+      approvalOperation = null;
+      closeConfirmation();
+      done = true;
+      byId("campaign-approval-status").textContent =
+        kind === "create"
+          ? "실행 승인을 기록했습니다. 메시지는 전송되지 않았습니다."
+          : kind === "schedule"
+            ? "예약을 변경했습니다. 메시지는 전송되지 않았습니다."
+            : "승인을 취소했습니다. 이제 초안을 수정할 수 있습니다.";
+    } catch (error) {
+      if (session !== generation || authorizationLost(error)) return;
+      if (!error.status || error.status >= 500) {
+        byId("campaign-approval-status").textContent =
+          "처리 결과를 확인하지 못했습니다. 같은 요청 재시도로 결과를 확인해 주세요. 다른 요청은 보낼 수 없습니다.";
+      } else if (error.status === 429) {
+        // A throttled retry says nothing about the previous attempt's acceptance.
+        byId("campaign-approval-status").textContent =
+          "요청이 많습니다. 요청을 유지하고 있습니다. 잠시 후 같은 요청을 재시도해 주세요.";
+      } else {
+        // A refusal is final for this request; conflicts show the state the server sent and never retry.
+        approvalOperation = null;
+        closeConfirmation();
+        if (error.code === "campaign_draft_conflict" && error.draft) {
+          // The preview on screen was read for the older version.
+          clearPreview();
+          showDraft(error.draft);
+          reload = true;
+        } else if (error.approval) {
+          try {
+            renderApproval(error.approval);
+          } catch {
+            reload = true;
+          }
+        }
+        byId("campaign-approval-status").textContent = approvalMessage(error);
+      }
+    } finally {
+      if (session === generation) {
+        approving = false;
+        controls();
+      }
+    }
+    // A recorded or cancelled approval hides the pressed button; keep keyboard focus on the result.
+    if (done && kind !== "schedule" && session === generation) byId("campaign-approval-current-title").focus();
+    if (reload && session === generation) {
+      const notice = byId("campaign-approval-status").textContent;
+      await loadApproval();
+      if (session === generation && !byId("campaign-approval-status").textContent)
+        byId("campaign-approval-status").textContent = notice;
+    }
   }
   function valid() {
     const name = fields.name.value.normalize("NFC").trim();
@@ -283,6 +634,7 @@ function createCampaignDrafts({ api, node }) {
   }
   async function save(archive = false) {
     if (!permitted || loading || reading || saving || conflict || unavailable || editing?.archived) return;
+    if (editing && (approvalActive() || approvalReading || approvalOperation || approving)) return;
     if (
       archive &&
       (!editing ||
@@ -313,12 +665,17 @@ function createCampaignDrafts({ api, node }) {
     clearPreview();
     const session = generation,
       pending = operation;
+    let approvalChanged = false,
+      saved = null;
     saving = true;
     controls();
     try {
       const draft = await api(pending.path, pending.method, pending.body);
       if (session !== generation) return;
       showDraft(draft);
+      // Every edit and archive moves the version, so a confirmation opened before it shows a version the server refuses.
+      closeConfirmation();
+      saved = draft.id;
       byId("campaign-draft-status").textContent = draft.archived
         ? "초안을 보관했습니다."
         : "초안을 저장했습니다. 메시지는 전송되지 않았습니다.";
@@ -336,6 +693,8 @@ function createCampaignDrafts({ api, node }) {
       } else {
         operation = null;
         conflict = error.code === "campaign_draft_conflict";
+        // Another tab approved this draft: the edits stay on screen and the approval area shows that approval.
+        approvalChanged = error.code === "approval_active";
         byId("campaign-draft-status").textContent = message(error);
       }
     } finally {
@@ -344,6 +703,10 @@ function createCampaignDrafts({ api, node }) {
         controls();
       }
     }
+    if (approvalChanged && session === generation) await loadApproval();
+    // A draft created here (or by a retried create) has no approval read yet; until one succeeds approving stays off.
+    else if (saved && session === generation && editing?.id === saved && !approvalLoaded && !approvalReading)
+      await loadApproval();
   }
   // A read: an unknown outcome only allows another click, so nothing here locks the editor or the button.
   async function preview() {
@@ -392,7 +755,7 @@ function createCampaignDrafts({ api, node }) {
     detailRequest++;
     permitted = false;
     workspace = undefined;
-    loading = reading = saving = false;
+    loading = reading = saving = approving = false;
     drafts = [];
     snapshots = [];
     clearEditor();
@@ -407,13 +770,39 @@ function createCampaignDrafts({ api, node }) {
   });
   form.addEventListener("input", () => {
     clearPreview();
+    closeConfirmation();
     controls();
+  });
+  // A zone change retires the approval shown in the old zone and reads it again; a pending write renders its own result.
+  function zoneChanged() {
+    closeConfirmation();
+    if (editing && !approving) void loadApproval();
+  }
+  for (const [element, event] of [
+    [timing(), "change"],
+    [scheduleInput(), "input"],
+    [scheduleInput(), "change"],
+  ])
+    element.addEventListener(event, () => controls());
+  byId("campaign-approval-start").addEventListener("click", startApproval);
+  byId("campaign-approval-submit").addEventListener("click", () => sendApproval("create"));
+  byId("campaign-approval-back").addEventListener("click", () => {
+    if (approving || approvalOperation) return;
+    closeConfirmation();
+    controls();
+    byId("campaign-approval-start").focus();
+  });
+  byId("campaign-approval-reschedule").addEventListener("click", () => sendApproval("schedule"));
+  byId("campaign-approval-cancel").addEventListener("click", () => sendApproval("cancel"));
+  byId("campaign-approval-refresh").addEventListener("click", () => {
+    if (!byId("campaign-approval-refresh").disabled) return loadApproval();
   });
   byId("campaign-draft-preview-run").addEventListener("click", preview);
   byId("campaign-draft-archive").addEventListener("click", () => save(true));
   byId("campaign-draft-reload").addEventListener("click", () => editing && openDraft(editing.id));
   byId("campaign-draft-new").addEventListener("click", () => {
-    if (!permitted || loading || reading || saving || operation || !canDiscard()) return;
+    if (!permitted || loading || reading || saving || operation || approvalOperation || approving || !canDiscard())
+      return;
     clearEditor();
     fields.name.focus();
   });
@@ -425,18 +814,22 @@ function createCampaignDrafts({ api, node }) {
       const allowed = ["owner", "admin"].includes(role);
       if (!allowed || workspace !== workspaceId) reset();
       // A same-workspace reload can bring a zone another admin stored; the preview's as_of text used the old one.
-      if (timeZone !== zone) clearPreview();
+      const changed = timeZone !== zone;
+      if (changed) clearPreview();
       permitted = allowed;
       workspace = workspaceId;
       timeZone = zone;
+      if (changed) zoneChanged();
       controls();
       if (permitted) return load();
     },
-    // A saved zone change: the preview's as_of and the snapshot option dates used the old zone. No reload.
+    // A saved zone change: the preview's as_of, the snapshot option dates and the approval times used the old zone.
+    // The draft list is not reloaded; the approval state is read again.
     timeZoneChanged(zone) {
       timeZone = zone;
       clearPreview();
       options();
+      zoneChanged();
       controls();
     },
   };
