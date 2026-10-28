@@ -154,8 +154,18 @@ test("a connection is attempted at most once every six hours, also after a trans
 
 test("a lost subscription keeps its first time for the same token, a present result clears it, and each change is logged once", async () => {
   const setDue = () => pool.query("UPDATE instagram_connections SET subscription_check_attempted_at=NULL");
+  const checkedAtMicros = async () =>
+    BigInt(
+      (
+        await pool.query<{ microseconds: string }>(
+          "SELECT (extract(epoch FROM subscription_checked_at)*1000000)::bigint::text AS microseconds FROM instagram_connections WHERE id=$1",
+          [connection],
+        )
+      ).rows[0]!.microseconds,
+    );
   await run(meta(missing).fetchImpl);
   const first = await record();
+  const firstCheckedAt = await checkedAtMicros();
   assert.notEqual(first.subscription_missing_at, null);
   assert.deepEqual(first.subscription_checked_at, first.subscription_missing_at);
   assert.equal(first.same_token, true);
@@ -173,14 +183,15 @@ test("a lost subscription keeps its first time for the same token, a present res
   await setDue();
   await run(meta(missing).fetchImpl);
   const second = await record();
+  const secondCheckedAt = await checkedAtMicros();
   assert.deepEqual(second.subscription_missing_at, first.subscription_missing_at);
-  assert.ok(second.subscription_checked_at > first.subscription_checked_at);
+  assert.ok(secondCheckedAt > firstCheckedAt);
   assert.equal(logLines.length, 1);
   await setDue();
   await run(meta().fetchImpl);
   const restored = await record();
   assert.equal(restored.subscription_missing_at, null);
-  assert.ok(restored.subscription_checked_at > second.subscription_checked_at);
+  assert.ok((await checkedAtMicros()) > secondCheckedAt);
   [listed] = await listConnections(pool, user);
   assert.equal(listed.subscription_missing_at, null);
   assert.deepEqual(listed.subscription_checked_at, restored.subscription_checked_at);
