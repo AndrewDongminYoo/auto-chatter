@@ -242,6 +242,7 @@ test("a stored URL that breaks the URL rules is refused without a lookup or a re
     "https://2130706433/in",
     "https://[::1]/in",
     "https://[2606:4700:4700::1111]/in",
+    // trunk-ignore(trufflehog/URI): Never-issued userinfo in a rejected webhook URL fixture.
     "https://user:secret@hooks.example.test/in",
     "https://hooks.example.test:8443/in",
     "https://localhost/in",

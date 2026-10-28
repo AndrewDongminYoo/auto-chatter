@@ -27,6 +27,7 @@ test("every refused class of webhook URL is rejected", () => {
     ["another port", "https://hooks.example.com:8443/in"],
     ["port 80", "https://hooks.example.com:80/in"],
     ["a user name", "https://user@hooks.example.com/in"],
+    // trunk-ignore(trufflehog/URI): Never-issued userinfo in a rejected webhook URL fixture.
     ["a user name and password", "https://user:secret@hooks.example.com/in"],
     ["an IPv4 literal", "https://203.0.113.10/in"],
     ["a loopback IPv4 literal", "https://127.0.0.1/in"],
