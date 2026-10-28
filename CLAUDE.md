@@ -19,6 +19,7 @@ Use `corepack pnpm` (pnpm 10, pinned by `packageManager`).
 corepack pnpm install --frozen-lockfile
 corepack pnpm check-types          # tsc --noEmit, the only compile check
 corepack pnpm test                 # unit tests, no DB needed
+python3 -m unittest discover -s .trunk/configs/tests -p 'test_*.py' -v # offline secret-scan reader
 TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:5433/automations_test corepack pnpm test:db
 TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:5433/automations_test corepack pnpm test:cloudflare
 corepack pnpm build:cloudflare    # bundle only, never deploys
@@ -38,8 +39,12 @@ node --test --test-name-pattern="seven-day boundary" src/instagram/reply-policy.
 - `*.db.test.ts` files refuse to run unless `TEST_DATABASE_URL` points at a database named `automations_test` on `localhost`/`127.0.0.1`, and they apply `db/schema.sql` themselves, then `TRUNCATE` every product table before each test. They run with `--test-concurrency=1`. The local Postgres container setup is in README.md.
 - `test:cloudflare` requires a disposable local PostgreSQL cluster: it creates roles and modifies public schema grants in `automations_test`.
 - Package scripts do not load `.env`; export variables into the shell first (`.env.example` lists the Meta ones).
-- Trunk (`.trunk/trunk.yaml`) runs prettier, markdownlint, yamllint, osv-scanner and trufflehog. The pre-commit format hook is disabled and `trunk check` runs on pre-push, so run `trunk fmt` yourself before committing.
+- Trunk (`.trunk/trunk.yaml`) runs git-diff-check, prettier, markdownlint, yamllint, osv-scanner, offline trufflehog and pinact (`lint` and `upgrade`).
+  Its filesystem JSONL reader retains findings without a literal source match and fails on malformed records; the Python regression suite above also runs in CI.
+  The pre-commit format hook is disabled and `trunk check` runs on pre-push, so format explicit task-owned paths with `trunk fmt <paths>` before committing.
 - Never enable sends, create cloud resources, or publish as part of tests.
+- PostgreSQL timestamps retain microseconds, while the default `pg` JavaScript `Date` reader retains milliseconds.
+  The subscription-check DB test reads epoch microseconds for strict ordering assertions; do not replace that reader with `Date` comparisons or sleeps.
 - For full-dashboard segment acceptance, build the Worker and run `TEST_DATABASE_URL=postgres://postgres@127.0.0.1:<port>/automations_test node scripts/segment-acceptance.mjs` against a fresh disposable cluster.
   This manual fixture serves the real assets and Worker with a restricted DB role, mocks only external auth, and refuses a nonempty public schema or existing application roles.
   It binds HTTPS to loopback, blocks other outbound HTTP, and keeps sends off; see the [acceptance procedure and limits](docs/notes/2026-10-20-segment-integrated-acceptance-verification.md).
