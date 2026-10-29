@@ -1114,7 +1114,7 @@ test("approval passes through a confirmation step that freezes the version, targ
       },
     },
   ]);
-  assert.match(h.get("campaign-approval-status").textContent, /기록했습니다.*전송되지 않았습니다/);
+  assert.match(h.get("campaign-approval-status").textContent, /기록했습니다.*서비스 전체 발송이 켜져 있을 때만 실행/);
   assert.equal(h.get("campaign-approval-confirm").hidden, true);
   assert.equal(h.get("campaign-approval-current-title").focused, true, "focus leaves the hidden confirmation");
   assert.equal(approvalShown(h), true);
@@ -1700,6 +1700,8 @@ test("the approval markup labels its inputs, keeps its messages in live regions 
   const start = html.indexOf('id="campaign-approval"');
   const section = html.slice(start, html.indexOf("</section>", start));
   assert.ok(start >= 0 && section.length > 0);
+  // A refusal moves keyboard focus to the area title, which needs tabindex to take it.
+  assert.match(section, /<h4 id="campaign-approval-title" tabindex="-1">/);
   assert.match(section, /<label\s*>실행 시점<select id="campaign-approval-timing"/);
   assert.match(section, /<label\s*>예약 시각<input\s+id="campaign-approval-schedule"\s+type="datetime-local"/);
   assert.doesNotMatch(section, /\sstep=/, "the server accepts minutes only");
@@ -2167,4 +2169,255 @@ test("the run panel markup sits inside the approval area, keeps its status live 
   assert.doesNotMatch(panel, /발송\s*가능/);
   const script = readFileSync(new URL("../../public/app/campaign-drafts.js", import.meta.url), "utf8");
   assert.doesNotMatch(script, /setInterval|setTimeout/, "the run is never polled");
+});
+
+// Approval writes (#277): refusal focus, the success-body check, the fallback notice and the success wording.
+const approvalHeadings = ["campaign-approval-title", "campaign-approval-current-title"];
+// The fake focus flag never clears, so each check resets both headings right before the write.
+const unfocusHeadings = (h: ApprovalHarness) => {
+  for (const id of approvalHeadings) h.get(id).focused = false;
+};
+const focusedHeadings = (h: ApprovalHarness) => approvalHeadings.filter((id) => h.get(id).focused);
+const approvalStatus = (h: ApprovalHarness) => h.get("campaign-approval-status").textContent;
+const cancelledApproval: Approval = {
+  ...storedApproval,
+  status: "cancelled",
+  version: 2,
+  cancelled_by: "user-me",
+  cancelled_at: "2026-10-27T04:00:00Z",
+};
+type ApprovalKind = "create" | "schedule" | "cancel";
+const approvalButton = (kind: ApprovalKind) =>
+  kind === "create"
+    ? "campaign-approval-submit"
+    : kind === "schedule"
+      ? "campaign-approval-reschedule"
+      : "campaign-approval-cancel";
+const isApprovalWrite = (kind: ApprovalKind, path: string, method?: string) =>
+  kind === "create" ? path.endsWith("/approvals") && method === "POST" : path.endsWith(`/${kind}`);
+// Opens the saved draft and prepares the write so the next click on approvalButton(kind) sends it.
+async function prepareApprovalWrite(h: ApprovalHarness, kind: ApprovalKind) {
+  await openSaved(h);
+  if (kind === "create") await click(h, "campaign-approval-start");
+  if (kind === "schedule") await chooseSchedule(h, "2026-10-29T06:30");
+}
+const unknownOutcome =
+  "처리 결과를 확인하지 못했습니다. 같은 요청 재시도로 결과를 확인해 주세요. 다른 요청은 보낼 수 없습니다.";
+
+const refusals: [string, ApprovalKind, Record<string, unknown>, string][] = [
+  [
+    "a create refused without an approval to show",
+    "create",
+    { status: 409, code: "campaign_schedule_timezone_changed" },
+    "campaign-approval-title",
+  ],
+  [
+    "a create refused with the approval recorded elsewhere",
+    "create",
+    { status: 409, code: "approval_exists", approval: storedApproval },
+    "campaign-approval-current-title",
+  ],
+  [
+    "a create refused by a draft conflict",
+    "create",
+    { status: 409, code: "campaign_draft_conflict", draft: { ...savedDraft, version: 4 } },
+    "campaign-approval-title",
+  ],
+  [
+    "a schedule change refused while the approval stays shown",
+    "schedule",
+    { status: 422, code: "campaign_schedule_out_of_range" },
+    "campaign-approval-current-title",
+  ],
+  [
+    "a schedule change refused with an unusable carried approval",
+    "schedule",
+    { status: 409, code: "campaign_approval_conflict", approval: { ...storedApproval, version: "2" } },
+    "campaign-approval-title",
+  ],
+  [
+    "a cancel refused with the cancelled approval",
+    "cancel",
+    { status: 409, code: "campaign_approval_cancelled", approval: cancelledApproval },
+    "campaign-approval-current-title",
+  ],
+  [
+    "a cancel refused without a carried approval",
+    "cancel",
+    { status: 404, code: "campaign_approval_not_found" },
+    "campaign-approval-current-title",
+  ],
+];
+for (const [name, kind, refusal, heading] of refusals)
+  test(`${name} moves focus to a visible approval heading`, async () => {
+    const h = await adminDraft(
+      async (path, method) => {
+        if (isApprovalWrite(kind, path, method)) throw structuredClone(refusal);
+      },
+      kind === "create" ? [] : [storedApproval],
+      "America/New_York",
+    );
+    await prepareApprovalWrite(h, kind);
+    unfocusHeadings(h);
+    await click(h, approvalButton(kind));
+    assert.equal(approvalWrites(h).length, 1);
+    assert.deepEqual(focusedHeadings(h), [heading]);
+    if (heading === "campaign-approval-current-title")
+      assert.equal(h.get("campaign-approval-current").hidden, false, "the focused heading is visible");
+  });
+
+const otherApprovalId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+const mismatches: [string, ApprovalKind, Approval][] = [
+  ["create answered with another approval", "create", { ...storedApproval, id: otherApprovalId }],
+  [
+    "create answered with another draft's approval",
+    "create",
+    { ...storedApproval, id: input.id, draft_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" },
+  ],
+  [
+    "schedule change answered with another approval",
+    "schedule",
+    { ...storedApproval, id: otherApprovalId, version: 2 },
+  ],
+  ["schedule change answered as cancelled", "schedule", cancelledApproval],
+  ["cancel answered with another approval", "cancel", { ...cancelledApproval, id: otherApprovalId }],
+  ["cancel answered as still approved", "cancel", { ...storedApproval, version: 2 }],
+];
+for (const [name, kind, body] of mismatches)
+  test(`a ${name} keeps the request and offers only the same-request retry`, async () => {
+    let answered = false;
+    const h = await adminDraft(
+      async (path, method) => {
+        if (isApprovalWrite(kind, path, method) && !answered) {
+          answered = true;
+          return structuredClone(body);
+        }
+      },
+      kind === "create" ? [] : [storedApproval],
+      "America/New_York",
+    );
+    await prepareApprovalWrite(h, kind);
+    const title = h.get("campaign-approval-current-title").textContent;
+    const summary = h.get("campaign-approval-summary").allText();
+    const button = approvalButton(kind);
+    await click(h, button);
+    assert.equal(approvalStatus(h), unknownOutcome);
+    assert.equal(h.get(button).textContent, "같은 요청 재시도");
+    assert.equal(h.get("campaign-approval-current-title").textContent, title, "the other body is not rendered");
+    assert.equal(h.get("campaign-approval-summary").allText(), summary);
+    assert.equal(h.controller.hasChanges(), true);
+    if (kind === "create") {
+      assert.equal(h.get("campaign-approval-confirm").hidden, false);
+      assert.equal(h.get("campaign-approval-back").hidden, true, "an unresolved request cannot be abandoned");
+    } else if (kind === "schedule") {
+      assert.equal(h.get("campaign-approval-cancel").disabled, true, "another request waits for the unresolved one");
+      await click(h, "campaign-approval-cancel");
+      assert.equal(approvalWrites(h).length, 1);
+    }
+    await click(h, button);
+    const writes = approvalWrites(h);
+    assert.equal(writes.length, 2);
+    assert.deepEqual(writes[1], writes[0], "the retry is the same request");
+    assert.equal(approvalShown(h), true);
+    assert.notEqual(h.get(button).textContent, "같은 요청 재시도");
+    assert.equal(h.controller.hasChanges(), false);
+  });
+
+// The server answers a repeated create ID with the approval's current state, whatever happened since (another tab or
+// admin can cancel it, or its run can start, while this tab holds the create as unknown).
+const replays: [string, Approval, string, string][] = [
+  [
+    "its executed approval",
+    { ...executedApproval, id: input.id },
+    "최근 승인 · 실행 시작됨",
+    "실행 승인이 이미 기록되어 실행이 시작되었습니다. 보내기 직전마다 모든 조건을 다시 확인합니다.",
+  ],
+  [
+    "its cancelled approval",
+    { ...cancelledApproval, id: input.id },
+    "최근 승인 · 취소됨",
+    "실행 승인이 이미 기록된 뒤 취소되었습니다. 응답받은 상태를 표시합니다.",
+  ],
+];
+for (const [name, replay, title, notice] of replays)
+  test(`a create retry answered with ${name} is accepted and releases the request`, async () => {
+    let attempts = 0;
+    const h = await adminDraft(async (path, method) => {
+      if (!(path.endsWith("/approvals") && method === "POST")) return;
+      // The first response is lost; every later answer for the same request ID is the same current state.
+      if (++attempts === 1) throw new Error("network lost");
+      return structuredClone(replay);
+    });
+    await openSaved(h);
+    await approveNow(h);
+    assert.equal(approvalStatus(h), unknownOutcome);
+    assert.equal(h.get("campaign-approval-submit").textContent, "같은 요청 재시도");
+    unfocusHeadings(h);
+    await click(h, "campaign-approval-submit");
+    const writes = approvalWrites(h);
+    assert.equal(writes.length, 2);
+    assert.deepEqual(writes[1], writes[0], "the retry is the same request");
+    assert.equal(h.get("campaign-approval-current-title").textContent, title);
+    assert.equal(approvalStatus(h), notice);
+    assert.equal(h.get("campaign-approval-confirm").hidden, true);
+    assert.notEqual(h.get("campaign-approval-submit").textContent, "같은 요청 재시도");
+    assert.deepEqual(focusedHeadings(h), ["campaign-approval-current-title"]);
+    assert.equal(h.controller.hasChanges(), false);
+    const executed = replay.status === "executed";
+    assert.equal(runReads(h), executed ? 1 : 0);
+    assert.equal(runShown(h), executed);
+    if (!executed) assertDraftLocked(h, false);
+  });
+
+for (const newer of [false, true])
+  test(`a refusal's fallback approval read ${newer ? "does not restore its notice after a newer read" : "restores its notice"}`, async () => {
+    let hold = false;
+    let release!: (value: unknown) => void;
+    const h = await adminDraft(async (path, method) => {
+      if (path.endsWith("/approvals") && method === "POST") {
+        hold = true;
+        throw { status: 409, code: "campaign_draft_conflict", draft: { ...savedDraft, version: 4 } };
+      }
+      if (path === "/api/campaign-approvals" && hold) {
+        hold = false;
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      }
+    });
+    await openSaved(h);
+    await click(h, "campaign-approval-start");
+    const pending = click(h, "campaign-approval-submit");
+    await draftSettle();
+    assert.equal(approvalStatus(h), "승인 상태를 불러오는 중…", "the fallback read is held open");
+    if (newer) {
+      // A zone change reads the approval again without changing the session generation.
+      h.controller.timeZoneChanged("UTC");
+      await draftSettle();
+      assert.equal(approvalStatus(h), "", "the newer read finished before the fallback");
+    }
+    release({ approvals: [] });
+    await pending;
+    if (newer) assert.equal(approvalStatus(h), "");
+    else assert.match(approvalStatus(h), /다른 곳에서 초안이 변경/);
+  });
+
+test("create and schedule successes say when the approval runs and never claim that nothing was sent", async () => {
+  const h = await adminDraft(undefined, [], "America/New_York");
+  await openSaved(h);
+  const due =
+    "실행 시점이 되면 서비스 전체 발송이 켜져 있을 때만 실행되며, 보내기 직전마다 모든 조건을 다시 확인합니다.";
+  await approveNow(h);
+  const created = approvalStatus(h);
+  assert.equal(created, `실행 승인을 기록했습니다. ${due}`);
+  await chooseSchedule(h, "2026-10-29T06:30");
+  await click(h, "campaign-approval-reschedule");
+  const scheduled = approvalStatus(h);
+  assert.equal(scheduled, `예약을 변경했습니다. ${due}`);
+  for (const text of [created, scheduled]) {
+    assert.doesNotMatch(text, /전송되지 않았습니다/);
+    assert.doesNotMatch(text, /발송\s*가능/);
+  }
+  await click(h, "campaign-approval-cancel");
+  assert.equal(approvalStatus(h), "승인을 취소했습니다. 이제 초안을 수정할 수 있습니다.");
 });

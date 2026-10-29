@@ -794,11 +794,15 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       if (approvalOperation.kind !== kind) return;
     } else if (kind === "create") {
       if (!staged) return;
+      const id = crypto.randomUUID();
+      // `approvalId` and `draftId` name what a success body must be; they are not sent.
       approvalOperation = {
         kind,
         path: staged.path,
         method: "POST",
-        body: { id: crypto.randomUUID(), ...staged.body },
+        body: { id, ...staged.body },
+        approvalId: id,
+        draftId: editing.id,
       };
     } else {
       if (byId(kind === "schedule" ? "campaign-approval-reschedule" : "campaign-approval-cancel").disabled) return;
@@ -814,21 +818,25 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
                 schedule_local: scheduleChoice(),
                 expected_time_zone: timeZone,
               },
+              approvalId: approval.id,
             }
           : {
               kind,
               path: `/api/campaign-approvals/${approval.id}/cancel`,
               method: "POST",
               body: { expected_version: approval.version },
+              approvalId: approval.id,
             };
     }
     // A read started before this write could otherwise render the state from before it.
     approvalRequest++;
     approvalReading = false;
     const session = generation,
-      pending = approvalOperation;
+      pending = approvalOperation,
+      draftId = editing.id;
     let reload = false,
-      done = false;
+      done = false,
+      refused = false;
     approving = true;
     controls();
     byId("campaign-approval-status").textContent =
@@ -836,15 +844,29 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     try {
       const result = await api(pending.path, pending.method, pending.body);
       if (session !== generation) return;
+      // Only the requested approval in the requested outcome releases the request; any other body is an unknown
+      // outcome with its retry. A repeated create returns the existing approval in its current state, which may have
+      // started its run or been cancelled since.
+      if (result?.id !== pending.approvalId) throw new Error("invalid approval");
+      if (kind === "create" && result.draft_id !== pending.draftId) throw new Error("invalid approval");
+      const outcomes =
+        kind === "create" ? ["approved", "executed", "cancelled"] : kind === "schedule" ? ["approved"] : ["cancelled"];
+      if (!outcomes.includes(result.status)) throw new Error("invalid approval");
       renderApproval(result);
       approvalOperation = null;
       closeConfirmation();
       done = true;
+      const due =
+        "실행 시점이 되면 서비스 전체 발송이 켜져 있을 때만 실행되며, 보내기 직전마다 모든 조건을 다시 확인합니다.";
       byId("campaign-approval-status").textContent =
         kind === "create"
-          ? "실행 승인을 기록했습니다. 메시지는 전송되지 않았습니다."
+          ? result.status === "executed"
+            ? "실행 승인이 이미 기록되어 실행이 시작되었습니다. 보내기 직전마다 모든 조건을 다시 확인합니다."
+            : result.status === "cancelled"
+              ? "실행 승인이 이미 기록된 뒤 취소되었습니다. 응답받은 상태를 표시합니다."
+              : `실행 승인을 기록했습니다. ${due}`
           : kind === "schedule"
-            ? "예약을 변경했습니다. 메시지는 전송되지 않았습니다."
+            ? `예약을 변경했습니다. ${due}`
             : "승인을 취소했습니다. 이제 초안을 수정할 수 있습니다.";
     } catch (error) {
       if (session !== generation || authorizationLost(error)) return;
@@ -859,6 +881,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
         // A refusal is final for this request; conflicts show the state the server sent and never retry.
         approvalOperation = null;
         closeConfirmation();
+        refused = true;
         if (error.code === "campaign_draft_conflict" && error.draft) {
           // The preview on screen was read for the older version.
           clearPreview();
@@ -881,10 +904,23 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     }
     // A recorded or cancelled approval hides the pressed button; keep keyboard focus on the result.
     if (done && kind !== "schedule" && session === generation) byId("campaign-approval-current-title").focus();
+    // A refusal closes the confirmation or changes the shown state; focus a heading that stays visible. The fallback
+    // read below hides the shown approval first, so a reload focuses the area title.
+    if (refused && session === generation)
+      byId(
+        !reload && !byId("campaign-approval-current").hidden
+          ? "campaign-approval-current-title"
+          : "campaign-approval-title",
+      ).focus();
     if (reload && session === generation) {
       const notice = byId("campaign-approval-status").textContent;
-      await loadApproval();
-      if (session === generation && !byId("campaign-approval-status").textContent)
+      // loadApproval takes its request number before its first await; a newer approval read must not get the old
+      // notice.
+      const fallback = loadApproval();
+      const fallbackRequest = approvalRequest;
+      await fallback;
+      const stillShown = session === generation && fallbackRequest === approvalRequest && editing?.id === draftId;
+      if (stillShown && !byId("campaign-approval-status").textContent)
         byId("campaign-approval-status").textContent = notice;
     }
     // A refusal can carry an executed approval (campaign_approval_executed, campaign_version_executed): show its run.
