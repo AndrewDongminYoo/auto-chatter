@@ -644,6 +644,8 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
     // A refused campaign approval write carries the current approval, or the current draft (409).
     error.approval = result.approval;
     error.draft = result.draft;
+    // A refused campaign run cancel carries the current run (409).
+    error.run = result.run;
     // A rejected (422) or stale (409) CSV import carries the fresh per-row check result.
     error.checked_at = result.checked_at;
     error.counts = result.counts;

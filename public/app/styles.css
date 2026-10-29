@@ -2110,3 +2110,10 @@ section {
 .campaign-approval-confirm h5 {
   margin-top: 0;
 }
+.campaign-approval h6 {
+  margin: 12px 0 4px;
+  font-size: 0.875rem;
+}
+.campaign-approval-confirm h6 {
+  margin-top: 0;
+}

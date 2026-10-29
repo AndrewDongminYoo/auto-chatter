@@ -1423,6 +1423,65 @@
                   통과했다는 뜻이고, 실제로 보낼 때는 모든 조건을 다시 확인합니다.
                 </p>
               </div>
+              <div
+                id="campaign-run"
+                class="campaign-draft-preview campaign-run"
+                role="group"
+                aria-labelledby="campaign-run-title"
+                hidden
+              >
+                <h5 id="campaign-run-title" tabindex="-1">실행 현황</h5>
+                <p class="hint">
+                  승인 상태를 불러올 때와 ‘실행 현황 새로고침’을 누를 때만 다시 읽습니다. 자동으로 갱신하지 않습니다.
+                </p>
+                <p id="campaign-run-status" class="hint" role="status" aria-live="polite"></p>
+                <div id="campaign-run-current" hidden>
+                  <dl id="campaign-run-summary" class="campaign-draft-preview-summary"></dl>
+                  <div class="campaign-draft-preview-table">
+                    <table>
+                      <caption>
+                        실행 시작 시점 조건별 인원 · 각 인원은 처음 해당하는 조건 하나에만 셉니다
+                      </caption>
+                      <thead>
+                        <tr>
+                          <th scope="col">조건</th>
+                          <th scope="col">인원</th>
+                        </tr>
+                      </thead>
+                      <tbody id="campaign-run-rows"></tbody>
+                    </table>
+                  </div>
+                  <h6>발송 행 상태별 수</h6>
+                  <dl id="campaign-run-deliveries" class="campaign-draft-preview-summary"></dl>
+                  <p class="hint">
+                    모든 행은 보내기 직전에 조건을 다시 확인하며, 서비스 전체 발송이 켜져 있을 때만 발송이 진행됩니다.
+                    보냄은 Meta가 요청을 받았다는 뜻일 뿐 상대가 읽었다는 뜻은 아닙니다. 결과 불명은 결과를 확인하지
+                    못한 행이며 자동으로 다시 보내지 않습니다.
+                  </p>
+                </div>
+                <div class="form-actions">
+                  <button id="campaign-run-cancel" type="button" class="secondary" hidden>실행 취소</button>
+                  <button id="campaign-run-refresh" type="button" class="secondary">실행 현황 새로고침</button>
+                </div>
+                <div
+                  id="campaign-run-confirm"
+                  class="campaign-approval-confirm"
+                  role="group"
+                  aria-labelledby="campaign-run-confirm-title"
+                  hidden
+                >
+                  <h6 id="campaign-run-confirm-title" tabindex="-1">실행 취소 확인</h6>
+                  <dl id="campaign-run-confirm-summary" class="campaign-draft-preview-summary"></dl>
+                  <p class="flow-alert warning">
+                    취소하면 이 실행의 대기 중인 행은 모두 취소되어 보내지 않습니다. 이미 보내는 중인 행은 되돌릴 수
+                    없고, 이미 보낸 메시지도 취소되지 않습니다. 취소한 실행은 다시 시작할 수 없습니다.
+                  </p>
+                  <div class="form-actions">
+                    <button id="campaign-run-cancel-submit" type="button">실행 취소 확정</button>
+                    <button id="campaign-run-cancel-back" type="button" class="secondary">돌아가기</button>
+                  </div>
+                </div>
+              </div>
               <div class="campaign-approval-schedule">
                 <label
                   >실행 시점<select id="campaign-approval-timing">

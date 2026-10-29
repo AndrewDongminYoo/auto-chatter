@@ -31,6 +31,16 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     approvalOperation = null,
     // The approval request shown in the confirmation step before it is sent.
     staged = null;
+  // The executed approval's run (#36). It is read when the approval is shown and on an explicit refresh only; there is
+  // no polling. `runRequest` retires a pending read or cancel response, like the other request counters.
+  let runRequest = 0,
+    run = null,
+    runReading = false,
+    cancelling = false,
+    // A cancel whose outcome is unknown or throttled: only this exact request may be sent again.
+    runOperation = null,
+    // The cancel request shown in the confirmation step before it is sent.
+    runStaged = null;
   // The preview reasons in the API's evaluation order. "조건 통과" only means the recorded conditions passed at as_of.
   const previewReasons = [
     ["connection_unavailable", "연결 발송 불가"],
@@ -74,6 +84,30 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     campaign_approval_id_conflict: "승인 요청을 확인하지 못했습니다. 승인 상태를 새로고침한 뒤 다시 시도해 주세요.",
   };
   const approvalMessage = (error) => approvalMessages[error.code] || message(error);
+  const runMessages = {
+    campaign_run_conflict:
+      "다른 곳에서 실행 상태가 바뀌었습니다. 현재 실행 현황을 표시합니다. 확인한 뒤 다시 시도해 주세요.",
+    campaign_run_cancelled: "이미 취소된 실행입니다. 현재 실행 현황을 표시합니다.",
+    campaign_run_completed: "이미 완료된 실행이라 취소할 수 없습니다. 현재 실행 현황을 표시합니다.",
+    campaign_run_not_found: "실행을 찾을 수 없습니다. 승인 상태를 새로고침해 주세요.",
+    invalid_campaign_run: "실행 취소 요청을 확인하지 못했습니다. 실행 현황을 새로고침한 뒤 다시 시도해 주세요.",
+  };
+  const runMessage = (error) => runMessages[error.code] || message(error);
+  const runStatuses = [
+    ["running", "진행 중"],
+    ["cancelled", "취소됨"],
+    ["completed", "완료"],
+  ];
+  // The run API's seven delivery statuses. "보냄" is Meta's acceptance only; "결과 불명" is never retried automatically.
+  const deliveryStatuses = [
+    ["pending", "대기"],
+    ["sending", "보내는 중"],
+    ["sent", "보냄"],
+    ["failed", "실패"],
+    ["blocked", "차단"],
+    ["unknown", "결과 불명"],
+    ["cancelled", "취소"],
+  ];
   function draftChanged() {
     return editing
       ? fields.name.value !== editing.name ||
@@ -82,7 +116,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       : Boolean(fields.name.value || fields.body.value || fields.snapshot_id.value);
   }
   function hasChanges() {
-    if (operation || saving || approvalOperation || approving) return true;
+    if (operation || saving || approvalOperation || approving || runOperation || cancelling) return true;
     return draftChanged();
   }
   const canDiscard = () => !hasChanges() || confirm("저장하지 않은 캠페인 초안 변경 사항을 버릴까요?");
@@ -106,8 +140,8 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     );
   };
   function controls() {
-    const busy = loading || reading || saving || approving;
-    const pending = Boolean(operation || approvalOperation);
+    const busy = loading || reading || saving || approving || cancelling;
+    const pending = Boolean(operation || approvalOperation || runOperation);
     // A draft with an approval in force, or whose approval is being read or written, is read-only.
     const approvalLock =
       Boolean(editing) && (approvalActive() || approvalReading || Boolean(approvalOperation) || approving);
@@ -151,7 +185,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   function approvalControls(busy) {
     const kind = approvalOperation?.kind;
     const active = approvalActive();
-    const idle = permitted && Boolean(editing) && !busy && !approvalReading && !approvalOperation;
+    const idle = permitted && Boolean(editing) && !busy && !approvalReading && !approvalOperation && !runOperation;
     byId("campaign-approval").hidden = !editing;
     byId("campaign-approval").setAttribute("aria-busy", String(approvalReading || approving));
     // The approve control needs the stored, unarchived, unchanged draft and a read that found no approval in force.
@@ -197,7 +231,27 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       button.textContent = approving && kind === action ? busyLabel : kind === action ? "같은 요청 재시도" : label;
       button.setAttribute("aria-busy", String(approving && kind === action));
     }
-    byId("campaign-approval-refresh").disabled = !permitted || !editing || busy || approvalReading;
+    // An unresolved run cancel keeps its request; reading the approval again would drop it with the run panel.
+    byId("campaign-approval-refresh").disabled =
+      !permitted || !editing || busy || approvalReading || Boolean(runOperation);
+    runControls(busy);
+  }
+  function runControls(busy) {
+    const confirmVisible = Boolean(runStaged || runOperation);
+    byId("campaign-run").hidden = !editing || !approval?.run_id;
+    byId("campaign-run").setAttribute("aria-busy", String(runReading || cancelling));
+    byId("campaign-run-refresh").disabled = !permitted || !editing || !approval?.run_id || busy || runReading;
+    const start = byId("campaign-run-cancel");
+    start.hidden = run?.status !== "running" || confirmVisible;
+    start.disabled = !permitted || busy || runReading || run?.status !== "running";
+    byId("campaign-run-confirm").hidden = !confirmVisible;
+    const submit = byId("campaign-run-cancel-submit");
+    submit.disabled = !permitted || busy || runReading || !confirmVisible;
+    submit.textContent = cancelling ? "취소하는 중…" : runOperation ? "같은 요청 재시도" : "실행 취소 확정";
+    submit.setAttribute("aria-busy", String(cancelling));
+    // An unresolved request cannot be abandoned; only its retry is offered.
+    byId("campaign-run-cancel-back").hidden = Boolean(runOperation);
+    byId("campaign-run-cancel-back").disabled = cancelling;
   }
   // Retires any pending preview read through its request counter, like the list and detail reads.
   function clearPreview() {
@@ -246,11 +300,15 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     value.schedule_kind === "immediate" ? "즉시" : instant(value.scheduled_at, value.schedule_time_zone);
   function renderApproval(value) {
     // Build every node first so a malformed response changes nothing on screen.
-    if (!["approved", "cancelled", "executed"].includes(value?.status) || !Number.isInteger(value.version))
+    if (
+      !["approved", "cancelled", "executed"].includes(value?.status) ||
+      !Number.isInteger(value.version) ||
+      (value.run_id != null && typeof value.run_id !== "string")
+    )
       throw new Error("invalid approval");
     const active = value.status === "approved";
-    // An executed approval started its run (#36), which the delivery worker sends; the run screen is not part of this
-    // page yet.
+    // An executed approval started its run (#36), which the delivery worker sends; the run panel below the approval
+    // shows it.
     const executed = value.status === "executed";
     const entries = [
       [
@@ -282,6 +340,8 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
           ),
         ]
       : [];
+    // Another approval, or the same one now carrying a run, retires the run shown and any response for it.
+    if (approval?.id !== value.id || (approval?.run_id ?? null) !== (value.run_id ?? null)) clearRun();
     approval = value;
     approvalLoaded = true;
     byId("campaign-approval-current-title").textContent = active
@@ -298,8 +358,190 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     timing().value = active && value.schedule_kind === "scheduled" ? "later" : "now";
     scheduleInput().value = active && sameZone ? value.schedule_local : "";
   }
+  // Forgets the shown run and retires a pending run read or cancel response. Callers that can hold an unresolved cancel
+  // (draft switch, new draft, approval reload, zone change) are blocked while it exists; a session reset drops it.
+  function clearRun() {
+    runRequest++;
+    run = null;
+    runReading = false;
+    cancelling = false;
+    runOperation = null;
+    runStaged = null;
+    byId("campaign-run-current").hidden = true;
+    byId("campaign-run-summary").replaceChildren();
+    byId("campaign-run-rows").replaceChildren();
+    byId("campaign-run-deliveries").replaceChildren();
+    byId("campaign-run-confirm-summary").replaceChildren();
+    byId("campaign-run-status").textContent = "";
+  }
+  function renderRun(value) {
+    // Build every node first so a malformed response changes nothing on screen.
+    const status = runStatuses.find(([key]) => key === value?.status);
+    if (!status || typeof value.id !== "string" || !Number.isInteger(value.version)) throw new Error("invalid run");
+    const entries = [["상태", status[1]]];
+    if (value.status === "cancelled") entries.push(["취소 시각", instant(value.cancelled_at, timeZone)]);
+    entries.push(
+      ["시작 시각", instant(value.start?.as_of, timeZone)],
+      ["시작 시점 원래 인원", `${decimal(value.start?.original_member_count)}명`],
+      ["시작 시점 남은 인원", `${decimal(value.start?.remaining_member_count)}명`],
+    );
+    const summary = definitions(entries);
+    const rows = reasonRows(value.start?.counts);
+    const deliveries = definitions(
+      deliveryStatuses.map(([key, label]) => [label, `${decimal(value.delivery_counts?.[key])}건`]),
+    );
+    run = value;
+    byId("campaign-run-summary").replaceChildren(...summary);
+    byId("campaign-run-rows").replaceChildren(...rows);
+    byId("campaign-run-deliveries").replaceChildren(...deliveries);
+    byId("campaign-run-current").hidden = false;
+  }
+  // Reads the shown approval's run. A read never changes a frozen cancel request: its retry stays the only cancel.
+  async function loadRun() {
+    if (!permitted || !editing || !approval?.run_id || cancelling) return;
+    const session = generation,
+      request = ++runRequest,
+      draftId = editing.id,
+      approvalId = approval.id,
+      runId = approval.run_id;
+    run = null;
+    // An unsent confirmation used the old version; an unresolved cancel keeps its summary for the retry.
+    runStaged = null;
+    if (!runOperation) byId("campaign-run-confirm-summary").replaceChildren();
+    byId("campaign-run-current").hidden = true;
+    runReading = true;
+    controls();
+    byId("campaign-run-status").textContent = "실행 현황을 불러오는 중…";
+    const current = () =>
+      session === generation && request === runRequest && editing?.id === draftId && approval?.id === approvalId;
+    try {
+      const result = await api(`/api/campaign-runs/${runId}`);
+      if (!current()) return;
+      if (result?.id !== runId) {
+        byId("campaign-run-status").textContent =
+          "다른 실행의 응답이라 표시하지 않았습니다. ‘실행 현황 새로고침’을 눌러 주세요.";
+        return;
+      }
+      renderRun(result);
+      byId("campaign-run-status").textContent = "";
+    } catch (error) {
+      if (!current() || authorizationLost(error)) return;
+      byId("campaign-run-status").textContent =
+        `실행 현황을 불러오지 못했습니다. ${runMessage(error)} ‘실행 현황 새로고침’을 눌러 주세요.`;
+    } finally {
+      if (current()) {
+        runReading = false;
+        controls();
+      }
+    }
+  }
+  // The confirmation step freezes the run and the version it shows; sending it never rereads the run.
+  function startRunCancel() {
+    if (byId("campaign-run-cancel").disabled || !run || run.status !== "running") return;
+    runStaged = {
+      runId: run.id,
+      path: `/api/campaign-runs/${run.id}/cancel`,
+      body: { expected_version: run.version },
+    };
+    byId("campaign-run-confirm-summary").replaceChildren(
+      ...definitions([
+        ["실행 시작 시각", instant(run.start.as_of, timeZone)],
+        ["표시된 대기 행", `${decimal(run.delivery_counts.pending)}건`],
+        ["표시된 보내는 중 행", `${decimal(run.delivery_counts.sending)}건`],
+      ]),
+    );
+    byId("campaign-run-status").textContent = "";
+    controls();
+    byId("campaign-run-confirm-title").focus();
+  }
+  async function cancelRun() {
+    if (!permitted || !editing || !approval?.run_id || cancelling || runReading) return;
+    if (!runOperation) {
+      if (!runStaged) return;
+      runOperation = runStaged;
+    }
+    // A read started before this write could otherwise render the state from before it.
+    const session = generation,
+      request = ++runRequest,
+      pending = runOperation,
+      draftId = editing.id,
+      approvalId = approval.id;
+    runReading = false;
+    let reload = false,
+      done = false,
+      refused = false;
+    cancelling = true;
+    controls();
+    byId("campaign-run-status").textContent = "실행을 취소하는 중…";
+    const current = () =>
+      session === generation && request === runRequest && editing?.id === draftId && approval?.id === approvalId;
+    try {
+      const result = await api(pending.path, "POST", pending.body);
+      if (!current()) return;
+      if (result?.id !== pending.runId) throw new Error("invalid run");
+      if (result.status !== "cancelled") throw new Error("invalid run");
+      // A malformed body throws before the request is released, so it stays an unknown outcome with its retry.
+      const sending = decimal(result.delivery_counts?.sending);
+      const cancelled = decimal(result.cancelled_delivery_count);
+      renderRun(result);
+      runOperation = null;
+      runStaged = null;
+      done = true;
+      byId("campaign-run-status").textContent =
+        `실행을 취소했습니다. 대기 중이던 ${cancelled}건을 취소했습니다.` +
+        (result.delivery_counts.sending !== "0" ? ` 이미 보내는 중이던 ${sending}건은 되돌릴 수 없습니다.` : "");
+    } catch (error) {
+      if (!current() || authorizationLost(error)) return;
+      if (!error.status || error.status >= 500) {
+        byId("campaign-run-status").textContent =
+          "처리 결과를 확인하지 못했습니다. 같은 요청 재시도로 결과를 확인해 주세요. 다른 요청은 보낼 수 없습니다.";
+      } else if (error.status === 429) {
+        // A throttled retry says nothing about the previous attempt's acceptance.
+        byId("campaign-run-status").textContent =
+          "요청이 많습니다. 요청을 유지하고 있습니다. 잠시 후 같은 요청을 재시도해 주세요.";
+      } else {
+        // A refusal is final for this request; a 409 shows the run the server sent and never retries.
+        runOperation = null;
+        runStaged = null;
+        refused = true;
+        byId("campaign-run-confirm-summary").replaceChildren();
+        // Without a usable carried run the screen reads the run again instead of keeping the old state.
+        reload = true;
+        if (error.run?.id === pending.runId) {
+          try {
+            renderRun(error.run);
+            reload = false;
+          } catch {
+            // The read below replaces it.
+          }
+        }
+        byId("campaign-run-status").textContent = runMessage(error);
+      }
+    } finally {
+      if (session === generation) {
+        cancelling = false;
+        controls();
+      }
+    }
+    // A cancelled or refused run hides the pressed button; keep keyboard focus on the result.
+    if ((done || refused) && current()) byId("campaign-run-title").focus();
+    if (reload && current()) {
+      const notice = byId("campaign-run-status").textContent;
+      // loadRun takes its request number before its first await; a newer run read must not get the old notice.
+      const fallback = loadRun();
+      const fallbackRequest = runRequest;
+      await fallback;
+      const stillShown =
+        session === generation &&
+        fallbackRequest === runRequest &&
+        editing?.id === draftId &&
+        approval?.id === approvalId;
+      if (stillShown && !byId("campaign-run-status").textContent) byId("campaign-run-status").textContent = notice;
+    }
+  }
   // Forgets the shown approval and retires a pending approval read; a pending write keeps its own request.
   function clearApproval() {
+    clearRun();
     approvalRequest++;
     approvalReading = false;
     approvalLoaded = false;
@@ -445,7 +687,18 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     }
   }
   async function openDraft(id) {
-    if (!permitted || loading || saving || reading || operation || approvalOperation || approving || !canDiscard())
+    if (
+      !permitted ||
+      loading ||
+      saving ||
+      reading ||
+      operation ||
+      approvalOperation ||
+      approving ||
+      runOperation ||
+      cancelling ||
+      !canDiscard()
+    )
       return;
     const session = generation,
       request = ++detailRequest;
@@ -475,7 +728,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   // newest approval. An approval older than the list's 100 entries is not found here; approving then answers
   // approval_exists with it.
   async function loadApproval() {
-    if (!permitted || !editing || approving) return;
+    if (!permitted || !editing || approving || cancelling || runOperation) return;
     clearApproval();
     const session = generation,
       request = approvalRequest,
@@ -504,6 +757,8 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
         controls();
       }
     }
+    // An executed approval's run is read once here; later reads need the refresh button.
+    if (current() && approval?.run_id) await loadRun();
   }
   // The confirmation step freezes the request it shows; sending it never rereads the inputs or the zone.
   function startApproval() {
@@ -534,7 +789,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     if (approvalOperation?.kind !== "create") byId("campaign-approval-confirm-summary").replaceChildren();
   }
   async function sendApproval(kind) {
-    if (!permitted || !editing || approving || approvalReading) return;
+    if (!permitted || !editing || approving || approvalReading || cancelling || runOperation) return;
     if (approvalOperation) {
       if (approvalOperation.kind !== kind) return;
     } else if (kind === "create") {
@@ -632,6 +887,8 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       if (session === generation && !byId("campaign-approval-status").textContent)
         byId("campaign-approval-status").textContent = notice;
     }
+    // A refusal can carry an executed approval (campaign_approval_executed, campaign_version_executed): show its run.
+    else if (session === generation && approval?.run_id && !run && !runReading) await loadRun();
   }
   function valid() {
     const name = fields.name.value.normalize("NFC").trim();
@@ -651,7 +908,11 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   }
   async function save(archive = false) {
     if (!permitted || loading || reading || saving || conflict || unavailable || editing?.archived) return;
-    if (editing && (approvalActive() || approvalReading || approvalOperation || approving)) return;
+    if (
+      editing &&
+      (approvalActive() || approvalReading || approvalOperation || approving || runOperation || cancelling)
+    )
+      return;
     if (
       archive &&
       (!editing ||
@@ -814,11 +1075,36 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   byId("campaign-approval-refresh").addEventListener("click", () => {
     if (!byId("campaign-approval-refresh").disabled) return loadApproval();
   });
+  byId("campaign-run-refresh").addEventListener("click", () => {
+    if (!byId("campaign-run-refresh").disabled) return loadRun();
+  });
+  byId("campaign-run-cancel").addEventListener("click", startRunCancel);
+  byId("campaign-run-cancel-submit").addEventListener("click", () => {
+    if (!byId("campaign-run-cancel-submit").disabled) return cancelRun();
+  });
+  byId("campaign-run-cancel-back").addEventListener("click", () => {
+    if (cancelling || runOperation) return;
+    runStaged = null;
+    byId("campaign-run-confirm-summary").replaceChildren();
+    controls();
+    byId("campaign-run-cancel").focus();
+  });
   byId("campaign-draft-preview-run").addEventListener("click", preview);
   byId("campaign-draft-archive").addEventListener("click", () => save(true));
   byId("campaign-draft-reload").addEventListener("click", () => editing && openDraft(editing.id));
   byId("campaign-draft-new").addEventListener("click", () => {
-    if (!permitted || loading || reading || saving || operation || approvalOperation || approving || !canDiscard())
+    if (
+      !permitted ||
+      loading ||
+      reading ||
+      saving ||
+      operation ||
+      approvalOperation ||
+      approving ||
+      runOperation ||
+      cancelling ||
+      !canDiscard()
+    )
       return;
     clearEditor();
     fields.name.focus();
