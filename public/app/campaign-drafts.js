@@ -468,7 +468,8 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       approvalId = approval.id;
     runReading = false;
     let reload = false,
-      done = false;
+      done = false,
+      refused = false;
     cancelling = true;
     controls();
     byId("campaign-run-status").textContent = "실행을 취소하는 중…";
@@ -478,6 +479,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       const result = await api(pending.path, "POST", pending.body);
       if (!current()) return;
       if (result?.id !== pending.runId) throw new Error("invalid run");
+      if (result.status !== "cancelled") throw new Error("invalid run");
       // A malformed body throws before the request is released, so it stays an unknown outcome with its retry.
       const sending = decimal(result.delivery_counts?.sending);
       const cancelled = decimal(result.cancelled_delivery_count);
@@ -501,6 +503,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
         // A refusal is final for this request; a 409 shows the run the server sent and never retries.
         runOperation = null;
         runStaged = null;
+        refused = true;
         byId("campaign-run-confirm-summary").replaceChildren();
         // Without a usable carried run the screen reads the run again instead of keeping the old state.
         reload = true;
@@ -520,12 +523,19 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
         controls();
       }
     }
-    // A cancelled run hides the pressed button; keep keyboard focus on the result.
-    if (done && current()) byId("campaign-run-title").focus();
+    // A cancelled or refused run hides the pressed button; keep keyboard focus on the result.
+    if ((done || refused) && current()) byId("campaign-run-title").focus();
     if (reload && current()) {
       const notice = byId("campaign-run-status").textContent;
-      await loadRun();
-      const stillShown = session === generation && editing?.id === draftId && approval?.id === approvalId;
+      // loadRun takes its request number before its first await; a newer run read must not get the old notice.
+      const fallback = loadRun();
+      const fallbackRequest = runRequest;
+      await fallback;
+      const stillShown =
+        session === generation &&
+        fallbackRequest === runRequest &&
+        editing?.id === draftId &&
+        approval?.id === approvalId;
       if (stillShown && !byId("campaign-run-status").textContent) byId("campaign-run-status").textContent = notice;
     }
   }

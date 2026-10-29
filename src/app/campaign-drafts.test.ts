@@ -1912,6 +1912,7 @@ for (const [code, status, pattern] of [
     assert.match(h.get("campaign-run-status").textContent, pattern);
     assert.deepEqual(pairs(h.get("campaign-run-deliveries"))[3], ["실패", "40건"]);
     assert.equal(h.get("campaign-run-confirm").hidden, true);
+    assert.equal(h.get("campaign-run-title").focused, true, "focus leaves the hidden confirmation");
     assert.equal(h.get("campaign-run-cancel").hidden, status !== "running");
     assert.equal(h.controller.hasChanges(), false);
     if (status === "running") {
@@ -1929,7 +1930,31 @@ test("a refusal without a usable run reads the run again", async () => {
   await cancelThroughConfirmation(h);
   assert.equal(runReads(h), 2);
   assert.equal(runShown(h), true);
+  assert.equal(h.get("campaign-run-title").focused, true, "focus leaves the hidden confirmation");
   assert.match(h.get("campaign-run-status").textContent, /다른 곳에서 실행 상태가 바뀌었습니다/);
+});
+
+test("a refusal notice is not restored over a newer run read started by an approval reload", async () => {
+  const gate = deferred();
+  let reads = 0;
+  const h = await openExecuted(async (path) => {
+    if (path.endsWith("/cancel")) throw { status: 409, code: "campaign_run_conflict" };
+    if (path === `/api/campaign-runs/${runId}` && ++reads === 2) return gate.promise;
+  });
+  await click(h, "campaign-run-cancel");
+  const pending = click(h, "campaign-run-cancel-submit");
+  await draftSettle();
+  assert.equal(runReads(h), 2, "the fallback read is pending");
+  assert.equal(h.get("campaign-approval-refresh").disabled, false);
+  await click(h, "campaign-approval-refresh");
+  await draftSettle();
+  assert.equal(runReads(h), 3);
+  assert.equal(h.get("campaign-run-status").textContent, "", "the newer read rendered the current run");
+  gate.resolve({ ...storedRun });
+  await pending;
+  await draftSettle();
+  assert.equal(h.get("campaign-run-status").textContent, "", "the stale fallback does not restore its notice");
+  assert.equal(runShown(h), true);
 });
 
 test("an unknown or throttled cancel allows only the same request again and blocks leaving the draft", async () => {
@@ -1990,6 +2015,20 @@ test("a malformed cancel response stays an unknown outcome with the same retry",
   await cancelThroughConfirmation(h);
   assert.equal(h.get("campaign-run-cancel-submit").textContent, "같은 요청 재시도");
   assert.deepEqual(pairs(h.get("campaign-run-summary"))[0], ["상태", "진행 중"], "nothing partial is rendered");
+  await click(h, "campaign-run-cancel-submit");
+  assert.deepEqual(runWrites(h)[1], runWrites(h)[0]);
+  assert.deepEqual(pairs(h.get("campaign-run-summary"))[0], ["상태", "취소됨"]);
+});
+
+test("a cancel success whose run is not cancelled stays an unknown outcome with the same retry", async () => {
+  let attempt = 0;
+  const h = await openExecuted(async (path) => {
+    if (path.endsWith("/cancel") && ++attempt === 1)
+      return { ...structuredClone(storedRun), cancelled_delivery_count: "0", sending_recalled: false };
+  });
+  await cancelThroughConfirmation(h);
+  assert.equal(h.get("campaign-run-cancel-submit").textContent, "같은 요청 재시도");
+  assert.doesNotMatch(h.get("campaign-run-status").textContent, /실행을 취소했습니다/);
   await click(h, "campaign-run-cancel-submit");
   assert.deepEqual(runWrites(h)[1], runWrites(h)[0]);
   assert.deepEqual(pairs(h.get("campaign-run-summary"))[0], ["상태", "취소됨"]);
