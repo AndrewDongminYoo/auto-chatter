@@ -220,7 +220,7 @@ guard는 저장된 수신자의 단계만 봅니다. 다른 수신자를 고르�
 
 행이 최종 상태가 되면, 행 잠금을 놓은 뒤 별도 문장이 그 실행을 완료합니다: `running`이고 `pending`·`sending` 행이 없으면 `completed`가 되고 `version`이 1 오르며 `updated_at`이 바뀝니다.
 최종 상태를 떠난 행은 다시 `pending`이나 `sending`이 되지 않으므로, 비어 있는 실행은 계속 비어 있습니다. 완료 문장은 실행 행만 `FOR NO KEY UPDATE SKIP LOCKED`로 잠그고, 다른 트랜잭션이 쥔 실행은 건너뜁니다.
-`campaign_start` cron 단계는 시작 뒤에 [도달할 수 없는 행의 정리](#도달할-수-없는-행의-정리)를 실행하고, 그다음 `pending`·`sending` 행이 없는 모든 `running` 실행을 완료합니다. 시작이나 정리가 실패해도 뒤의 부분은 실행하며, 단계는 첫 실패로 실패합니다. 그래서 후보가 없는 실행과 마지막 행이 정리된 실행은 같은 cron에서 완료됩니다. 취소된 실행은 바꾸지 않습니다.
+`campaign_start` cron 단계는 시작 뒤에 [도달할 수 없는 행의 정리](#도달할-수-없는-행의-정리)를 실행하고, 그다음 `pending`·`sending` 행이 없는 모든 `running` 실행을 완료합니다. 시작이나 정리가 실패해도 뒤의 부분은 실행하며, 단계는 첫 실패로 실패합니다(두 번째 이후 부분 실패의 로그는 [운영 상태](2026-10-01-operations-health.md#정기-작업-기록)). 그래서 후보가 없는 실행과 마지막 행이 정리된 실행은 같은 cron에서 완료됩니다. 취소된 실행은 바꾸지 않습니다.
 `stale_recovery` 단계는 10분 넘게 `sending`인 행을 `unknown` / `worker_interrupted`로 바꾸고 시도 열은 유지합니다. 같은 cron의 `campaign_start` 단계가 그 실행을 완료합니다. 운영 상태는 이 결과를 복구 시각(`updated_at`)으로 셉니다([운영 상태 문서](2026-10-01-operations-health.md#지표와-api)).
 완료된 실행을 취소하면 기존처럼 `409 campaign_run_completed`입니다.
 

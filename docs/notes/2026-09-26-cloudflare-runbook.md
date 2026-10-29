@@ -796,7 +796,7 @@ DB 상태와 고정 오류 로그를 확인하고 `unknown`을 일괄 pending으
 [Query Builder 문서](https://developers.cloudflare.com/workers/observability/query-builder/)(2026-10-01 확인)대로 대시보드의 Workers & Pages에서 Observability를 열고 키·연산자·값으로 거릅니다.
 
 - 경보: `code`가 `alert_`로 시작하는 줄. `event`가 `alert_started`이면 시작, `alert_cleared`이면 해제, `alert_new_occurrence`이면 켜진 `alert_unknown_outcome` 동안 새로 생긴 `unknown`입니다.
-- Cron 단계 실패: `event = cron_step_failed`, 단계는 `step`, 원인 분류는 `code`입니다. DB 연결 풀 열기·닫기 실패는 `event = cron_run_failed`, 단계 결과나 `cron` 행 기록 실패는 `event = cron_step_record_failed`·`cron_record_failed`입니다.
+- Cron 단계 실패: `event = cron_step_failed`, 단계는 `step`, 원인 분류는 `code`입니다. `campaign_start`에서 같은 실행의 두 번째 이후 부분 실패는 `event = cron_step_part_failed`이고 부분 이름은 `part`입니다. DB 연결 풀 열기·닫기 실패는 `event = cron_run_failed`, 단계 결과나 `cron` 행 기록 실패는 `event = cron_step_record_failed`·`cron_record_failed`입니다.
 - Queue 발행 실패: `event = queue_publish_failed`. 이후 Cron의 `wake` 단계가 복구합니다.
 - 한 요청이나 한 Cron 실행의 줄 모음: 같은 `correlation_id`. 웹훅·API는 응답의 `cf-ray` 값과 같습니다.
 - 한 연결의 줄: `connection_id`.

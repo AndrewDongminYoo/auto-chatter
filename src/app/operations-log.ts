@@ -19,24 +19,31 @@ export const OPERATION_STEPS = [
 ] as const;
 export type OperationStep = (typeof OPERATION_STEPS)[number];
 
+// The parts of the campaign_start step (#280), named on a cron_step_part_failed line.
+export const OPERATION_PARTS = ["start", "sweep", "complete"] as const;
+export type OperationPart = (typeof OPERATION_PARTS)[number];
+
 export interface OperationLogFields {
   event: string;
   code: string;
   correlation_id?: string | undefined;
   connection_id?: string | undefined;
   step?: OperationStep | undefined;
+  part?: OperationPart | undefined;
 }
 
 const NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const CORRELATION_ID = /^[A-Za-z0-9-]{1,64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const STEPS: ReadonlySet<string> = new Set(OPERATION_STEPS);
+const PARTS: ReadonlySet<string> = new Set(OPERATION_PARTS);
 const ALLOWED: Record<string, (value: string) => boolean> = {
   event: (value) => NAME.test(value),
   code: (value) => NAME.test(value),
   correlation_id: (value) => CORRELATION_ID.test(value),
   connection_id: (value) => UUID.test(value),
   step: (value) => STEPS.has(value),
+  part: (value) => PARTS.has(value),
 };
 
 // Returns the fields that may be logged: unknown keys and values of the wrong shape are dropped.

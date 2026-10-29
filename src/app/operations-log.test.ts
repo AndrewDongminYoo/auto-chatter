@@ -61,6 +61,20 @@ test("operation logs drop disallowed keys and allowed keys whose value has the w
   });
 });
 
+test("operation logs keep a part only when it names a campaign_start part", () => {
+  for (const part of ["start", "sweep", "complete"] as const)
+    assert.deepEqual(
+      operationLogEntry({ event: "cron_step_part_failed", code: "database_error", step: "campaign_start", part }),
+      { event: "cron_step_part_failed", code: "database_error", step: "campaign_start", part },
+    );
+  for (const part of ["bogus", "Start", "start ", "", "campaign_start"])
+    assert.deepEqual(
+      operationLogEntry({ event: "cron_step_part_failed", code: "database_error", step: "campaign_start", part }),
+      { event: "cron_step_part_failed", code: "database_error", step: "campaign_start" },
+    );
+  assert.deepEqual(operationLogEntry({ event: "x", part: { toString: () => "start" } }), { event: "x" });
+});
+
 test("log levels map to the matching console method", () => {
   const seen: string[] = [];
   const restore = ["log", "warn", "error"].map((method) =>
