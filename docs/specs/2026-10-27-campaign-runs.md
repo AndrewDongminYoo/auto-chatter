@@ -143,7 +143,7 @@ PR ②(2026-10-29)의 계약입니다.
 
 ### 저장: migration 066
 
-- `next_attempt_at`(기본값 `clock_timestamp()`): 대기 행을 다시 가져갈 수 있는 시각입니다. 미룬 행은 `pending`으로 남고 이 시각이 뒤로 갑니다.
+- `next_attempt_at`(기본값 `now()`): 대기 행을 다시 가져갈 수 있는 시각입니다. 미룬 행은 `pending`으로 남고 이 시각이 뒤로 갑니다.
 - `provider_called_at`: 공급자 요청 직전에 씁니다. 캠페인 예산이 이 열로 호출을 셉니다.
 - 색인 세 개: 가져오기와 깨우기용 `campaign_deliveries_due_idx`(`(connection_id,next_attempt_at,created_at,id) WHERE status='pending'`), 예산용 `campaign_deliveries_called_idx`(`(connection_id,provider_called_at) WHERE provider_called_at IS NOT NULL`), 오래된 `sending` 복구용 `campaign_deliveries_sending_idx`입니다.
 - 기존 CHECK는 바꾸지 않습니다. `pending`으로 돌아가는 행은 `attempt_id`와 `attempt_started_at`을 비웁니다. `cancelled`는 시도 열을 가져도 됩니다.

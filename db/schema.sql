@@ -792,7 +792,7 @@ CREATE INDEX IF NOT EXISTS campaign_deliveries_recipient_idx
   ON campaign_deliveries(workspace_id,connection_id,recipient_id);
 -- The campaign delivery worker (#36, PR 2) claims pending campaign_deliveries rows and sends each as one DM.
 -- next_attempt_at: when a pending row may next be claimed; a deferred row stays pending with a later time.
-ALTER TABLE campaign_deliveries ADD COLUMN IF NOT EXISTS next_attempt_at timestamptz NOT NULL DEFAULT clock_timestamp();
+ALTER TABLE campaign_deliveries ADD COLUMN IF NOT EXISTS next_attempt_at timestamptz NOT NULL DEFAULT now();
 -- provider_called_at: set immediately before the provider send request, so the hourly campaign budget counts calls.
 ALTER TABLE campaign_deliveries ADD COLUMN IF NOT EXISTS provider_called_at timestamptz;
 -- The claim and the wake read a connection's due pending rows, oldest first.
