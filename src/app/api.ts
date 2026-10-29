@@ -700,13 +700,15 @@ export async function appApi(
             ),
           );
       }
-      // Execution approvals are records only: no outbox row, queue message or send (#35, #36).
+      // An execution approval writes no outbox row, queue message or send; a due approval's run is started by the
+      // cron and delivered by the campaign worker (#35, #36).
       const draftApproval = /^\/api\/campaign-drafts\/([^/]+)\/approvals$/.exec(url.pathname);
       if (draftApproval && request.method === "POST") {
         if (url.searchParams.size) throw new ApiError(400, "invalid_campaign_approval");
         const result = await approveCampaignDraft(pool, user, draftApproval[1]!, await readJson(request, 8192));
         if (result.error === "campaign_draft_conflict") return json({ error: result.error, draft: result.draft }, 409);
-        if (result.error === "approval_exists") return json({ error: result.error, approval: result.approval }, 409);
+        if (result.error === "approval_exists" || result.error === "campaign_version_executed")
+          return json({ error: result.error, approval: result.approval }, 409);
         return json(result.approval, result.created ? 201 : 200);
       }
       const campaignApproval = /^\/api\/campaign-approvals(?:\/([^/]+)(?:\/(schedule|cancel))?)?$/.exec(url.pathname);

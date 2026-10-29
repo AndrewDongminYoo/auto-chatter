@@ -149,9 +149,10 @@ migration 064는 코드 배포 전에 전체 실행기(`deploy/migrate-multi-use
 관리자가 초안 한 버전의 최종 실행 승인을 기록합니다.
 승인은 무엇을 승인했는지(초안 버전, 고정 대상, 이름·본문 사본, 승인 시점 미리보기)와 언제 실행할지(즉시 또는 작업 공간 현지 시각)만 저장합니다.
 아무것도 보내거나 큐에 넣거나 발송 예약을 만들지 않습니다.
-승인 API는 outbox 행·큐 메시지·발송을 만들지 않고, 응답은 항상 `delivery_available: false`입니다.
+승인 API는 outbox 행·큐 메시지·발송을 만들지 않고, 응답은 ~~항상 `delivery_available: false`입니다~~ `delivery_available`을 담습니다.
 2026-10-27부터 기한이 된 승인은 `campaign_start` cron 단계가 실행 하나를 시작하고 `executed`로 바꿉니다. 실행은 대기 중 발송 행만 쓰고 아무것도 보내지 않으며, 계약은 [캠페인 실행](2026-10-27-campaign-runs.md)이 맡습니다.
-실제 발송은 [#36](https://github.com/AndrewDongminYoo/auto-chatter/issues/36)의 발송 worker(PR ②)가 그 행을 읽어 맡을 범위입니다.
+~~실제 발송은 [#36](https://github.com/AndrewDongminYoo/auto-chatter/issues/36)의 발송 worker(PR ②)가 그 행을 읽어 맡을 범위입니다.~~
+2026-10-29 정정(#36 PR ②): 발송 worker가 실행의 행을 보내며, 승인 응답의 `delivery_available`은 `true`입니다. 계약은 [발송 worker](2026-10-27-campaign-runs.md#발송-worker)가 맡고, 이 문서의 해당 문장보다 앞섭니다.
 Cloudflare OAuth 표면의 Instagram 마케팅 capability는 2026-10-27부터 지원(`channel_marketing_supported: true`)이며, Meta 정책 근거와 발송 조건은 캠페인 실행 계약이 맡습니다.
 
 ### 승인 저장
@@ -182,7 +183,7 @@ CHECK 제약으로 예약 종류·시각·시간대의 짝과, 취소 상태일 
 - `POST /api/campaign-approvals/:id/cancel`: `{expected_version}`으로 취소하고 버전을 1 올립니다.
 
 버전이 다르면 `409 campaign_approval_conflict`, 취소된 승인에 대한 변경·재취소는 `409 campaign_approval_cancelled`이며 둘 다 응답의 `approval`에 현재 상태를 담습니다.
-응답에는 `preview: {as_of, original_member_count, remaining_member_count, counts}`, 예약 시각을 그 시간대의 벽시계로 보인 `schedule_local`, `delivery_available: false`가 포함됩니다.
+응답에는 `preview: {as_of, original_member_count, remaining_member_count, counts}`, 예약 시각을 그 시간대의 벽시계로 보인 `schedule_local`, ~~`delivery_available: false`~~ `delivery_available`(2026-10-29 #36 PR ②부터 `true`)이 포함됩니다.
 065부터는 실행의 `run_id`와 `run_status`(실행 전에는 `null`)도 포함하며, 실행된 승인의 예약 변경·취소는 `409 campaign_approval_executed`와 현재 승인입니다([캠페인 실행](2026-10-27-campaign-runs.md#승인의-실행-상태)).
 
 ### 승인 규칙
@@ -242,12 +243,13 @@ CHECK 제약으로 예약 종류·시각·시간대의 짝과, 취소 상태일 
 
 승인 버튼은 보관되지 않았고 저장하지 않은 변경·대기 중이거나 결과 불명인 요청·유효한 승인이 없으며 승인 상태 조회가 끝난 초안에서만 켜집니다.
 관리자는 실행 시점으로 ‘즉시’ 또는 ‘예약’을 고르며, 예약은 작업 공간 현지 날짜와 시각(`datetime-local`, 분 단위)입니다.
-버튼을 누르면 먼저 확인 단계가 열려 승인할 초안 버전, 고정 대상, 실행 시점(예약이면 화면이 아는 시간대와 함께)과 실제 발송은 아직 지원하지 않으며 승인은 기록만 한다는 안내를 보여 줍니다.
+버튼을 누르면 먼저 확인 단계가 열려 승인할 초안 버전, 고정 대상, 실행 시점(예약이면 화면이 아는 시간대와 함께)과 ~~실제 발송은 아직 지원하지 않으며 승인은 기록만 한다는~~ 실행 시점에 서비스 전체 발송이 켜져 있을 때만 실행이 시작되고 보내기 직전마다 모든 조건을 다시 확인한다는(2026-10-29 #36 PR ②) 안내를 보여 줍니다.
 확인 단계는 보여 준 요청을 고정하고, ‘승인 기록’을 눌러야 클라이언트 UUID, 표시한 초안 `expected_version`, `schedule_local` 또는 `null`, 화면이 아는 `expected_time_zone`으로 `POST /api/campaign-drafts/:id/approvals`를 보냅니다.
 
 유효한 승인과 가장 최근의 취소된 승인은 상태, 승인한 초안 이름·버전, 실행 시점(‘즉시’ 또는 승인에 저장된 `schedule_time_zone`으로 표시한 시각과 그 시간대), 승인·취소한 사람과 시각, 승인 시점의 원래·남은 인원과 조건 기준 시각, 미리보기 표와 같은 사유 이름의 조건별 인원 표를 보여 줍니다.
 `candidate`는 ‘조건 통과’로 표시하며, 화면 어디에도 ‘발송 가능’이라는 표현을 쓰지 않습니다.
-`delivery_available: false`인 유효한 승인에는 실제 발송을 아직 지원하지 않는다는 경고를 둡니다.
+~~`delivery_available: false`인 유효한 승인에는 실제 발송을 아직 지원하지 않는다는 경고를 둡니다.~~
+2026-10-29 정정(#36 PR ②): 응답이 항상 `delivery_available: true`이므로 그 경고와 분기를 없앴습니다. 유효한 승인에는 실행 시점에 서비스 전체 발송이 켜져 있을 때만 실행이 시작되고 보내기 직전마다 조건을 다시 확인한다는 안내를 둡니다. 문구는 `public/app/campaign-drafts.js`와 [발송 worker의 화면 항목](2026-10-27-campaign-runs.md#응답-화면-운영-상태)이 맡습니다.
 사람은 현재 로그인한 사용자이면 ‘나’, 아니면 ‘다른 멤버’와 사용자 ID 앞 8자리로 표시합니다. 관리자는 멤버 목록을 읽을 수 없기 때문입니다.
 유효한 승인이 있으면 초안 입력·저장·보관을 잠그고, 수정하려면 먼저 승인을 취소하라고 안내합니다.
 취소된 승인은 조회만 하며 초안 잠금을 풉니다.

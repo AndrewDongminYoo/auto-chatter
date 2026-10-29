@@ -175,7 +175,7 @@ test("an admin records an immediate approval with copies, the preview and an aud
   assert.equal(created.version, 1);
   assert.equal(created.approved_by, admin);
   assert.equal(created.cancelled_by, null);
-  assert.equal(created.delivery_available, false);
+  assert.equal(created.delivery_available, true);
   assert.equal("create_request_hash" in created, false);
   assert.equal(created.preview.original_member_count, "2");
   assert.equal(created.preview.counts.connection_unavailable, "1");
@@ -193,7 +193,7 @@ test("an admin records an immediate approval with copies, the preview and an aud
   assert.equal(listed.approvals.length, 1);
   assert.equal("body" in listed.approvals[0], false);
   assert.equal("events" in listed.approvals[0], false);
-  assert.equal(listed.approvals[0].delivery_available, false);
+  assert.equal(listed.approvals[0].delivery_available, true);
   for (const table of ["private_reply_outbox", "instagram_manual_replies", "webhook_deliveries", "flow_runs"])
     assert.equal((await pool.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n, 0, table);
 });
@@ -652,7 +652,18 @@ test("approval writes leave delivery, consent and snapshot rows unchanged and su
   };
   const before = await state();
   await expect(await cancel(fixture.id, 1, actor));
-  const saved = await expect(await approve(fixture.draft_id, approval(1), actor), 201);
+  // The fixture's executed approval ran draft version 1, which is never approved again (#36), so edit the draft first.
+  const { snapshot_id } = (await pool.query("SELECT snapshot_id FROM campaign_drafts WHERE id=$1", [fixture.draft_id]))
+    .rows[0];
+  await expect(
+    await request(
+      "PUT",
+      `/api/campaign-drafts/${fixture.draft_id}`,
+      { snapshot_id, name: "Campaign", body: "Draft message", expected_version: 1 },
+      actor,
+    ),
+  );
+  const saved = await expect(await approve(fixture.draft_id, approval(2), actor), 201);
   scheduleClock = "2026-11-10T00:00:00Z";
   await expect(
     await reschedule(

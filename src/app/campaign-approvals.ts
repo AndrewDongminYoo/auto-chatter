@@ -12,7 +12,8 @@ import { dueLocalSql, localDueSql } from "./inbox-reminders.ts";
 import { SCHEDULE_MIN_AHEAD, scheduleLocal } from "./manual-replies.ts";
 
 // Execution approvals record what an administrator approved and when it should run. Nothing here queues, schedules
-// or sends a message; the campaign_start step (campaign-runs.ts, #36) starts one run per due approval.
+// or sends a message; the campaign_start step (campaign-runs.ts, #36) starts one run per due approval while sending is
+// switched on, and the delivery worker rechecks every condition before each send.
 const LIMIT = 100;
 // The inbox scheduled-reply bounds (docs/specs/2026-10-16-inbox-scheduled-replies.md) are at least one minute ahead
 // and before that recipient's reply window ends. An approval has no single recipient, so only the fixed lower bound
@@ -69,7 +70,8 @@ function shape(row: Record<string, any>) {
       remaining_member_count: preview_counts.remaining_member_count,
       counts: Object.fromEntries(CAMPAIGN_PREVIEW_REASONS.map((reason) => [reason, preview_counts[reason]])),
     },
-    delivery_available: false,
+    // The delivery worker sends a started run's rows (#36); the global send switch still decides whether it runs.
+    delivery_available: true,
   };
 }
 async function detail(client: PoolClient, workspace: string, id: string) {
@@ -190,6 +192,16 @@ export async function approveCampaignDraft(pool: Pool, user: User, draftId: stri
       )
     ).rows[0];
     if (active) return { error: "approval_exists" as const, approval: await detail(client, workspace, active.id) };
+    // A draft version that already ran is not approved again, so one snapshot never starts twice without an edit (#36).
+    const executed = (
+      await client.query(
+        `SELECT id FROM campaign_approvals WHERE workspace_id=$1 AND draft_id=$2 AND draft_version=$3 AND status='executed'
+         ORDER BY approved_at DESC,id LIMIT 1`,
+        [workspace, draft, current.version],
+      )
+    ).rows[0];
+    if (executed)
+      return { error: "campaign_version_executed" as const, approval: await detail(client, workspace, executed.id) };
     const scheduled = await readSchedule(client, workspace, request);
     // The same evaluation as the preview API, in this transaction and after the draft lock.
     const preview = (await evaluateCampaignPreview(client, workspace, draft))!;

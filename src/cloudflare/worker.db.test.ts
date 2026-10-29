@@ -9,7 +9,8 @@ import { Pool } from "pg";
 import worker, { type Env } from "./index.ts";
 import { operationsHealth } from "../app/operations-health.ts";
 import { signingKeyContext } from "../app/webhook-delivery.ts";
-import { PRIVATE_REPLY_HOURLY_BUDGET } from "../instagram/send-quota.ts";
+import { CAMPAIGN_HOURLY_BUDGET, PRIVATE_REPLY_HOURLY_BUDGET } from "../instagram/send-quota.ts";
+import { startDueCampaignRuns } from "../app/campaign-runs.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
@@ -2805,7 +2806,8 @@ test("campaign_start executes a due approval only while sending is on, and sends
   const runs = (await pool.query("SELECT approval_id,status,start_counts FROM campaign_runs")).rows;
   assert.equal(runs.length, 1);
   assert.equal(runs[0].approval_id, approval);
-  assert.equal(runs[0].status, "running");
+  // The run has no candidate, so the same step completes it (#36).
+  assert.equal(runs[0].status, "completed");
   assert.equal(runs[0].start_counts.no_dm_identity, "1");
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM campaign_deliveries")).rows[0].n, 0);
   assert.deepEqual(
@@ -2818,6 +2820,280 @@ test("campaign_start executes a due approval only while sending is on, and sends
   );
   assert.equal(sends, 0);
   assert.deepEqual(logLines, []);
+});
+
+// A started campaign on the fixture connection whose members are all candidates: each sender is bridged to its DM
+// recipient by a sent reply ten minutes ago, the recipient wrote a text DM an hour ago and granted marketing.
+const campaignApprover = "77777777-7777-4777-8777-777777777777";
+async function campaignFixture(members: Array<[string, string]>) {
+  const workspace = "11111111-1111-4111-8111-111111111111";
+  await pool.query(
+    "UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=least(coalesce(inbox_enabled_at,now()),now()-interval '1 hour')",
+  );
+  await pool.query(
+    "INSERT INTO workspace_members(user_id,workspace_id,role) VALUES($1,$2,'admin') ON CONFLICT DO NOTHING",
+    [campaignApprover, workspace],
+  );
+  for (const [sender, recipient] of members) {
+    const event = (
+      await pool.query(
+        `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+         VALUES($1,$2,$3,$3,$4,'hello') RETURNING id`,
+        [workspace, connectionId, `campaign-comment-${sender}`, sender],
+      )
+    ).rows[0].id;
+    await pool.query(
+      `INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,
+         private_reply_text,recipient_id,status,provider_message_id,sent_at)
+       VALUES($1,$2,$3,'33333333-3333-4333-8333-333333333333',$4,$4,$5,'reply',$6,'sent','bridge',now()-interval '10 minutes')`,
+      [workspace, connectionId, event, `campaign-comment-${sender}`, sender, recipient],
+    );
+    await pool.query(
+      `INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at)
+       VALUES($1,$2,$3,$4,'hi','text',now()-interval '1 hour')`,
+      [workspace, connectionId, recipient, `campaign-dm-${sender}`],
+    );
+    await recordChannelConsentEvent(pool, {
+      requestKey: crypto.randomUUID(),
+      workspaceId: workspace,
+      connectionId,
+      channel: "instagram",
+      identityKind: "dm_recipient",
+      identityValue: recipient,
+      purpose: "marketing",
+      decision: "grant",
+      evidenceKind: "explicit",
+      evidenceReference: "test:campaign",
+      occurredAt: new Date(),
+      actorId: campaignApprover,
+    });
+  }
+  const segment = (
+    await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,$2) RETURNING id", [
+      workspace,
+      `Campaign ${crypto.randomUUID()}`,
+    ])
+  ).rows[0].id;
+  const snapshot = (
+    await pool.query(
+      `INSERT INTO instagram_segment_snapshots(workspace_id,segment_id,created_by,as_of,definition,segment_name,counts,member_count)
+       VALUES($1,$2,$3,now(),'{}','Audience','{}',$4) RETURNING id`,
+      [workspace, segment, campaignApprover, members.length],
+    )
+  ).rows[0].id;
+  for (const [sender] of members)
+    await pool.query(
+      "INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,$4)",
+      [snapshot, workspace, connectionId, sender],
+    );
+  const draft = (
+    await pool.query(
+      `INSERT INTO campaign_drafts(id,workspace_id,snapshot_id,name,body,create_request_hash,created_by,updated_by)
+       VALUES(gen_random_uuid(),$1,$2,'Campaign','Campaign hello',repeat('0',64),$3,$3) RETURNING id`,
+      [workspace, snapshot, campaignApprover],
+    )
+  ).rows[0].id;
+  const approval = (
+    await pool.query(
+      `INSERT INTO campaign_approvals(workspace_id,id,draft_id,draft_version,snapshot_id,name,body,schedule_kind,
+         preview_as_of,preview_counts,create_request_hash,approved_by)
+       VALUES($1,gen_random_uuid(),$2,1,$3,'Campaign','Campaign hello','immediate',now(),
+         '{"original_member_count":"0","remaining_member_count":"0","connection_unavailable":"0","contact_paused":"0",
+           "no_dm_identity":"0","opted_out":"0","marketing_consent_required":"0","reply_window_closed":"0","candidate":"0"}',
+         repeat('0',64),$4) RETURNING id`,
+      [workspace, draft, snapshot, campaignApprover],
+    )
+  ).rows[0].id;
+  await startDueCampaignRuns(pool);
+  const run = (await pool.query("SELECT id FROM campaign_runs WHERE approval_id=$1", [approval])).rows[0].id as string;
+  assert.equal(
+    (await pool.query("SELECT count(*)::int AS n FROM campaign_deliveries WHERE run_id=$1", [run])).rows[0].n,
+    members.length,
+  );
+  return run;
+}
+async function campaignRows(run: string) {
+  return (
+    await pool.query(
+      "SELECT sender_id,status,failure_code,provider_message_id FROM campaign_deliveries WHERE run_id=$1 ORDER BY sender_id",
+      [run],
+    )
+  ).rows;
+}
+// The default Graph mock, also recording each POST's body.
+function recordPosts(): unknown[] {
+  const posts: unknown[] = [];
+  const original = globalThis.fetch;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method === "POST") posts.push(JSON.parse(String(init.body)));
+    return original(input, init);
+  });
+  return posts;
+}
+
+test("a queue message sends a campaign row only when no automation of the connection had a row", async () => {
+  await manualFixture();
+  const run = await campaignFixture([["campaign-sender", "9101"]]);
+  assert.equal((await worker.fetch(request(), env)).status, 200);
+  const posts = recordPosts();
+  for (let message = 0; message < 3; message++) {
+    published = [];
+    assert.equal(await consume(), "ack");
+    // Work is left after the first two messages, so the wake queues the connection again.
+    assert.deepEqual(published, message < 2 ? [{ connectionId }] : []);
+  }
+  assert.deepEqual(posts, [
+    { recipient: { id: "456" }, message: { text: "Manual response" } },
+    { recipient: { comment_id: "comment-1" }, message: { text: "reply" } },
+    { recipient: { id: "9101" }, message: { text: "Campaign hello" } },
+  ]);
+  assert.deepEqual(await campaignRows(run), [
+    { sender_id: "campaign-sender", status: "sent", failure_code: null, provider_message_id: "message-1" },
+  ]);
+  assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [run])).rows[0].status, "completed");
+  assert.equal(await consume(), "ack");
+  assert.equal(posts.length, 3);
+});
+
+test("a pending follow confirmation DM is sent before a campaign row", async () => {
+  await pool.query(
+    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final link',non_follower_reply_text='Follow and confirm again'",
+  );
+  const delivered: string[] = [];
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (init?.method === "POST") {
+      delivered.push(JSON.parse(String(init.body)).message.text);
+      return Response.json({ message_id: "message-" + delivered.length, recipient_id: "456" });
+    }
+    if (url.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (url.pathname.endsWith("/456")) return Response.json({ is_user_follow_business: true });
+    if (url.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
+    return Response.json({
+      id: "comment-1",
+      from: { id: "456" },
+      media: { id: "media-1" },
+      timestamp: new Date().toISOString(),
+    });
+  });
+  await worker.fetch(request("comment-1", "456"), env);
+  assert.equal(await consume(), "ack");
+  assert.deepEqual(delivered, ["reply"]);
+  await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 second'");
+  const run = await campaignFixture([["campaign-sender", "9101"]]);
+  await ingestMessages(pool, [
+    { accountId: "123", senderId: "456", messageId: "campaign-confirm", text: "확인", timestamp: new Date() },
+  ]);
+  assert.equal(await consume(), "ack");
+  assert.deepEqual(delivered, ["reply", "Final link"]);
+  assert.equal((await campaignRows(run))[0].status, "pending");
+  assert.equal(await consume(), "ack");
+  assert.deepEqual(delivered, ["reply", "Final link", "Campaign hello"]);
+  assert.equal((await campaignRows(run))[0].status, "sent");
+});
+
+test("a connection at its campaign budget is neither claimed nor woken, while its replies still send", async () => {
+  await manualFixture();
+  const run = await campaignFixture([["campaign-sender", "9101"]]);
+  const filler = await campaignFixture([]);
+  await pool.query(
+    `INSERT INTO campaign_deliveries(workspace_id,run_id,connection_id,sender_id,recipient_id,status,attempt_id,
+       attempt_started_at,provider_message_id,sent_at,provider_called_at)
+     SELECT '11111111-1111-4111-8111-111111111111',$1,$2,'budget-'||n,'3'||n,'sent',gen_random_uuid(),
+       now()-interval '10 minutes','m'||n,now()-interval '10 minutes',now()-interval '10 minutes'
+     FROM generate_series(1,$3::int) n`,
+    [filler, connectionId, CAMPAIGN_HOURLY_BUDGET],
+  );
+  published = [];
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, [{ connectionId }]);
+  published = [];
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 1);
+  assert.equal((await pool.query("SELECT status FROM instagram_manual_replies")).rows[0].status, "sent");
+  // Only the held campaign row is left, so the connection is not queued again, by the queue or by the cron.
+  assert.deepEqual(published, []);
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, []);
+  assert.equal((await worker.fetch(request(), env)).status, 200);
+  assert.deepEqual(published, [{ connectionId }]);
+  published = [];
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 2);
+  assert.equal((await replyState("comment-1")).status, "sent");
+  assert.deepEqual(published, []);
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 2);
+  assert.equal((await campaignRows(run))[0].status, "pending");
+  // Once a call leaves the hour the cron wakes it and the queue sends it.
+  await pool.query(
+    "UPDATE campaign_deliveries SET provider_called_at=now()-interval '61 minutes' WHERE sender_id='budget-1'",
+  );
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, [{ connectionId }]);
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 3);
+  assert.equal((await campaignRows(run))[0].status, "sent");
+});
+
+test("a connection paused after the campaign guard and before the POST defers the row instead of blocking it", async () => {
+  const run = await campaignFixture([["campaign-sender", "9101"]]);
+  const originalQuery = Pool.prototype.query;
+  let paused = 0;
+  mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    // graphFetch's own connection check, the last read before the POST; a rate limit elsewhere pauses it first.
+    if (
+      paused === 0 &&
+      typeof sql === "string" &&
+      sql.startsWith("SELECT 1 FROM instagram_connections WHERE id=$1 AND active AND send_enabled") &&
+      sql.includes("access_token_encrypted=$2")
+    ) {
+      paused++;
+      await Reflect.apply(originalQuery, this, [
+        "UPDATE instagram_connections SET send_paused_until=now()+interval '15 minutes' WHERE id=$1",
+        [connectionId],
+      ]);
+    }
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  assert.equal(await consume(), "ack");
+  assert.equal(paused, 1);
+  assert.equal(sends, 0);
+  assert.deepEqual(await campaignRows(run), [
+    { sender_id: "campaign-sender", status: "pending", failure_code: "connection_paused", provider_message_id: null },
+  ]);
+  assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [run])).rows[0].status, "running");
+});
+
+test("with sending off a campaign row is neither woken nor sent", async () => {
+  const run = await campaignFixture([["campaign-sender", "9101"]]);
+  env.SEND_ENABLED = "false";
+  published = [];
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, []);
+  assert.equal(await consume(), "ack");
+  assert.equal(sends, 0);
+  assert.deepEqual(await campaignRows(run), [
+    { sender_id: "campaign-sender", status: "pending", failure_code: null, provider_message_id: null },
+  ]);
+  env.SEND_ENABLED = "true";
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, [{ connectionId }]);
+});
+
+test("the cron turns a stale sending campaign row unknown and completes its run in the same run", async () => {
+  const run = await campaignFixture([["campaign-sender", "9101"]]);
+  await pool.query(
+    `UPDATE campaign_deliveries SET status='sending',attempt_id=gen_random_uuid(),
+       attempt_started_at=now()-interval '11 minutes' WHERE run_id=$1`,
+    [run],
+  );
+  await worker.scheduled({}, env);
+  assert.deepEqual(await campaignRows(run), [
+    { sender_id: "campaign-sender", status: "unknown", failure_code: "worker_interrupted", provider_message_id: null },
+  ]);
+  assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [run])).rows[0].status, "completed");
+  assert.equal(sends, 0);
 });
 
 test("token refresh, the subscription check and webhook delivery share one subrequest budget per cron invocation", async () => {

@@ -2,7 +2,12 @@ import type { Pool } from "pg";
 import type { User } from "./auth.ts";
 import { logOperation, type OperationStep } from "./operations-log.ts";
 import { workspaceFor } from "./settings.ts";
-import { privateReplyBudgetOpenSql } from "../instagram/send-quota.ts";
+import {
+  campaignBudgetOpenSql,
+  campaignBudgetReopenedAtSql,
+  privateReplyBudgetOpenSql,
+} from "../instagram/send-quota.ts";
+import { campaignDeliveryDueSql } from "../instagram/campaign-delivery-worker.ts";
 
 // Alert thresholds are service policy (#59, docs/specs/2026-10-01-operations-health.md).
 export const ALERT_THRESHOLDS = {
@@ -33,7 +38,9 @@ export interface ConnectionMetrics {
 
 // Computed on read; there is no time-series store. The due predicates are those of wakeDueReplies in
 // src/cloudflare/index.ts, so held work (contact pause, connection pause, sending off, no valid token, a used-up
-// private reply budget) is not counted as waiting. The 24-hour window uses the last claim time, or the creation or confirmation time of a
+// private reply or campaign budget) is not counted as waiting. A campaign run waits for hours by design, so its rows
+// count from the latest of their due time, the pause end, the connection's last campaign call and the moment its
+// campaign budget last regained room: the wait then measures a stalled queue, not a budget-limited run. The 24-hour window uses the last claim time, or the creation or confirmation time of a
 // row that was never claimed, because the rows have no terminal timestamp.
 const METRICS_SQL = `
 WITH metrics AS (
@@ -51,7 +58,12 @@ WITH metrics AS (
          JOIN private_reply_outbox reply ON reply.id=flow.reply_id
          WHERE flow.connection_id=c.id AND flow.status='pending' AND flow.next_attempt_at<=now()
            AND NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
-             AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused))))
+             AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused))),
+        (SELECT min(greatest(delivery.next_attempt_at,c.send_paused_until,
+           (SELECT max(called.provider_called_at) FROM campaign_deliveries called WHERE called.connection_id=c.id),
+           ${campaignBudgetReopenedAtSql("c.id")})) FROM campaign_deliveries delivery
+         WHERE delivery.connection_id=c.id AND ${campaignDeliveryDueSql("delivery")}
+           AND ${campaignBudgetOpenSql("c.id")}))
       END,
       (SELECT min(greatest(manual.next_attempt_at,c.send_paused_until)) FROM instagram_manual_replies manual
        WHERE manual.connection_id=c.id AND manual.status='pending' AND manual.next_attempt_at<=now()
@@ -67,6 +79,8 @@ WITH metrics AS (
        SELECT attempt_started_at FROM private_reply_outbox WHERE connection_id=c.id AND status='sending'
        UNION ALL SELECT attempt_started_at FROM instagram_follow_conversations WHERE connection_id=c.id AND status='sending'
        UNION ALL SELECT attempt_started_at FROM instagram_manual_replies WHERE connection_id=c.id AND status='sending'
+       UNION ALL SELECT attempt_started_at FROM campaign_deliveries
+         WHERE workspace_id=c.workspace_id AND connection_id=c.id AND status='sending'
      ) sending) AS oldest_sending_at,
     outcomes.unknown_24h,outcomes.failed_24h,outcomes.blocked_24h
   FROM instagram_connections c
@@ -81,6 +95,8 @@ WITH metrics AS (
         AND coalesce(attempt_started_at,confirmed_at)>now()-interval '24 hours'
       UNION ALL SELECT status FROM instagram_manual_replies WHERE connection_id=c.id AND status IN ('unknown','failed')
         AND (status<>'unknown' OR resolved_at IS NULL) AND coalesce(attempt_started_at,created_at)>now()-interval '24 hours'
+      UNION ALL SELECT status FROM campaign_deliveries WHERE workspace_id=c.workspace_id AND connection_id=c.id
+        AND status IN ('unknown','failed','blocked') AND coalesce(attempt_started_at,created_at)>now()-interval '24 hours'
     ) outcome
   ) outcomes
   WHERE $1::uuid IS NULL OR c.workspace_id=$1
@@ -200,7 +216,8 @@ export async function recordSteps(pool: Pool, outcomes: readonly StepOutcome[]):
 // from one snapshot.
 const UNKNOWN_TOTAL_SQL = `SELECT (SELECT count(*) FROM private_reply_outbox WHERE status='unknown')
   +(SELECT count(*) FROM instagram_follow_conversations WHERE status='unknown')
-  +(SELECT count(*) FROM instagram_manual_replies WHERE status='unknown') AS total,
+  +(SELECT count(*) FROM instagram_manual_replies WHERE status='unknown')
+  +(SELECT count(*) FROM campaign_deliveries WHERE status='unknown') AS total,
   (SELECT alert_seen_count FROM scheduled_steps WHERE name='alert_unknown_outcome') AS seen`;
 
 // Everything one alert evaluation reads, in one statement and so from one snapshot: every connection's metrics
