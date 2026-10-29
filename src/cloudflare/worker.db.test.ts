@@ -3137,6 +3137,52 @@ test("the cron ends a paused contact's campaign row whose window closed and comp
   assert.deepEqual(published, []);
 });
 
+test("a failed campaign start still runs the sweep and the completion, and the campaign_start step records the failure", async () => {
+  // A run whose paused contact's window closed (a sweep candidate) and a run with no row (a completion candidate).
+  const swept = await campaignFixture([["campaign-sender", "9101"]]);
+  const empty = await campaignFixture([]);
+  await pool.query(
+    `INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused)
+     VALUES('11111111-1111-4111-8111-111111111111',$1,'campaign-sender',true)`,
+    [connectionId],
+  );
+  await pool.query(
+    "UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours' WHERE recipient_id='9101'",
+  );
+  const originalQuery = Pool.prototype.query;
+  let startQueries = 0;
+  mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    // startDueCampaignRuns' due approval read, the first part of the step.
+    if (typeof sql === "string" && sql.startsWith("SELECT workspace_id,id FROM campaign_approvals WHERE")) {
+      startQueries++;
+      throw Object.assign(new Error("terminating connection due to administrator command"), { code: "57P01" });
+    }
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  published = [];
+  await assert.rejects(worker.scheduled({}, env), /scheduled recovery failed/);
+  assert.equal(startQueries, 1);
+  assert.deepEqual(await campaignRows(swept), [
+    { sender_id: "campaign-sender", status: "blocked", failure_code: "reply_window_closed", provider_message_id: null },
+  ]);
+  for (const run of [swept, empty])
+    assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [run])).rows[0].status, "completed");
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT failure_code,last_failure_at IS NOT NULL AS failed FROM scheduled_steps WHERE name='campaign_start'",
+      )
+    ).rows,
+    [{ failure_code: "database_unavailable", failed: true }],
+  );
+  assert.deepEqual(
+    logLines.filter((line) => line.event === "cron_step_failed").map(({ correlation_id, ...line }) => line),
+    [{ event: "cron_step_failed", code: "database_unavailable", step: "campaign_start" }],
+  );
+  assert.equal(sends, 0);
+  assert.deepEqual(published, []);
+});
+
 test("token refresh, the subscription check and webhook delivery share one subrequest budget per cron invocation", async () => {
   await longLivedToken();
   // Ten connections whose tokens are due, so token refresh makes two Graph calls for each of them.

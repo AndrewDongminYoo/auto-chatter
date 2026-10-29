@@ -166,7 +166,12 @@ const SWEEP_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp()
    WHERE d.status='pending' AND (${CONTACT_PAUSED} OR NOT ${CONNECTION_SENDABLE})
      AND EXISTS(SELECT 1 FROM campaign_runs run WHERE run.workspace_id=d.workspace_id AND run.id=d.run_id
        AND run.status='running')
- ), verified AS MATERIALIZED (${verifiedDmRecipientsSql("id IN (SELECT connection_id FROM unreachable)")}),
+ ), verified AS MATERIALIZED (${verifiedDmRecipientsSql(
+   "id IN (SELECT connection_id FROM unreachable)",
+   // Only the stored recipients' groups, each with every sender, so the read follows the rows the sweep can end.
+   `EXISTS(SELECT 1 FROM unreachable u WHERE u.workspace_id=reply.workspace_id
+      AND u.connection_id=reply.connection_id AND u.recipient_id=reply.recipient_id)`,
+ )}),
  staged AS MATERIALIZED (
    SELECT v.workspace_id,v.connection_id,v.sender_id,v.recipient_id,${recipientStageSql("v.workspace_id")} AS stage
    FROM verified v CROSS JOIN evaluation CROSS JOIN LATERAL ${latestTextSql("v.workspace_id")}
