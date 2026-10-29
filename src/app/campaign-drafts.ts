@@ -120,19 +120,22 @@ export const CONNECTION_SENDABLE =
 export const CONTACT_PAUSED = "coalesce(a.paused OR a.handoff_paused,false)";
 // Stages 4-7 of one verified DM recipient: 4 opted out (the recipient or its comment sender revoked marketing or
 // service replies), 5 no exact explicit marketing grant, 6 no stored text DM in the last 24 hours, 7 candidate.
-const RECIPIENT_STAGE = `CASE
-     WHEN EXISTS(SELECT 1 FROM channel_consent_state state WHERE state.workspace_id=$1 AND state.connection_id=v.connection_id
+// `workspace` is the workspace expression: $1 here, the delivery row's workspace in the campaign sweep (#273).
+export const recipientStageSql = (workspace: string) => `CASE
+     WHEN EXISTS(SELECT 1 FROM channel_consent_state state WHERE state.workspace_id=${workspace} AND state.connection_id=v.connection_id
        AND state.channel='instagram' AND state.purpose IN ('marketing','service_reply') AND state.decision='revoke'
        AND ((state.identity_kind='dm_recipient' AND state.identity_value=v.recipient_id)
          OR (state.identity_kind='comment_sender' AND state.identity_value=v.sender_id))) THEN 4
-     WHEN NOT EXISTS(SELECT 1 FROM channel_consent_state state WHERE state.workspace_id=$1 AND state.connection_id=v.connection_id
+     WHEN NOT EXISTS(SELECT 1 FROM channel_consent_state state WHERE state.workspace_id=${workspace} AND state.connection_id=v.connection_id
        AND state.channel='instagram' AND state.identity_kind='dm_recipient' AND state.identity_value=v.recipient_id
        AND state.purpose='marketing' AND state.decision='grant' AND state.evidence_kind='explicit') THEN 5
      WHEN NOT coalesce(latest.message_at<=evaluation.as_of AND evaluation.as_of-latest.message_at<interval '24 hours',false) THEN 6
      ELSE 7 END`;
-const LATEST_TEXT = `(SELECT max(message.message_at) AS message_at
-     FROM instagram_inbox_messages message WHERE message.workspace_id=$1 AND message.connection_id=v.connection_id
+const RECIPIENT_STAGE = recipientStageSql("$1");
+export const latestTextSql = (workspace: string) => `(SELECT max(message.message_at) AS message_at
+     FROM instagram_inbox_messages message WHERE message.workspace_id=${workspace} AND message.connection_id=v.connection_id
        AND message.recipient_id=v.recipient_id AND message.kind='text') latest`;
+const LATEST_TEXT = latestTextSql("$1");
 // One statement and one clock (as_of). Stages 1-3 belong to the member; stages 4-6 belong to each verified DM
 // recipient, and the member takes the furthest stage any of its recipients reaches (7 is candidate). The
 // verified bridge reads its own freshness clock (now()), as the contact detail does. The bridge, the per-recipient

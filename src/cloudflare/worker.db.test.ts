@@ -1319,6 +1319,15 @@ test("interrupted sends remain unknown on queue redelivery", async () => {
   published = [];
   await worker.scheduled({}, env);
   assert.equal((await rows())[0].status, "unknown");
+  // The cron's recovery records its own time, which operations health dates the outcome from (#274).
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT failure_code,recovered_at>now()-interval '1 minute' AS recovered_now FROM private_reply_outbox",
+      )
+    ).rows,
+    [{ failure_code: "worker_interrupted", recovered_now: true }],
+  );
   assert.equal(await consume(), "ack");
   assert.equal(sends, 0);
   assert.deepEqual(published, []);
@@ -3094,6 +3103,84 @@ test("the cron turns a stale sending campaign row unknown and completes its run 
   ]);
   assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [run])).rows[0].status, "completed");
   assert.equal(sends, 0);
+});
+
+test("the cron ends a paused contact's campaign row whose window closed and completes its run in the same run", async () => {
+  const run = await campaignFixture([["campaign-sender", "9101"]]);
+  await pool.query(
+    `INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused)
+     VALUES('11111111-1111-4111-8111-111111111111',$1,'campaign-sender',true)`,
+    [connectionId],
+  );
+  await pool.query(
+    "UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours' WHERE recipient_id='9101'",
+  );
+  published = [];
+  await worker.scheduled({}, env);
+  assert.deepEqual(await campaignRows(run), [
+    { sender_id: "campaign-sender", status: "blocked", failure_code: "reply_window_closed", provider_message_id: null },
+  ]);
+  assert.equal(
+    (await pool.query("SELECT attempt_id FROM campaign_deliveries WHERE run_id=$1", [run])).rows[0].attempt_id,
+    null,
+  );
+  assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [run])).rows[0].status, "completed");
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT failure_code FROM scheduled_steps WHERE name='campaign_start' AND last_success_at IS NOT NULL",
+      )
+    ).rows,
+    [{ failure_code: null }],
+  );
+  assert.equal(sends, 0);
+  assert.deepEqual(published, []);
+});
+
+test("a failed campaign start still runs the sweep and the completion, and the campaign_start step records the failure", async () => {
+  // A run whose paused contact's window closed (a sweep candidate) and a run with no row (a completion candidate).
+  const swept = await campaignFixture([["campaign-sender", "9101"]]);
+  const empty = await campaignFixture([]);
+  await pool.query(
+    `INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused)
+     VALUES('11111111-1111-4111-8111-111111111111',$1,'campaign-sender',true)`,
+    [connectionId],
+  );
+  await pool.query(
+    "UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours' WHERE recipient_id='9101'",
+  );
+  const originalQuery = Pool.prototype.query;
+  let startQueries = 0;
+  mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    // startDueCampaignRuns' due approval read, the first part of the step.
+    if (typeof sql === "string" && sql.startsWith("SELECT workspace_id,id FROM campaign_approvals WHERE")) {
+      startQueries++;
+      throw Object.assign(new Error("terminating connection due to administrator command"), { code: "57P01" });
+    }
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  published = [];
+  await assert.rejects(worker.scheduled({}, env), /scheduled recovery failed/);
+  assert.equal(startQueries, 1);
+  assert.deepEqual(await campaignRows(swept), [
+    { sender_id: "campaign-sender", status: "blocked", failure_code: "reply_window_closed", provider_message_id: null },
+  ]);
+  for (const run of [swept, empty])
+    assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [run])).rows[0].status, "completed");
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT failure_code,last_failure_at IS NOT NULL AS failed FROM scheduled_steps WHERE name='campaign_start'",
+      )
+    ).rows,
+    [{ failure_code: "database_unavailable", failed: true }],
+  );
+  assert.deepEqual(
+    logLines.filter((line) => line.event === "cron_step_failed").map(({ correlation_id, ...line }) => line),
+    [{ event: "cron_step_failed", code: "database_unavailable", step: "campaign_start" }],
+  );
+  assert.equal(sends, 0);
+  assert.deepEqual(published, []);
 });
 
 test("token refresh, the subscription check and webhook delivery share one subrequest budget per cron invocation", async () => {

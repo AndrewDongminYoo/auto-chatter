@@ -3,7 +3,10 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, mock, test } from "node:test";
 import { Pool } from "pg";
 import { appApi } from "./api.ts";
-import { evaluateAlerts, recordStep, recordSteps } from "./operations-health.ts";
+import { connectionMetrics, evaluateAlerts, recordStep, recordSteps } from "./operations-health.ts";
+import { recoverStaleFollowReplies } from "../instagram/follow-flow.ts";
+import { recoverStaleManualReplies } from "../instagram/manual-reply-worker.ts";
+import { recoverStalePrivateReplies } from "../instagram/reply-worker.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
@@ -635,4 +638,86 @@ test("an API request without cf-ray logs a fresh UUID correlation ID, also from 
   assert.equal(entry.event, "request_failed");
   assert.match(entry.correlation_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   assert.equal(poolCorrelationId, entry.correlation_id);
+});
+
+// #274: stale recovery dates its unknown outcome from the recovery, so an attempt that began more than 24 hours
+// before a late recovery still counts and raises unknown_outcome. An ordinary outcome that old stays outside.
+const staleCutoff = () => new Date(Date.now() - 10 * 60_000);
+async function outcomeCounts() {
+  const [metrics] = await connectionMetrics(pool, workspaceId);
+  return [metrics!.unknown_24h, metrics!.failed_24h, metrics!.blocked_24h];
+}
+async function unknownAlertActive() {
+  mock.method(console, "warn", () => undefined);
+  mock.method(console, "info", () => undefined);
+  try {
+    await evaluateAlerts(pool, true, "recovered-outcome-test");
+  } finally {
+    mock.restoreAll();
+  }
+  return (await pool.query("SELECT alert_active FROM scheduled_steps WHERE name='alert_unknown_outcome'")).rows[0]
+    ?.alert_active;
+}
+async function assertRecoveredCounts(recover: () => Promise<unknown>) {
+  assert.deepEqual(await outcomeCounts(), [0, 0, 0]);
+  assert.notEqual(await unknownAlertActive(), true);
+  await recover();
+  assert.deepEqual(await outcomeCounts(), [1, 0, 0]);
+  assert.equal(await unknownAlertActive(), true);
+}
+
+test("a private reply recovered from a stale sending counts from its recovery, not its attempt start", async () => {
+  await reply(connectionId, "300", "sending", { claimedMinutesAgo: 25 * 60, hoursAgo: 25 });
+  await reply(connectionId, "301", "unknown", { claimedMinutesAgo: 25 * 60, hoursAgo: 25 });
+  await pool.query("UPDATE private_reply_outbox SET failure_code='send_outcome_unknown' WHERE sender_id='301'");
+  await assertRecoveredCounts(() => recoverStalePrivateReplies(pool, staleCutoff(), connectionId));
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT sender_id,status,failure_code,recovered_at IS NOT NULL AS recovered FROM private_reply_outbox ORDER BY sender_id",
+      )
+    ).rows,
+    [
+      { sender_id: "300", status: "unknown", failure_code: "worker_interrupted", recovered: true },
+      { sender_id: "301", status: "unknown", failure_code: "send_outcome_unknown", recovered: false },
+    ],
+  );
+});
+
+test("a follow reply recovered from a stale sending counts from its recovery, not its attempt start", async () => {
+  await reply(connectionId, "310", "sent", { claimedMinutesAgo: 26 * 60, hoursAgo: 26 });
+  await reply(connectionId, "311", "sent", { claimedMinutesAgo: 26 * 60, hoursAgo: 26 });
+  await pool.query(
+    `INSERT INTO instagram_follow_conversations(reply_id,connection_id,recipient_id,confirmation_keyword,follower_reply_text,
+       non_follower_reply_text,status,failure_code,confirmed_at,attempt_id,attempt_started_at)
+     SELECT id,connection_id,'9'||sender_id,'ok','follower text','nonfollower text',
+       CASE WHEN sender_id='310' THEN 'sending' ELSE 'unknown' END,
+       CASE WHEN sender_id='310' THEN NULL ELSE 'send_outcome_unknown' END,
+       now()-interval '25 hours 30 minutes',gen_random_uuid(),now()-interval '25 hours'
+     FROM private_reply_outbox WHERE sender_id IN ('310','311')`,
+  );
+  await assertRecoveredCounts(() => recoverStaleFollowReplies(pool, staleCutoff()));
+});
+
+test("a manual reply recovered from a stale sending counts from its recovery, not its attempt start", async () => {
+  await reply(connectionId, "456", "sent");
+  await pool.query(
+    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id) VALUES($1,$2,'456')",
+    [workspaceId, connectionId],
+  );
+  await pool.query(
+    `INSERT INTO instagram_inbox_handoffs(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,updated_by)
+     SELECT workspace_id,connection_id,'123',sender_id,id,true,1,$2 FROM private_reply_outbox WHERE connection_id=$1`,
+    [connectionId, adminId],
+  );
+  await pool.query(
+    `INSERT INTO instagram_manual_replies(workspace_id,connection_id,recipient_id,request_key,created_by,text,handoff_version,
+       status,failure_code,attempt_id,attempt_started_at,created_at)
+     VALUES($1,$2,'123',gen_random_uuid(),$3,'stale',1,'sending',NULL,gen_random_uuid(),now()-interval '25 hours',
+       now()-interval '25 hours'),
+       ($1,$2,'123',gen_random_uuid(),$3,'ordinary',1,'unknown','send_outcome_unknown',gen_random_uuid(),
+       now()-interval '25 hours',now()-interval '25 hours')`,
+    [workspaceId, connectionId, adminId],
+  );
+  await assertRecoveredCounts(() => recoverStaleManualReplies(pool));
 });

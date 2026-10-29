@@ -14,11 +14,13 @@ export const inboxIdentityCandidatesSql = `
 // its conversations, and the segment DM consent filter evaluates them; both use this text. A recipient is
 // verified when every candidate of it, in its own connection, names one sender, at least one candidate is
 // fresh, its ID is numeric and at least one inbox message of it is stored. It never compares across connections
-// or workspaces. This is advisory, not the delivery guard.
-export function verifiedDmRecipientsSql(owned: string) {
+// or workspaces. This is advisory, not the delivery guard. `recipients` (a condition over the candidate `reply`) may
+// narrow the read to whole recipient groups of a connection; it must keep every sender of a selected recipient, so
+// the result for that recipient does not change.
+export function verifiedDmRecipientsSql(owned: string, recipients = "TRUE") {
   return `WITH owned AS (
    SELECT id,workspace_id,inbox_enabled_at FROM instagram_connections WHERE ${owned}
- ), candidates AS (${inboxIdentityCandidatesSql})
+ ), candidates AS (${inboxIdentityCandidatesSql} AND (${recipients}))
  SELECT workspace_id,connection_id,recipient_id,min(sender_id) AS sender_id,
    (array_agg(id::text ORDER BY sent_at DESC,id DESC) FILTER (WHERE fresh))[1] AS evidence_reply_id
  FROM candidates GROUP BY workspace_id,connection_id,recipient_id
