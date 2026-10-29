@@ -138,6 +138,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
   const config = JSON.parse(await readFile(new URL("../../wrangler.json", import.meta.url), "utf8"));
   let sends = 0;
   const graphPaths = [];
+  const graphPosts = [];
   const webhookRequests = [];
   const runtime = new Miniflare({
     modules: true,
@@ -179,6 +180,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
       assert.equal(graphUrl.hostname, "graph.instagram.com");
       if (request.method === "POST") {
         sends++;
+        graphPosts.push(await request.json());
         return Response.json({ message_id: "runtime-message" });
       }
       if (graphUrl.pathname.endsWith("/me")) return Response.json({ id: "987", user_id: "123" });
@@ -571,6 +573,33 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
       [{ sender_id: "sender-campaign", recipient_id: "9001", status: "pending" }],
     );
     assert.equal(sends, 3);
+    // The restricted server role delivers that row through one queue message (#36): one account read and one POST
+    // of the approval's body as plain text to the stored recipient, nothing else, and the run completes.
+    await pool.query("INSERT INTO workspace_members(user_id,workspace_id,role) VALUES($1,$2,'admin')", [
+      campaignUser,
+      campaignWorkspace,
+    ]);
+    const pathsBeforeCampaign = graphPaths.length;
+    await consumer.queue("auto-chatter-replies", [
+      { id: "campaign", timestamp: new Date(), body: { connectionId: campaignConnection }, attempts: 1 },
+    ]);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if ((await pool.query("SELECT status FROM campaign_deliveries")).rows[0]?.status !== "pending") break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.deepEqual(
+      (
+        await pool.query(
+          "SELECT status,provider_message_id,provider_called_at IS NOT NULL AS called FROM campaign_deliveries",
+        )
+      ).rows,
+      [{ status: "sent", provider_message_id: "runtime-message", called: true }],
+      JSON.stringify(graphPaths),
+    );
+    assert.equal(sends, 4);
+    assert.deepEqual(graphPaths.slice(pathsBeforeCampaign), ["/v24.0/me", "/v24.0/123/messages"]);
+    assert.deepEqual(graphPosts.at(-1), { recipient: { id: "9001" }, message: { text: "Hello" } });
+    assert.deepEqual((await pool.query("SELECT status FROM campaign_runs")).rows, [{ status: "completed" }]);
     assert.equal(webhookRequests.length, 1);
     const [webhookRequest] = webhookRequests;
     const delivered = (
@@ -2225,7 +2254,7 @@ test("workerd segment snapshots use restricted server privileges and refuse an a
     });
     assert.equal(approved.status, 201, await approved.clone().text());
     const approvedBody = await approved.json();
-    assert.equal(approvedBody.delivery_available, false);
+    assert.equal(approvedBody.delivery_available, true);
     assert.equal(approvedBody.preview.original_member_count, "1");
     const frozenEdit = await runtime.dispatchFetch(campaignPath, {
       method: "PUT",

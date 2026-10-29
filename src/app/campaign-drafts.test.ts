@@ -145,7 +145,7 @@ const storedApproval = {
     remaining_member_count: "9007199254741014",
     counts: previewResponse.counts,
   },
-  delivery_available: false,
+  delivery_available: true,
 };
 type Approval = typeof storedApproval;
 type DraftApi = (path: string, method?: string, body?: Record<string, unknown>) => Promise<unknown>;
@@ -1119,7 +1119,9 @@ test("an approval in force shows its stored counts and schedule zone and locks t
   assert.match(summary, /승인 시점 남은 인원\s+9,007,199,254,741,014명/);
   assert.deepEqual(
     h.get("campaign-approval-warnings").children.map((child) => child.textContent),
-    ["실제 발송은 아직 지원하지 않습니다. 이 승인은 기록일 뿐이며 메시지를 보내거나 예약하지 않습니다."],
+    [
+      "실행 시점이 되면 서비스 전체 발송이 켜져 있을 때만 실행이 시작됩니다. 보내기 직전마다 모든 조건을 다시 확인하며, 조건을 통과하지 못한 사람에게는 보내지 않습니다.",
+    ],
   );
   assertDraftLocked(h, true);
   assert.equal(h.get("campaign-approval-start").hidden, true);
@@ -1237,7 +1239,7 @@ test("an executed conflict shows the executed approval, unlocks the draft and al
   await openSaved(h);
   await click(h, "campaign-approval-cancel");
   assert.equal(h.get("campaign-approval-current-title").textContent, "최근 승인 · 실행 시작됨");
-  assert.match(h.get("campaign-approval-summary").allText(), /실행 시작됨 · 발송 대상만 기록함/);
+  assert.match(h.get("campaign-approval-summary").allText(), /실행 시작됨 · 보내기 직전에 조건을 다시 확인해 발송/);
   assert.doesNotMatch(h.get("campaign-approval-summary").allText(), /취소\s/);
   assert.match(h.get("campaign-approval-status").textContent, /이미 실행이 시작된 승인/);
   assert.equal(h.get("campaign-approval-warnings").children.length, 0);
@@ -1255,6 +1257,21 @@ test("an approval that already exists elsewhere is shown and locks the draft", a
   assert.equal(approvalShown(h), true);
   assert.match(h.get("campaign-approval-status").textContent, /먼저 기록/);
   assertDraftLocked(h, true);
+  assert.equal(approvalWrites(h).length, 1);
+});
+
+test("an executed draft version is refused with the executed approval and leaves the draft editable", async () => {
+  const executed = { ...storedApproval, status: "executed", run_id: "run-1", run_status: "completed" };
+  const h = await adminDraft(async (path, method) => {
+    if (path.endsWith("/approvals") && method === "POST")
+      throw { status: 409, code: "campaign_version_executed", approval: executed };
+  });
+  await openSaved(h);
+  await approveNow(h);
+  assert.equal(h.get("campaign-approval-current-title").textContent, "최근 승인 · 실행 시작됨");
+  assert.match(h.get("campaign-approval-status").textContent, /이미 실행되었습니다.*초안을 수정해 저장한 뒤 승인/);
+  assert.equal(h.get("campaign-approval-warnings").children.length, 0);
+  assertDraftLocked(h, false);
   assert.equal(approvalWrites(h).length, 1);
 });
 
@@ -1619,6 +1636,19 @@ test("the approval markup labels its inputs, keeps its messages in live regions 
   for (const id of ["campaign-approval-status", "campaign-approval-warnings"])
     assert.match(section, new RegExp(`id="${id}"[^>]*role="status"`));
   assert.match(section, /<th scope="col">조건<\/th>/);
-  assert.match(section, /실제 발송은 아직 지원하지 않습니다/);
+  // The formatter may break these sentences at any space.
+  assert.match(section, /서비스\s+전체\s+발송이\s+켜져\s+있을\s+때만\s+실행이\s+시작되고/);
+  assert.match(section, /보내기\s+직전마다\s+모든\s+조건을\s+다시\s+확인하며/);
+  assert.doesNotMatch(section, /아직 지원하지 않습니다/);
   assert.doesNotMatch(section, /발송\s*가능/);
+});
+
+test("the draft notice says an approved draft runs only while service-wide sending is on", () => {
+  const html = readFileSync(new URL("../../public/app/index.html", import.meta.url), "utf8");
+  const start = html.indexOf('id="campaign-draft-help"');
+  const notice = html.slice(start, html.indexOf("</p>", start));
+  assert.ok(start >= 0 && notice.length > 0);
+  // The formatter may break these sentences at any space.
+  assert.match(notice, /승인한\s+초안은\s+서비스\s+전체\s+발송이\s+켜져\s+있을\s+때만\s+실행됩니다/);
+  assert.doesNotMatch(notice, /아직\s+제공하지\s+않습니다/);
 });

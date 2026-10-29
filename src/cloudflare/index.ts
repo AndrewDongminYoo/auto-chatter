@@ -67,7 +67,9 @@ async function wakeDueReplies(
 ): Promise<void> {
   if (env.SEND_ENABLED !== "true") return;
   // A connection at its private reply budget (#60) is due only for manual replies and follow confirmations, so
-  // the wake after a queue message does not queue it again for replies it cannot claim. The unscoped cron wake
+  // the wake after a queue message does not queue it again for replies it cannot claim. Campaign rows (#36) are due
+  // while their run is running and the connection has campaign budget left; they share the send switch, the token
+  // and the connection pause with the other automated sends. The unscoped cron wake
   // queues the connections it woke least recently first and then stamps the ones it queued, so beyond the bound
   // every due connection is reached in rotation; scoped wakes keep the ID order and do not stamp.
   const due = await pool.query<{ id: string }>(
@@ -89,7 +91,9 @@ async function wakeDueReplies(
        OR EXISTS(SELECT 1 FROM instagram_follow_conversations flow JOIN private_reply_outbox reply ON reply.id=flow.reply_id
          WHERE flow.connection_id=c.id AND flow.status='pending' AND flow.next_attempt_at<=now()
          AND NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
-           AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused))))))
+           AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused)))
+       OR (EXISTS(SELECT 1 FROM campaign_deliveries delivery WHERE delivery.connection_id=c.id AND ${campaignDeliveryDueSql("delivery")})
+         AND ${campaignBudgetOpenSql("c.id")}))))
      ORDER BY CASE WHEN $3 THEN c.send_woken_at END NULLS FIRST, c.id LIMIT 100`,
     [
       scope && "connectionId" in scope ? scope.connectionId : null,
@@ -383,9 +387,9 @@ export default {
               connection.access_token_encrypted,
             );
             // Follow confirmations have a shorter delivery window than comment private replies.
-            if (
+            const followProcessed =
               !manualProcessed &&
-              !(await processNextFollowReply(
+              (await processNextFollowReply(
                 pool,
                 connectionId,
                 new InstagramFollowTransport({
@@ -426,15 +430,58 @@ export default {
                     }
                   },
                 }),
-              ))
-            )
-              await processNextPrivateReply(
+              ));
+            const replyProcessed =
+              !manualProcessed &&
+              !followProcessed &&
+              (await processNextPrivateReply(
                 pool,
                 new InstagramLoginPrivateReplyTransport(config),
                 () => new Date(),
                 connectionId,
                 correlationId,
+              ));
+            // A campaign row (#36) is sent only when no automation of this connection had a row, so automations
+            // keep priority. Its final guard runs again in beforeSend, and graphFetch checks the connection once more
+            // just before the POST.
+            if (!manualProcessed && !followProcessed && !replyProcessed) {
+              const globalSendEnabled = env.SEND_ENABLED === "true";
+              // graphFetch refuses a POST on a paused connection as a block (connection_changed). For a campaign row a
+              // pause is a deferral, as in its guard, so a pause recorded after the guard defers the row too.
+              const campaignGraphFetch: typeof fetch = async (input, init) => {
+                try {
+                  return await graphFetch(input, init);
+                } catch (error) {
+                  if (error instanceof PreSendVerificationError && error.failureCode === "connection_changed") {
+                    const paused = await pool.query(
+                      "SELECT 1 FROM instagram_connections WHERE id=$1 AND active AND send_enabled AND token_expires_at>now() AND send_paused_until>now()",
+                      [connectionId],
+                    );
+                    if (paused.rowCount) throw new PreSendVerificationError("retry", "connection_paused");
+                  }
+                  throw error;
+                }
+              };
+              await processNextCampaignDelivery(
+                pool,
+                connectionId,
+                new InstagramFollowTransport({
+                  ...config,
+                  fetchImpl: campaignGraphFetch,
+                  beforeSend: (context) =>
+                    assertCampaignDeliveryAllowed(pool, {
+                      workspaceId: connection.workspace_id,
+                      id: context.replyId,
+                      attempt: context.attemptId,
+                      connectionId,
+                      encryptedToken: connection.access_token_encrypted,
+                      globalSendEnabled,
+                    }),
+                }),
+                connection.access_token_encrypted,
+                { globalSendEnabled },
               );
+            }
           }
           await wakeDueReplies(pool, env, { connectionId });
         } finally {
@@ -580,6 +627,7 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
         );
         await recoverStaleManualReplies(pool);
         await recoverStaleFollowReplies(pool, new Date(Date.now() - 10 * 60_000));
+        await recoverStaleCampaignDeliveries(pool);
       });
       await step("wake", () => wakeDueReplies(pool, env));
       // Outbound flow webhooks (#47) are delivered after every message step, so a slow or failing endpoint
@@ -593,8 +641,18 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
         });
       });
       // Due campaign approvals start their run (#36): pending delivery rows only, with no provider call or queue
-      // message. It shares the global send switch, so with sending off no approval is executed.
-      await step("campaign_start", () => startDueCampaignRuns(pool, { correlationId }));
+      // message. It shares the global send switch, so with sending off no approval is executed. Then every running
+      // run without a pending or sending row completes, a run with no candidate included, also when a start failed;
+      // the step then fails with the start's code.
+      await step("campaign_start", async () => {
+        try {
+          await startDueCampaignRuns(pool, { correlationId });
+        } catch (error) {
+          await completeCampaignRuns(pool).catch(() => undefined);
+          throw error;
+        }
+        await completeCampaignRuns(pool);
+      });
     }
     await flush(false);
     // The alerts step runs before the 'cron' row is written, so that row counts its failure too; a run whose
@@ -611,7 +669,14 @@ import { Pool } from "pg";
 import { ingestComments, resumeDueFlowRuns } from "../instagram/store.ts";
 import { verifySignature, verifySubscription } from "../instagram/webhook.ts";
 import { processNextPrivateReply, PreSendVerificationError } from "../instagram/reply-worker.ts";
-import { privateReplyBudgetOpenSql } from "../instagram/send-quota.ts";
+import { campaignBudgetOpenSql, privateReplyBudgetOpenSql } from "../instagram/send-quota.ts";
+import {
+  assertCampaignDeliveryAllowed,
+  campaignDeliveryDueSql,
+  completeCampaignRuns,
+  processNextCampaignDelivery,
+  recoverStaleCampaignDeliveries,
+} from "../instagram/campaign-delivery-worker.ts";
 import { InstagramLoginPrivateReplyTransport } from "../instagram/instagram-login-private-reply.ts";
 import { publicPage } from "./public-pages.ts";
 import { appApi } from "../app/api.ts";

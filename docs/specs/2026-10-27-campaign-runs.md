@@ -11,6 +11,12 @@
 
 #36은 세 PR로 나눕니다: ① 실행과 발송 행(이 문서의 구현 범위), ② 발송 worker, ③ 화면.
 이 PR은 아무것도 보내지 않습니다: Graph 호출, transport, outbox 행, 큐 메시지가 없습니다.
+
+2026-10-29 정합 기록: PR ②가 [발송 worker](#발송-worker) 절을 구현했습니다.
+이 문서의 PR ① 절에 있는 "보내지 않는다"는 서술은 PR ①의 범위를 기록한 것입니다. 현재 동작은 발송 worker 절과 그 코드(`src/instagram/campaign-delivery-worker.ts`)가 기준입니다.
+PR ②로 바뀐 줄은 지우지 않고 취소선으로 표시하고, 그 옆에 바뀐 내용을 적었습니다.
+2026-10-29 운영자가 PR ②의 계획을 승인했습니다: Queue 경로, 최종 guard, 결과 분류, 연결당 시간당 1,000회 캠페인 예산, 실행된 초안 버전 재승인의 409 거절, 승인 화면 문구.
+migration 066은 코드 배포 전에 전체 실행기로 적용해야 합니다. PR ②의 검증 결과는 [캠페인 발송 검증](../notes/2026-10-29-campaign-delivery-verification.md)에 기록합니다.
 #36과 [#35](https://github.com/AndrewDongminYoo/auto-chatter/issues/35)는 이 PR 뒤에도 열린 상태로 남습니다.
 검증 결과는 [캠페인 실행 검증](../notes/2026-10-27-campaign-runs-verification.md)에 기록합니다.
 migration 065는 코드 배포 전에 전체 실행기(`deploy/migrate-multi-user.sql`)로 적용해야 합니다.
@@ -64,8 +70,9 @@ capability는 지원 여부를 알리는 값일 뿐이며 자격 검사나 최�
 실행 전환은 승인의 `version`을 올리지 않고 감사 행도 쓰지 않습니다. 감사 행은 행위자가 필요한데 cron 단계에는 행위자가 없으므로, 실행 기록은 `campaign_runs` 행입니다.
 실행된 승인은 초안을 더 이상 고정하지 않으므로, 초안을 수정하고 다시 승인할 수 있으며 새 승인은 자기 실행을 시작합니다.
 초안을 수정하지 않고 같은 버전을 다시 승인할 수도 있습니다. 그 승인은 같은 고정 대상으로 두 번째 실행을 시작하고, 중복 키는 실행마다 따로이므로 같은 사람에게 두 번째 발송 행이 생깁니다.
-같은 초안 버전의 재승인을 막을지, 실행 사이의 중복 발송을 막을지는 PR ②가 실제로 보내기 전에 운영자가 정할 결정입니다.
-승인 목록과 상세 응답에는 `run_id`와 `run_status`가 추가됩니다(실행이 없으면 `null`). 기존 키의 의미는 바뀌지 않으며 `delivery_available`은 계속 거짓입니다.
+~~같은 초안 버전의 재승인을 막을지, 실행 사이의 중복 발송을 막을지는 PR ②가 실제로 보내기 전에 운영자가 정할 결정입니다.~~
+2026-10-29 운영자 결정(PR ②): 실행된 초안 버전은 다시 승인하지 않습니다. [재승인 거절](#재승인-거절)을 봅니다. 초안을 수정한 새 버전은 다시 승인할 수 있으며, 실행 사이의 중복 발송은 막지 않습니다.
+승인 목록과 상세 응답에는 `run_id`와 `run_status`가 추가됩니다(실행이 없으면 `null`). 기존 키의 의미는 바뀌지 않으며 ~~`delivery_available`은 계속 거짓입니다~~ `delivery_available`은 PR ②부터 참입니다.
 
 ## 시작: cron 단계 campaign_start
 
@@ -123,9 +130,118 @@ Cloudflare cron에 `campaign_start` 단계를 추가합니다.
 
 ## 조회
 
-`GET /api/campaign-runs/:id`(`admin`)는 실행 열, 저장된 시작 수(`start: {as_of, original_member_count, remaining_member_count, counts}`), 상태별 발송 행 수(`delivery_counts`, 일곱 상태 모두 10진 문자열), `delivery_available: false`를 돌려줍니다.
+`GET /api/campaign-runs/:id`(`admin`)는 실행 열, 저장된 시작 수(`start: {as_of, original_member_count, remaining_member_count, counts}`), 상태별 발송 행 수(`delivery_counts`, 일곱 상태 모두 10진 문자열), ~~`delivery_available: false`~~ `delivery_available`(PR ②부터 `true`)을 돌려줍니다.
 댓글 작성자·DM 수신자 식별자는 응답에 없습니다.
 화면(PR ③)은 승인의 `run_id`로 실행을 찾습니다.
+
+## 발송 worker
+
+PR ②(2026-10-29)의 계약입니다.
+`pending` 발송 행 하나를 저장된 DM 수신자(`recipient_id`)에게 승인에 저장된 본문 사본으로 보냅니다. 태그와 버튼이 없는 일반 텍스트 DM 하나(`{"recipient":{"id":…},"message":{"text":…}}`)입니다.
+코드는 `src/instagram/campaign-delivery-worker.ts`이고, Cloudflare Queue 소비자만 이를 부릅니다. Node 환경 토큰 worker는 캠페인을 보내지 않습니다.
+테스트는 Meta를 호출하지 않으며, 저장소의 `SEND_ENABLED`는 계속 `false`입니다.
+
+### 저장: migration 066
+
+- `next_attempt_at`(기본값 `now()`): 대기 행을 다시 가져갈 수 있는 시각입니다. 미룬 행은 `pending`으로 남고 이 시각이 뒤로 갑니다.
+- `provider_called_at`: 공급자 요청 직전에 씁니다. 캠페인 예산이 이 열로 호출을 셉니다.
+- 색인 세 개: 가져오기와 깨우기용 `campaign_deliveries_due_idx`(`(connection_id,next_attempt_at,created_at,id) WHERE status='pending'`), 예산용 `campaign_deliveries_called_idx`(`(connection_id,provider_called_at) WHERE provider_called_at IS NOT NULL`), 오래된 `sending` 복구용 `campaign_deliveries_sending_idx`입니다.
+- 기존 CHECK는 바꾸지 않습니다. `pending`으로 돌아가는 행은 `attempt_id`와 `attempt_started_at`을 비웁니다. `cancelled`는 시도 열을 가져도 됩니다.
+- 권한은 표 단위이므로 접근 스크립트는 바뀌지 않습니다.
+
+### 가져오기
+
+한 연결의 `pending` 행 중 `next_attempt_at`이 지났고, 실행이 `running`이고, 댓글 작성자의 자동화 일시 중지와 상담 전환 중지가 없고, 연결이 일시 중지되지 않았고, 캠페인 예산이 남은 행 하나를 가져옵니다.
+순서는 `next_attempt_at`, `created_at`, `id`이고 `FOR UPDATE OF d SKIP LOCKED`입니다. 행을 `sending`으로 바꾸고 새 `attempt_id`와 `attempt_started_at`을 씁니다.
+이후 모든 변경은 `status='sending' AND attempt_id=$n`을 조건으로 하며, 가져온 행을 잃으면 예외를 던집니다.
+실행 상태는 잠그지 않고 읽습니다. 취소는 실행 행을 잠근 뒤 발송 행을 바꾸므로, worker가 행을 쥔 채 실행 잠금을 기다리지 않습니다.
+가져오기, 깨우기, 운영 상태의 대기 지표는 같은 SQL 조각(`campaignDeliveryDueSql`)을 읽습니다.
+
+### 최종 guard
+
+가져온 뒤, 계정 확인 읽기 뒤, 그리고 transport의 `beforeSend`에서 POST 직전에 다시 검사합니다. 모두 데이터베이스에서 읽으며, `graphFetch`의 기존 연결 검사도 POST마다 한 번 더 실행됩니다.
+수신자 단위 조건은 미리보기와 시작이 쓰는 같은 SQL 조각(`src/app/campaign-drafts.ts`의 `RECIPIENT_STAGE`와 `LATEST_TEXT`, 연결과 대상 조건은 `CONNECTION_SENDABLE`과 `CONTACT_PAUSED`)을 읽습니다.
+guard는 저장된 수신자의 단계만 봅니다. 다른 수신자를 고르지 않습니다. 미리보기, 승인, 시작 결과는 바뀌지 않습니다(조각으로 나눈 뒤에도 `EVALUATION_SQL` 문자열이 바이트 단위로 같음을 확인했습니다).
+
+| 조건                                                                                          | 결과                                    |
+| --------------------------------------------------------------------------------------------- | --------------------------------------- |
+| 가져온 행을 잃음                                                                              | 차단 `delivery_changed`                 |
+| 실행이 `running`이 아님(취소됨)                                                               | 행을 `cancelled` / `run_cancelled`로 둠 |
+| 전역 `SEND_ENABLED`가 `true`가 아님                                                           | 재시도 `global_send_disabled`           |
+| 연결이 비활성·발송 꺼짐·토큰 없음·토큰 만료                                                   | 차단 `connection_unavailable`           |
+| 연결은 보낼 수 있으나 토큰이 바뀜                                                             | 재시도 `token_rotated`                  |
+| 연결 일시 중지(`send_paused_until`)                                                           | 재시도 `connection_paused`              |
+| 승인한 사용자가 그 작업 공간의 활성 `owner`·`admin`이 아님                                    | 차단 `approver_unavailable`             |
+| 댓글 작성자의 수동 중지 또는 상담 전환 중지                                                   | 재시도 `contact_paused`                 |
+| 저장된 수신자가 지금 그 댓글 작성자의 확인된 DM 수신자가 아님                                 | 차단 `no_dm_identity`                   |
+| 수신자나 댓글 작성자의 마케팅·서비스 답장 철회, 또는 그 작성자와 연결된 DM 수신자의 수신 거부 | 차단 `recipient_opted_out`              |
+| 정확한 명시적 마케팅 동의 없음                                                                | 차단 `marketing_consent_required`       |
+| 열린 24시간 텍스트 창 없음                                                                    | 차단 `reply_window_closed`              |
+| 동의·확인 읽기 실패                                                                           | 재시도 `consent_unavailable`            |
+
+수신 거부는 미리보기의 단계 4(그 수신자와 그 작성자)와 다른 worker의 `deliveryRecipientOptedOut`(그 작성자와 연결된 모든 DM 수신자의 서비스 답장 철회)를 모두 검사합니다.
+차단 사유가 하나라도 있으면 재시도 사유보다 앞섭니다. 그래서 일시 중지가 길어져도 창이 닫히거나 동의가 없어진 행은 끝납니다. 같은 종류 안에서는 위 표의 순서로 첫 사유를 기록합니다.
+재시도는 행을 `pending`으로 되돌리고 시도 열을 비우며, `next_attempt_at`을 1분 뒤로 미룹니다. 차단은 행을 `blocked`와 사유로 끝냅니다.
+승인자 검사는 예약 수동 답장의 작성자 검사보다 엄격합니다. 예약 수동 답장은 작성자가 관리자에서 상담원으로 바뀌어도 보내지만, 캠페인 발송 행은 승인자가 지금도 활성 `owner`·`admin`이어야 하므로 상담원으로 바뀐 승인자의 행은 `approver_unavailable`로 차단됩니다. 승인 자체가 관리자 권한이므로 운영자가 승인한 계획의 역할 목록을 따랐습니다. 이 검사로 [알려진 한계](#알려진-한계)의 승인자 항목이 해결됩니다.
+연결 일시 중지가 guard를 지난 뒤 `graphFetch`의 POST 직전 검사에서야 보이면(다른 큐 호출의 속도 제한), 그 검사는 다른 worker처럼 `connection_changed` 차단을 던집니다. 캠페인 transport는 이것을 받아, 연결이 일시 중지만 되어 있고 활성·발송 켜짐·유효 토큰이면 재시도 `connection_paused`로 바꿉니다.
+
+### 결과
+
+결과 분류는 수동 답장 worker와 같이 `instagramAdapter.classifySendError`와 `classifyMetaGraphFailure`를 씁니다.
+
+- 성공: `sent`, `provider_message_id`, `sent_at`.
+- 계정 확인이 다른 계정을 가리킴: 차단 `authorization_unverified`. 계정 확인 읽기 실패: 재시도 `verification_unavailable`.
+- 보내기 전 재시도(`PreSendVerificationError` `retry`): `pending`, 1분 뒤. 보내기 전 차단: `blocked`.
+- 공급자의 명확한 거절: `failed` / `meta_error_<code>`.
+- 공급자의 속도 제한: 행은 `pending`으로 돌아가고 시도 열을 비우며 `next_attempt_at`은 일시 중지가 끝나는 시각입니다. 연결의 `send_paused_until`은 수동 답장처럼 `max(900초, Retry-After)`만큼 밀립니다. 일시 중지 동안 그 연결의 다른 캠페인 행도 가져가지 않습니다.
+- 그 밖의 `send()` 오류: `unknown`이며 자동으로 다시 시도하지 않습니다.
+
+결과를 쓰는 트랜잭션은 실행 행을 `FOR SHARE`로 먼저 잠그고, 속도 제한이면 연결을 `FOR NO KEY UPDATE`로 잠근 뒤 발송 행을 바꿉니다.
+실행을 먼저 잠그는 순서는 취소의 순서(실행, 그다음 행)와 같습니다. 그래서 취소는 이 트랜잭션을 기다린 뒤 `pending`으로 돌아간 행을 취소합니다.
+취소가 먼저 실행을 잡았다면 결과 트랜잭션이 기다린 뒤 취소된 실행을 보고, `pending`으로 돌아갈 행을 `cancelled` / `run_cancelled`로 둡니다. 따라서 취소된 실행에 `pending` 행이 남지 않습니다.
+세 삭제 함수는 연결을 잡은 채 발송 행을 `NOWAIT`로 잠그고 `sending` 행이 있으면 거절하므로, 결과 트랜잭션과 교착하지 않습니다. 새 열이 생겨도 세 함수는 바뀌지 않습니다.
+
+### 예산
+
+`src/instagram/send-quota.ts`의 `CAMPAIGN_HOURLY_BUDGET`은 연결당 최근 1시간 동안 1,000회입니다. `campaignBudgetOpenSql`이 그 연결의 발송 행 중 `provider_called_at`이 최근 1시간 안인 행을 셉니다.
+이 값은 서비스 정책이며 Meta의 한도가 아닙니다. Meta는 Instagram 프로페셔널 계정당 텍스트 Send API 호출을 초당 100회로 문서화하고, 시간당 한도나 앱 전체 메시지 한도는 문서화하지 않습니다([Instagram Platform 개요](https://developers.facebook.com/docs/instagram-platform/overview/)). 이 내용은 운영자가 승인한 계획에 기록된 2026-10-29 확인 결과이며, 이 구현 작업 중에는 문서를 다시 열어 보지 않았습니다.
+1,000회로 두면 5,000명(고정 대상 상한) 실행이 약 5시간에 끝나서, 대부분의 수신자가 24시간 창 안에 받습니다.
+비공개 답장 예산 700회([비공개 답장 예산](2026-10-12-send-quotas.md#비공개-답장-예산))와는 따로 셉니다. 캠페인 예산을 다 쓴 연결도 비공개 답장, 수동 답장, 팔로우 확인 DM은 계속 보냅니다.
+호출 수는 POST 직전에 셉니다. 그래서 나가지 않은 요청도 호출로 세며, 예산은 일찍 멈추는 쪽으로 틀립니다.
+반대로 적게 세는 경우가 하나 있습니다. 셈은 호출이 아니라 행 단위이므로, Meta가 호출 제한으로 거절한 행을 1시간 안에 다시 보내면 `provider_called_at`을 덮어써 두 POST를 한 번으로 셉니다. 이 재시도는 이미 연결을 최소 900초 일시 중지하므로 그대로 둡니다. 비공개 답장 예산도 같은 오차를 받아들입니다([셈의 오차](2026-10-12-send-quotas.md#셈의-오차)).
+
+### 우선순위와 깨우기
+
+큐 메시지 하나는 기존 순서대로 수동 답장, 팔로우 확인, 비공개 답장을 처리하고, 셋 중 아무것도 행을 가져가지 않았을 때만 캠페인 행 하나를 처리합니다. 그래서 자동화가 우선입니다.
+캠페인 행은 `InstagramFollowTransport`와 기존 `graphFetch`로 보내며, `beforeSend`가 최종 guard를 실행합니다.
+`wakeDueReplies`는 발송이 켜져 있고 유효한 토큰이 있고 일시 중지되지 않았고 캠페인 예산이 남은 연결에 기한이 된 캠페인 행(`running` 실행)이 있으면 그 연결을 깨웁니다. 메시지 하나가 행 하나를 처리한 뒤 남은 일이 있으면 같은 연결을 다시 깨웁니다.
+
+### 완료와 오래된 sending
+
+행이 최종 상태가 되면, 행 잠금을 놓은 뒤 별도 문장이 그 실행을 완료합니다: `running`이고 `pending`·`sending` 행이 없으면 `completed`가 되고 `version`이 1 오르며 `updated_at`이 바뀝니다.
+최종 상태를 떠난 행은 다시 `pending`이나 `sending`이 되지 않으므로, 비어 있는 실행은 계속 비어 있습니다. 완료 문장은 실행 행만 `FOR NO KEY UPDATE SKIP LOCKED`로 잠그고, 다른 트랜잭션이 쥔 실행은 건너뜁니다.
+`campaign_start` cron 단계는 시작 뒤에 `pending`·`sending` 행이 없는 모든 `running` 실행을 완료합니다. 시작이 실패해도 완료는 실행합니다. 그래서 후보가 없는 실행은 시작한 같은 cron에서 완료됩니다. 취소된 실행은 바꾸지 않습니다.
+`stale_recovery` 단계는 10분 넘게 `sending`인 행을 `unknown` / `worker_interrupted`로 바꾸고 시도 열은 유지합니다. 같은 cron의 `campaign_start` 단계가 그 실행을 완료합니다.
+완료된 실행을 취소하면 기존처럼 `409 campaign_run_completed`입니다.
+
+### 재승인 거절
+
+`POST /api/campaign-drafts/:id/approvals`는 같은 초안 버전에 `executed` 승인이 있으면 `409 campaign_version_executed`와 그 승인(가장 최근 것)을 돌려주고 아무것도 쓰지 않습니다. 그래서 초안을 수정하지 않고는 같은 고정 대상이 두 번 시작되지 않습니다.
+검사 순서는 요청 ID 재전송, 초안 버전, 유효한 승인, 그다음 이 검사입니다. 실행된 승인을 만든 요청을 다시 보내면 지금처럼 그 승인을 200으로 돌려줍니다.
+화면은 다른 409처럼 응답의 승인으로 다시 표시하고, 초안을 수정해 저장한 뒤 승인하라고 안내합니다.
+PR ② 이전에 기록된 데이터에는 같은 버전에 실행된 승인과 유효한 승인이 함께 있을 수 있습니다. 이 검사는 새 승인만 막고 기존 승인은 바꾸지 않습니다.
+
+### 응답, 화면, 운영 상태
+
+- 승인과 실행 응답의 `delivery_available`은 `true`입니다. 전역 발송 스위치가 실행 여부를 계속 정합니다.
+- 승인 화면은 "실행 시점이 되면 서비스 전체 발송이 켜져 있을 때만 실행이 시작되고, 보내기 직전마다 모든 조건을 다시 확인한다"고 안내합니다. 실행된 승인의 상태 문구는 "실행 시작됨 · 보내기 직전에 조건을 다시 확인해 발송"입니다. 실행 진행률과 취소 화면은 PR ③입니다.
+- 운영 상태(`src/app/operations-health.ts`)는 연결별 대기 지표(가져오기와 같은 조건, 캠페인 예산 포함, 시작 시각은 [운영 상태 문서](2026-10-01-operations-health.md#지표와-api)), `sending` 체류, 최근 24시간 `unknown`·`failed`·`blocked` 수와 `unknown` 경보의 전체 수에 캠페인 발송 행을 넣습니다.
+
+### 배포 순서
+
+1. migration 066을 전체 실행기(`deploy/migrate-multi-user.sql`)로 적용합니다. 066은 열과 색인만 추가합니다.
+2. 코드를 배포합니다. `SEND_ENABLED`가 `false`인 동안에는 실행도 발송도 시작되지 않습니다.
+3. `SEND_ENABLED`를 `true`로 바꾸기 전에 [이미 있는 승인과 배포 순서](#이미-있는-승인과-배포-순서)의 조회를 합니다. 이제 실행된 승인의 행은 바로 발송 대상이 됩니다.
 
 ## 데이터 경계
 
@@ -158,7 +274,11 @@ migration 064와 승인 화면은 "기록만 하며 발송하지 않음" 계약�
 ## 알려진 한계
 
 - 작업 공간 내보내기는 50,000행(`WORKSPACE_EXPORT_LIMITS.maxRows`)을 넘으면 전체를 거절합니다. 발송 행은 실행마다 최대 5,000개이고 서버 역할이 지울 수 없으므로, 고정 대상 명단 행(최대 20,000개)과 함께 쌓이면 몇 번의 큰 실행 뒤 내보내기가 거절될 수 있습니다. 발송 행 상한이나 보존 기간은 운영자가 정할 후속 결정입니다.
-- 시작은 승인한 관리자의 현재 멤버 자격을 다시 확인하지 않습니다. 보내기 직전 검사에 이를 넣을지는 PR ②에서 정합니다.
+- 시작은 승인한 관리자의 현재 멤버 자격을 다시 확인하지 않습니다. ~~보내기 직전 검사에 이를 넣을지는 PR ②에서 정합니다.~~ PR ②가 보내기 직전 검사에 넣었습니다(`approver_unavailable`).
+- (PR ②) 발송이 꺼졌거나 토큰이 없거나 만료된 연결의 행은 깨우지도 가져가지도 않으므로 그 실행은 `running`으로 남습니다. 연결이 다시 보낼 수 있게 되면 행을 가져가 창이 닫힌 행은 차단으로 끝나고, 그 전에는 실행 취소로 끝낼 수 있습니다.
+- (PR ②) 캠페인 예산은 삭제한 행의 호출을 이월하지 않습니다. 개인·연결 삭제로 지운 행의 최근 호출은 셈에서 빠집니다.
+- (PR ②) 마지막 guard와 Meta POST는 원자적이지 않습니다. guard를 지난 뒤의 취소나 설정 변경은 이미 나간 요청을 되돌리지 못합니다. 결과를 쓸 때 실행이 취소되어 있어도 보낸 행은 `sent`로 남습니다.
+- (PR ②) 같은 사람이 여러 실행에 들어 있으면 실행마다 따로 받습니다. 실행 사이의 중복은 막지 않습니다.
 - 실행 화면은 PR ③입니다. 이 PR은 관리 화면이 실행된 승인을 오류로 처리하지 않도록 상태 문구와 `campaign_approval_executed` 안내만 추가했습니다.
 
 ## PR ②와 ③의 계획
@@ -171,6 +291,9 @@ PR ②(발송 worker)는 다음을 맡습니다.
 - 보내기 직전에 실행 상태, 전역 발송 스위치, 연결의 토큰·발송 설정·일시 중지, 대상 일시 중지와 상담 전환, 확인된 DM 연결, 수신 거부, 정확한 명시적 마케팅 동의, 24시간 창을 모두 다시 검사합니다.
 - 승인에 저장된 본문 사본을 태그 없는 일반 텍스트로 보냅니다.
 - 예산, 재시도, 오래된 `sending`의 복구, 실행 완료(`completed`)를 다룹니다.
+
+2026-10-29 정합 기록: 위 PR ② 계획은 이 저장소의 PR ②가 구현했습니다. 구현의 기준은 [발송 worker](#발송-worker) 절과 `src/instagram/campaign-delivery-worker.ts`이며, 검증은 [캠페인 발송 검증](../notes/2026-10-29-campaign-delivery-verification.md)입니다.
+계획에 없던 결정은 승인자 검사, 차단 사유의 우선, 취소된 실행에서 되돌아갈 행의 `cancelled` 처리, 연결당 시간당 1,000회 예산, 실행된 버전의 재승인 거절입니다.
 
 PR ③(화면)은 승인 상세에서 실행을 찾아 진행률과 상태별 수를 보이고 취소를 제공합니다.
 

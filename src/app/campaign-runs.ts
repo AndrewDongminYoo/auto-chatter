@@ -5,7 +5,8 @@ import { CampaignStartFailedError, failureCode, logOperation } from "./operation
 
 // Campaign runs (#36, docs/specs/2026-10-27-campaign-runs.md). Starting a run writes one pending delivery row per
 // candidate member; nothing here calls a provider, publishes a queue message or writes an outbox row. The delivery
-// worker (PR 2) claims the rows and rechecks every condition immediately before each send.
+// worker (src/instagram/campaign-delivery-worker.ts) claims the rows and rechecks every condition immediately before
+// each send.
 
 // Due approvals one campaign_start step starts at most, oldest due first. Each start re-evaluates up to 5,000
 // snapshot members (the freeze limit) in one statement, so a run of the step stays a handful of statements.
@@ -183,8 +184,8 @@ async function detail(client: PoolClient, workspace: string, id: string) {
     delivery_counts: Object.fromEntries(
       CAMPAIGN_DELIVERY_STATUSES.map((status) => [status, (delivery_counts[status] as string | undefined) ?? "0"]),
     ),
-    // This PR writes delivery rows but sends nothing; the delivery worker (PR 2) changes this.
-    delivery_available: false,
+    // The delivery worker sends the rows; the global send switch still decides whether it runs.
+    delivery_available: true,
   };
 }
 

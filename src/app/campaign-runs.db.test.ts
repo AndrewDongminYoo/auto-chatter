@@ -585,7 +585,7 @@ test("cancelling a run cancels its pending rows only, and the read returns count
   assert.equal(read.status, "running");
   assert.equal(read.version, 1);
   assert.equal(read.approval_id, approval.id);
-  assert.equal(read.delivery_available, false);
+  assert.equal(read.delivery_available, true);
   assert.equal(read.start.counts.candidate, "2");
   assert.equal(read.start.original_member_count, "2");
   assert.deepEqual(read.delivery_counts, {
@@ -679,7 +679,27 @@ test("an executed approval refuses a schedule change and a cancel, and its draft
   );
   assert.equal(cancel.error, "campaign_approval_executed");
   assert.equal(await approvalStatus(approval.id), "executed");
-  // The draft can be edited and approved again; a new approval would start its own run.
+  // The executed draft version is not approved again (#36): the refusal carries the executed approval and writes
+  // nothing, so one snapshot never starts twice without an edit.
+  const again = {
+    id: randomUUID(),
+    expected_version: 1,
+    schedule_local: null,
+    expected_time_zone: "UTC",
+  };
+  const refused = await expect(
+    await request("POST", `/api/campaign-drafts/${approval.draft_id}/approvals`, again),
+    409,
+  );
+  assert.equal(refused.error, "campaign_version_executed");
+  assert.equal(refused.approval.id, approval.id);
+  assert.equal(refused.approval.status, "executed");
+  assert.equal(
+    (await pool.query("SELECT count(*)::int AS n FROM campaign_approvals WHERE draft_id=$1", [approval.draft_id]))
+      .rows[0].n,
+    1,
+  );
+  // The draft can be edited and its new version approved; that approval would start its own run.
   const snapshot = (await pool.query("SELECT snapshot_id FROM campaign_drafts WHERE id=$1", [approval.draft_id]))
     .rows[0].snapshot_id;
   await expect(
@@ -690,6 +710,21 @@ test("an executed approval refuses a schedule change and a cancel, and its draft
       expected_version: 1,
     }),
   );
+  const edited = await expect(
+    await request("POST", `/api/campaign-drafts/${approval.draft_id}/approvals`, { ...again, expected_version: 2 }),
+    201,
+  );
+  assert.equal(edited.draft_version, 2);
+  // A replay of the request that created the executed approval still answers it as a success.
+  const replayed = await expect(
+    await request("POST", `/api/campaign-drafts/${approval.draft_id}/approvals`, {
+      ...again,
+      id: approval.id,
+    }),
+    200,
+  );
+  assert.equal(replayed.id, approval.id);
+  assert.equal(replayed.status, "executed");
 });
 
 test("connection, person and workspace deletion remove delivery rows and refuse while one is sending", async () => {
@@ -947,5 +982,45 @@ test("migration 065 replays over stored runs and reproduces the canonical deleti
   assert.ok(
     runner.indexOf("065_campaign_runs.sql") > runner.indexOf("064_campaign_approvals.sql") &&
       runner.indexOf("065_campaign_runs.sql") < runner.indexOf("supabase-access.sql"),
+  );
+});
+
+test("migration 066 replays over stored rows and keeps the delivery checks", async () => {
+  await qualifying("1001", "2001");
+  const approval = await approve(await draftFor([[C, "1001"]]));
+  await startDueCampaignRuns(pool);
+  const run = (await runOf(approval.id)).id;
+  const sql = await readFile(new URL("../../db/migrations/066_campaign_delivery.sql", import.meta.url), "utf8");
+  await pool.query(sql);
+  await pool.query(sql);
+  const row = (
+    await pool.query(
+      "SELECT status,next_attempt_at<=clock_timestamp() AS due,provider_called_at FROM campaign_deliveries WHERE run_id=$1",
+      [run],
+    )
+  ).rows;
+  assert.deepEqual(row, [{ status: "pending", due: true, provider_called_at: null }]);
+  const indexes = (
+    await pool.query(
+      "SELECT indexname FROM pg_indexes WHERE tablename='campaign_deliveries' AND indexname LIKE 'campaign_deliveries_%_idx' ORDER BY indexname",
+    )
+  ).rows.map((index) => index.indexname);
+  for (const name of [
+    "campaign_deliveries_called_idx",
+    "campaign_deliveries_due_idx",
+    "campaign_deliveries_sending_idx",
+  ])
+    assert.ok(indexes.includes(name), name);
+  // A pending row still holds no attempt.
+  await assert.rejects(
+    pool.query("UPDATE campaign_deliveries SET attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE run_id=$1", [
+      run,
+    ]),
+    { code: "23514" },
+  );
+  const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
+  assert.ok(
+    runner.indexOf("066_campaign_delivery.sql") > runner.indexOf("065_campaign_runs.sql") &&
+      runner.indexOf("066_campaign_delivery.sql") < runner.indexOf("supabase-access.sql"),
   );
 });

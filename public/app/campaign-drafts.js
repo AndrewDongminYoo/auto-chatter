@@ -64,6 +64,8 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       "다른 곳에서 승인이 변경되었습니다. 현재 승인을 표시합니다. 확인한 뒤 다시 시도해 주세요.",
     campaign_approval_cancelled: "이미 취소된 승인입니다. 현재 상태를 표시합니다.",
     campaign_approval_executed: "이미 실행이 시작된 승인이라 바꾸거나 취소할 수 없습니다. 현재 상태를 표시합니다.",
+    campaign_version_executed:
+      "이 초안 버전은 이미 실행되었습니다. 다시 보내려면 초안을 수정해 저장한 뒤 승인해 주세요. 실행된 승인을 표시합니다.",
     campaign_schedule_timezone_changed:
       "작업 공간 시간대가 다른 곳에서 바뀌었습니다. 페이지를 새로고침해 바뀐 시간대를 확인한 뒤 다시 시도해 주세요.",
     campaign_schedule_out_of_range: "예약 시각은 현재보다 1분 이상 뒤여야 합니다. 시각을 다시 선택해 주세요.",
@@ -247,12 +249,17 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     if (!["approved", "cancelled", "executed"].includes(value?.status) || !Number.isInteger(value.version))
       throw new Error("invalid approval");
     const active = value.status === "approved";
-    // An executed approval started its run (#36); the run screen is not part of this page yet.
+    // An executed approval started its run (#36), which the delivery worker sends; the run screen is not part of this
+    // page yet.
     const executed = value.status === "executed";
     const entries = [
       [
         "상태",
-        active ? "승인됨 · 기록만 하며 발송하지 않음" : executed ? "실행 시작됨 · 발송 대상만 기록함" : "취소됨",
+        active
+          ? "승인됨 · 실행 시점에 서비스 발송이 켜져 있으면 시작"
+          : executed
+            ? "실행 시작됨 · 보내기 직전에 조건을 다시 확인해 발송"
+            : "취소됨",
       ],
       ["승인한 초안", `${value.name} · 버전 ${value.draft_version}`],
       ["실행 시점", scheduleText(value)],
@@ -267,15 +274,14 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     );
     const summary = definitions(entries);
     const rows = reasonRows(value.preview?.counts);
-    const warnings =
-      active && value.delivery_available !== true
-        ? [
-            node(
-              "p",
-              "실제 발송은 아직 지원하지 않습니다. 이 승인은 기록일 뿐이며 메시지를 보내거나 예약하지 않습니다.",
-            ),
-          ]
-        : [];
+    const warnings = active
+      ? [
+          node(
+            "p",
+            "실행 시점이 되면 서비스 전체 발송이 켜져 있을 때만 실행이 시작됩니다. 보내기 직전마다 모든 조건을 다시 확인하며, 조건을 통과하지 못한 사람에게는 보내지 않습니다.",
+          ),
+        ]
+      : [];
     approval = value;
     approvalLoaded = true;
     byId("campaign-approval-current-title").textContent = active

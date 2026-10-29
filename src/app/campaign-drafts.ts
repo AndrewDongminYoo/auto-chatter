@@ -110,6 +110,29 @@ export const CAMPAIGN_PREVIEW_REASONS = [
   "candidate",
 ] as const;
 export const utc = (column: string) => `to_char(${column} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+// The member-level and recipient-level conditions of the preview, shared with the delivery worker's final guard
+// (#36), so the preview, the start and the guard read one text. Each refers to fixed aliases: `c` the connection,
+// `a` the member's instagram_contact_automation row, `v` one verified DM recipient (connection_id, sender_id,
+// recipient_id), `latest` that recipient's latest stored text DM (LATEST_TEXT), `evaluation.as_of` the clock, and $1
+// the workspace.
+export const CONNECTION_SENDABLE =
+  "coalesce(c.active AND c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>evaluation.as_of,false)";
+export const CONTACT_PAUSED = "coalesce(a.paused OR a.handoff_paused,false)";
+// Stages 4-7 of one verified DM recipient: 4 opted out (the recipient or its comment sender revoked marketing or
+// service replies), 5 no exact explicit marketing grant, 6 no stored text DM in the last 24 hours, 7 candidate.
+const RECIPIENT_STAGE = `CASE
+     WHEN EXISTS(SELECT 1 FROM channel_consent_state state WHERE state.workspace_id=$1 AND state.connection_id=v.connection_id
+       AND state.channel='instagram' AND state.purpose IN ('marketing','service_reply') AND state.decision='revoke'
+       AND ((state.identity_kind='dm_recipient' AND state.identity_value=v.recipient_id)
+         OR (state.identity_kind='comment_sender' AND state.identity_value=v.sender_id))) THEN 4
+     WHEN NOT EXISTS(SELECT 1 FROM channel_consent_state state WHERE state.workspace_id=$1 AND state.connection_id=v.connection_id
+       AND state.channel='instagram' AND state.identity_kind='dm_recipient' AND state.identity_value=v.recipient_id
+       AND state.purpose='marketing' AND state.decision='grant' AND state.evidence_kind='explicit') THEN 5
+     WHEN NOT coalesce(latest.message_at<=evaluation.as_of AND evaluation.as_of-latest.message_at<interval '24 hours',false) THEN 6
+     ELSE 7 END`;
+const LATEST_TEXT = `(SELECT max(message.message_at) AS message_at
+     FROM instagram_inbox_messages message WHERE message.workspace_id=$1 AND message.connection_id=v.connection_id
+       AND message.recipient_id=v.recipient_id AND message.kind='text') latest`;
 // One statement and one clock (as_of). Stages 1-3 belong to the member; stages 4-6 belong to each verified DM
 // recipient, and the member takes the furthest stage any of its recipients reaches (7 is candidate). The
 // verified bridge reads its own freshness clock (now()), as the contact detail does. The bridge, the per-recipient
@@ -127,28 +150,17 @@ const EVALUATION_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timest
    WHERE m.workspace_id=$1
  ), verified AS MATERIALIZED (${verifiedDmRecipientsSql("workspace_id=$1 AND id IN (SELECT connection_id FROM members)")}),
  recipient_stages AS MATERIALIZED (
-   SELECT v.connection_id,v.sender_id,v.recipient_id,latest.message_at AS last_text_at,CASE
-     WHEN EXISTS(SELECT 1 FROM channel_consent_state state WHERE state.workspace_id=$1 AND state.connection_id=v.connection_id
-       AND state.channel='instagram' AND state.purpose IN ('marketing','service_reply') AND state.decision='revoke'
-       AND ((state.identity_kind='dm_recipient' AND state.identity_value=v.recipient_id)
-         OR (state.identity_kind='comment_sender' AND state.identity_value=v.sender_id))) THEN 4
-     WHEN NOT EXISTS(SELECT 1 FROM channel_consent_state state WHERE state.workspace_id=$1 AND state.connection_id=v.connection_id
-       AND state.channel='instagram' AND state.identity_kind='dm_recipient' AND state.identity_value=v.recipient_id
-       AND state.purpose='marketing' AND state.decision='grant' AND state.evidence_kind='explicit') THEN 5
-     WHEN NOT coalesce(latest.message_at<=evaluation.as_of AND evaluation.as_of-latest.message_at<interval '24 hours',false) THEN 6
-     ELSE 7 END AS stage
+   SELECT v.connection_id,v.sender_id,v.recipient_id,latest.message_at AS last_text_at,${RECIPIENT_STAGE} AS stage
    FROM verified v JOIN members m ON m.connection_id=v.connection_id AND m.sender_id=v.sender_id CROSS JOIN evaluation
-   CROSS JOIN LATERAL (SELECT max(message.message_at) AS message_at
-     FROM instagram_inbox_messages message WHERE message.workspace_id=$1 AND message.connection_id=v.connection_id
-       AND message.recipient_id=v.recipient_id AND message.kind='text') latest
+   CROSS JOIN LATERAL ${LATEST_TEXT}
  ), recipients AS MATERIALIZED (
    SELECT connection_id,sender_id,max(stage) AS stage,
      (array_agg(recipient_id ORDER BY last_text_at DESC,recipient_id) FILTER (WHERE stage=7))[1] AS recipient_id
    FROM recipient_stages GROUP BY connection_id,sender_id
  ), staged AS (
    SELECT m.connection_id,m.sender_id,r.recipient_id,CASE
-     WHEN NOT coalesce(c.active AND c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>evaluation.as_of,false) THEN 1
-     WHEN coalesce(a.paused OR a.handoff_paused,false) THEN 2
+     WHEN NOT ${CONNECTION_SENDABLE} THEN 1
+     WHEN ${CONTACT_PAUSED} THEN 2
      ELSE coalesce(r.stage,3)
    END AS stage
    FROM members m CROSS JOIN evaluation
@@ -168,6 +180,15 @@ const START_SQL = `${EVALUATION_SQL},
    (SELECT coalesce(json_agg(json_build_array(connection_id,sender_id,recipient_id) ORDER BY connection_id,sender_id),'[]')
     FROM staged WHERE stage=${CAMPAIGN_PREVIEW_REASONS.indexOf("candidate") + 1}) AS candidates
  FROM draft CROSS JOIN evaluation`;
+// The delivery worker's final guard (#36) reads the stage (4-7) of a delivery row's stored DM recipient with the
+// preview's own predicates. It returns no row when that recipient is not, now, a verified DM recipient of that comment
+// sender on that connection (no_dm_identity), and it never chooses another recipient. $1 is the workspace, $2 the
+// connection, $3 the comment sender and $4 the DM recipient.
+export const CAMPAIGN_RECIPIENT_STAGE_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp() AS as_of),
+ verified AS MATERIALIZED (${verifiedDmRecipientsSql("workspace_id=$1 AND id=$2")})
+ SELECT ${RECIPIENT_STAGE} AS stage
+ FROM verified v CROSS JOIN evaluation CROSS JOIN LATERAL ${LATEST_TEXT}
+ WHERE v.connection_id=$2 AND v.sender_id=$3 AND v.recipient_id=$4`;
 function previewOf(row: Record<string, any>) {
   return {
     draft_id: row.draft_id as string,
