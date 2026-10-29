@@ -90,7 +90,7 @@ Meta 대시보드에서 전송한 테스트 웹훅의 HTTP 200 응답도 확인�
 기본 실행은 DB와 수신기만 시작하며, 실제 발송과 공개 HTTPS는 각각 `send`와 `public` 프로필로 활성화합니다.
 환경 설정, 백업·복원과 업데이트 절차는 [배포 운영 절차](docs/notes/2026-09-26-deployment-runbook.md)를 따릅니다.
 
-Node.js 24, pnpm 10, PostgreSQL 17이 필요합니다.
+Node.js 24 이상, pnpm 10, PostgreSQL 17이 필요합니다.
 개발용 일회성 DB는 다음처럼 시작하고 초기 스키마를 적용할 수 있습니다.
 
 ```bash
@@ -151,6 +151,7 @@ Facebook Login 경로에서는 토큰 범위, Page 연결과 `MESSAGING` 작업�
 
 일반 테스트는 DB가 필요하지 않습니다.
 DB 통합 테스트는 별도의 로컬 `automations_test` DB만 사용하며 해당 DB의 제품 테이블을 초기화합니다.
+`test:cloudflare`는 DB 역할과 public 스키마 권한도 바꾸므로, UTF8로 초기화한 폐기 가능한 전용 PostgreSQL 클러스터에서 실행해야 합니다.
 위 개발용 컨테이너를 사용한다면 테스트 DB를 한 번 생성합니다.
 
 ```bash
@@ -162,10 +163,11 @@ corepack pnpm install --frozen-lockfile
 corepack pnpm check-types
 corepack pnpm test
 TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:5433/automations_test corepack pnpm test:db
-TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:5433/automations_test corepack pnpm test:cloudflare
+TEST_DATABASE_URL='postgres://postgres@127.0.0.1:<port>/automations_test' corepack pnpm test:cloudflare
 ```
 
 `test:cloudflare`는 배포하지 않고 번들을 만든 뒤 로컬 workerd·PostgreSQL·가짜 Graph 응답으로 검증합니다.
+위 명령의 `<port>`는 전용 클러스터의 포트로 바꿔야 하며, 개발용 DB 서버나 실제 서비스 DB를 가리키면 안 됩니다.
 Supabase 권한 SQL 테스트는 격리된 테스트 DB 서버에서만 실행합니다.
 
 ## 라이선스

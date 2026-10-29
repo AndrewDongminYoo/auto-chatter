@@ -303,6 +303,7 @@ test("creation applies the delivery URL rules and rejects malformed input", asyn
   for (const url of [
     "http://hooks.example.test/in",
     "https://hooks.example.test:8443/in",
+    // trunk-ignore(trufflehog/URI): Never-issued userinfo in a rejected webhook URL fixture.
     "https://user:secret@hooks.example.test/in",
     "https://127.0.0.1/in",
     "https://2130706433/in",
