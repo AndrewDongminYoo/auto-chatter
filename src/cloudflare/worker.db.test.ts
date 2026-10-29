@@ -209,7 +209,7 @@ afterEach(() => {
     const entry: unknown = JSON.parse(line as string);
     assert.ok(entry && typeof entry === "object" && !Array.isArray(entry));
     for (const key of Object.keys(entry))
-      assert.ok(["event", "code", "correlation_id", "connection_id", "step"].includes(key), key);
+      assert.ok(["event", "code", "correlation_id", "connection_id", "step", "part"].includes(key), key);
   }
 });
 after(async () => {
@@ -3179,6 +3179,77 @@ test("a failed campaign start still runs the sweep and the completion, and the c
     logLines.filter((line) => line.event === "cron_step_failed").map(({ correlation_id, ...line }) => line),
     [{ event: "cron_step_failed", code: "database_unavailable", step: "campaign_start" }],
   );
+  // A single part failure is already the cron_step_failed line (#280).
+  assert.deepEqual(
+    logLines.filter((line) => line.event === "cron_step_part_failed"),
+    [],
+  );
+  assert.equal(sends, 0);
+  assert.deepEqual(published, []);
+});
+
+test("when the campaign start and the sweep both fail, the sweep's failure gets its own part line and the completion still runs", async () => {
+  // A run whose paused contact's window closed (a sweep candidate) and a run with no row (a completion candidate).
+  const swept = await campaignFixture([["campaign-sender", "9101"]]);
+  const empty = await campaignFixture([]);
+  await pool.query(
+    `INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused)
+     VALUES('11111111-1111-4111-8111-111111111111',$1,'campaign-sender',true)`,
+    [connectionId],
+  );
+  await pool.query(
+    "UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours' WHERE recipient_id='9101'",
+  );
+  const originalQuery = Pool.prototype.query;
+  let startQueries = 0;
+  let sweepQueries = 0;
+  mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    // startDueCampaignRuns' due approval read, the first part of the step.
+    if (typeof sql === "string" && sql.startsWith("SELECT workspace_id,id FROM campaign_approvals WHERE")) {
+      startQueries++;
+      throw Object.assign(new Error("terminating connection due to administrator command"), { code: "57P01" });
+    }
+    // endUnreachableCampaignDeliveries' statement, the second part, fails with a different code.
+    if (
+      typeof sql === "string" &&
+      sql.includes("UPDATE campaign_deliveries d SET status='blocked',failure_code=ended.code")
+    ) {
+      sweepQueries++;
+      throw Object.assign(new Error("duplicate key value (secret text)"), { code: "23505" });
+    }
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  published = [];
+  await assert.rejects(worker.scheduled({}, env), /scheduled recovery failed/);
+  assert.equal(startQueries, 1);
+  assert.equal(sweepQueries, 1);
+  // The sweep ended nothing, so its run keeps a pending row; the completion still completed the empty run.
+  assert.deepEqual(await campaignRows(swept), [
+    { sender_id: "campaign-sender", status: "pending", failure_code: null, provider_message_id: null },
+  ]);
+  assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [swept])).rows[0].status, "running");
+  assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [empty])).rows[0].status, "completed");
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT failure_code,last_failure_at IS NOT NULL AS failed FROM scheduled_steps WHERE name='campaign_start'",
+      )
+    ).rows,
+    [{ failure_code: "database_unavailable", failed: true }],
+  );
+  const stepFailures = logLines.filter((line) => line.event === "cron_step_failed");
+  const partFailures = logLines.filter((line) => line.event === "cron_step_part_failed");
+  assert.deepEqual(
+    stepFailures.map(({ correlation_id, ...line }) => line),
+    [{ event: "cron_step_failed", code: "database_unavailable", step: "campaign_start" }],
+  );
+  assert.deepEqual(
+    partFailures.map(({ correlation_id, ...line }) => line),
+    [{ event: "cron_step_part_failed", code: "database_error", step: "campaign_start", part: "sweep" }],
+  );
+  // Both lines belong to the same cron run.
+  assert.ok(stepFailures[0]!.correlation_id);
+  assert.equal(partFailures[0]!.correlation_id, stepFailures[0]!.correlation_id);
   assert.equal(sends, 0);
   assert.deepEqual(published, []);
 });

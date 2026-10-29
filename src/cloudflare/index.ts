@@ -644,18 +644,29 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
       // message. It shares the global send switch, so with sending off no approval is executed. Then the sweep ends
       // the pending rows that the worker cannot reach and that a block reason applies to (#273), and every running
       // run without a pending or sending row completes, a run with no candidate included. The sweep and the
-      // completion also run when an earlier part failed; the step then fails with the first failure.
+      // completion also run when an earlier part failed; the step then fails with the first failure, which the step's
+      // cron_step_failed line and scheduled_steps record. Each later part failure of the same run gets its own
+      // cron_step_part_failed line (#280), written when it happens, so before the step's cron_step_failed line.
       await step("campaign_start", async () => {
         let failure: { error: unknown } | null = null;
-        for (const part of [
-          () => startDueCampaignRuns(pool, { correlationId }),
-          () => endUnreachableCampaignDeliveries(pool),
-          () => completeCampaignRuns(pool),
-        ])
+        const parts: [OperationPart, () => Promise<unknown>][] = [
+          ["start", () => startDueCampaignRuns(pool, { correlationId })],
+          ["sweep", () => endUnreachableCampaignDeliveries(pool)],
+          ["complete", () => completeCampaignRuns(pool)],
+        ];
+        for (const [part, run] of parts)
           try {
-            await part();
+            await run();
           } catch (error) {
-            failure ??= { error };
+            if (failure)
+              logOperation({
+                event: "cron_step_part_failed",
+                code: failureCode(error),
+                correlation_id: correlationId,
+                step: "campaign_start",
+                part,
+              });
+            else failure = { error };
           }
         if (failure) throw failure.error;
       });
@@ -704,6 +715,7 @@ import {
   logOperation,
   SubscriptionCheckFailedError,
   TokenRefreshFailedError,
+  type OperationPart,
   type OperationStep,
 } from "../app/operations-log.ts";
 import { evaluateAlerts, recordStep, recordSteps, type StepOutcome } from "../app/operations-health.ts";
