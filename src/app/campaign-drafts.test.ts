@@ -1642,3 +1642,13 @@ test("the approval markup labels its inputs, keeps its messages in live regions 
   assert.doesNotMatch(section, /아직 지원하지 않습니다/);
   assert.doesNotMatch(section, /발송\s*가능/);
 });
+
+test("the draft notice says an approved draft runs only while service-wide sending is on", () => {
+  const html = readFileSync(new URL("../../public/app/index.html", import.meta.url), "utf8");
+  const start = html.indexOf('id="campaign-draft-help"');
+  const notice = html.slice(start, html.indexOf("</p>", start));
+  assert.ok(start >= 0 && notice.length > 0);
+  // The formatter may break these sentences at any space.
+  assert.match(notice, /승인한\s+초안은\s+서비스\s+전체\s+발송이\s+켜져\s+있을\s+때만\s+실행됩니다/);
+  assert.doesNotMatch(notice, /아직\s+제공하지\s+않습니다/);
+});
