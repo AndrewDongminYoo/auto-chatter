@@ -608,6 +608,18 @@ Worker를 버전 `3c3ddd7c-1c9e-4d84-9b4f-f9c2f5718a63`로 배포했고, 09:07:3
 23개 항목의 공개 점검은 배포 전에는 바뀐 `app.js`·`campaign-drafts.js`·`styles.css`·`index.html`의 해시만 달라 19개가 통과했고, 배포 뒤 09:08:14Z의 점검에서는 23개가 모두 통과했습니다.
 `scheduled_steps`를 09:09:19Z, 09:10:25Z, 09:11:30Z에 조회했습니다. 발송과 무관한 8개 단계는 첫 조회부터 모두 배포 뒤의 성공 시각(09:09:11~13Z)으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 로그인한 세션으로 요청하지 않았으므로 실행 현황 화면은 운영에서 실행하지 않았고, 실제 캠페인 발송도 하지 않았습니다.
+
+2026-10-29 11:02Z에는 운영자의 "운영 DB 조회, 백업, migration 067 적용, Worker 배포를 승인합니다" 요청에 따라 `main` 커밋 `32bd56b`를 적용했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #279(끝난 캠페인 행 정리와 복구된 결과의 24시간 창, migration 067, 앞 기록 포함)입니다.
+적용 전 조회에서 운영 DB는 066까지 적용된 상태였고(`recovered_at` 열 없음, `campaign_delivery_attempt` CHECK는 `pending`·`cancelled`만 시도 열 없이 허용, public 테이블 54개), 캠페인 실행·발송 행·승인은 모두 0개, 발송 중 행은 0개(비공개 답장, 팔로우 응답, 수동 답장, 외부 전송)였습니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-29-migration-067/public-pre-067.dump`(354,890바이트, SHA-256 `d3932de49ca4762bc602f8e2d7394ca2dd439743f40f7c829116b6df0293ec02`)에 저장했고, 목록 읽기에서 데이터 테이블 54개를 확인했습니다.
+같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE는 201건이었습니다.
+적용 후 public 테이블은 54개 그대로이고, `private_reply_outbox`와 `instagram_follow_conversations`에 NULL을 허용하는 `recovered_at`이 생겼으며, `campaign_delivery_attempt` CHECK는 `blocked`도 시도 열 없이 허용합니다.
+세 테이블은 RLS가 켜져 있고 `auto_chatter_server`는 SELECT·INSERT·UPDATE만 가졌습니다. 서버 역할의 테이블 DELETE·TRUNCATE 권한, `anon`·`authenticated`의 public 테이블 권한, RLS가 꺼진 public 테이블은 모두 0개였습니다.
+배포 전 `main`의 `32bd56b` CI가 통과한 것을 확인했습니다.
+이어서 Worker를 버전 `ccf5240a-51c4-4dd8-bb67-9506a9d6deb8`로 배포했고, 11:03:28Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `3c3ddd7c-1c9e-4d84-9b4f-f9c2f5718a63`이었고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+정적 파일이 바뀌지 않아 23개 항목의 공개 점검은 배포 전(11:03:10Z)과 배포 뒤(11:03:53Z) 모두 통과했으며, 배포를 구별하는 근거는 새 활성 버전과 아래 cron 조회입니다.
+`scheduled_steps`를 11:04:59Z, 11:06:04Z, 11:07:09Z에 조회했습니다. 발송과 무관한 8개 단계는 첫 조회부터 모두 배포 뒤의 성공 시각(11:04:11~13Z)으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
+`SEND_ENABLED`가 거짓이므로 `stale_recovery`와 `campaign_start`(끝난 행 정리 포함)는 실행되지 않았고, 실제 캠페인 발송도 하지 않았습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
