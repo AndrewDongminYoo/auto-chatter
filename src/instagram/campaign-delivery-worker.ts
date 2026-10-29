@@ -1,8 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
-import { CAMPAIGN_RECIPIENT_STAGE_SQL, CONNECTION_SENDABLE, CONTACT_PAUSED } from "../app/campaign-drafts.ts";
+import {
+  CAMPAIGN_RECIPIENT_STAGE_SQL,
+  CONNECTION_SENDABLE,
+  CONTACT_PAUSED,
+  latestTextSql,
+  recipientStageSql,
+} from "../app/campaign-drafts.ts";
+import { verifiedDmRecipientsSql } from "../app/inbox-identity.ts";
 import { instagramAdapter } from "./channel-adapter.ts";
-import { deliveryRecipientOptedOut, type ConsentQueryable } from "./channel-consent.ts";
+import { deliveryRecipientOptedOut, deliveryRecipientOptedOutSql, type ConsentQueryable } from "./channel-consent.ts";
 import type { FollowSendContext } from "./follow-transport.ts";
 import { PreSendVerificationError } from "./reply-worker.ts";
 import { campaignBudgetOpenSql } from "./send-quota.ts";
@@ -25,14 +32,18 @@ export function campaignDeliveryDueSql(d: string): string {
       AND (automation.paused OR automation.handoff_paused))`;
 }
 
+// The approver of the row's run (alias `approval`) is still an active owner or admin of the row's (`d`) workspace.
+// The final guard and the sweep read this one text.
+const APPROVER_ACTIVE = `EXISTS(SELECT 1 FROM workspace_members member WHERE member.workspace_id=d.workspace_id
+     AND member.user_id=approval.approved_by AND member.removed_at IS NULL AND member.role IN ('owner','admin'))`;
+
 // The member-level part of the final guard, from the database in one statement: the claim, the run, the connection
 // (with the preview's own connection and contact predicates), the approver's membership and the contact pause.
 const GUARD_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp() AS as_of)
  SELECT d.sender_id,d.recipient_id,run.status AS run_status,${CONNECTION_SENDABLE} AS connection_sendable,
    c.access_token_encrypted IS DISTINCT FROM $5::text AS token_changed,
    coalesce(c.send_paused_until>evaluation.as_of,false) AS connection_paused,${CONTACT_PAUSED} AS contact_paused,
-   EXISTS(SELECT 1 FROM workspace_members member WHERE member.workspace_id=d.workspace_id
-     AND member.user_id=approval.approved_by AND member.removed_at IS NULL AND member.role IN ('owner','admin'))
+   ${APPROVER_ACTIVE}
      AS approver_active
  FROM campaign_deliveries d CROSS JOIN evaluation
  JOIN campaign_runs run ON run.workspace_id=d.workspace_id AND run.id=d.run_id
@@ -131,6 +142,68 @@ export async function completeCampaignRuns(
        ORDER BY r.workspace_id,r.id FOR NO KEY UPDATE SKIP LOCKED)`,
     [run?.workspaceId ?? null, run?.runId ?? null],
   );
+  return result.rowCount ?? 0;
+}
+
+// Pending rows one sweep ends at most, oldest first (#273). A cron run then completes their runs.
+export const CAMPAIGN_SWEEP_LIMIT = 500;
+
+// The sweep (#273) in one statement and one clock. `unreachable` holds the pending rows of running runs that the
+// claim and the wake never take: the comment sender is paused or in handoff, or the connection cannot send (the
+// preview's CONNECTION_SENDABLE). Runs, approvals, connections and contact rows are read, never locked. Each of those
+// rows gets the final guard's first block reason, in the guard's order, from the guard's own fragments; a row with
+// none (only retry reasons apply) is left for the worker. `staged` is the stored recipient's stage (4-7) when it is
+// still a verified DM recipient of that comment sender, as CAMPAIGN_RECIPIENT_STAGE_SQL reads it. The limit applies
+// after the reason, so rows that stay pending never hold back rows behind them. Only the rows are locked, with
+// FOR UPDATE SKIP LOCKED; the final UPDATE changes no key column, so it takes no lock on a run or a connection.
+const SWEEP_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp() AS as_of),
+ unreachable AS MATERIALIZED (
+   SELECT d.workspace_id,d.id,d.connection_id,d.sender_id,d.recipient_id
+   FROM campaign_deliveries d CROSS JOIN evaluation
+   LEFT JOIN instagram_connections c ON c.workspace_id=d.workspace_id AND c.id=d.connection_id
+   LEFT JOIN instagram_contact_automation a ON a.workspace_id=d.workspace_id AND a.connection_id=d.connection_id
+     AND a.sender_id=d.sender_id
+   WHERE d.status='pending' AND (${CONTACT_PAUSED} OR NOT ${CONNECTION_SENDABLE})
+     AND EXISTS(SELECT 1 FROM campaign_runs run WHERE run.workspace_id=d.workspace_id AND run.id=d.run_id
+       AND run.status='running')
+ ), verified AS MATERIALIZED (${verifiedDmRecipientsSql("id IN (SELECT connection_id FROM unreachable)")}),
+ staged AS MATERIALIZED (
+   SELECT v.workspace_id,v.connection_id,v.sender_id,v.recipient_id,${recipientStageSql("v.workspace_id")} AS stage
+   FROM verified v CROSS JOIN evaluation CROSS JOIN LATERAL ${latestTextSql("v.workspace_id")}
+   WHERE EXISTS(SELECT 1 FROM unreachable u WHERE u.workspace_id=v.workspace_id AND u.connection_id=v.connection_id
+     AND u.sender_id=v.sender_id AND u.recipient_id=v.recipient_id)
+ ), ended AS MATERIALIZED (
+   SELECT d.workspace_id,d.id,decided.code
+   FROM campaign_deliveries d JOIN unreachable u ON u.workspace_id=d.workspace_id AND u.id=d.id CROSS JOIN evaluation
+   JOIN campaign_runs run ON run.workspace_id=d.workspace_id AND run.id=d.run_id
+   JOIN campaign_approvals approval ON approval.workspace_id=run.workspace_id AND approval.id=run.approval_id
+   LEFT JOIN instagram_connections c ON c.workspace_id=d.workspace_id AND c.id=d.connection_id
+   LEFT JOIN staged s ON s.workspace_id=d.workspace_id AND s.connection_id=d.connection_id
+     AND s.sender_id=d.sender_id AND s.recipient_id=d.recipient_id
+   CROSS JOIN LATERAL (SELECT CASE
+     WHEN NOT ${CONNECTION_SENDABLE} THEN 'connection_unavailable'
+     WHEN NOT ${APPROVER_ACTIVE} THEN 'approver_unavailable'
+     WHEN s.stage IS NULL THEN 'no_dm_identity'
+     WHEN s.stage=4 OR (${deliveryRecipientOptedOutSql("d.workspace_id", "d.connection_id", "d.sender_id")})
+       THEN 'recipient_opted_out'
+     WHEN s.stage=5 THEN 'marketing_consent_required'
+     WHEN s.stage=6 THEN 'reply_window_closed'
+   END AS code) decided
+   WHERE d.status='pending' AND decided.code IS NOT NULL
+   ORDER BY d.created_at,d.id FOR UPDATE OF d SKIP LOCKED LIMIT $1
+ )
+ UPDATE campaign_deliveries d SET status='blocked',failure_code=ended.code,updated_at=clock_timestamp()
+ FROM ended WHERE d.workspace_id=ended.workspace_id AND d.id=ended.id AND d.status='pending'
+ RETURNING d.id`;
+
+// Ends, as blocked with the final guard's code, the pending campaign rows that the worker cannot reach and that a
+// block reason applies to now (#273). It never claims a row, never sets an attempt and never calls a provider.
+// The campaign_start cron step calls it after the starts and before completeCampaignRuns. Returns the rows ended.
+export async function endUnreachableCampaignDeliveries(
+  pool: Pick<Pool, "query">,
+  options: { limit?: number } = {},
+): Promise<number> {
+  const result = await pool.query(SWEEP_SQL, [options.limit ?? CAMPAIGN_SWEEP_LIMIT]);
   return result.rowCount ?? 0;
 }
 

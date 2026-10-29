@@ -623,7 +623,7 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
     if (env.SEND_ENABLED === "true") {
       await step("stale_recovery", async () => {
         await pool.query(
-          "UPDATE private_reply_outbox SET status='unknown',failure_code='worker_interrupted' WHERE status='sending' AND attempt_started_at<now()-interval '10 minutes'",
+          "UPDATE private_reply_outbox SET status='unknown',failure_code='worker_interrupted',recovered_at=clock_timestamp() WHERE status='sending' AND attempt_started_at<now()-interval '10 minutes'",
         );
         await recoverStaleManualReplies(pool);
         await recoverStaleFollowReplies(pool, new Date(Date.now() - 10 * 60_000));
@@ -641,17 +641,23 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
         });
       });
       // Due campaign approvals start their run (#36): pending delivery rows only, with no provider call or queue
-      // message. It shares the global send switch, so with sending off no approval is executed. Then every running
-      // run without a pending or sending row completes, a run with no candidate included, also when a start failed;
-      // the step then fails with the start's code.
+      // message. It shares the global send switch, so with sending off no approval is executed. Then the sweep ends
+      // the pending rows that the worker cannot reach and that a block reason applies to (#273), and every running
+      // run without a pending or sending row completes, a run with no candidate included. The sweep and the
+      // completion also run when an earlier part failed; the step then fails with the first failure.
       await step("campaign_start", async () => {
-        try {
-          await startDueCampaignRuns(pool, { correlationId });
-        } catch (error) {
-          await completeCampaignRuns(pool).catch(() => undefined);
-          throw error;
-        }
-        await completeCampaignRuns(pool);
+        let failure: { error: unknown } | null = null;
+        for (const part of [
+          () => startDueCampaignRuns(pool, { correlationId }),
+          () => endUnreachableCampaignDeliveries(pool),
+          () => completeCampaignRuns(pool),
+        ])
+          try {
+            await part();
+          } catch (error) {
+            failure ??= { error };
+          }
+        if (failure) throw failure.error;
       });
     }
     await flush(false);
@@ -674,6 +680,7 @@ import {
   assertCampaignDeliveryAllowed,
   campaignDeliveryDueSql,
   completeCampaignRuns,
+  endUnreachableCampaignDeliveries,
   processNextCampaignDelivery,
   recoverStaleCampaignDeliveries,
 } from "../instagram/campaign-delivery-worker.ts";

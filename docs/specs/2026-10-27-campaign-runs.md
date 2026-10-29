@@ -60,7 +60,7 @@ capability는 지원 여부를 알리는 값일 뿐이며 자격 검사나 최�
 
 - 중복 키는 `(run_id, connection_id, sender_id)`입니다.
 - `status`는 `pending`·`sending`·`sent`·`failed`·`blocked`·`unknown`·`cancelled`입니다. 이 PR은 `pending`과 `cancelled`만 씁니다.
-- CHECK가 상태와 열을 묶습니다: `pending`은 시도 열이 비어 있고, `sending`·`sent`·`failed`·`blocked`·`unknown`은 `attempt_id`와 `attempt_started_at`이 있으며, `provider_message_id`와 `sent_at`은 `sent`일 때만 있고, `failed`·`blocked`는 `failure_code`가 있습니다.
+- CHECK가 상태와 열을 묶습니다: `pending`은 시도 열이 비어 있고, `sending`·`sent`·`failed`·`blocked`·`unknown`은 `attempt_id`와 `attempt_started_at`이 있으며, `provider_message_id`와 `sent_at`은 `sent`일 때만 있고, `failed`·`blocked`는 `failure_code`가 있습니다. migration 067부터 `blocked`는 시도 열이 없어도 됩니다([정리](#도달할-수-없는-행의-정리)).
 - `recipient_id`는 숫자 DM 수신자 ID이며, 연결은 같은 작업 공간의 연결이어야 합니다(복합 외래 키).
 
 ### 승인의 실행 상태
@@ -220,9 +220,30 @@ guard는 저장된 수신자의 단계만 봅니다. 다른 수신자를 고르�
 
 행이 최종 상태가 되면, 행 잠금을 놓은 뒤 별도 문장이 그 실행을 완료합니다: `running`이고 `pending`·`sending` 행이 없으면 `completed`가 되고 `version`이 1 오르며 `updated_at`이 바뀝니다.
 최종 상태를 떠난 행은 다시 `pending`이나 `sending`이 되지 않으므로, 비어 있는 실행은 계속 비어 있습니다. 완료 문장은 실행 행만 `FOR NO KEY UPDATE SKIP LOCKED`로 잠그고, 다른 트랜잭션이 쥔 실행은 건너뜁니다.
-`campaign_start` cron 단계는 시작 뒤에 `pending`·`sending` 행이 없는 모든 `running` 실행을 완료합니다. 시작이 실패해도 완료는 실행합니다. 그래서 후보가 없는 실행은 시작한 같은 cron에서 완료됩니다. 취소된 실행은 바꾸지 않습니다.
-`stale_recovery` 단계는 10분 넘게 `sending`인 행을 `unknown` / `worker_interrupted`로 바꾸고 시도 열은 유지합니다. 같은 cron의 `campaign_start` 단계가 그 실행을 완료합니다.
+`campaign_start` cron 단계는 시작 뒤에 [도달할 수 없는 행의 정리](#도달할-수-없는-행의-정리)를 실행하고, 그다음 `pending`·`sending` 행이 없는 모든 `running` 실행을 완료합니다. 시작이나 정리가 실패해도 뒤의 부분은 실행하며, 단계는 첫 실패로 실패합니다. 그래서 후보가 없는 실행과 마지막 행이 정리된 실행은 같은 cron에서 완료됩니다. 취소된 실행은 바꾸지 않습니다.
+`stale_recovery` 단계는 10분 넘게 `sending`인 행을 `unknown` / `worker_interrupted`로 바꾸고 시도 열은 유지합니다. 같은 cron의 `campaign_start` 단계가 그 실행을 완료합니다. 운영 상태는 이 결과를 복구 시각(`updated_at`)으로 셉니다([운영 상태 문서](2026-10-01-operations-health.md#지표와-api)).
 완료된 실행을 취소하면 기존처럼 `409 campaign_run_completed`입니다.
+
+### 도달할 수 없는 행의 정리
+
+2026-10-29 [#273](https://github.com/AndrewDongminYoo/auto-chatter/issues/273)의 계약입니다. 코드는 `src/instagram/campaign-delivery-worker.ts`의 `endUnreachableCampaignDeliveries`입니다.
+가져오기와 깨우기는 대상이 일시 중지된 행과 보낼 수 없는 연결의 행을 가져가지 않습니다. 그래서 그 행이 다시 보낼 수 없게 되어도(창 닫힘, 수신 거부 등) `pending`으로 남고, 실행은 `running`으로 남았습니다.
+정리는 `campaign_start` 단계 안에서 시작 뒤, 완료 앞에 실행하며, 전역 `SEND_ENABLED`가 `true`일 때만 실행합니다(단계 자체가 그렇습니다).
+
+- 대상: `running` 실행의 `pending` 행 가운데 가져오기와 깨우기가 닿지 않는 행입니다. 댓글 작성자의 수동 중지나 상담 전환 중지(`CONTACT_PAUSED`)가 있거나, 연결이 보낼 수 없는(`CONNECTION_SENDABLE`이 거짓: 비활성, 발송 꺼짐, 토큰 없음, 토큰 만료) 행입니다. `next_attempt_at`은 보지 않습니다. 닿을 수 있는 행은 worker의 최종 guard가 판단하므로 건드리지 않습니다.
+- 판정: 대상 행마다 최종 guard의 차단 사유를 guard의 순서대로 보고, 첫 사유로 `blocked`와 그 코드를 씁니다. 순서는 `connection_unavailable`, `approver_unavailable`, `no_dm_identity`, `recipient_opted_out`, `marketing_consent_required`, `reply_window_closed`입니다. 그래서 같은 행에 guard와 같은 코드를 씁니다.
+- 재시도 사유(대상 일시 중지, 연결 일시 중지, 토큰 교체, 동의 읽기 실패)만 있는 행은 끝내지 않고 `pending`으로 둡니다. 읽기가 실패하면 문장 전체가 실패하고 아무것도 쓰지 않습니다.
+- 같은 SQL 조각: 수신자 단계는 미리보기와 guard의 `recipientStageSql`·`latestTextSql`(작업 공간 식을 인자로 받도록 나눈 `RECIPIENT_STAGE`·`LATEST_TEXT`)과 `verifiedDmRecipientsSql`, 연결은 `CONNECTION_SENDABLE`, 승인자는 guard의 `APPROVER_ACTIVE`, 수신 거부는 `deliveryRecipientOptedOut`의 쿼리를 나눈 `deliveryRecipientOptedOutSql`(그 작성자와 연결된 모든 DM 수신자)를 읽습니다. 미리보기, 시작, guard, `deliveryRecipientOptedOut`의 SQL 문자열은 나눈 뒤에도 바이트 단위로 같습니다(검증 기록 참조).
+- 쓰기: 행을 가져가지 않고, `attempt_id`를 쓰지 않고, 공급자를 호출하지 않고, 큐 메시지를 보내지 않습니다. `status='blocked'`, `failure_code`, `updated_at`만 쓰며 `status='pending'`을 조건으로 합니다. 그래서 정리로 끝난 `blocked` 행에는 시도 열이 없고, migration 067이 이를 위해 `campaign_delivery_attempt` CHECK를 넓혔습니다(아래).
+- 잠금: 한 문장, 한 시계입니다. 실행, 승인, 연결, 대상 행은 잠그지 않고 읽고, 발송 행만 `created_at`, `id` 순으로 `FOR UPDATE OF d SKIP LOCKED`로 잠급니다. 마지막 UPDATE는 외래 키 열을 바꾸지 않으므로 실행이나 연결에 키 잠금도 걸지 않습니다. 그래서 취소(실행, 그다음 행)와도, 삭제 함수(연결, 그다음 행 `NOWAIT`)와도 교착하지 않습니다. 다른 트랜잭션이 쥔 행은 건너뛰며, 그 짧은 동안 삭제 함수가 행을 잠그지 못하면 지금처럼 `sending_in_progress`로 거절합니다.
+- 한도: 한 번에 최대 `CAMPAIGN_SWEEP_LIMIT`(500)행, 오래된 행부터입니다. 한도는 차단 사유를 정한 뒤에 적용하므로, 재시도 사유만 있어 남는 오래된 행이 뒤의 행을 막지 않습니다. 대상 행은 한도와 관계없이 모두 읽으므로 비용은 실행 중인 실행의 일시 중지된 대상과 보낼 수 없는 연결의 `pending` 행 수에 비례합니다.
+- 결과: 운영 상태의 `blocked_24h`는 정리된 행을 시도 시각이 없으므로 생성 시각으로 셉니다([운영 상태 문서](2026-10-01-operations-health.md#지표와-api)).
+
+migration 067은 `blocked` 행에 시도 열이 없어도 되도록 `campaign_delivery_attempt`를 다시 만듭니다. 나머지 규칙(`pending`은 시도 열 없음, 두 시도 열은 함께 비거나 함께 참)은 그대로입니다.
+이 완화는 계획이 067에 정한 `recovered_at` 열 밖의 계약 변경이며, 정리가 `attempt_id`를 쓰지 않으려면 피할 수 없습니다.
+완화는 정리가 끝낸 행만이 아니라 모든 `blocked` 행에 적용됩니다. worker는 행을 가져간 뒤에만 차단하므로 그 `blocked` 행은 여전히 시도 열을 갖지만, 이제 CHECK가 아니라 worker의 DB 검사(최종 guard 검사와 POST 직전 guard 검사의 `attempted`)가 이를 확인합니다.
+같은 migration이 [운영 상태](2026-10-01-operations-health.md#지표와-api)의 `recovered_at` 열도 추가합니다.
+배포 순서는 066과 같습니다: 067을 전체 실행기(`deploy/migrate-multi-user.sql`)로 적용한 뒤 코드를 배포합니다. 067 없이 이 코드가 돌면 정리의 UPDATE가 CHECK 위반으로 실패해 `campaign_start` 단계가 실패하고(완료는 계속 실행), 복구 문장과 운영 상태의 지표·경보 읽기는 없는 `recovered_at` 열 때문에 실패합니다.
 
 ### 재승인 거절
 
@@ -311,7 +332,7 @@ migration 064와 승인 화면은 "기록만 하며 발송하지 않음" 계약�
 
 - 작업 공간 내보내기는 50,000행(`WORKSPACE_EXPORT_LIMITS.maxRows`)을 넘으면 전체를 거절합니다. 발송 행은 실행마다 최대 5,000개이고 서버 역할이 지울 수 없으므로, 고정 대상 명단 행(최대 20,000개)과 함께 쌓이면 몇 번의 큰 실행 뒤 내보내기가 거절될 수 있습니다. 발송 행 상한이나 보존 기간은 운영자가 정할 후속 결정입니다.
 - 시작은 승인한 관리자의 현재 멤버 자격을 다시 확인하지 않습니다. ~~보내기 직전 검사에 이를 넣을지는 PR ②에서 정합니다.~~ PR ②가 보내기 직전 검사에 넣었습니다(`approver_unavailable`).
-- (PR ②) 발송이 꺼졌거나 토큰이 없거나 만료된 연결의 행은 깨우지도 가져가지도 않으므로 그 실행은 `running`으로 남습니다. 연결이 다시 보낼 수 있게 되면 행을 가져가 창이 닫힌 행은 차단으로 끝나고, 그 전에는 실행 취소로 끝낼 수 있습니다.
+- ~~(PR ②) 발송이 꺼졌거나 토큰이 없거나 만료된 연결의 행은 깨우지도 가져가지도 않으므로 그 실행은 `running`으로 남습니다. 연결이 다시 보낼 수 있게 되면 행을 가져가 창이 닫힌 행은 차단으로 끝나고, 그 전에는 실행 취소로 끝낼 수 있습니다.~~ 2026-10-29 [#273](https://github.com/AndrewDongminYoo/auto-chatter/issues/273)의 [정리](#도달할-수-없는-행의-정리)가 그런 행과 일시 중지된 대상의 행을 차단 사유가 있으면 `blocked`로 끝냅니다. 재시도 사유만 있는 일시 중지된 대상의 행은 일시 중지가 풀리거나 차단 사유가 생길 때까지 `pending`이고, 그동안 실행은 `running`입니다.
 - (PR ②) 캠페인 예산은 삭제한 행의 호출을 이월하지 않습니다. 개인·연결 삭제로 지운 행의 최근 호출은 셈에서 빠집니다.
 - (PR ②) 마지막 guard와 Meta POST는 원자적이지 않습니다. guard를 지난 뒤의 취소나 설정 변경은 이미 나간 요청을 되돌리지 못합니다. 결과를 쓸 때 실행이 취소되어 있어도 보낸 행은 `sent`로 남습니다.
 - (PR ②) 같은 사람이 여러 실행에 들어 있으면 실행마다 따로 받습니다. 실행 사이의 중복은 막지 않습니다.

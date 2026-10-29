@@ -8,6 +8,7 @@ import { connectionAlerts, connectionMetrics, evaluateAlerts } from "../app/oper
 import {
   assertCampaignDeliveryAllowed,
   completeCampaignRuns,
+  endUnreachableCampaignDeliveries,
   processNextCampaignDelivery,
   recoverStaleCampaignDeliveries,
 } from "./campaign-delivery-worker.ts";
@@ -539,7 +540,11 @@ test("the guard immediately before the POST sees a change made after the second 
   assert.equal(await deliver(seen, {}, source), true);
   assert.deepEqual(seen.posts, []);
   const [row] = await rows(run);
-  assert.deepEqual([row.status, row.failure_code, row.called], ["blocked", "reply_window_closed", true]);
+  // Migration 067 lets a blocked row have no attempt, so this row's attempt is asserted here, not by the CHECK.
+  assert.deepEqual(
+    [row.status, row.failure_code, row.called, row.attempted],
+    ["blocked", "reply_window_closed", true, true],
+  );
 });
 
 test("a run cancelled between the claim and the POST lands the claimed row cancelled", async () => {
@@ -916,4 +921,190 @@ test("a budget-limited campaign's wait counts from its last provider call or the
   const stuck = await wait();
   assert.ok(stuck.oldest_due_pending_seconds! >= 3599, String(stuck.oldest_due_pending_seconds));
   assert.equal(connectionAlerts(stuck, true).includes("oldest_pending"), true);
+});
+
+// The sweep (#273). A paused contact's row is never claimed, so the sweep gives it the final guard's code when a
+// block reason applies and leaves it pending otherwise. Each guard case runs again with the contact paused and the
+// sweep must reach the guard's outcome without any attempt.
+const pauseContact = (sender: string) =>
+  pool.query(
+    `INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,$3,true)
+     ON CONFLICT(workspace_id,connection_id,sender_id) DO UPDATE SET paused=true`,
+    [W, C, sender],
+  );
+const closeWindow = (recipient: string) =>
+  pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours' WHERE recipient_id=$1", [
+    recipient,
+  ]);
+for (const { name, change, expect } of guardCases)
+  test(`the sweep gives a paused contact's row the guard's outcome: ${name}`, async () => {
+    const run = await campaign([["1001", "2001"]]);
+    await change();
+    await pauseContact("1001");
+    const [row] = await rows(run);
+    if (expect[0] === "blocked") {
+      assert.equal(await endUnreachableCampaignDeliveries(pool), 1);
+      const [ended] = await rows(run);
+      assert.deepEqual([ended.status, ended.failure_code], expect);
+      assert.equal(ended.attempted, false);
+      assert.equal(await completeCampaignRuns(pool), 1);
+      assert.deepEqual(await runState(run), { status: "completed", version: 2 });
+    } else {
+      // Only retry reasons apply, so the row stays for the worker exactly as it was.
+      assert.equal(await endUnreachableCampaignDeliveries(pool), 0);
+      assert.deepEqual(await rows(run), [row]);
+      assert.equal(row.status, "pending");
+      assert.equal(row.failure_code, null);
+      assert.deepEqual(await runState(run), { status: "running", version: 1 });
+    }
+    assert.equal((await rows(run))[0].called, false);
+  });
+
+// A connection that cannot send is never woken, so its rows end as connection_unavailable without a contact pause.
+for (const [name, change] of [
+  ["inactive", "UPDATE instagram_connections SET active=false"],
+  ["sending switched off", "UPDATE instagram_connections SET send_enabled=false"],
+  ["no token", "UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL"],
+  ["token expired", "UPDATE instagram_connections SET token_expires_at=now()-interval '1 second'"],
+] as const)
+  test(`the sweep ends the rows of a connection that cannot send: ${name}`, async () => {
+    const run = await campaign([
+      ["1001", "2001"],
+      ["1002", "2002"],
+    ]);
+    await pool.query(change);
+    // The approver became an agent and 1002's window closed too; the guard's first reason, the connection, wins.
+    await closeWindow("2002");
+    await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [admin]);
+    assert.equal(await endUnreachableCampaignDeliveries(pool), 2);
+    assert.deepEqual(
+      (await rows(run)).map((row) => [row.status, row.failure_code, row.attempted, row.called]),
+      [
+        ["blocked", "connection_unavailable", false, false],
+        ["blocked", "connection_unavailable", false, false],
+      ],
+    );
+  });
+
+test("the sweep leaves reachable rows and the rows of runs that are not running", async () => {
+  // Reachable: the worker's guard decides it, even though its window has closed.
+  const reachable = await campaign([["1001", "2001"]]);
+  await closeWindow("2001");
+  // A cancelled run with a row left pending (written directly; a cancel cancels its rows).
+  const cancelled = await campaign([["1002", "2002"]]);
+  await pauseContact("1002");
+  await closeWindow("2002");
+  await pool.query("UPDATE campaign_runs SET status='cancelled',cancelled_by=$2,cancelled_at=now() WHERE id=$1", [
+    cancelled,
+    admin,
+  ]);
+  const completed = await campaign([["1003", "2003"]]);
+  await pauseContact("1003");
+  await closeWindow("2003");
+  await pool.query("UPDATE campaign_runs SET status='completed' WHERE id=$1", [completed]);
+  assert.equal(await endUnreachableCampaignDeliveries(pool), 0);
+  for (const run of [reachable, cancelled, completed])
+    assert.deepEqual(
+      (await rows(run)).map((row) => [row.status, row.failure_code]),
+      [["pending", null]],
+    );
+  // The reachable row is then ended by the worker's guard, as before.
+  const seen = graph();
+  assert.equal(await deliver(seen), true);
+  assert.deepEqual(seen.posts, []);
+  assert.deepEqual(
+    (await rows(reachable)).map((row) => [row.status, row.failure_code]),
+    [["blocked", "reply_window_closed"]],
+  );
+});
+
+test("the sweep ends at most its limit, oldest first, counting only rows it ends", async () => {
+  const run = await campaign([
+    ["1001", "2001"],
+    ["1002", "2002"],
+    ["1003", "2003"],
+    ["1004", "2004"],
+  ]);
+  for (const sender of ["1001", "1002", "1003", "1004"]) await pauseContact(sender);
+  for (const recipient of ["2002", "2003", "2004"]) await closeWindow(recipient);
+  // 1001 is the oldest and only paused (stage 7), so it never takes a place in the batch.
+  await pool.query(
+    `UPDATE campaign_deliveries SET created_at=now()-make_interval(mins=>10-(sender_id::int-1000)) WHERE run_id=$1`,
+    [run],
+  );
+  const statuses = async () => (await rows(run)).map((row) => [row.sender_id, row.status]);
+  assert.equal(await endUnreachableCampaignDeliveries(pool, { limit: 2 }), 2);
+  assert.deepEqual(await statuses(), [
+    ["1001", "pending"],
+    ["1002", "blocked"],
+    ["1003", "blocked"],
+    ["1004", "pending"],
+  ]);
+  assert.equal(await endUnreachableCampaignDeliveries(pool, { limit: 2 }), 1);
+  assert.equal(await endUnreachableCampaignDeliveries(pool, { limit: 2 }), 0);
+  assert.deepEqual((await statuses()).at(-1), ["1004", "blocked"]);
+  assert.deepEqual(await runState(run), { status: "running", version: 1 });
+});
+
+test("the sweep skips a held row and never waits on a run or connection lock", async () => {
+  const run = await campaign([
+    ["1001", "2001"],
+    ["1002", "2002"],
+  ]);
+  for (const sender of ["1001", "1002"]) await pauseContact(sender);
+  for (const recipient of ["2001", "2002"]) await closeWindow(recipient);
+  const holder = await pool.connect();
+  const timeout = () => new Promise<string>((resolve) => setTimeout(() => resolve("waited"), 5_000).unref());
+  try {
+    await holder.query("BEGIN");
+    // A cancel's first lock, a deletion's first lock, and one row held by another worker.
+    await holder.query("SELECT id FROM campaign_runs WHERE id=$1 FOR UPDATE", [run]);
+    await holder.query("SELECT id FROM instagram_connections WHERE id=$1 FOR UPDATE", [C]);
+    await holder.query("SELECT id FROM campaign_deliveries WHERE run_id=$1 AND sender_id='1001' FOR UPDATE", [run]);
+    assert.equal(await Promise.race([endUnreachableCampaignDeliveries(pool), timeout()]), 1);
+    assert.deepEqual(
+      (await rows(run)).map((row) => [row.sender_id, row.status]),
+      [
+        ["1001", "pending"],
+        ["1002", "blocked"],
+      ],
+    );
+    await holder.query("COMMIT");
+  } finally {
+    holder.release();
+  }
+  assert.equal(await endUnreachableCampaignDeliveries(pool), 1);
+  assert.equal(await completeCampaignRuns(pool), 1);
+});
+
+test("a campaign row recovered from a stale sending counts from its recovery, not its attempt start (#274)", async () => {
+  const run = await campaign([
+    ["1001", "2001"],
+    ["1002", "2002"],
+  ]);
+  await pool.query(
+    `UPDATE campaign_deliveries SET status='sending',attempt_id=gen_random_uuid(),
+       attempt_started_at=now()-interval '25 hours' WHERE run_id=$1 AND sender_id='1001'`,
+    [run],
+  );
+  // An ordinary unknown outcome that old stays outside the window.
+  await pool.query(
+    `UPDATE campaign_deliveries SET status='unknown',failure_code='send_outcome_unknown',attempt_id=gen_random_uuid(),
+       attempt_started_at=now()-interval '25 hours' WHERE run_id=$1 AND sender_id='1002'`,
+    [run],
+  );
+  assert.equal((await connectionMetrics(pool, W))[0]!.unknown_24h, 0);
+  await recoverStaleCampaignDeliveries(pool);
+  const [metrics] = await connectionMetrics(pool, W);
+  assert.deepEqual([metrics!.unknown_24h, metrics!.failed_24h, metrics!.blocked_24h], [1, 0, 0]);
+  mock.method(console, "warn", () => undefined);
+  await evaluateAlerts(pool, true, "campaign-recovered-test");
+  assert.deepEqual(
+    (
+      await pool.query(
+        "SELECT alert_seen_count FROM scheduled_steps WHERE name='alert_unknown_outcome' AND alert_active",
+      )
+    ).rows,
+    [{ alert_seen_count: "2" }],
+  );
 });

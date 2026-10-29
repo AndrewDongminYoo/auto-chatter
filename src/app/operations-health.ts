@@ -41,7 +41,10 @@ export interface ConnectionMetrics {
 // private reply or campaign budget) is not counted as waiting. A campaign run waits for hours by design, so its rows
 // count from the latest of their due time, the pause end, the connection's last campaign call and the moment its
 // campaign budget last regained room: the wait then measures a stalled queue, not a budget-limited run. The 24-hour window uses the last claim time, or the creation or confirmation time of a
-// row that was never claimed, because the rows have no terminal timestamp.
+// row that was never claimed, because the rows have no terminal timestamp. A row that stale recovery turned unknown
+// (worker_interrupted) is dated by that recovery instead (#274), so an outcome found late still raises unknown_outcome;
+// rows recovered before migration 067 have no recovery time and keep their attempt start.
+const recovered = (time: string) => `CASE WHEN status='unknown' AND failure_code='worker_interrupted' THEN ${time} END`;
 const METRICS_SQL = `
 WITH metrics AS (
   SELECT c.id::text AS id,c.username,c.active,c.send_enabled,c.send_paused_until,
@@ -90,13 +93,17 @@ WITH metrics AS (
       count(*) FILTER (WHERE outcome.status='blocked')::int AS blocked_24h
     FROM (
       SELECT status FROM private_reply_outbox WHERE connection_id=c.id AND status IN ('unknown','failed','blocked')
-        AND coalesce(attempt_started_at,created_at)>now()-interval '24 hours'
+        AND coalesce(${recovered("recovered_at")},attempt_started_at,created_at)>now()-interval '24 hours'
       UNION ALL SELECT status FROM instagram_follow_conversations WHERE connection_id=c.id AND status IN ('unknown','failed','blocked')
-        AND coalesce(attempt_started_at,confirmed_at)>now()-interval '24 hours'
-      UNION ALL SELECT status FROM instagram_manual_replies WHERE connection_id=c.id AND status IN ('unknown','failed')
-        AND (status<>'unknown' OR resolved_at IS NULL) AND coalesce(attempt_started_at,created_at)>now()-interval '24 hours'
+        AND coalesce(${recovered("recovered_at")},attempt_started_at,confirmed_at)>now()-interval '24 hours'
+      UNION ALL SELECT status FROM instagram_manual_replies manual WHERE connection_id=c.id AND status IN ('unknown','failed')
+        AND (status<>'unknown' OR resolved_at IS NULL)
+        AND coalesce(${recovered(`(SELECT max(event.created_at) FROM instagram_manual_reply_events event
+          WHERE event.reply_id=manual.id AND event.workspace_id=manual.workspace_id AND event.kind='unknown'
+            AND event.failure_code='worker_interrupted')`)},attempt_started_at,created_at)>now()-interval '24 hours'
       UNION ALL SELECT status FROM campaign_deliveries WHERE workspace_id=c.workspace_id AND connection_id=c.id
-        AND status IN ('unknown','failed','blocked') AND coalesce(attempt_started_at,created_at)>now()-interval '24 hours'
+        AND status IN ('unknown','failed','blocked')
+        AND coalesce(${recovered("updated_at")},attempt_started_at,created_at)>now()-interval '24 hours'
     ) outcome
   ) outcomes
   WHERE $1::uuid IS NULL OR c.workspace_id=$1

@@ -77,6 +77,10 @@ Cron 단계 `kept_reply_cleanup`, `oauth_state_cleanup`, `token_refresh`, `subsc
 - `unknown_24h`, `failed_24h`, `blocked_24h`: 최근 24시간의 결과 수입니다. 행에 결과 확정 시각이 없으므로 마지막 claim 시각, claim하지 않은 행은 생성 시각(팔로우 응답은 확인 시각)으로 근사합니다.
   팔로우 응답도 비공개 답장처럼 `pending`으로 돌아갈 때만 claim 시각을 지우므로 결과 행은 마지막 claim 시각을 유지하며, 이 변경 전에 결과가 된 팔로우 응답은 claim 시각이 없어 확인 시각을 씁니다.
   해결 처리한 수동 답장의 `unknown`은 세지 않습니다.
+  예외로, 오래된 `sending` 복구(`stale_recovery`와 Node worker의 복구)가 `unknown` / `worker_interrupted`로 바꾼 행은 복구 시각으로 셉니다([#274](https://github.com/AndrewDongminYoo/auto-chatter/issues/274)). 그래서 복구가 24시간 넘게 돌지 못했다가 돌아도, 그때 생긴 `unknown`은 24시간 창 안에 들어와 `unknown_outcome` 경보를 켭니다.
+  복구 시각은 네 발송 테이블에서 다음 열입니다: 비공개 답장과 팔로우 응답은 migration 067이 추가한 `recovered_at`, 수동 답장은 복구 문장이 함께 쓰는 `unknown` 이벤트(`instagram_manual_reply_events`, `failure_code='worker_interrupted'`)의 `created_at`, 캠페인 발송 행은 복구가 쓰고 이후 바뀌지 않는 `updated_at`입니다. 다른 결과는 지금처럼 위 시각을 씁니다.
+  067 이전에 복구된 비공개 답장과 팔로우 응답은 `recovered_at`이 없으므로 이전처럼 claim 시각을 씁니다. 값을 채우지 않습니다.
+  [캠페인 정리](2026-10-27-campaign-runs.md#도달할-수-없는-행의-정리)가 claim 없이 `blocked`로 끝낸 캠페인 행은 claim 시각이 없으므로 생성 시각으로 셉니다. 그래서 24시간보다 오래된 실행에서 정리된 행은 `blocked_24h`에 나타나지 않습니다. 이 지표의 시각 기준은 바꾸지 않았습니다.
 - `token_expires_in_days`: 토큰 만료까지 남은 일수(내림, 만료되면 음수, 토큰이 없으면 `null`)입니다.
 - `send_paused_until`: Meta 발송 제한으로 연결이 일시 중지돼 있으면 그 끝 시각입니다.
 
@@ -114,7 +118,7 @@ API가 상담원을 거부하므로 상담원에게는 영역을 숨기고 요�
 
 - 로그 단위 테스트: 허용하지 않은 키, 형식이 맞지 않는 허용 키 값, 오류 메시지 기반 코드가 버려집니다.
 - Cloudflare DB 테스트(`worker.db.test.ts`): Queue 발행 실패 뒤 Cron 복구, Cron 단계의 DB 실패(실패 기록, `alert_cron_stale` 한 번, 다른 단계 계속, 복구 후 해제 한 번), `alerts` 단계 실패가 `cron` 행을 실패로 남김, 풀 닫기 실패가 원래 오류 메시지를 내보내지 않음, Meta 발송 제한(health의 일시 중지 표시, 로그 없음). 이 파일의 모든 테스트가 콘솔 호출을 가로채고, 각 호출이 허용 필드만 가진 객체 하나인지 `afterEach`에서 확인합니다. workerd 테스트는 별도 프로세스라 이 확인 밖입니다.
-- DB 테스트(`operations-health.db.test.ts`): 관리자 지표·경보 계산, 상담원 거부, 응답의 비밀·본문·ID 부재, 경보 전환 한 번 기록, 켜진 경보의 새 `unknown` 한 번 기록, `cf-ray`가 없는 API 요청의 UUID 상관 ID(풀에도 같은 ID).
+- DB 테스트(`operations-health.db.test.ts`): 관리자 지표·경보 계산, 상담원 거부, 응답의 비밀·본문·ID 부재, 경보 전환 한 번 기록, 켜진 경보의 새 `unknown` 한 번 기록, `cf-ray`가 없는 API 요청의 UUID 상관 ID(풀에도 같은 ID), 시도가 24시간보다 오래된 행을 복구한 비공개 답장·팔로우 응답·수동 답장의 `unknown_24h`와 `unknown_outcome`(같은 나이의 일반 `unknown`은 제외). 캠페인 발송 행의 같은 경우는 `campaign-delivery-worker.db.test.ts`, Cron 복구 문장의 `recovered_at`은 `worker.db.test.ts`가 확인합니다([검증 기록](../notes/2026-10-29-campaign-sweep-health-window-verification.md)).
 - 권한 테스트(`access.db.test.ts`)와 workerd 테스트(`runtime.db.test.mjs`): 서버 역할의 upsert 허용과 DELETE 차단, API 역할 차단, 제한된 서버 역할로 실행한 Cron의 단계 기록.
 
 운영 Workers Logs의 실제 기록·검색과 운영 데이터의 경보는 확인하지 않았습니다.

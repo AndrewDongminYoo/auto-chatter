@@ -413,7 +413,7 @@ export async function processNextFollowReply(
 
 export async function recoverStaleFollowReplies(pool: Pool, olderThan: Date, connectionId?: string): Promise<void> {
   await pool.query(
-    "UPDATE instagram_follow_conversations SET status='unknown',failure_code='worker_interrupted' WHERE status='sending' AND attempt_started_at<$1 AND ($2::uuid IS NULL OR connection_id=$2)",
+    "UPDATE instagram_follow_conversations SET status='unknown',failure_code='worker_interrupted',recovered_at=clock_timestamp() WHERE status='sending' AND attempt_started_at<$1 AND ($2::uuid IS NULL OR connection_id=$2)",
     [olderThan, connectionId ?? null],
   );
 }

@@ -389,7 +389,7 @@ export async function processNextPrivateReply(
 export async function recoverStalePrivateReplies(pool: Pool, olderThan: Date, connectionId: string): Promise<number> {
   if (!connectionId) throw new Error("Instagram connection ID is required");
   const result = await pool.query(
-    "UPDATE private_reply_outbox SET status = 'unknown', failure_code = 'worker_interrupted' WHERE status = 'sending' AND attempt_started_at < $1 AND connection_id = $2",
+    "UPDATE private_reply_outbox SET status = 'unknown', failure_code = 'worker_interrupted', recovered_at = clock_timestamp() WHERE status = 'sending' AND attempt_started_at < $1 AND connection_id = $2",
     [olderThan, connectionId],
   );
   return result.rowCount ?? 0;

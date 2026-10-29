@@ -804,6 +804,18 @@ CREATE INDEX IF NOT EXISTS campaign_deliveries_called_idx
 -- Stale recovery reads the rows still in sending.
 CREATE INDEX IF NOT EXISTS campaign_deliveries_sending_idx
   ON campaign_deliveries(attempt_started_at) WHERE status='sending';
+-- recovered_at (#274, migration 067): when stale recovery turned a sending row into unknown / worker_interrupted;
+-- operations health dates that outcome from it. campaign_deliveries uses updated_at, manual replies the unknown event.
+ALTER TABLE private_reply_outbox ADD COLUMN IF NOT EXISTS recovered_at timestamptz;
+ALTER TABLE instagram_follow_conversations ADD COLUMN IF NOT EXISTS recovered_at timestamptz;
+-- The campaign sweep (#273, migration 067) ends an unreachable pending row as blocked without claiming it, so a
+-- blocked row may have no attempt. This covers every blocked row; the worker's blocked rows keep their claim's attempt
+-- by code (asserted in its DB tests), not by this CHECK.
+ALTER TABLE campaign_deliveries DROP CONSTRAINT IF EXISTS campaign_delivery_attempt;
+ALTER TABLE campaign_deliveries ADD CONSTRAINT campaign_delivery_attempt CHECK(
+  (status IN ('pending','cancelled','blocked') OR (attempt_id IS NOT NULL AND attempt_started_at IS NOT NULL))
+  AND (status<>'pending' OR (attempt_id IS NULL AND attempt_started_at IS NULL))
+  AND ((attempt_id IS NULL)=(attempt_started_at IS NULL)));
 CREATE TABLE IF NOT EXISTS instagram_segment_snapshot_members (
   snapshot_id uuid NOT NULL,
   workspace_id uuid NOT NULL,

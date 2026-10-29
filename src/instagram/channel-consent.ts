@@ -42,20 +42,20 @@ export async function recipientOptedOut(
   return result.rows[0]?.opted_out === true;
 }
 
-export async function deliveryRecipientOptedOut(
-  queryable: ConsentQueryable,
-  input: { workspaceId: string; connectionId: string; senderId: string },
-): Promise<boolean> {
-  const result = await queryable.query<{ opted_out: boolean }>(
-    `WITH verified_identities(identity_kind,identity_value) AS (
-       VALUES ('comment_sender'::text,$3::text)
+// The opt-out query of deliveryRecipientOptedOut, as a query that selects one boolean: a service reply revoke of the
+// comment sender or of a DM recipient that a provider-acknowledged reply bridged to it. The arguments are SQL
+// expressions for the workspace, the connection and the comment sender; the campaign sweep (#273) runs it per
+// delivery row as a scalar subquery.
+export const deliveryRecipientOptedOutSql = (workspace: string, connection: string, sender: string) =>
+  `WITH verified_identities(identity_kind,identity_value) AS (
+       VALUES ('comment_sender'::text,${sender}::text)
        UNION
        SELECT 'dm_recipient'::text,reply.recipient_id
        FROM private_reply_outbox reply
        JOIN instagram_comment_events event ON event.id=reply.event_id
          AND event.workspace_id=reply.workspace_id AND event.connection_id=reply.connection_id
          AND event.sender_id=reply.sender_id
-       WHERE reply.workspace_id=$1 AND reply.connection_id=$2 AND reply.sender_id=$3
+       WHERE reply.workspace_id=${workspace} AND reply.connection_id=${connection} AND reply.sender_id=${sender}
          AND reply.status='sent' AND reply.recipient_id IS NOT NULL
          AND reply.provider_message_id IS NOT NULL AND length(btrim(reply.provider_message_id))>0
      )
@@ -63,9 +63,16 @@ export async function deliveryRecipientOptedOut(
        SELECT 1 FROM channel_consent_state state
        JOIN verified_identities identity ON state.identity_kind=identity.identity_kind
          AND state.identity_value=identity.identity_value
-       WHERE state.workspace_id=$1 AND state.connection_id=$2 AND state.channel='instagram'
+       WHERE state.workspace_id=${workspace} AND state.connection_id=${connection} AND state.channel='instagram'
          AND state.purpose='service_reply' AND state.decision='revoke'
-     ) AS opted_out`,
+     )`;
+
+export async function deliveryRecipientOptedOut(
+  queryable: ConsentQueryable,
+  input: { workspaceId: string; connectionId: string; senderId: string },
+): Promise<boolean> {
+  const result = await queryable.query<{ opted_out: boolean }>(
+    `${deliveryRecipientOptedOutSql("$1", "$2", "$3")} AS opted_out`,
     [input.workspaceId, input.connectionId, input.senderId],
   );
   return result.rows[0]?.opted_out === true;
