@@ -524,7 +524,12 @@ test("the HTTP routes create, list, read pages of and download a snapshot with i
     assert.deepEqual(row.slice(0, 7), ["1", summary.id, segment.id, asOf, workspace, "instagram", "comment_sender"]);
     assert.ok(row[8]!.startsWith("'"));
   }
-  assert.doesNotMatch(bytes.toString(), /RAW COMMENT SECRET|RAW DM SECRET|Lead buyers|shop|9001/);
+  assert.doesNotMatch(bytes.toString(), /RAW COMMENT SECRET|RAW DM SECRET|Lead buyers|shop/);
+  // The DM recipient ID is checked per field: a random snapshot or segment UUID can contain its digits (#278).
+  assert.deepEqual(
+    rows.flat().filter((field) => field === "9001" || field === "'9001"),
+    [],
+  );
   assert.equal((await request(adminId, "GET", `/api/segment-snapshots/${summary.id}/members.csv?x=1`)).status, 400);
   for (const query of ["?after=", "?after=!!", "?page=1", "?after=a&after=b"])
     assert.equal((await request(adminId, "GET", `/api/segment-snapshots/${summary.id}${query}`)).status, 400, query);
