@@ -2,8 +2,8 @@
 """Convert offline TruffleHog filesystem JSONL without discarding findings."""
 
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 
 def physical_location(filename, secret, line_hint, files, offsets):
@@ -65,7 +65,13 @@ def to_result(finding, files, offsets):
         "level": "error",
         "ruleId": detector,
         "message": {"text": "Secret detected"},
-        "locations": [{"physicalLocation": physical_location(filename, secret, filesystem.get("line"), files, offsets)}],
+        "locations": [
+            {
+                "physicalLocation": physical_location(
+                    filename, secret, filesystem.get("line"), files, offsets
+                )
+            }
+        ],
     }
 
 
@@ -79,13 +85,22 @@ def main():
         try:
             results.append(to_result(json.loads(line), files, offsets))
         except ValueError:
-            print(f"Invalid TruffleHog filesystem JSONL at line {line_number}", file=sys.stderr)
+            print(
+                f"Invalid TruffleHog filesystem JSONL at line {line_number}",
+                file=sys.stderr,
+            )
             return 1
-    print(json.dumps({
-        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-        "version": "2.1.0",
-        "runs": [{"tool": {"driver": {"name": "TruffleHog"}}, "results": results}],
-    }))
+    print(
+        json.dumps(
+            {
+                "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+                "version": "2.1.0",
+                "runs": [
+                    {"tool": {"driver": {"name": "TruffleHog"}}, "results": results}
+                ],
+            }
+        )
+    )
     return 0
 
 
