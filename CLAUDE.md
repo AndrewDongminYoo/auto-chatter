@@ -42,6 +42,7 @@ node --test --test-name-pattern="seven-day boundary" src/instagram/reply-policy.
 - `.trunk/trunk.yaml` owns the Trunk linter set; pinact runs both `lint` and `upgrade`, and trufflehog runs offline.
   Its filesystem JSONL reader retains findings without a literal source match and fails on malformed records; the Python regression suite above also runs in CI.
   The pre-commit hook formats staged files and `trunk check` runs on pre-push; a file that must keep its formatting needs an explicit `lint.ignore` entry in `.trunk/trunk.yaml`.
+  cspell reads `cspell.config.yaml`: add project terms to `.cspell/custom-dictionary.txt` and PostgreSQL catalog or function names to `.cspell/postgres-terms.txt`, and fix a real misspelling in its source instead.
 - Never enable sends, create cloud resources, or publish as part of tests.
 - PostgreSQL timestamps retain microseconds, while the default `pg` JavaScript `Date` reader retains milliseconds.
   The subscription-check DB test reads epoch microseconds for strict ordering assertions; do not replace that reader with `Date` comparisons or sleeps.
