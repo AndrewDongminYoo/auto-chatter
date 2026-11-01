@@ -9,3 +9,4 @@ backups/
 .dev.vars.*
 .env.*
 !.env.example
+__pycache__/

@@ -16,15 +16,13 @@ runtimes:
     - node@24.20.0
 # This is the section where you manage your linters. (https://docs.trunk.io/check/configuration)
 lint:
-  enabled:
-    - git-diff-check
-    - osv-scanner@2.7.0
-    - pinact@4.1.1!:
-        commands: [lint, upgrade]
-    - prettier@3.9.10
-    - trufflehog@3.99.7
-    - yamllint@1.38.0
-    - markdownlint@0.50.0
+  disabled:
+    - bandit
+    # trufflehog owns secret scanning; checkov only flagged the synthetic CI credentials and a missing HEALTHCHECK.
+    - checkov
+    - grype
+    # ruff's I rules sort the imports.
+    - isort
   definitions:
     - name: pinact
       commands:
@@ -40,10 +38,27 @@ lint:
           parser:
             runtime: python
             run: python3 .trunk/configs/trufflehog_to_sarif.py
+  enabled:
+    - actionlint@1.7.8
+    - black@26.10.1
+    - cspell@10.4.0
+    - git-diff-check
+    - hadolint@2.15.1
+    - markdownlint@0.50.0
+    - osv-scanner@2.7.0
+    - oxipng@9.1.5
+    - pinact@4.1.1!
+    - prettier@3.9.10
+    - ruff@0.17.3
+    - shellcheck@0.11.0
+    - shfmt@3.13.1
+    - taplo@0.10.0
+    - trufflehog@3.99.7
+    - yamllint@1.38.0
 actions:
   disabled:
     - trunk-upgrade-available
     - trunk-announce
-    - trunk-fmt-pre-commit
   enabled:
     - trunk-check-pre-push
+    - trunk-fmt-pre-commit

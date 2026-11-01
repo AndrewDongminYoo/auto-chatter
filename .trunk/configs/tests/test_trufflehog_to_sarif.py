@@ -3,16 +3,18 @@
 import base64
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
-
-READER = Path(os.environ.get(
-    "TRUFFLEHOG_READER", str(Path(__file__).resolve().parents[1] / "trufflehog_to_sarif.py")
-))
+READER = Path(
+    os.environ.get(
+        "TRUFFLEHOG_READER",
+        str(Path(__file__).resolve().parents[1] / "trufflehog_to_sarif.py"),
+    )
+)
 
 
 class TruffleHogReaderTest(unittest.TestCase):
@@ -38,8 +40,11 @@ class TruffleHogReaderTest(unittest.TestCase):
 
     def invoke(self, input_text):
         return subprocess.run(
-            [sys.executable, str(READER)], input=input_text,
-            text=True, capture_output=True, check=False,
+            [sys.executable, str(READER)],
+            input=input_text,
+            text=True,
+            capture_output=True,
+            check=False,
         )
 
     def convert(self, findings):
@@ -60,7 +65,9 @@ class TruffleHogReaderTest(unittest.TestCase):
         self.assertNotIn("region", self.location(results[0]))
 
     def test_reported_source_line_selects_the_matching_occurrence(self):
-        filename = self.fixture("reported.txt", "header\nsynthetic-secret\nspacer\nsynthetic-secret\n")
+        filename = self.fixture(
+            "reported.txt", "header\nsynthetic-secret\nspacer\nsynthetic-secret\n"
+        )
         finding = self.finding(filename)
         finding["SourceMetadata"]["Data"]["Filesystem"]["line"] = 4
         results = self.convert([finding])
@@ -68,14 +75,16 @@ class TruffleHogReaderTest(unittest.TestCase):
         self.assertEqual(self.location(results[0])["region"]["startColumn"], 1)
 
     def test_reported_source_lines_can_arrive_out_of_order(self):
-        filename = self.fixture("reported-order.txt", "header\nsynthetic-secret\nspacer\nsynthetic-secret\n")
+        filename = self.fixture(
+            "reported-order.txt", "header\nsynthetic-secret\nspacer\nsynthetic-secret\n"
+        )
         findings = [self.finding(filename), self.finding(filename)]
-        for finding, line in zip(findings, [4, 2]):
+        for finding, line in zip(findings, [4, 2], strict=False):
             finding["SourceMetadata"]["Data"]["Filesystem"]["line"] = line
         results = self.convert(findings)
-        self.assertEqual([
-            self.location(result)["region"]["startLine"] for result in results
-        ], [4, 2])
+        self.assertEqual(
+            [self.location(result)["region"]["startLine"] for result in results], [4, 2]
+        )
 
     def test_invalid_or_wrong_reported_line_keeps_literal_fallback(self):
         filename = self.fixture("reported-invalid.txt", "header\nsynthetic-secret\n")
@@ -104,25 +113,34 @@ class TruffleHogReaderTest(unittest.TestCase):
     def test_repeated_occurrences_and_files_do_not_share_location_state(self):
         first = self.fixture("first.txt", "synthetic-secret\nsynthetic-secret\n")
         second = self.fixture("second.txt", "synthetic-secret\n")
-        results = self.convert([
-            self.finding(first), self.finding(first), self.finding(second),
-            self.finding(first),
-        ])
+        results = self.convert(
+            [
+                self.finding(first),
+                self.finding(first),
+                self.finding(second),
+                self.finding(first),
+            ]
+        )
         self.assertEqual(len(results), 4)
-        self.assertEqual([
-            self.location(result)["region"]["startLine"] for result in results[:3]
-        ], [1, 2, 1])
+        self.assertEqual(
+            [self.location(result)["region"]["startLine"] for result in results[:3]],
+            [1, 2, 1],
+        )
         self.assertNotIn("region", self.location(results[3]))
 
     def test_different_secrets_in_one_file_keep_independent_locations(self):
         filename = self.fixture("secrets.txt", "first-secret second-secret")
-        results = self.convert([
-            self.finding(filename, "first-secret"), self.finding(filename, "second-secret"),
-        ])
+        results = self.convert(
+            [
+                self.finding(filename, "first-secret"),
+                self.finding(filename, "second-secret"),
+            ]
+        )
         self.assertEqual(len(results), 2)
-        self.assertEqual([
-            self.location(result)["region"]["startColumn"] for result in results
-        ], [1, 14])
+        self.assertEqual(
+            [self.location(result)["region"]["startColumn"] for result in results],
+            [1, 14],
+        )
 
     def test_messages_do_not_expose_raw_or_redacted_values(self):
         filename = self.fixture("message.txt", "synthetic-secret")
@@ -153,7 +171,10 @@ class TruffleHogReaderTest(unittest.TestCase):
     def test_invalid_input_fails_without_emitting_clean_sarif_or_secret(self):
         finding = self.finding("unused.txt")
         for invalid in [
-            "{malformed synthetic-secret", "[]", "null", "{}",
+            "{malformed synthetic-secret",
+            "[]",
+            "null",
+            "{}",
             json.dumps({**finding, "SourceMetadata": {"Data": {"Git": {"file": "x"}}}}),
             json.dumps({**finding, "SourceMetadata": {"Data": {"Filesystem": {}}}}),
             json.dumps({**finding, "DetectorName": ""}),

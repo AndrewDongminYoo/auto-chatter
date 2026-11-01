@@ -3185,7 +3185,7 @@ function conditionTreeButton(text, label, data, disabled = false, reasonId = "")
   if (reasonId) button.setAttribute("aria-describedby", reasonId);
   return button;
 }
-// One leaf row: its kind, its tag or its field, operator and value with the field rows' per-type behaviour, and its
+// One leaf row: its kind, its tag or its field, operator and value with the field rows' per-type behavior, and its
 // move and remove controls. Controls carry no name, so the filter form's named elements stay the existing ones.
 function conditionTreeLeafRow(group, groupIndex, leaf, leafIndex) {
   const place = `그룹 ${groupIndex + 1} 조건 ${leafIndex + 1}`;
