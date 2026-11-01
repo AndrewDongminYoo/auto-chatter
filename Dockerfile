@@ -11,6 +11,8 @@ WORKDIR /app
 COPY --from=dependencies --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node package.json ./
 COPY --chown=node:node src ./src
+# The official node image creates the node user, so the name resolves.
+# hadolint ignore=DL3066
 USER node
 EXPOSE 3000
 CMD ["node", "src/instagram/main.ts"]
