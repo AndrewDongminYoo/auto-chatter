@@ -10,7 +10,7 @@ import { isMetaTokenRejection, readMetaGraphErrorCode } from "../instagram/meta-
 // display only: no claim, wake query, final guard, ingestion or send decision reads it.
 
 // One cron run checks at most this many connections, and a connection is attempted at most once per interval.
-// One check is two Meta GETs. Both are service policy (operator decision, 2026-10-11).
+// One check is two Meta GETs. Both are service policy (decision, 2026-10-11).
 export const SUBSCRIPTION_CHECKS_PER_RUN = 2;
 export const SUBSCRIPTION_CHECK_INTERVAL_HOURS = 6;
 export const REQUIRED_SUBSCRIPTION_FIELDS = ["comments", "messages", "messaging_postbacks"] as const;
