@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_PASSWORD: local-dev
           POSTGRES_DB: automations_test
@@ -35,6 +35,11 @@ jobs:
       # Node.js 25+ no longer bundles Corepack; the Dockerfile installs the same pinned version.
       - run: npm install -g corepack@0.36.0 && corepack enable
       - run: corepack pnpm install --frozen-lockfile
+      - name: Verify PostgreSQL major version
+        run: |
+          version=$(docker exec '${{ job.services.postgres.id }}' psql -U postgres -d automations_test -Atc 'SHOW server_version_num')
+          test "$version" -ge 180000
+          test "$version" -lt 190000
       - run: corepack pnpm check-types
       - run: corepack pnpm test
       - run: corepack pnpm test:db
@@ -78,10 +83,29 @@ jobs:
           docker compose --env-file /dev/null config --quiet
           sh -n deploy/init-app-user.sh
           docker compose --env-file /dev/null build ingress
+      - name: Reject legacy PostgreSQL data without replacing it
+        run: |
+          export COMPOSE_PROJECT_NAME=ci-postgres-legacy
+          trap 'docker compose --env-file /dev/null down --volumes' EXIT
+          docker compose --env-file /dev/null run --rm --no-deps -T db sh -ec '
+            printf "17\n" > /var/lib/postgresql/PG_VERSION
+            printf "legacy-data\n" > /var/lib/postgresql/legacy-marker
+          '
+          result=0
+          timeout 30s docker compose --env-file /dev/null run --rm --no-deps -T db > /tmp/postgres-legacy.log 2>&1 || result=$?
+          cat /tmp/postgres-legacy.log
+          test "$result" -eq 1
+          grep -F 'Error: in 18+' /tmp/postgres-legacy.log
+          docker compose --env-file /dev/null run --rm --no-deps -T db sh -ec '
+            test "$(cat /var/lib/postgresql/PG_VERSION)" = 17
+            test "$(cat /var/lib/postgresql/legacy-marker)" = legacy-data
+            test ! -e /var/lib/postgresql/18/docker/PG_VERSION
+          '
       - name: Start DB and ingress without a send worker
         run: |
           docker compose --env-file /dev/null up -d --wait db ingress
           test -z "$(docker compose --env-file /dev/null --profile send ps -q worker)"
+          test "$(docker compose --env-file /dev/null exec -T db psql -U postgres -d automations -Atc 'SHOW data_directory')" = /var/lib/postgresql/18/docker
       - name: Migrate an existing Compose database with the application role retained
         run: |
           docker compose --env-file /dev/null exec -T db mkdir -p /tmp/auto-chatter/db/migrations /tmp/auto-chatter/deploy

@@ -23,6 +23,7 @@ libpq
 locktype
 ndims
 nspowner
+pg_dumpall
 pgdata
 PGPASSWORD
 PGSERVICE

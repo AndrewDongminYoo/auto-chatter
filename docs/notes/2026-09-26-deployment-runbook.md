@@ -23,6 +23,7 @@ DB는 내부 `data` 네트워크에만 연결하고, 프록시는 `edge` 네트�
 ## 최초 준비와 로컬 수신 확인
 
 Docker Engine과 Compose 플러그인이 있는 서버에서 저장소 루트를 작업 디렉터리로 사용합니다.
+기존 PostgreSQL 17 볼륨이 있으면 먼저 아래 [PostgreSQL 17에서 18로 업그레이드](#postgresql-17에서-18로-업그레이드)의 백업·복원 절차를 별도로 승인받아 완료합니다.
 다음 명령은 템플릿을 처음 준비할 때만 실행합니다.
 
 ```bash
@@ -61,6 +62,9 @@ curl -i http://127.0.0.1:3000/webhooks/instagram
 기존 볼륨에는 초기화 스크립트가 다시 실행되지 않습니다.
 환경 파일의 암호만 바꿔도 DB 역할의 암호가 바뀌지는 않으므로, 암호 교체는 DB 역할과 실행 환경에 함께 적용해야 합니다.
 이 구성이 만들지 않은 기존 DB를 연결하는 작업은 역할·스키마 확인 후 별도 이관 절차로 처리합니다.
+PostgreSQL 18은 같은 `postgres_data` 볼륨을 `/var/lib/postgresql`에 마운트하고 기본 데이터 경로 `/var/lib/postgresql/18/docker`를 사용합니다.
+기존 PostgreSQL 17 데이터가 볼륨 루트에 있으면 공식 이미지의 진입 스크립트가 기동을 거부하며, 새 DB로 대체하지 않습니다.
+`PGDATA`를 이전 경로로 지정하거나 `PG_VERSION`을 수정해서 이 검사를 우회하지 않습니다.
 
 ## 공개 HTTPS 연결
 
@@ -145,6 +149,45 @@ docker compose --env-file deploy/runtime.env exec -T db psql -U postgres -d auto
 격리와 검토가 완료된 후에만 발송 재개를 승인합니다.
 
 ## 업데이트와 마이그레이션
+
+### PostgreSQL 17에서 18로 업그레이드
+
+이미지 태그 변경과 아래 SQL 마이그레이션은 PostgreSQL 데이터 파일의 메이저 버전을 변환하지 않습니다.
+이 절차는 별도 운영 승인이 필요한 수동 백업·복원 작업이며, CI의 빈 DB·버전 표식 검사는 실제 PostgreSQL 17 클러스터의 업그레이드를 검증하지 않습니다.
+[공식 이미지의 PostgreSQL 18 볼륨 변경 안내](https://hub.docker.com/_/postgres)와 [PostgreSQL 업그레이드 문서](https://www.postgresql.org/docs/18/upgrading.html)를 함께 확인합니다.
+
+1. PostgreSQL 17 이미지와 기존 마운트 구성을 유지한 상태에서 실제 서버 버전, Compose 프로젝트 이름, 볼륨 이름, DB 크기, 확장 기능과 역할을 기록합니다.
+   유지보수 시간을 정하고 수신기와 발송 워커를 중지하여 쓰기를 차단합니다.
+   이전 이미지·구성·볼륨과 백업을 보존하고, 복원 공간과 롤백 방법을 먼저 확보합니다.
+2. 실행 중인 PostgreSQL 17의 도구로 아래 백업을 만듭니다.
+   종료 상태와 파일 크기를 확인하고 접근을 제한한 암호화 저장소에도 복사합니다.
+   역할 백업에는 암호 해시가 포함될 수 있으므로 로그·Git·공개 경로에 남기지 않습니다.
+
+   ```bash
+   umask 077
+   mkdir -p backups
+   docker compose --env-file deploy/runtime.env exec -T db pg_dumpall -U postgres --globals-only > backups/postgres17-globals.sql
+   docker compose --env-file deploy/runtime.env exec -T db pg_dump -U postgres -d automations -Fc > backups/automations-postgres17.dump
+   ```
+
+3. 운영 볼륨과 연결되지 않은 별도 PostgreSQL 18 환경에서 복원을 연습합니다.
+   이 대상에는 Compose의 `db/schema.sql`·앱 역할 초기화 스크립트를 실행하지 않습니다.
+   필요한 확장 기능을 설치하고, 역할 백업을 검토하여 대상에 이미 있는 `postgres` 역할과 충돌하는 구문을 조정한 뒤 역할·DB 소유자를 먼저 복원합니다.
+   빈 `automations` DB에 `pg_restore --exit-on-error`로 복원하고 테이블별 행 수, 권한, 주요 조회와 앱 연결을 확인합니다.
+   발송 워커는 계속 중지합니다.
+4. 복원 연습이 통과하면 최종 백업과 별도 PostgreSQL 18 대상의 복원을 완료합니다.
+   기존 PostgreSQL 17 볼륨을 보존한 채 복원된 대상을 운영 Compose에 연결할 구체적인 볼륨 전환 방법과 롤백 시점을 승인받습니다.
+   이 저장소는 `postgres_data` 이름을 자동 변경하거나 기존 볼륨을 삭제하지 않습니다.
+   빈 볼륨으로 기동한 결과를 업그레이드 성공으로 간주하지 않습니다.
+5. 복원된 서버의 메이저 버전이 18이고 데이터 경로가 `/var/lib/postgresql/18/docker`인지 확인합니다.
+   아래 SQL 마이그레이션은 엔진 업그레이드와 별도로 적용 여부를 판단합니다.
+   먼저 수신기만 시작하여 DB 읽기·쓰기와 웹훅을 확인하고, 위 백업 복원 절차에 따라 미확정 발송 작업을 격리·대조합니다.
+   발송 재개는 별도로 승인받습니다.
+6. 검증에 실패하면 수신기와 워커를 중지한 상태로 보존한 PostgreSQL 17 이미지·마운트 구성·볼륨으로 돌아갑니다.
+   PostgreSQL 18 데이터 디렉터리를 PostgreSQL 17에서 열지 않습니다.
+   전환 뒤 새 쓰기가 있었다면 이전 볼륨에 없으므로, 복귀 전에 데이터 대조와 복구 계획을 다시 검토합니다.
+
+### 애플리케이션 SQL 마이그레이션과 이미지 업데이트
 
 먼저 현재 실행 중인 이미지 태그·ID와 워커 활성 여부를 릴리스 기록에 남기고 이전 이미지를 보관합니다.
 새 이미지 빌드 전에 확인하며, 롤백 후보 이미지는 정리 명령으로 삭제하지 않습니다.
