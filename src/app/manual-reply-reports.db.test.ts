@@ -211,9 +211,16 @@ test("manual report rejects ambiguous, invalid, unbounded or unsupported query i
 });
 
 test("manual report bounds index reads by creation period with and without a connection filter", async () => {
+  // Spread history across recipients so a single-recipient skip scan cannot replace the period-index check.
+  await pool.query(
+    `INSERT INTO instagram_inbox_handoffs(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,updated_by)
+     SELECT workspace_id,connection_id,(n+1000)::text,sender_id,evidence_reply_id,active,version,updated_by
+     FROM instagram_inbox_handoffs CROSS JOIN generate_series(1,12000) n WHERE connection_id=$1`,
+    [connection],
+  );
   await pool.query(
     `INSERT INTO instagram_manual_replies(workspace_id,connection_id,recipient_id,request_key,created_by,text,handoff_version,status,created_at)
-     SELECT $1,$2,'123',gen_random_uuid(),$3,'historical request',1,'sent',
+     SELECT $1,$2,(n+1000)::text,gen_random_uuid(),$3,'historical request',1,'sent',
        '2020-01-01'::timestamptz + n * interval '1 minute' FROM generate_series(1,12000) n`,
     [workspace, connection, owner],
   );
