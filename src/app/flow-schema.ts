@@ -50,12 +50,12 @@ const WAIT_TYPES = new Set<string>();
 // starts when the webhook arrives, so the delays before a message leave an hour of that window for
 // webhook, cron and retry latency (service policy, not a Meta limit).
 const MAX_DELAY_MINUTES = 7 * 24 * 60 - 60;
-// The longest a run waits for a reply to its private reply (operator decision, 7 days).
+// The longest a run waits for a reply to its private reply (decision, 7 days).
 const MAX_REPLY_WAIT_MINUTES = 7 * 24 * 60;
 // A time wait resumes at the next occurrence of a 24-hour local time, usually within a day. On a day
 // the clocks go back it can last a day plus the shift: one hour in most zones and two in
 // Antarctica/Troll (PostgreSQL 17.11 zone data, 2026-2027). It counts as a day plus that two-hour
-// shift toward the reply window (operator decision, 2026-10-01), so the hour MAX_DELAY_MINUTES leaves
+// shift toward the reply window (decision, 2026-10-01), so the hour MAX_DELAY_MINUTES leaves
 // for latency stays intact in every zone. A reply that still falls outside the seven days is blocked
 // as comment_expired by reply-policy.ts before the send, never sent late.
 const TIME_WAIT_MINUTES = 26 * 60;

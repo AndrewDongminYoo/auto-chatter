@@ -86,7 +86,7 @@ const contactTagInputNames = ["tag", "tag_2", "tag_3", "tag_4", "tag_5"];
 // The rows of the field condition: the first keeps the original control names, rows 2 and 3 add a suffix.
 // The server accepts at most three conditions on distinct fields; one row sends the legacy keys.
 const fieldRowSuffixes = ["", "_2", "_3"];
-// True when the operator changed a condition or the name since the edit started or since the saved values were last
+// True when the user changed a condition or the name since the edit started or since the saved values were last
 // loaded. The name is compared with the loaded one, because segmentNameDirty is false for an emptied name field.
 // Group editor changes do not count as inputs; the tree is compared with the loaded one in order, so moving a group
 // or a condition is a change and moving it back is not.
@@ -3118,9 +3118,9 @@ function segmentControls() {
     segmentBusy || Boolean(editingSegment && segmentEditChanged()),
   );
 }
-// Leaves edit mode. By default the operator's draft stays: the filter form keeps its conditions, the name field keeps
+// Leaves edit mode. By default the user's draft stays: the filter form keeps its conditions, the name field keeps
 // its value, and a changed draft stays marked unsaved, because segmentEditChanged() ends with edit mode.
-// Pass discard only where the operator chose to drop the draft (cancel, archive after its confirmation) or where
+// Pass discard only where the user chose to drop the draft (cancel, archive after its confirmation) or where
 // nothing unsaved can remain (a successful save, a session reset).
 function leaveSegmentEdit({ discard = false } = {}) {
   segmentNameDirty = segmentNameDirty || segmentEditChanged();
@@ -3682,7 +3682,7 @@ async function saveSegmentEdit(editing, payload, generation) {
   } catch (error) {
     if (generation !== segmentsGeneration || editingSegment !== editing) return;
     if (error.code === "segment_conflict" && error.segment) {
-      // Keep the operator's values and the old version, so saving again cannot overwrite the newer change.
+      // Keep the user's values and the old version, so saving again cannot overwrite the newer change.
       editing.saved = error.segment;
       byId("segment-edit-saved").textContent = `지금 저장된 값: ${segmentSummary(error.segment)}`;
       byId("segment-edit-conflict").hidden = false;

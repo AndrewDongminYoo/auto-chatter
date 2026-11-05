@@ -1,5 +1,5 @@
 -- Apply through deploy/migrate-multi-user.sql.
--- Operator confirmation is advisory; it never replaces provider identity or consent evidence.
+-- User confirmation is advisory; it never replaces provider identity or consent evidence.
 CREATE TABLE IF NOT EXISTS instagram_contact_identity_link_events (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   workspace_id uuid NOT NULL,

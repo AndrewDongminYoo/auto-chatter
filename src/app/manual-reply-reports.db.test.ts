@@ -113,7 +113,7 @@ test("manual report counts current requests once, isolates workspaces and distin
   const failed = (
     await pool.query("SELECT id FROM instagram_manual_replies WHERE connection_id=$1 AND status='failed'", [connection])
   ).rows[0].id;
-  await pool.query("UPDATE instagram_manual_replies SET retry_of=$2,retry_reason='operator decision' WHERE id=$1", [
+  await pool.query("UPDATE instagram_manual_replies SET retry_of=$2,retry_reason='user decision' WHERE id=$1", [
     retry.id,
     failed,
   ]);
