@@ -171,7 +171,8 @@ Whole-workspace deletion follows `docs/specs/2026-09-30-workspace-data-deletion.
 `compose.yaml` starts PostgreSQL and ingress by default; profiles `send` and `public` enable the real worker and Caddy proxy respectively.
 Use `--env-file deploy/runtime.env` explicitly; `deploy/environment.example` is the empty template.
 Never print resolved configuration with secrets; use `config --quiet`.
-Fresh DB volumes initialize the current schema and a separate DML-only `automations_app` role; existing volumes need the migrations in `docs/notes/2026-09-26-deployment-runbook.md`.
+Fresh DB volumes initialize the current schema and a separate DML-only `automations_app` role.
+PostgreSQL 18 mounts the existing `postgres_data` volume at `/var/lib/postgresql`, with default PGDATA `/var/lib/postgresql/18/docker`; PostgreSQL 17 data requires a separately approved backup/restore upgrade before startup, while SQL schema changes use the migration procedure in `docs/notes/2026-09-26-deployment-runbook.md`.
 Deployment smoke checks use synthetic credentials, a separate Compose project and loopback ports, with no live Meta calls.
 
 **CI**: `.github/workflows/ci.yaml` runs type checks, unit and PostgreSQL integration tests, a local workerd/Hyperdrive/Queue smoke check, Trunk, and a container deployment smoke check on PRs and pushes to `main`.
