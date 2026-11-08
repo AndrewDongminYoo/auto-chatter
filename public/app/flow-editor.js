@@ -1231,7 +1231,8 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     if (
       !enable &&
       !confirm(
-        `이 플로를 끌까요? 새 ${flowIsDmFlow(draft) ? "DM으로" : "댓글로"} 실행을 시작하지 않고, 기다리는 중인 실행은 재개할 때 취소되며, 대기열의 답장도 보내지 않습니다. 다시 켜도 취소된 실행은 되살아나지 않습니다.`,
+        // Disable acts on the published version, whose trigger can differ from the draft's, so this names neither.
+        "이 플로를 끌까요? 새 실행을 시작하지 않고, 기다리는 중인 실행은 재개할 때 취소되며, 대기열의 답장도 보내지 않습니다. 다시 켜도 취소된 실행은 되살아나지 않습니다.",
       )
     )
       return;
@@ -1243,11 +1244,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
         if (session !== epoch || current?.id !== id) return;
         current.enabled = result.enabled;
         clearErrors();
-        notice(
-          result.enabled
-            ? `플로를 켰습니다. 새 ${flowStartName(draft)}부터 발행 버전으로 실행합니다.`
-            : "플로를 껐습니다.",
-        );
+        notice(result.enabled ? "플로를 켰습니다. 지금부터 발행 버전으로 새 실행을 시작합니다." : "플로를 껐습니다.");
         void loadList();
       } catch (error) {
         if (session !== epoch || current?.id !== id) return;
