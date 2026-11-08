@@ -650,6 +650,18 @@ migration 적용과 Worker 배포 사이에는 이 Mac의 Wrangler 로그인 정
 24개 항목의 공개 점검은 배포 전(05:06:01Z)에는 바뀐 `app.js`·`flow-editor-model.js`·`flow-editor.js`의 해시만 달라 21개가 통과했고, 배포 뒤 05:38:03Z의 점검에서는 24개가 모두 통과했습니다.
 `scheduled_steps`를 05:38:23Z, 05:39:28Z, 05:40:34Z에 조회했습니다. 발송과 무관한 8개 단계는 첫 조회부터 모두 배포 뒤의 성공 시각(05:38:11~12Z)으로 갱신됐고, 이후 조회마다 다시 갱신됐습니다. 가장 최근 실패 기록은 배포 전인 2026-10-28 16:04:47Z의 `cron` `step_failed`이며, 배포 이후의 실패 기록과 켜진 경보는 없었습니다.
 `SEND_ENABLED`가 거짓이므로 `stale_recovery`·`wake`·`webhook_delivery`는 2026-10-07 00:43:49Z의 마지막 성공 그대로입니다. DM 트리거 플로는 운영에 없으므로 DM 시작 경로는 운영에서 실행되지 않았고, DM 발송 행을 보내는 worker는 아직 없습니다(#291).
+
+2026-11-08 07:54Z에는 "운영 DB 조회, 백업, migration 069 적용, Worker 배포 승인합니다" 요청에 따라 `main` 커밋 `ad0492a`를 적용했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #296(앞 기록), #297(재전송된 DM의 반대 방향 배제), #298(DM 플로 발송 worker와 메시징 ID 일시정지, migration 069), `058298b`·`ad0492a`(Trunk 린터와 개발 도구 의존성)입니다.
+배포 전 `main`의 `ad0492a` CI(실행 42460574907)가 통과한 것을 확인했고, 배포는 이 커밋만 체크아웃한 별도 worktree에서 실행했습니다.
+적용 전 조회에서 운영 DB는 068까지 적용된 상태였고(public 테이블 56개, `instagram_dm_automation` 없음, `flow_dm_deliveries`는 `pending`만 허용), DM 발송 행·DM 시작 기록·DM 트리거 버전은 모두 0개, 발송 중 행은 0개(비공개 답장, 팔로우 응답, 수동 답장, 캠페인, 외부 전송)였습니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-11-08-migration-069/public-pre-069.dump`(370,383바이트, SHA-256 `83f7350c4b572df2120fce9f07cc7767486feb88f18ddb67d489417efe9fa32a`)에 저장했고, 목록 읽기에서 데이터 테이블 56개를 확인했습니다.
+같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE는 212건이었습니다.
+적용 후 public 테이블은 57개이고, `flow_dm_deliveries`에 발송 상태·시도·공급자 열과 제약 `flow_dm_delivery_status`·`flow_dm_delivery_attempt`·`flow_dm_delivery_sent`·`flow_dm_delivery_failure`, 인덱스 `flow_dm_deliveries_due_idx`·`flow_dm_deliveries_sending_idx`가 생겼습니다. `instagram_dm_automation`이 생겼고, 세 삭제 함수가 이 테이블을 지웁니다.
+두 테이블은 RLS가 켜져 있고 `auto_chatter_server`는 SELECT·INSERT·UPDATE만 가졌습니다. 서버 역할의 테이블 DELETE·TRUNCATE 권한, `anon`·`authenticated`의 public 테이블 권한, RLS가 꺼진 public 테이블은 모두 0개였습니다.
+이어서 Worker를 버전 `1a319e19-e02b-472f-8dbf-ae83b6cabfde`로 배포했고, 07:59:39Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `71fc15a3-3ba4-434d-ba13-2c55fded2af9`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+정적 파일이 바뀌지 않아 24개 항목의 공개 점검은 배포 전(07:54:59Z)과 배포 뒤(08:00:22Z) 모두 통과했으며, 배포를 구별하는 근거는 새 활성 버전과 아래 cron 조회입니다.
+`scheduled_steps`를 08:00:38Z, 08:01:43Z, 08:02:48Z에 조회했습니다. 발송과 무관한 8개 단계는 첫 조회부터 모두 배포 뒤의 성공 시각(08:00:11~12Z)으로 갱신됐고, 이후 조회마다 다시 갱신됐습니다. 가장 최근 실패 기록은 배포 전인 2026-10-28 16:04:47Z의 `cron` `step_failed`이며, 배포 이후의 실패 기록과 켜진 경보는 없었습니다.
+`SEND_ENABLED`가 거짓이므로 `stale_recovery`·`wake`·`webhook_delivery`는 2026-10-07 00:43:49Z의 마지막 성공 그대로이고, DM 플로 발송 worker는 운영에서 실행되지 않았습니다. 실계정 발송 확인은 #293에서 따로 승인받습니다.
 예약 갱신은 수신 중인 계정에서 취득한 지 24시간 이상 지난 유효한 토큰만 만료 30일 전부터 시도합니다.
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
