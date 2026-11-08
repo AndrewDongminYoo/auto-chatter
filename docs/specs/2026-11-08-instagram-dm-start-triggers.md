@@ -203,7 +203,7 @@ claim 직후, 계정 확인(`GET /me`) 뒤, 그리고 transport의 `beforeSend`�
 - `ProviderRateLimitedError`: `pending`으로 돌리고 `rate_limit_retries`를 하나 올립니다. 지연은 15분, 1시간, 4시간 단계와 더 긴 `Retry-After` 가운데 긴 쪽이며, 연결의 `send_paused_until`도 같은 끝까지 미루고 행의 `next_attempt_at`을 그 끝으로 둡니다. 세 단계를 다 쓴 뒤의 호출 제한은 `failed`로 끝내되 연결은 그대로 멈춥니다.
 - 계정 확인이 다른 계정이면 `blocked`/`authorization_unverified`, 읽기에 실패하면 `pending`/`verification_unavailable`입니다.
 - 그 밖의 오류: `unknown`/`send_outcome_unknown`. 10분 넘게 `sending`인 행은 cron의 `stale_recovery`가 `unknown`/`worker_interrupted`로 바꿉니다. `unknown`은 자동으로 다시 보내지 않습니다.
-- 실행은 댓글 실행이 비공개 답장 뒤에 그러하듯 `delivering`으로 남고, 단계 기록도 더하지 않습니다. 실행 기록과 실행 보고서는 이 행의 상태, 실패 코드, 보낸 시각을 그 실행의 발송 상태로 읽습니다.
+- 실행은 댓글 실행이 비공개 답장 뒤에 그러하듯 `delivering`으로 남고, 단계 기록도 더하지 않습니다. 실행 기록(`listFlowRuns`)은 이 행의 상태, 실패 코드, 보낸 시각을 그 실행의 발송 상태로 읽습니다. 실행 보고서(`flowRunReport`)는 이 행의 상태만 `reply_counts`에 세고, 실패 코드와 보낸 시각은 읽지 않습니다.
 
 ### 예산과 깨우기
 
