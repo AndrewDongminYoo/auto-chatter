@@ -117,14 +117,14 @@ migration 063~069는 새 SECURITY DEFINER 함수를 추가하지 않았습니다
 - `dm-flow-delivery-worker.db.test.ts` "a fresh DM start event of the same sender on another connection does not reopen the window": 25시간 전 시작 기록의 행이 있고 같은 발신자의 새 시작 기록이 다른 연결에 있을 때 `reply_window_closed`로 막히는지 확인합니다. `WINDOW_ANCHOR`에서 `start.connection_id=d.connection_id`를 빼면 이 단언이 실패했습니다.
 - `dm-flow-delivery-worker.db.test.ts` "a held row is skipped rather than waited on, and two workers claim one row each": 다른 트랜잭션이 가장 오래된 행을 `FOR UPDATE`로 잡은 동안 worker가 기다리지 않고 다음 행을 보내는지, 그 뒤 두 worker가 동시에 서로 다른 행을 하나씩 보내는지 확인합니다. claim에서 `SKIP LOCKED`를 빼면 worker가 5초 동안 기다려 이 테스트 하나만 실패했습니다(`tests 32`, `fail 1`, deadlock 없음).
   테스트가 실패해도 `finally`에서 잡은 트랜잭션을 `ROLLBACK`하고, 잠금을 기다리던 claim이 끝날 때까지 기다립니다. 그래서 열린 잠금이 다음 테스트로 넘어가지 않습니다. 처음 작성한 형태는 `ROLLBACK` 없이 연결을 풀에 돌려주어, 같은 변이에서 뒤의 guard 테스트 두 개가 `deadlock detected`로 함께 실패했습니다.
-- `dm-start-trigger.db.test.ts` "concurrent enables of two default-reply flows on one connection leave one enabled": 첫 켜기를 UPDATE 뒤·커밋 전에 붙잡고 두 번째 켜기를 보낸 뒤 놓아, 결과가 `200`과 `422`이고 켜진 플로가 하나인지 확인합니다. 이 테스트를 위해 같은 파일의 `request` 도우미에 풀을 바꿔 넣는 선택 인자를 더했습니다. 켜기의 연결 조회에서 `FOR NO KEY UPDATE`를 빼면 결과 단언이 실패했습니다.
+- `dm-start-trigger.db.test.ts` "concurrent enables of two default-reply flows on one connection leave one enabled": 첫 켜기를 UPDATE 뒤·커밋 전에 붙잡고 두 번째 켜기를 보낸 뒤, 두 번째 요청이 첫 켜기의 backend에 막혀 연결 행(`FROM instagram_connections`)을 기다리는 것을 `pg_blocking_pids`로 확인하고 놓습니다. 결과가 `200`과 `422`이고 켜진 플로가 하나인지 확인합니다. 기다리지 않고 끝나거나 기다림이 보이지 않으면 실패하고, 실패해도 `finally`에서 붙잡은 켜기를 놓고 두 요청이 끝날 때까지 기다립니다. 이 테스트를 위해 같은 파일의 `request` 도우미에 풀을 바꿔 넣는 선택 인자를 더했습니다. 켜기의 연결 조회에서 `FOR NO KEY UPDATE`를 빼면 "the second request finished without waiting for the connection lock"으로 실패했습니다.
+- `dm-start-trigger.db.test.ts` "a publish that overlaps an enable in flight waits for it and is refused": 같은 방법으로 키워드 플로의 켜기를 붙잡은 동안 겹치는 키워드의 꺼진 플로를 발행하면, 발행이 연결 행을 기다리고 켜기가 커밋된 뒤 `422 dm_keyword_conflict`로 거절되는지 확인합니다. 발행의 연결 조회에서 `FOR NO KEY UPDATE`를 빼면 이 테스트만 실패했고, 켜기의 잠금을 빼면 두 테스트가 모두 실패했습니다.
 - `dm-start-trigger.db.test.ts` "a DM starts only the flows of the connection that received it": 같은 작업 공간의 다른 연결에 켜진 기본 응답 플로가 있을 때, 이 연결로 온 DM은 아무것도 시작하지 않고 다른 연결로 온 DM만 그 플로를 시작하는지 확인합니다. 후보 조회에서 `v.trigger_connection_id=$2`를 빼면 실패했습니다.
 - `settings.db.test.ts` "scheduled manual reply changes are versioned idempotent scoped and cancelled without a send"에 두 줄을 보탰습니다. 만든 사람이 아닌 상담원의 취소는 `403`, 다른 작업 공간 사용자의 취소는 `404`이고, 두 거절 뒤에도 만든 사람의 버전 1 수정이 적용되는지 확인합니다. 역할 조건을 수정에만 적용하도록(`!cancel &&`) 바꾸면 실패했습니다.
 - `settings.db.test.ts` "scheduled manual reply permits its creator and administrators and keeps valid agent permission"에 한 단계를 보탰습니다. 만든 사람(관리자)이 수정한 요청을 소유자가 같은 요청 키와 같은 본문으로 다시 보내면 `409 idempotency_conflict`인지 확인합니다. 재전송 확인에서 `previous.actor_id !== user.id` 조건을 빼면 이 단언이 실패했습니다.
 
 ## 테스트하지 않은 항목
 
-- DM 키워드 플로의 발행(꺼진 플로)과 다른 플로의 켜기가 동시에 일어나는 경우는 테스트하지 않았습니다. 발행도 플로 잠금 뒤 같은 연결 `FOR NO KEY UPDATE`를 잡으므로 켜기 경쟁 테스트와 같은 잠금이 직렬화합니다.
 - `src/cloudflare/`의 파일은 바꾸지 않았으므로 `test:cloudflare`는 이번 게이트에 넣지 않았습니다. 큐 소비자에서 발송 경로의 순서(수동 답장, 팔로우 확인, DM 플로, 비공개 답장, 캠페인)는 기존 `worker.db.test.ts`가 확인합니다.
 - 세션 강화의 여러 문서·여러 탭 동작은 이번에 브라우저에서 다시 실행하지 않았습니다. 기존 근거는 [쿠키 순서 검증 기록](2026-10-22-auth-cookie-response-order.md)과 `auth-session.test.ts`입니다.
 - 운영 DB의 권한, 운영 Worker, 실제 Meta 발송은 확인하지 않았습니다. 이 점검의 테스트는 모두 로컬 PostgreSQL에서 실행합니다.
