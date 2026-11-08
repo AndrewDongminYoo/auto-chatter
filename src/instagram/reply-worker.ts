@@ -74,8 +74,9 @@ export class ProviderRateLimitedError extends Error {
   }
 }
 
-// One entry per allowed retry after a rate-limited send; the reply fails once these are used up.
-const rateLimitRetryDelaysSeconds = [15 * 60, 60 * 60, 4 * 60 * 60] as const;
+// One entry per allowed retry after a rate-limited send; the reply fails once these are used up. The DM flow
+// delivery worker (#291) uses the same tiers.
+export const rateLimitRetryDelaysSeconds = [15 * 60, 60 * 60, 4 * 60 * 60] as const;
 
 interface ClaimedRow {
   follow_config: unknown;

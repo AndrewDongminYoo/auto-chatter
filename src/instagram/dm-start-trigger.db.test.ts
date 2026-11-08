@@ -621,7 +621,7 @@ test("a DM recipient's revoke blocks another messaging ID bridged to the same co
   assert.equal((await started()).length, 0);
 });
 
-test("no claim, worker or resume selects a DM delivery row", async () => {
+test("no claim of another send path, worker or resume selects a DM delivery row", async () => {
   await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
   await dm("9600", "hello");
   const before = (await pool.query("SELECT * FROM flow_dm_deliveries")).rows;
@@ -732,6 +732,8 @@ test("migration 068 replays over stored rows, keeps the canonical deletion funct
   const sql = await readFile(new URL("../../db/migrations/068_dm_start_triggers.sql", import.meta.url), "utf8");
   await pool.query(sql);
   await pool.query(sql);
+  // Migration 069 (#291) holds the latest body of the three deletion functions.
+  await pool.query(await readFile(new URL("../../db/migrations/069_dm_flow_delivery.sql", import.meta.url), "utf8"));
   assert.deepEqual(await definitions(), canonical);
   assert.equal((await started()).length, 1);
   // The source CHECK holds: a run has exactly one of a comment event and a DM start event.

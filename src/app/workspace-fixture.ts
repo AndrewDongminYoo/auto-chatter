@@ -333,6 +333,10 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      VALUES($1,$2,$3,'901','dm flow reply')`,
     [workspace, connection, dmRun],
   );
+  await pool.query(
+    "INSERT INTO instagram_dm_automation(workspace_id,connection_id,recipient_id,paused) VALUES($1,$2,'901',true)",
+    [workspace, connection],
+  );
   const endpoint = (
     await pool.query("INSERT INTO webhook_endpoints(workspace_id,name,url) VALUES($1,'crm',$2) RETURNING id", [
       workspace,

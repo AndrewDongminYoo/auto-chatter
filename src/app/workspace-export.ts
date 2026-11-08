@@ -24,6 +24,8 @@ export const EXPORTED_TABLES: Record<string, { scope: "self" | "workspace" | "co
   // Kept DM text is removed after 15 minutes and is not exported in the meantime either.
   instagram_unmatched_replies: { scope: "workspace", omit: ["message_text"] },
   instagram_contact_automation: { scope: "workspace" },
+  // The automation pause of a messaging sender ID (#291), apart from the comment sender's pause above.
+  instagram_dm_automation: { scope: "workspace" },
   instagram_contact_identity_links: { scope: "workspace" },
   instagram_contact_identity_link_events: { scope: "workspace" },
   instagram_contact_tags: { scope: "workspace" },

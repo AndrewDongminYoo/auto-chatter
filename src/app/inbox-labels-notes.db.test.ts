@@ -803,6 +803,7 @@ test("migration 033 replays (with later deletion migrations), every deletion fun
     "064_campaign_approvals.sql",
     "065_campaign_runs.sql",
     "068_dm_start_triggers.sql",
+    "069_dm_flow_delivery.sql",
   ])
     await pool.query(await readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8"));
   assert.deepEqual(await functions(), current);

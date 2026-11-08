@@ -1397,8 +1397,8 @@ DO $$ BEGIN
   END IF;
 END $$;
 -- The first message of a run that a DM started, addressed to the messaging sender ID. It is never written to
--- private_reply_outbox. No worker, claim, cron step or queue reads these rows yet (#291 adds delivery), so the
--- only status is pending.
+-- private_reply_outbox. Migration 068 created it with the status pending only; migration 069 (#291, below) adds
+-- the delivery columns and the other statuses.
 CREATE TABLE IF NOT EXISTS flow_dm_deliveries (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL,
@@ -1413,6 +1413,66 @@ CREATE TABLE IF NOT EXISTS flow_dm_deliveries (
 );
 CREATE INDEX IF NOT EXISTS flow_dm_deliveries_recipient_idx
   ON flow_dm_deliveries(workspace_id,connection_id,recipient_id);
+-- DM flow delivery (#291): the Cloudflare queue consumer claims a pending row and sends it as one DM to the
+-- messaging sender ID within 24 hours of that sender's latest inbound DM. The Node worker never reads these rows.
+-- next_attempt_at: when a pending row may next be claimed; a deferred row stays pending with a later time.
+-- rate_limit_retries: the rate-limited retries already spent, as in private_reply_outbox.
+-- provider_called_at: set immediately before the provider send request. No hourly budget reads it.
+-- updated_at: the last state change; operations health dates a row that stale recovery made unknown by it.
+ALTER TABLE flow_dm_deliveries ADD COLUMN IF NOT EXISTS attempt_id uuid;
+ALTER TABLE flow_dm_deliveries ADD COLUMN IF NOT EXISTS attempt_started_at timestamptz;
+ALTER TABLE flow_dm_deliveries ADD COLUMN IF NOT EXISTS next_attempt_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE flow_dm_deliveries ADD COLUMN IF NOT EXISTS rate_limit_retries integer NOT NULL DEFAULT 0
+  CHECK(rate_limit_retries>=0);
+ALTER TABLE flow_dm_deliveries ADD COLUMN IF NOT EXISTS failure_code text
+  CHECK(failure_code ~ '^[a-z][a-z0-9_]{0,63}$');
+ALTER TABLE flow_dm_deliveries ADD COLUMN IF NOT EXISTS provider_called_at timestamptz;
+ALTER TABLE flow_dm_deliveries ADD COLUMN IF NOT EXISTS provider_message_id text
+  CHECK(length(btrim(provider_message_id))>0);
+ALTER TABLE flow_dm_deliveries ADD COLUMN IF NOT EXISTS sent_at timestamptz;
+ALTER TABLE flow_dm_deliveries ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT clock_timestamp();
+-- Migration 068's unnamed status CHECK allowed pending only; every stored row is pending and stays valid.
+ALTER TABLE flow_dm_deliveries DROP CONSTRAINT IF EXISTS flow_dm_deliveries_status_check;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='flow_dm_deliveries'::regclass AND conname='flow_dm_delivery_status') THEN
+    ALTER TABLE flow_dm_deliveries ADD CONSTRAINT flow_dm_delivery_status
+      CHECK(status IN ('pending','sending','sent','failed','blocked','unknown'));
+  END IF;
+  -- A pending row holds no attempt; every other row was claimed and keeps the attempt that last held it.
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='flow_dm_deliveries'::regclass AND conname='flow_dm_delivery_attempt') THEN
+    ALTER TABLE flow_dm_deliveries ADD CONSTRAINT flow_dm_delivery_attempt CHECK(
+      (status='pending' OR (attempt_id IS NOT NULL AND attempt_started_at IS NOT NULL))
+      AND (status<>'pending' OR (attempt_id IS NULL AND attempt_started_at IS NULL)));
+  END IF;
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='flow_dm_deliveries'::regclass AND conname='flow_dm_delivery_sent') THEN
+    ALTER TABLE flow_dm_deliveries ADD CONSTRAINT flow_dm_delivery_sent CHECK(
+      (status='sent')=(provider_message_id IS NOT NULL AND sent_at IS NOT NULL)
+      AND (status='sent' OR (provider_message_id IS NULL AND sent_at IS NULL)));
+  END IF;
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='flow_dm_deliveries'::regclass AND conname='flow_dm_delivery_failure') THEN
+    ALTER TABLE flow_dm_deliveries ADD CONSTRAINT flow_dm_delivery_failure
+      CHECK(status NOT IN ('failed','blocked') OR failure_code IS NOT NULL);
+  END IF;
+END $$;
+-- The claim and the wake read a connection's due pending rows, oldest first.
+CREATE INDEX IF NOT EXISTS flow_dm_deliveries_due_idx
+  ON flow_dm_deliveries(connection_id,next_attempt_at,created_at,id) WHERE status='pending';
+-- Stale recovery reads the rows still in sending.
+CREATE INDEX IF NOT EXISTS flow_dm_deliveries_sending_idx
+  ON flow_dm_deliveries(attempt_started_at) WHERE status='sending';
+-- The automation pause of one messaging sender ID (#291). A DM sender is an identity of its own, never linked to a
+-- comment sender, so instagram_contact_automation (keyed by the comment sender) does not apply to it. The DM flow
+-- delivery claim skips a paused recipient's rows and its final guard rechecks the pause. No API route or screen
+-- sets it yet; the inbox work adds them. Deletion removes it by the dm_recipient identity.
+CREATE TABLE IF NOT EXISTS instagram_dm_automation (
+  workspace_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  recipient_id text NOT NULL CHECK(recipient_id ~ '^[0-9]{1,40}$'),
+  paused boolean NOT NULL DEFAULT false,
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY(workspace_id,connection_id,recipient_id),
+  FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id)
+);
 -- Outbound webhooks (#47). An endpoint is an HTTPS address that an administrator registered; a flow's
 -- webhook node queues one signed delivery to it. Server roles never delete these rows; the deletion
 -- functions do. The limit of active endpoints per workspace is enforced in code under the workspace lock.
@@ -1557,6 +1617,7 @@ BEGIN
     PERFORM 1 FROM public.instagram_manual_replies WHERE connection_id=p_connection ORDER BY id FOR UPDATE NOWAIT;
     PERFORM 1 FROM public.webhook_deliveries WHERE connection_id=p_connection ORDER BY event_id FOR UPDATE NOWAIT;
     PERFORM 1 FROM public.campaign_deliveries WHERE workspace_id=p_workspace AND connection_id=p_connection ORDER BY id FOR UPDATE NOWAIT;
+    PERFORM 1 FROM public.flow_dm_deliveries WHERE workspace_id=p_workspace AND connection_id=p_connection ORDER BY id FOR UPDATE NOWAIT;
   EXCEPTION WHEN lock_not_available THEN
     RAISE EXCEPTION 'sending_in_progress' USING ERRCODE='AC003';
   END;
@@ -1565,6 +1626,7 @@ BEGIN
     OR EXISTS(SELECT 1 FROM public.instagram_manual_replies WHERE connection_id=p_connection AND status='sending')
     OR EXISTS(SELECT 1 FROM public.webhook_deliveries WHERE connection_id=p_connection AND status='sending')
     OR EXISTS(SELECT 1 FROM public.campaign_deliveries WHERE workspace_id=p_workspace AND connection_id=p_connection AND status='sending')
+    OR EXISTS(SELECT 1 FROM public.flow_dm_deliveries WHERE workspace_id=p_workspace AND connection_id=p_connection AND status='sending')
   THEN
     RAISE EXCEPTION 'sending_in_progress' USING ERRCODE='AC003';
   END IF;
@@ -1655,6 +1717,9 @@ BEGIN
   DELETE FROM public.instagram_contact_automation WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_automation', affected);
+  DELETE FROM public.instagram_dm_automation WHERE workspace_id=p_workspace AND connection_id=p_connection;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_dm_automation', affected);
   DELETE FROM public.instagram_contact_tags WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_tags', affected);
@@ -1758,6 +1823,7 @@ DECLARE
   replies bigint[];
   deliveries uuid[];
   campaign_rows uuid[];
+  dm_rows uuid[];
   deleted jsonb := '{}'::jsonb;
   retained jsonb;
   affected bigint;
@@ -1827,6 +1893,9 @@ BEGIN
     SELECT coalesce(array_agg(id), '{}') INTO campaign_rows FROM public.campaign_deliveries
     WHERE workspace_id=p_workspace AND connection_id=p_connection
       AND (sender_id=ANY(senders) OR recipient_id=ANY(recipients));
+    -- DM flow delivery rows are keyed by the messaging sender ID.
+    SELECT coalesce(array_agg(id), '{}') INTO dm_rows FROM public.flow_dm_deliveries
+    WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients);
 
     -- Lock the person's delivery rows before checking them. Workers claim with FOR UPDATE SKIP LOCKED,
     -- so a claim either committed first (and is seen as sending here) or skips these rows.
@@ -1836,10 +1905,11 @@ BEGIN
     PERFORM 1 FROM public.instagram_manual_replies
     WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients) FOR UPDATE;
     PERFORM 1 FROM public.webhook_deliveries WHERE event_id=ANY(deliveries) FOR UPDATE;
-    -- Campaign rows refuse instead of waiting, like the connection and workspace deletions: a delivery being
-    -- finalized may hold its row while it waits for a connection lock that conflicts with the one held here.
+    -- Campaign and DM flow rows refuse instead of waiting, like the connection and workspace deletions: a delivery
+    -- being finalized may hold its row while it waits for a connection lock that conflicts with the one held here.
     BEGIN
       PERFORM 1 FROM public.campaign_deliveries WHERE workspace_id=p_workspace AND id=ANY(campaign_rows) ORDER BY id FOR UPDATE NOWAIT;
+      PERFORM 1 FROM public.flow_dm_deliveries WHERE id=ANY(dm_rows) ORDER BY id FOR UPDATE NOWAIT;
     EXCEPTION WHEN lock_not_available THEN
       RAISE EXCEPTION 'sending_in_progress' USING ERRCODE='AC003';
     END;
@@ -1852,6 +1922,7 @@ BEGIN
     OR EXISTS(SELECT 1 FROM public.webhook_deliveries WHERE event_id=ANY(deliveries) AND status='sending')
     OR EXISTS(SELECT 1 FROM public.campaign_deliveries
       WHERE workspace_id=p_workspace AND id=ANY(campaign_rows) AND status='sending')
+    OR EXISTS(SELECT 1 FROM public.flow_dm_deliveries WHERE id=ANY(dm_rows) AND status='sending')
   THEN
     RAISE EXCEPTION 'sending_in_progress' USING ERRCODE='AC003';
   END IF;
@@ -1962,6 +2033,11 @@ BEGIN
   WHERE workspace_id=p_workspace AND connection_id=p_connection AND sender_id=ANY(senders);
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_automation', affected);
+  -- The automation pause of a messaging sender ID, keyed like the inbox.
+  DELETE FROM public.instagram_dm_automation
+  WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients);
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_dm_automation', affected);
   DELETE FROM public.instagram_contact_tags
   WHERE workspace_id=p_workspace AND connection_id=p_connection AND sender_id=ANY(senders);
   GET DIAGNOSTICS affected = ROW_COUNT;
@@ -2122,6 +2198,7 @@ BEGIN
     PERFORM 1 FROM public.instagram_manual_replies WHERE workspace_id=p_workspace ORDER BY id FOR UPDATE NOWAIT;
     PERFORM 1 FROM public.webhook_deliveries WHERE workspace_id=p_workspace ORDER BY event_id FOR UPDATE NOWAIT;
     PERFORM 1 FROM public.campaign_deliveries WHERE workspace_id=p_workspace ORDER BY id FOR UPDATE NOWAIT;
+    PERFORM 1 FROM public.flow_dm_deliveries WHERE workspace_id=p_workspace ORDER BY id FOR UPDATE NOWAIT;
   EXCEPTION WHEN lock_not_available THEN
     RAISE EXCEPTION 'sending_in_progress' USING ERRCODE='AC003';
   END;
@@ -2129,7 +2206,8 @@ BEGIN
     OR EXISTS(SELECT 1 FROM public.instagram_follow_conversations WHERE connection_id=ANY(connections) AND status='sending')
     OR EXISTS(SELECT 1 FROM public.instagram_manual_replies WHERE workspace_id=p_workspace AND status='sending')
     OR EXISTS(SELECT 1 FROM public.webhook_deliveries WHERE workspace_id=p_workspace AND status='sending')
-    OR EXISTS(SELECT 1 FROM public.campaign_deliveries WHERE workspace_id=p_workspace AND status='sending') THEN
+    OR EXISTS(SELECT 1 FROM public.campaign_deliveries WHERE workspace_id=p_workspace AND status='sending')
+    OR EXISTS(SELECT 1 FROM public.flow_dm_deliveries WHERE workspace_id=p_workspace AND status='sending') THEN
     RAISE EXCEPTION 'sending_in_progress' USING ERRCODE='AC003';
   END IF;
   SELECT coalesce(array_agg(user_id ORDER BY user_id), '{}') INTO members
@@ -2201,6 +2279,9 @@ BEGIN
   DELETE FROM public.instagram_contact_automation WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_automation', affected);
+  DELETE FROM public.instagram_dm_automation WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_dm_automation', affected);
   DELETE FROM public.instagram_contact_tags WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_tags', affected);
