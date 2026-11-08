@@ -24,7 +24,7 @@ let dir = "";
 let repo = "";
 let fakeWrangler = "";
 let fakeBin = "";
-const commits = { base: "", chore: "", migration: "" };
+const commits = { base: "", chore: "", deploy: "", migration: "", schema: "" };
 
 function git(...args: string[]): string {
   const result = spawnSync("git", ["-c", "commit.gpgsign=false", ...args], {
@@ -98,6 +98,8 @@ before(() => {
   commits.base = commit("README.md", "base\n", "base");
   commits.chore = commit("package.json", "{}\n", "chore");
   commits.migration = commit("db/migrations/070_example.sql", "SELECT 1;\n", "migration");
+  commits.schema = commit("db/schema.sql", "SELECT 2;\n", "schema");
+  commits.deploy = commit("deploy/supabase-access.sql", "SELECT 3;\n", "deploy");
 });
 
 after(() => {
@@ -116,6 +118,19 @@ test("the migration guard stops a range that changes a migration and names the f
   assert.match(result.summary, /Deploy stopped by the migration guard/);
   assert.match(result.summary, /`db\/migrations\/070_example\.sql`/);
   assert.match(result.summary, /migrations_applied: true/);
+});
+
+test("the migration guard stops a range that changes only db/schema.sql or only a deploy SQL file", () => {
+  // Each range holds one commit, so each guarded path must stop the deploy on its own.
+  for (const [range, file] of [
+    [{ sha: commits.schema, tag: commits.migration }, "db/schema.sql"],
+    [{ sha: commits.deploy, tag: commits.schema }, "deploy/supabase-access.sql"],
+  ] as const) {
+    const result = runGuard(range.sha, { tag: range.tag });
+    assert.equal(result.status, 1, result.output);
+    assert.match(result.summary, /Deploy stopped by the migration guard/);
+    assert.ok(result.summary.includes(`- \`${file}\``), result.summary);
+  }
 });
 
 function assertStops(result: ReturnType<typeof runGuard>, reason: RegExp) {
