@@ -1,5 +1,6 @@
 import { isRecord, isUuid } from "./auth.ts";
 import { isValidFieldValue } from "./contact-fields.ts";
+import { normalizeMatchText } from "../instagram/comment-rule.ts";
 
 export type FlowNode = { id: string; type: string; config: Record<string, unknown> };
 export type FlowEdge = { from: string; port: string; to: string };
@@ -17,6 +18,8 @@ export type PublishContext = {
   webhookFields: ReadonlySet<string>;
   legacyRuleEnabled: boolean;
   otherFlowPublished: boolean;
+  // The trigger nodes of the other enabled DM trigger flows on the trigger's connection (#33).
+  dmTriggers?: readonly FlowNode[];
 };
 
 export const EMPTY_FLOW: FlowDocument = { schema_version: 1, nodes: [], edges: [] };
@@ -26,6 +29,8 @@ const MAX_BYTES = 65536;
 const IDENTIFIER = /^[A-Za-z0-9_-]{1,40}$/;
 const PORTS: Record<string, string[]> = {
   instagram_comment: ["next"],
+  instagram_dm_keyword: ["next"],
+  instagram_dm_default: ["next"],
   instagram_message: ["next"],
   follows_account: ["true", "false"],
   has_tag: ["true", "false"],
@@ -38,6 +43,14 @@ const PORTS: Record<string, string[]> = {
   wait_for_reply: ["replied", "timeout"],
   webhook: ["next"],
 };
+// A flow starts from exactly one trigger: a comment on one media, or an inbound text DM that matches a keyword
+// trigger or, when no keyword trigger matches, the default-reply trigger (#33).
+export const DM_TRIGGER_TYPES: ReadonlySet<string> = new Set(["instagram_dm_keyword", "instagram_dm_default"]);
+export const TRIGGER_TYPES: ReadonlySet<string> = new Set(["instagram_comment", ...DM_TRIGGER_TYPES]);
+// A DM-triggered run has no comment, no 7-day comment window and no private-reply outbox, and its sender is a
+// messaging ID that is not linked to a comment contact. Until later PRs add them, its flow is the trigger
+// followed by messages only: no variables, waits, delays, contact conditions or actions, or webhooks.
+const DM_FLOW_TYPES = new Set([...DM_TRIGGER_TYPES, "instagram_message"]);
 // Own-property lookup, so names such as "constructor" are unknown types rather than prototype members.
 function portsOf(type: string): string[] | undefined {
   return Object.hasOwn(PORTS, type) ? PORTS[type] : undefined;
@@ -138,6 +151,18 @@ function validConfig(node: FlowNode): boolean {
         keywords(config.excluded_keywords) &&
         (config.match_mode === "all" || (config.keywords as unknown[]).length > 0)
       );
+    // The comment trigger's shape: "all" matches every DM except the excluded keywords.
+    case "instagram_dm_keyword":
+      return (
+        exactKeys(config, ["connection_id", "keywords", "match_mode", "excluded_keywords"]) &&
+        isUuid(config.connection_id) &&
+        oneOf(config.match_mode, ["contains", "exact", "all"]) &&
+        keywords(config.keywords) &&
+        keywords(config.excluded_keywords) &&
+        (config.match_mode === "all" || (config.keywords as unknown[]).length > 0)
+      );
+    case "instagram_dm_default":
+      return exactKeys(config, ["connection_id"]) && isUuid(config.connection_id);
     case "instagram_message":
       return (
         exactKeys(config, ["text"], ["button_title"]) &&
@@ -320,6 +345,39 @@ function hasCycle(nodes: FlowNode[], edges: FlowEdge[]): boolean {
   return nodes.some((node) => visit(node.id));
 }
 
+// Whether one DM could start both triggers (#33). Two default-reply triggers always overlap; a keyword trigger
+// never overlaps a default-reply one, because a keyword match wins. An "all" keyword trigger overlaps every other
+// keyword trigger. Two other keyword triggers overlap when, after the match normalization, two exact keywords are
+// equal, an exact keyword contains a contains-keyword, or one contains-keyword contains the other. Excluded
+// keywords are ignored. A DM that holds keywords of two contains triggers can still match both; ingestion then
+// starts the oldest flow.
+export function dmTriggersOverlap(left: FlowNode, right: FlowNode): boolean {
+  if (left.type === "instagram_dm_default" || right.type === "instagram_dm_default") return left.type === right.type;
+  if (left.config.match_mode === "all" || right.config.match_mode === "all") return true;
+  const words = (node: FlowNode) =>
+    (Array.isArray(node.config.keywords) ? node.config.keywords : [])
+      .filter((word): word is string => typeof word === "string")
+      .map(normalizeMatchText)
+      .filter(Boolean);
+  const exact = (node: FlowNode) => node.config.match_mode === "exact";
+  return words(left).some((a) =>
+    words(right).some((b) => {
+      if (exact(left) && exact(right)) return a === b;
+      if (exact(left)) return a.includes(b);
+      if (exact(right)) return b.includes(a);
+      return a.includes(b) || b.includes(a);
+    }),
+  );
+}
+
+// The conflicts of a DM trigger with the other enabled DM trigger flows on its connection (#33).
+export function dmTriggerConflicts(trigger: FlowNode, others: readonly FlowNode[], path: string): FlowError[] {
+  if (!DM_TRIGGER_TYPES.has(trigger.type) || !others.some((other) => dmTriggersOverlap(trigger, other))) return [];
+  return trigger.type === "instagram_dm_default"
+    ? [error("dm_default_conflict", path, { node_id: trigger.id })]
+    : [error("dm_keyword_conflict", `${path}.keywords`, { node_id: trigger.id })];
+}
+
 export function validateFlowForPublish(input: unknown, context: PublishContext): FlowError[] {
   const parsed = parseFlowDocument(input);
   if ("errors" in parsed) return parsed.errors;
@@ -347,8 +405,15 @@ export function validateFlowForPublish(input: unknown, context: PublishContext):
     if (node.type === "instagram_message")
       errors.push(...variableErrors(String(node.config.text), context.fields, `${path}.text`, node.id));
   });
-  const triggers = nodes.filter((node) => node.type === "instagram_comment");
+  const triggers = nodes.filter((node) => TRIGGER_TYPES.has(node.type));
   if (triggers.length !== 1) errors.push(error("trigger_count", "nodes"));
+  if (triggers.length === 1 && DM_TRIGGER_TYPES.has(triggers[0]!.type))
+    nodes.forEach((node, index) => {
+      if (portsOf(node.type) && !DM_FLOW_TYPES.has(node.type))
+        errors.push(error("dm_trigger_unsupported_node", `nodes[${index}].type`, { node_id: node.id }));
+      else if (node.type === "instagram_message" && /\{\{|\}\}/.test(String(node.config.text)))
+        errors.push(error("dm_trigger_unsupported_variable", `nodes[${index}].config.text`, { node_id: node.id }));
+    });
   const valid: FlowEdge[] = [];
   const used = new Set<string>();
   edges.forEach((edge, index) => {
@@ -368,7 +433,7 @@ export function validateFlowForPublish(input: unknown, context: PublishContext):
       return;
     }
     used.add(key);
-    if (to.type === "instagram_comment")
+    if (TRIGGER_TYPES.has(to.type))
       errors.push(error("trigger_has_incoming", `edges[${index}].to`, { edge_index: index }));
     // A reply wait listens for an answer to the private reply sent just before it.
     if (to.type === "wait_for_reply" && from.type !== "instagram_message")
@@ -428,16 +493,22 @@ export function validateFlowForPublish(input: unknown, context: PublishContext):
     errors.push(error("legacy_rule_conflict", `${triggerPath}.media_id`, { node_id: trigger.id }));
   if (context.otherFlowPublished)
     errors.push(error("flow_trigger_conflict", `${triggerPath}.media_id`, { node_id: trigger.id }));
+  errors.push(...dmTriggerConflicts(trigger, context.dmTriggers ?? [], triggerPath));
   return errors;
 }
 
+export function flowTrigger(document: Pick<FlowDocument, "nodes">): FlowNode | undefined {
+  return document.nodes.find((node) => TRIGGER_TYPES.has(node.type));
+}
+
 export function flowReferences(document: FlowDocument): {
+  trigger_type: string | null;
   connection_id: string | null;
   media_id: string | null;
   field_ids: string[];
   endpoint_ids: string[];
 } {
-  const trigger = document.nodes.find((node) => node.type === "instagram_comment");
+  const trigger = flowTrigger(document);
   const fields = new Set<string>();
   const endpoints = new Set<string>();
   for (const node of document.nodes) {
@@ -455,8 +526,12 @@ export function flowReferences(document: FlowDocument): {
         if (isUuid(match[1])) fields.add(match[1].toLowerCase());
   }
   return {
+    trigger_type: trigger?.type ?? null,
     connection_id: isUuid(trigger?.config.connection_id) ? trigger.config.connection_id.toLowerCase() : null,
-    media_id: typeof trigger?.config.media_id === "string" ? trigger.config.media_id : null,
+    media_id:
+      trigger?.type === "instagram_comment" && typeof trigger.config.media_id === "string"
+        ? trigger.config.media_id
+        : null,
     field_ids: [...fields].sort(),
     endpoint_ids: [...endpoints].sort(),
   };

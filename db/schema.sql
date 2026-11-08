@@ -1348,6 +1348,71 @@ CREATE TRIGGER carry_deleted_private_reply_calls
 AFTER DELETE ON public.private_reply_outbox
 REFERENCING OLD TABLE AS deleted_replies
 FOR EACH STATEMENT EXECUTE FUNCTION public.carry_deleted_private_reply_calls();
+-- DM start triggers (#33). A published version is keyed by its trigger type: a comment flow keeps its
+-- (connection, media) key, and a DM keyword or default-reply flow has a connection and no media.
+ALTER TABLE flow_versions ADD COLUMN IF NOT EXISTS trigger_type text NOT NULL DEFAULT 'instagram_comment';
+ALTER TABLE flow_versions ALTER COLUMN trigger_media_id DROP NOT NULL;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='flow_versions'::regclass AND conname='flow_versions_trigger_key') THEN
+    ALTER TABLE flow_versions ADD CONSTRAINT flow_versions_trigger_key CHECK(
+      trigger_type IN ('instagram_comment','instagram_dm_keyword','instagram_dm_default')
+      AND (trigger_type='instagram_comment') = (trigger_media_id IS NOT NULL));
+  END IF;
+END $$;
+-- One row per inbound text DM that started a published DM trigger flow. It holds identifiers, the DM time and
+-- the matched flow and version, never the DM text. sender_id is the messaging sender ID (a DM recipient); it is
+-- not linked to a comment sender. A DM that a precedence rule blocks writes no row.
+CREATE TABLE IF NOT EXISTS instagram_dm_start_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  message_id text NOT NULL CHECK(length(message_id) BETWEEN 1 AND 512),
+  sender_id text NOT NULL CHECK(sender_id ~ '^[0-9]{1,40}$'),
+  flow_id uuid NOT NULL,
+  flow_version_id uuid NOT NULL,
+  trigger_type text NOT NULL CHECK(trigger_type IN ('instagram_dm_keyword','instagram_dm_default')),
+  message_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE(connection_id,message_id),
+  UNIQUE(id,connection_id,workspace_id),
+  FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id),
+  FOREIGN KEY(flow_id,workspace_id) REFERENCES flows(id,workspace_id),
+  FOREIGN KEY(flow_version_id,flow_id) REFERENCES flow_versions(id,flow_id)
+);
+CREATE INDEX IF NOT EXISTS instagram_dm_start_events_sender_idx
+  ON instagram_dm_start_events(workspace_id,connection_id,sender_id);
+-- A run starts from exactly one source: a comment event or a DM start event, with one run per flow and source.
+ALTER TABLE flow_runs ALTER COLUMN event_id DROP NOT NULL;
+ALTER TABLE flow_runs ADD COLUMN IF NOT EXISTS dm_start_event_id uuid;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='flow_runs'::regclass AND conname='flow_runs_dm_start_event') THEN
+    ALTER TABLE flow_runs ADD CONSTRAINT flow_runs_dm_start_event
+      FOREIGN KEY(dm_start_event_id,connection_id,workspace_id) REFERENCES instagram_dm_start_events(id,connection_id,workspace_id);
+  END IF;
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='flow_runs'::regclass AND conname='flow_runs_source') THEN
+    ALTER TABLE flow_runs ADD CONSTRAINT flow_runs_source CHECK((event_id IS NULL) <> (dm_start_event_id IS NULL));
+  END IF;
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='flow_runs'::regclass AND conname='flow_runs_dm_start_unique') THEN
+    ALTER TABLE flow_runs ADD CONSTRAINT flow_runs_dm_start_unique UNIQUE(flow_id,dm_start_event_id);
+  END IF;
+END $$;
+-- The first message of a run that a DM started, addressed to the messaging sender ID. It is never written to
+-- private_reply_outbox. No worker, claim, cron step or queue reads these rows yet (#291 adds delivery), so the
+-- only status is pending.
+CREATE TABLE IF NOT EXISTS flow_dm_deliveries (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  flow_run_id uuid NOT NULL UNIQUE,
+  recipient_id text NOT NULL CHECK(recipient_id ~ '^[0-9]{1,40}$'),
+  message_text text NOT NULL CHECK(length(message_text) BETWEEN 1 AND 1000),
+  status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending')),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id),
+  FOREIGN KEY(flow_run_id,connection_id,workspace_id) REFERENCES flow_runs(id,connection_id,workspace_id)
+);
+CREATE INDEX IF NOT EXISTS flow_dm_deliveries_recipient_idx
+  ON flow_dm_deliveries(workspace_id,connection_id,recipient_id);
 -- Outbound webhooks (#47). An endpoint is an HTTPS address that an administrator registered; a flow's
 -- webhook node queues one signed delivery to it. Server roles never delete these rows; the deletion
 -- functions do. The limit of active endpoints per workspace is enforced in code under the workspace lock.
@@ -1621,12 +1686,19 @@ BEGIN
   DELETE FROM public.webhook_deliveries WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('webhook_deliveries', affected);
+  -- The first-message rows of DM-started runs point at the runs; the DM start events go after the runs.
+  DELETE FROM public.flow_dm_deliveries WHERE workspace_id=p_workspace AND connection_id=p_connection;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('flow_dm_deliveries', affected);
   DELETE FROM public.flow_step_runs WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('flow_step_runs', affected);
   DELETE FROM public.flow_runs WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('flow_runs', affected);
+  DELETE FROM public.instagram_dm_start_events WHERE workspace_id=p_workspace AND connection_id=p_connection;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_dm_start_events', affected);
   DELETE FROM public.instagram_comment_events WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_comment_events', affected);
@@ -1921,22 +1993,41 @@ BEGIN
   DELETE FROM public.webhook_deliveries WHERE event_id=ANY(deliveries);
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('webhook_deliveries', affected);
-  -- A flow run whose reply or webhook delivery was queued after the rows were locked stays with it.
-  DELETE FROM public.flow_step_runs step USING public.flow_runs run, public.instagram_comment_events event
-  WHERE step.run_id=run.id AND event.id=run.event_id
-    AND run.workspace_id=p_workspace AND run.connection_id=p_connection AND event.sender_id=ANY(senders)
-    AND NOT EXISTS(SELECT 1 FROM public.private_reply_outbox reply WHERE reply.flow_run_id=run.id)
-    AND NOT EXISTS(SELECT 1 FROM public.webhook_deliveries delivery WHERE delivery.flow_run_id=run.id);
+  -- The first-message rows of runs a DM started, keyed by the messaging sender ID like the inbox.
+  DELETE FROM public.flow_dm_deliveries
+  WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients);
   GET DIAGNOSTICS affected = ROW_COUNT;
-  deleted := deleted || jsonb_build_object('flow_step_runs', affected);
-  DELETE FROM public.flow_runs run USING public.instagram_comment_events event
-  WHERE event.id=run.event_id
-    AND run.workspace_id=p_workspace AND run.connection_id=p_connection AND event.sender_id=ANY(senders)
+  deleted := deleted || jsonb_build_object('flow_dm_deliveries', affected);
+  -- A flow run belongs to the person through its comment sender or, for a run a DM started, its messaging
+  -- sender ID. A run whose reply or webhook delivery was queued after the rows were locked stays with it.
+  DELETE FROM public.flow_step_runs step USING public.flow_runs run
+  WHERE step.run_id=run.id AND run.workspace_id=p_workspace AND run.connection_id=p_connection
+    AND (EXISTS(SELECT 1 FROM public.instagram_comment_events event
+        WHERE event.id=run.event_id AND event.sender_id=ANY(senders))
+      OR EXISTS(SELECT 1 FROM public.instagram_dm_start_events start
+        WHERE start.id=run.dm_start_event_id AND start.sender_id=ANY(recipients)))
     AND NOT EXISTS(SELECT 1 FROM public.private_reply_outbox reply WHERE reply.flow_run_id=run.id)
     AND NOT EXISTS(SELECT 1 FROM public.webhook_deliveries delivery WHERE delivery.flow_run_id=run.id)
+    AND NOT EXISTS(SELECT 1 FROM public.flow_dm_deliveries dm WHERE dm.flow_run_id=run.id);
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('flow_step_runs', affected);
+  DELETE FROM public.flow_runs run
+  WHERE run.workspace_id=p_workspace AND run.connection_id=p_connection
+    AND (EXISTS(SELECT 1 FROM public.instagram_comment_events event
+        WHERE event.id=run.event_id AND event.sender_id=ANY(senders))
+      OR EXISTS(SELECT 1 FROM public.instagram_dm_start_events start
+        WHERE start.id=run.dm_start_event_id AND start.sender_id=ANY(recipients)))
+    AND NOT EXISTS(SELECT 1 FROM public.private_reply_outbox reply WHERE reply.flow_run_id=run.id)
+    AND NOT EXISTS(SELECT 1 FROM public.webhook_deliveries delivery WHERE delivery.flow_run_id=run.id)
+    AND NOT EXISTS(SELECT 1 FROM public.flow_dm_deliveries dm WHERE dm.flow_run_id=run.id)
     AND NOT EXISTS(SELECT 1 FROM public.flow_step_runs step WHERE step.run_id=run.id);
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('flow_runs', affected);
+  DELETE FROM public.instagram_dm_start_events start
+  WHERE start.workspace_id=p_workspace AND start.connection_id=p_connection AND start.sender_id=ANY(recipients)
+    AND NOT EXISTS(SELECT 1 FROM public.flow_runs run WHERE run.dm_start_event_id=start.id);
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_dm_start_events', affected);
   -- A comment that arrived after the rows were locked keeps its new reply or flow run and stays for a later run.
   DELETE FROM public.instagram_comment_events event
   WHERE event.workspace_id=p_workspace AND event.connection_id=p_connection AND event.sender_id=ANY(senders)
@@ -2169,12 +2260,19 @@ BEGIN
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('webhook_endpoints', affected);
   -- Flow runs follow the replies that point at them and precede the versions they are pinned to.
+  DELETE FROM public.flow_dm_deliveries WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('flow_dm_deliveries', affected);
   DELETE FROM public.flow_step_runs WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('flow_step_runs', affected);
   DELETE FROM public.flow_runs WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('flow_runs', affected);
+  -- DM start events point at the flow versions deleted next.
+  DELETE FROM public.instagram_dm_start_events WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_dm_start_events', affected);
   UPDATE public.flows SET enabled=false,published_version_id=NULL WHERE workspace_id=p_workspace;
   DELETE FROM public.flow_versions WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;

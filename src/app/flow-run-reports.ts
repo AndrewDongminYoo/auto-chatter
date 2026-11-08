@@ -41,7 +41,8 @@ export async function flowRunReport(pool: Pool, user: User, query: URLSearchPara
     (flow !== null && !isUuid(flow))
   )
     throw new ApiError(400, "invalid_report_query");
-  // Run creation selects the cohort. The unique outbox flow_run_id permits one left join;
+  // Run creation selects the cohort. The unique outbox and DM delivery flow_run_id permit one left join each (a run
+  // has at most one of them: a comment run's reply or a DM-started run's first message, #33);
   // step and webhook histories must not multiply counts or imply delivery success.
   const row = (
     await pool.query<ReportRow>(
@@ -64,16 +65,18 @@ export async function flowRunReport(pool: Pool, user: User, query: URLSearchPara
        'awaiting_reply',count(*) FILTER (WHERE r.status='awaiting_reply')::text,
        'cancelled',count(*) FILTER (WHERE r.status='cancelled')::text
      ) AS run_counts, json_build_object(
-       'absent',count(*) FILTER (WHERE reply.id IS NULL)::text,
-       'pending',count(*) FILTER (WHERE reply.status='pending')::text,
-       'sending',count(*) FILTER (WHERE reply.status='sending')::text,
-       'sent',count(*) FILTER (WHERE reply.status='sent')::text,
-       'blocked',count(*) FILTER (WHERE reply.status='blocked')::text,
-       'failed',count(*) FILTER (WHERE reply.status='failed')::text,
-       'unknown',count(*) FILTER (WHERE reply.status='unknown')::text
+       'absent',count(*) FILTER (WHERE reply.id IS NULL AND dm.id IS NULL)::text,
+       'pending',count(*) FILTER (WHERE coalesce(reply.status,dm.status)='pending')::text,
+       'sending',count(*) FILTER (WHERE coalesce(reply.status,dm.status)='sending')::text,
+       'sent',count(*) FILTER (WHERE coalesce(reply.status,dm.status)='sent')::text,
+       'blocked',count(*) FILTER (WHERE coalesce(reply.status,dm.status)='blocked')::text,
+       'failed',count(*) FILTER (WHERE coalesce(reply.status,dm.status)='failed')::text,
+       'unknown',count(*) FILTER (WHERE coalesce(reply.status,dm.status)='unknown')::text
      ) AS reply_counts
      FROM flow_runs r LEFT JOIN private_reply_outbox reply
        ON reply.flow_run_id=r.id AND reply.workspace_id=r.workspace_id AND reply.connection_id=r.connection_id
+     LEFT JOIN flow_dm_deliveries dm
+       ON dm.flow_run_id=r.id AND dm.workspace_id=r.workspace_id AND dm.connection_id=r.connection_id
      WHERE r.workspace_id=$1 AND (r.connection_id=$5 OR $5::uuid IS NULL) AND (r.flow_id=$7 OR $7::uuid IS NULL)
        AND r.created_at>=context.period_from AND r.created_at<context.period_before
        AND context.connection_exists AND context.flow_exists AND context.time_zone=$4

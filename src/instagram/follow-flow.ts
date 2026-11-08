@@ -6,6 +6,7 @@ import { lockInboxConversations, storeInboxMessage } from "./inbox.ts";
 import { deliveryRecipientOptedOut } from "./channel-consent.ts";
 import { PreSendVerificationError, ProviderRateLimitedError, ProviderRejectedError } from "./reply-worker.ts";
 import { resumeRepliedFlowRun } from "./store.ts";
+import { startDmTriggerFlow } from "./dm-start-trigger.ts";
 
 const normalized = (text: string) => text.normalize("NFC").trim().toLowerCase();
 export async function ingestMessages(
@@ -28,7 +29,10 @@ export async function ingestMessages(
       // Read (and lock the connection) before the lookups: a reply recorded as sent between them would
       // otherwise leave this DM neither matched nor kept.
       const keeper = await sendingConnection(client, message);
-      if (!(await offerMessage(client, message, false)) && keeper) await keepUnmatched(client, keeper, message);
+      if (await offerMessage(client, message, false)) continue;
+      if (keeper) await keepUnmatched(client, keeper, message);
+      // Only a DM that neither the reply wait nor the follow confirmation took may start a DM trigger flow (#33).
+      await startDmTriggerFlow(client, message);
     }
     await client.query("COMMIT");
   } catch (error) {

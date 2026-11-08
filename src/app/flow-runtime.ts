@@ -1,6 +1,14 @@
 import { matchesCommentRule } from "../instagram/comment-rule.ts";
 import { isValidFieldValue } from "./contact-fields.ts";
-import { normalizeTag, replySaveFields, type FlowDocument, type FlowError, type FlowNode } from "./flow-schema.ts";
+import {
+  DM_TRIGGER_TYPES,
+  flowTrigger,
+  normalizeTag,
+  replySaveFields,
+  type FlowDocument,
+  type FlowError,
+  type FlowNode,
+} from "./flow-schema.ts";
 
 // What the runtime knows about the commenter when the comment arrives.
 export type ContactFacts = { tags: ReadonlySet<string>; fields: ReadonlyMap<string, unknown> };
@@ -79,9 +87,10 @@ const MAX_TAGS = 20;
 const MAX_MESSAGE = 1000;
 const VARIABLE = /\{\{([^{}]*)\}\}/g;
 
-function trigger(document: FlowDocument): FlowNode | undefined {
-  return document.nodes.find((node) => node.type === "instagram_comment");
-}
+// The DM trigger types (#33) run too; the editor does not offer them yet (#292), so they stay out of this list,
+// which the editor's type catalog mirrors.
+const executable = (type: string) => EXECUTABLE_TYPES.has(type) || DM_TRIGGER_TYPES.has(type);
+const trigger = flowTrigger;
 
 function variableFieldIds(text: string): string[] {
   return [...text.matchAll(VARIABLE)].flatMap((match) => {
@@ -93,7 +102,7 @@ function variableFieldIds(text: string): string[] {
 export function flowExecutionErrors(document: FlowDocument, fieldTypes: ReadonlyMap<string, string>): FlowError[] {
   const errors: FlowError[] = [];
   document.nodes.forEach((node, index) => {
-    if (!EXECUTABLE_TYPES.has(node.type))
+    if (!executable(node.type))
       errors.push({ code: "unsupported_node", node_id: node.id, path: `nodes[${index}].type` });
     else if (node.type === "instagram_message" && node.config.button_title !== undefined)
       errors.push({ code: "unsupported_message", node_id: node.id, path: `nodes[${index}].config` });
@@ -112,9 +121,13 @@ export function flowExecutionErrors(document: FlowDocument, fieldTypes: Readonly
   return errors;
 }
 
+// A comment or DM keyword trigger matches the text with the comment-rule matcher; a DM default-reply trigger
+// matches every text, and ingestion offers a DM to it only when no keyword trigger matched.
 export function matchesFlowTrigger(document: FlowDocument, text: string): boolean {
-  const config = trigger(document)?.config;
-  if (!config) return false;
+  const node = trigger(document);
+  if (!node) return false;
+  if (node.type === "instagram_dm_default") return true;
+  const config = node.config;
   return matchesCommentRule(text, {
     keyword: "",
     keywords: config.keywords as string[],

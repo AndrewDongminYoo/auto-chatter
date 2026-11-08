@@ -459,6 +459,7 @@ test("references expose the trigger and every field id used by configs and varia
   const parsed = parseFlowDocument(branching);
   assert.ok("document" in parsed);
   assert.deepEqual(flowReferences(parsed.document), {
+    trigger_type: "instagram_comment",
     connection_id: connection,
     media_id: "1789",
     field_ids: [field, numberField].sort(),

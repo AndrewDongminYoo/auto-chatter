@@ -24,6 +24,8 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
   let numbers = {};
   const openMenus = new Set();
   const isAdmin = () => ["owner", "admin"].includes(getRole());
+  // Admins edit an open flow unless the editor cannot show it correctly (flowReadOnlyReason).
+  const canEdit = () => isAdmin() && !current?.readOnly;
   const dirty = () => current !== null && changes !== savedChanges;
   const sameId = (left, right) => String(left).toLowerCase() === String(right).toLowerCase();
   const names = {
@@ -143,6 +145,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
       published: flow.published_version_no,
       enabled: flow.enabled,
       archived: flow.archived === true,
+      readOnly: flowReadOnlyReason(flow.draft) ?? null,
     };
     draft = JSON.parse(JSON.stringify(flow.draft));
     changes = 0;
@@ -194,13 +197,15 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     byId("flow-test-run").disabled = busy || archived;
     byId("flow-status").textContent = !isAdmin()
       ? "플로는 관리자와 소유자만 바꿀 수 있어 읽기 전용으로 보여 줍니다."
-      : archived
-        ? "보관한 플로입니다. 저장할 수 없으니 필요한 내용을 옮긴 뒤 닫아 주세요."
-        : unsaved
-          ? "저장하지 않은 변경 사항이 있습니다. 발행과 초안 테스트는 저장한 초안으로 하므로 먼저 저장해 주세요."
-          : current.published
-            ? `저장한 초안입니다. 발행 버전은 v${current.published}이며, 초안을 발행해야 실행에 반영됩니다.`
-            : "저장한 초안입니다. 발행하고 켜야 새 댓글에 실행됩니다.";
+      : current.readOnly
+        ? current.readOnly
+        : archived
+          ? "보관한 플로입니다. 저장할 수 없으니 필요한 내용을 옮긴 뒤 닫아 주세요."
+          : unsaved
+            ? "저장하지 않은 변경 사항이 있습니다. 발행과 초안 테스트는 저장한 초안으로 하므로 먼저 저장해 주세요."
+            : current.published
+              ? `저장한 초안입니다. 발행 버전은 v${current.published}이며, 초안을 발행해야 실행에 반영됩니다.`
+              : "저장한 초안입니다. 발행하고 켜야 새 댓글에 실행됩니다.";
     byId("flow-badges").replaceChildren(
       badge(current.published ? `발행 v${current.published}` : "미발행"),
       badge(current.enabled ? "켜짐" : "꺼짐", current.enabled ? "success" : ""),
@@ -208,7 +213,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     );
   }
   function renderEditor() {
-    const admin = isAdmin();
+    const admin = canEdit();
     byId("flow-editor-title").textContent = current.name;
     byId("flow-name-row").hidden = !admin;
     byId("flow-actions").hidden = !admin;
@@ -680,7 +685,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     item.append(
       node("p", entry.port === "next" ? "여기서 끝납니다." : "이 가지는 비어 있어 여기서 끝납니다.", "flow-slot-text"),
     );
-    if (!isAdmin()) return item;
+    if (!canEdit()) return item;
     const types = flowSlotTypes(draft, entry.from, entry.port);
     if (types.length)
       item.append(addForm(entry.from, [entry.port], `${slotName(entry.from, entry.port)}에 추가할 단계`));
@@ -699,7 +704,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
       byId(`flow-step-title-${entry.id}`)?.focus();
     });
     item.append(node("span", "→ ", "flow-link-arrow"), link);
-    if (isAdmin()) {
+    if (canEdit()) {
       const unlink = node("button", "연결 끊기", "secondary");
       unlink.type = "button";
       unlink.setAttribute("aria-label", `${slotName(entry.from, entry.port)}의 연결 끊기`);
@@ -736,7 +741,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
       for (const error of errors) list.append(node("li", error.message));
       element.append(list);
     }
-    if (isAdmin()) element.append(stepMenu(item, summary));
+    if (canEdit()) element.append(stepMenu(item, summary));
     if (entry.branches.length) {
       const branches = node("div", "", "flow-branches");
       for (const branch of entry.branches) {
@@ -804,7 +809,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     numbers = flowStepNumbers(outline);
     const parts = [];
     if (!outline.trigger) {
-      if (isAdmin()) {
+      if (canEdit()) {
         const start = node("button", "댓글 트리거 만들기");
         start.type = "button";
         start.addEventListener("click", () => {

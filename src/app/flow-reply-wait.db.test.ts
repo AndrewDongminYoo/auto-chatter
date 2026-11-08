@@ -208,6 +208,11 @@ async function sentMinutesAgo(minutes: number) {
   ]);
 }
 
+// The text that starts the run claim (CLAIMED_RUN in store.ts). pg_stat_activity keeps only the first 1 kB of a
+// query (track_activity_query_size), and the reply claim is longer, so its closing FOR UPDATE OF run is not
+// always in the stored text; only the claim waits on a Lock with this text, as the cron claim uses SKIP LOCKED.
+const RUN_CLAIM = "%FROM flow_runs run JOIN flows f%";
+
 async function waitForLock(pattern: string) {
   for (let attempt = 0; attempt < 100; attempt++) {
     const waiting = await pool.query(
@@ -507,7 +512,7 @@ test("a timeout that claimed the run first wins over a reply that arrives while 
     await waitForLock("%pg_advisory_xact_lock%");
     // The reply is dated inside the wait, so it waits for the run row the timeout holds.
     const replied = dm("9001", "XL", { at: new Date(Date.now() - 2 * 60_000) });
-    await waitForLock("%FOR UPDATE OF run%");
+    await waitForLock(RUN_CLAIM);
     await holder.query("COMMIT");
     assert.equal(await timedOut, 1);
     await replied;
@@ -669,7 +674,7 @@ async function deliverConcurrently(firstId: string, secondId: string) {
     const firstMessage = dm("9001", "XL", { id: firstId });
     await waitForLock("%pg_advisory_xact_lock%");
     const secondMessage = dm("9001", "M", { id: secondId });
-    await waitForLock("%FOR UPDATE OF run%");
+    await waitForLock(RUN_CLAIM);
     await holder.query("COMMIT");
     await Promise.all([firstMessage, secondMessage]);
   } finally {

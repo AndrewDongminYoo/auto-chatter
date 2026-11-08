@@ -244,6 +244,7 @@ test("migration 063 replays and preserves drafts while matching the canonical wo
   // 064 and 065 redefine the function after 063, so the runner's order reproduces the canonical one.
   await pool.query(await readFile(new URL("../../db/migrations/064_campaign_approvals.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/065_campaign_runs.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/068_dm_start_triggers.sql", import.meta.url), "utf8"));
   assert.equal(await definition(), canonical);
   assert.equal((await expect(await request("GET", `/api/campaign-drafts/${input.id}`))).version, 1);
 });

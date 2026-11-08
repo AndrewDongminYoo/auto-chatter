@@ -144,6 +144,7 @@ Write new or changed per-feature invariants there, not here: this file keeps onl
 - [Contacts and segments](docs/agents/feature-invariants.md#contacts-and-segments): `src/app/contact*.ts`, `src/app/segment-snapshots.ts`, `public/app/{condition-tree-model,contact-*,segment-*}.js`
 - [Inbox](docs/agents/feature-invariants.md#inbox): `src/app/inbox*.ts`, `src/instagram/inbox.ts`, `src/app/manual-replies.ts`, `src/app/reply-templates.ts`
 - [Consent and flows](docs/agents/feature-invariants.md#consent-and-flows): `src/app/channel-consent.ts`, `src/app/flow*.ts`, `src/app/webhook*.ts`, flow runs in `src/instagram/store.ts`
+- [DM start triggers](docs/agents/feature-invariants.md#dm-start-triggers): `src/instagram/dm-start-trigger.ts`
 - [Deletion, workspace and operations](docs/agents/feature-invariants.md#deletion-workspace-and-operations): `src/app/data-deletion.ts`, `src/app/workspace-*.ts`, `src/app/plans.ts`, `src/app/operations-*.ts`, the deletion functions in `db/schema.sql` and `db/migrations/`, `deploy/*.sql`
 - [Reports](docs/agents/feature-invariants.md#reports): `src/app/*-reports.ts`, `public/app/*-reports.js`
 
