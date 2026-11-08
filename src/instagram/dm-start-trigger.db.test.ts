@@ -488,6 +488,34 @@ test("a concurrent redelivery waits for the delivery that started a DM flow and 
   );
 });
 
+// The message locks are taken in key order, not in the batch's order: while another session holds the lower key, a
+// batch that lists the higher key first waits on the lower key and holds no message lock yet. Taking them in input
+// order would hold the higher key while waiting, and two batches with the same IDs in opposite orders could deadlock.
+test("a batch takes its message locks in key order, whatever the order of its messages", async () => {
+  const holder = await pool.connect();
+  let batch: Promise<void> | undefined;
+  try {
+    await holder.query("BEGIN");
+    const holderPid = (await holder.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+    await holder.query("SELECT pg_advisory_xact_lock(hashtextextended('instagram-message:owned-account:lock-a',0))");
+    const at = new Date();
+    batch = ingestMessages(pool, [
+      { accountId: "owned-account", senderId: "9800", messageId: "lock-b", text: "b", timestamp: at },
+      { accountId: "owned-account", senderId: "9801", messageId: "lock-a", text: "a", timestamp: at },
+    ]);
+    await waitForMessageLock();
+    const held = await pool.query(
+      "SELECT count(*)::int AS held FROM pg_locks WHERE locktype='advisory' AND granted AND pid<>$1",
+      [holderPid],
+    );
+    assert.equal(held.rows[0].held, 0);
+  } finally {
+    await holder.query("ROLLBACK");
+    holder.release();
+  }
+  await batch;
+});
+
 test("a kept DM inside its 15-minute window blocks its sender until it is matched or expires", async () => {
   await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
   await pool.query(
