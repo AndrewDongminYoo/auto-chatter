@@ -549,6 +549,29 @@ test("the guard immediately before the POST sees a change made after the second 
   );
 });
 
+// Security audit #62, fourth pass: CLAUDE.md requires every automated send path to recheck the contact pause and the
+// service revokes after the claim and immediately before the POST. Each change is made after the worker's own
+// guards, when it stamps provider_called_at, so only the transport's beforeSend guard can see it.
+for (const { name, change, expect } of guardCases.filter((guard) =>
+  [
+    "the marketing grant was revoked",
+    "the comment sender opted out",
+    "another DM recipient bridged to the sender opted out",
+    "the contact was paused",
+    "a handoff paused the contact",
+  ].includes(guard.name),
+))
+  test(`the guard immediately before the POST: ${name}`, async () => {
+    const run = await campaign([["1001", "2001"]]);
+    const seen = graph();
+    assert.equal(await deliver(seen, {}, hookedPool(/SET provider_called_at/, change)), true);
+    assert.deepEqual(seen.posts, []);
+    const [row] = await rows(run);
+    assert.deepEqual([row.status, row.failure_code, row.called], [...expect, true]);
+    assert.equal(row.attempted, expect[0] !== "pending");
+    if (expect[0] === "pending") assert.deepEqual(await runState(run), { status: "running", version: 1 });
+  });
+
 test("a run cancelled between the claim and the POST lands the claimed row cancelled", async () => {
   const run = await campaign([
     ["1001", "2001"],

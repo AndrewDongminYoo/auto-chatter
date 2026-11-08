@@ -301,6 +301,18 @@ test("the 24-hour window is anchored on the sender's latest inbound DM and read 
   assert.deepEqual(recipients(seen), ["9001", "9002"]);
 });
 
+// Security audit #62, fourth pass: the window belongs to one connection. A fresh DM start event of the same messaging
+// ID on another connection of the workspace is that connection's DM, so it does not reopen this connection's window.
+test("a fresh DM start event of the same sender on another connection does not reopen the window", async () => {
+  const stale = await dmRow("9003", { messageAt: "now()-interval '25 hours'" });
+  await pool.query("UPDATE instagram_dm_start_events SET created_at=now()-interval '25 hours' WHERE sender_id='9003'");
+  await dmRow("9003", { connection: OTHER });
+  const seen = graph();
+  assert.equal(await deliver(seen), true);
+  assert.deepEqual(seen.posts, []);
+  assert.deepEqual([(await row(stale)).status, (await row(stale)).failure_code], ["blocked", "reply_window_closed"]);
+});
+
 test("the claim takes the oldest due row and skips deferred, paused, handed-off and other connections' rows", async () => {
   const deferred = await dmRow("9001");
   const paused = await dmRow("9002");
@@ -331,6 +343,40 @@ test("the claim takes the oldest due row and skips deferred, paused, handed-off 
   await pool.query("UPDATE instagram_connections SET send_paused_until=NULL");
   assert.equal(await deliver(seen), true);
   assert.equal((await row(paused)).status, "sent");
+});
+
+// Security audit #62, fourth pass: a row another worker holds is skipped rather than waited on, and two concurrent
+// workers send two different rows, never one row twice.
+test("a held row is skipped rather than waited on, and two workers claim one row each", async () => {
+  const held = await dmRow("9001");
+  await dmRow("9002");
+  await dmRow("9003");
+  const holder = await pool.connect();
+  let claim: ReturnType<typeof deliver> | undefined;
+  try {
+    await holder.query("BEGIN");
+    await holder.query("SELECT id FROM flow_dm_deliveries WHERE id=$1 FOR UPDATE", [held]);
+    const seen = graph();
+    claim = deliver(seen);
+    const claimed = await Promise.race([
+      claim,
+      new Promise<string>((resolve) => setTimeout(() => resolve("waited"), 5_000).unref()),
+    ]);
+    assert.equal(claimed, true, "the claim must skip the locked row");
+    assert.deepEqual(recipients(seen), ["9002"]);
+    await holder.query("COMMIT");
+  } finally {
+    // A failed assertion must not return the client with its transaction and row lock open, and the claim that waited on
+    // that lock must finish here, so a regression fails this test alone instead of deadlocking the next ones.
+    await holder.query("ROLLBACK").catch(() => undefined);
+    holder.release();
+    await claim?.catch(() => undefined);
+  }
+  const first = graph();
+  const second = graph();
+  assert.deepEqual(await Promise.all([deliver(first), deliver(second)]), [true, true]);
+  assert.deepEqual([...recipients(first), ...recipients(second)].sort(), ["9001", "9003"]);
+  assert.equal((await row(held)).status, "sent");
 });
 
 // Each case changes one recorded condition. Retries go back to pending a minute later with the attempt cleared;
@@ -413,6 +459,8 @@ for (const { name, change, expect } of guardCases.filter((guard) =>
     "the messaging ID was paused",
     "an inbox handoff started",
     "the messaging ID opted out",
+    // Security audit #62, fourth pass: a revoke reached through the reply bridge is a service revoke as well.
+    "a comment sender bridged to the messaging ID opted out",
   ].includes(guard.name),
 ))
   test(`the guard immediately before the POST: ${name}`, async () => {
