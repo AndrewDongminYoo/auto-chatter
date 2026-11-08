@@ -639,7 +639,7 @@ test("two DM batches with their senders in opposite orders both complete", async
   let locks = 0;
   const first = ingestHeld(
     [message("456", "batch-a-1"), message("789", "batch-a-2")],
-    (text) => text.includes("pg_advisory_xact_lock(") && ++locks === 2,
+    (text) => text.includes("'inbox-conversation:'") && ++locks === 2,
   );
   const settle = (promise: Promise<void>) =>
     promise.then(

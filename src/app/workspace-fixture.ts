@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 
 // Seeds one row in every exported table for one workspace; the export and workspace deletion DB tests share it.
+// Returns the IDs of the DM-trigger version, the DM start event and its run, which the export test looks up by ID.
 export async function seedWorkspace(pool: Pool, workspace: string, user: string, connection: string, account: string) {
   await pool.query("INSERT INTO workspaces(id) VALUES($1)", [workspace]);
   await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2)", [workspace, user]);
@@ -299,19 +300,32 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      VALUES($1,$2,$3,$4,$5,'2001','124','flow reply','failed')`,
     [workspace, connection, flowEvent, run, `comment-flow-${account}`],
   );
-  // A run that a DM started (#33): its start event, run and first-message row.
+  // A run that a DM started (#33): its own DM-trigger flow version (no media), start event, run and first-message row.
+  const dmFlow = (
+    await pool.query(
+      `INSERT INTO flows(workspace_id,name,draft,draft_revision) VALUES($1,'dm welcome','{"nodes":[]}',1) RETURNING id`,
+      [workspace],
+    )
+  ).rows[0].id;
+  const dmVersion = (
+    await pool.query(
+      `INSERT INTO flow_versions(flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_type,published_by)
+       VALUES($1,$2,1,1,'{"nodes":[]}',$3,'instagram_dm_keyword',$4) RETURNING id`,
+      [dmFlow, workspace, connection, user],
+    )
+  ).rows[0].id;
   const dmStart = (
     await pool.query(
       `INSERT INTO instagram_dm_start_events(workspace_id,connection_id,message_id,sender_id,flow_id,flow_version_id,trigger_type,message_at)
        VALUES($1,$2,$3,'901',$4,$5,'instagram_dm_keyword',now()) RETURNING id`,
-      [workspace, connection, `dm-start-${account}`, flow, version],
+      [workspace, connection, `dm-start-${account}`, dmFlow, dmVersion],
     )
   ).rows[0].id;
   const dmRun = (
     await pool.query(
       `INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,dm_start_event_id,status)
        VALUES($1,$2,$3,$4,$5,'delivering') RETURNING id`,
-      [workspace, connection, flow, version, dmStart],
+      [workspace, connection, dmFlow, dmVersion, dmStart],
     )
   ).rows[0].id;
   await pool.query(
@@ -346,4 +360,5 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      VALUES($1,$2,$3,'{"instagram_comment_events":0}','{}')`,
     [workspace, connection, user],
   );
+  return { dmVersion: dmVersion as string, dmRun: dmRun as string, dmStart: dmStart as string };
 }

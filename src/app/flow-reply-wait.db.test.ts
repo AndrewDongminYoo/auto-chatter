@@ -664,8 +664,9 @@ async function twoRunsWaitingOnOnePerson() {
   return { first, second };
 }
 
-// The first message claims the newest run and waits on the contact lock a manual edit holds; the second
-// message picks the same run and waits on its row lock until the first one commits.
+// The first message claims the newest run and waits on the contact lock a manual edit holds; a second message
+// with another ID picks the same run and waits on its row lock until the first one commits, and a second delivery
+// of the same message ID waits on the message lock ingestion takes first (#291).
 async function deliverConcurrently(firstId: string, secondId: string) {
   const holder = await pool.connect();
   try {
@@ -674,7 +675,7 @@ async function deliverConcurrently(firstId: string, secondId: string) {
     const firstMessage = dm("9001", "XL", { id: firstId });
     await waitForLock("%pg_advisory_xact_lock%");
     const secondMessage = dm("9001", "M", { id: secondId });
-    await waitForLock(RUN_CLAIM);
+    await waitForLock(firstId === secondId ? "%instagram-message:%" : RUN_CLAIM);
     await holder.query("COMMIT");
     await Promise.all([firstMessage, secondMessage]);
   } finally {

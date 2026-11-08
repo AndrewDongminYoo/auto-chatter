@@ -18,6 +18,7 @@ export async function ingestMessages(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await lockMessageIds(client, messages);
     await lockInboxConversations(client, messages, now);
     for (const message of messages) {
       await storeInboxMessage(client, message, now);
@@ -43,10 +44,26 @@ export async function ingestMessages(
   }
 }
 
+// Serializes two deliveries of one message ID (#291): a redelivery waits until the first delivery committed, so the
+// reply wait, the follow confirmation and the kept-DM store see the DM trigger start event the first one wrote,
+// whether or not inbox storage (and with it the conversation lock) is on. The key is the account and the message
+// ID, because the connection is not read yet. The locks are taken before every other lock of the transaction and in
+// key order, so a transaction waiting for one holds only message locks that sort before it and cannot close a cycle.
+// The ordered subquery is not flattened, so the locks are taken in that order.
+async function lockMessageIds(client: PoolClient, messages: readonly InstagramMessage[]): Promise<void> {
+  await client.query(
+    `SELECT pg_advisory_xact_lock(hashtextextended('instagram-message:' || m.account_id || ':' || m.message_id, 0))
+     FROM (SELECT DISTINCT account_id,message_id FROM unnest($1::text[],$2::text[]) AS input(account_id,message_id)
+           ORDER BY account_id,message_id) m`,
+    [messages.map((message) => message.accountId), messages.map((message) => message.messageId)],
+  );
+}
+
 // Offers one DM to the flow run waiting for this person's reply and to the follow confirmation, in the
 // caller's transaction, and returns whether either one took it. Normally the private reply must have
 // been sent no later than the DM; `early` (#108) instead accepts a DM dated from when the reply's last
-// send attempt started, for a DM kept while that reply was being sent.
+// send attempt started, for a DM kept while that reply was being sent. A message ID that already started a
+// DM trigger flow on the conversation's connection (a redelivery, #291) is taken by neither.
 async function offerMessage(client: PoolClient, message: InstagramMessage, early: boolean): Promise<boolean> {
   // A typed DM (not a button postback) answers the flow run waiting for this person's reply.
   const replied = !message.confirmationReplyId && (await resumeRepliedFlowRun(client, message, early));
@@ -62,8 +79,10 @@ async function offerMessage(client: PoolClient, message: InstagramMessage, early
       AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id
     WHERE c.account_id=$1 AND c.active AND c.send_enabled AND rule.enabled
       AND flow.recipient_id=$2 AND ($4::text IS NULL OR (flow.reply_id::text=$4 AND flow.confirmation_button_title<>'')) AND (flow.status='waiting' OR (automation.paused OR automation.handoff_paused)) AND reply.status='sent' AND ${early ? "reply.attempt_started_at" : "reply.sent_at"}<=$3
+      AND NOT EXISTS(SELECT 1 FROM instagram_dm_start_events started
+        WHERE started.connection_id=flow.connection_id AND started.message_id=$5)
     ORDER BY reply.sent_at DESC,reply.id DESC LIMIT 1 FOR UPDATE OF flow`,
-    [message.accountId, message.senderId, message.timestamp, message.confirmationReplyId ?? null],
+    [message.accountId, message.senderId, message.timestamp, message.confirmationReplyId ?? null, message.messageId],
   );
   const row = result.rows[0];
   if (
@@ -108,13 +127,14 @@ async function sendingConnection(client: PoolClient, message: InstagramMessage):
 }
 
 // Keeps a DM that matched nothing while a reply was being sent, unless a follow confirmation or a reply
-// wait already used this message ID (a redelivery).
+// wait already used this message ID or it already started a DM trigger flow (a redelivery, #291).
 async function keepUnmatched(client: PoolClient, keeper: Keeper, message: InstagramMessage): Promise<void> {
   await client.query(
     `INSERT INTO instagram_unmatched_replies(workspace_id,connection_id,sender_id,message_id,message_text,confirmation_reply_id,message_at)
      SELECT $1,$2,$3,$4,$5,$6,$7
      WHERE NOT EXISTS(SELECT 1 FROM instagram_message_receipts WHERE connection_id=$2 AND message_id=$4)
        AND NOT EXISTS(SELECT 1 FROM flow_runs WHERE connection_id=$2 AND reply_message_id=$4)
+       AND NOT EXISTS(SELECT 1 FROM instagram_dm_start_events WHERE connection_id=$2 AND message_id=$4)
      ON CONFLICT(connection_id,message_id) DO NOTHING`,
     [
       keeper.workspace_id,
