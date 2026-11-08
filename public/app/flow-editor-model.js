@@ -32,12 +32,22 @@ function flowCatalogEntry(type) {
 function flowTypes() {
   return flowTypeCatalog.map((entry) => entry.type);
 }
+// DM trigger steps (#33) run on the server but the editor cannot edit them yet (#292); a flow that has one
+// opens read-only (flowReadOnlyReason).
+var flowDmTriggerLabels = { instagram_dm_keyword: "DM 키워드 트리거", instagram_dm_default: "DM 기본 응답 트리거" };
 function flowTypeLabel(type) {
-  return flowCatalogEntry(type)?.label ?? `지원하지 않는 단계(${type})`;
+  return (
+    flowCatalogEntry(type)?.label ??
+    (Object.hasOwn(flowDmTriggerLabels, type) ? flowDmTriggerLabels[type] : `지원하지 않는 단계(${type})`)
+  );
 }
-// The editor does not offer follows_account, but a draft saved through the API may hold one; its ports
-// keep the outline following both branches.
-var flowOtherPorts = { follows_account: ["true", "false"] };
+// The editor does not offer follows_account or the DM triggers, but a draft saved through the API may hold
+// them; their ports keep the outline following every branch.
+var flowOtherPorts = {
+  follows_account: ["true", "false"],
+  instagram_dm_keyword: ["next"],
+  instagram_dm_default: ["next"],
+};
 function flowPorts(type) {
   return (flowCatalogEntry(type)?.ports ?? (Object.hasOwn(flowOtherPorts, type) ? flowOtherPorts[type] : [])).slice();
 }
@@ -123,7 +133,16 @@ function flowNodeById(document, id) {
   return document.nodes.find((node) => node.id === id);
 }
 function flowTrigger(document) {
-  return document.nodes.find((node) => node.type === "instagram_comment");
+  return document.nodes.find(
+    (node) => node.type === "instagram_comment" || Object.hasOwn(flowDmTriggerLabels, node.type),
+  );
+}
+// Why the editor shows a document without editing controls, or null when it may be edited. A save from the
+// editor would keep a DM trigger it cannot show correctly, so a flow that has one is read-only until #292.
+function flowReadOnlyReason(document) {
+  return document.nodes.some((node) => Object.hasOwn(flowDmTriggerLabels, node.type))
+    ? "DM 트리거 플로는 아직 편집기에서 바꿀 수 없어 읽기 전용으로 보여 줍니다."
+    : null;
 }
 // The edge a run follows from a port: the first one, as planFlowRun reads it.
 function flowEdge(document, from, port) {
@@ -485,6 +504,10 @@ var flowErrorMessages = {
   unsupported_message: "확인 버튼이 있는 메시지는 지금 실행할 수 없습니다.",
   unsupported_variable: "예/아니요 필드는 메시지 변수로 쓸 수 없습니다.",
   unsupported_after_message: "메시지 보내기 뒤에는 응답 기다리기만 이어질 수 있습니다.",
+  dm_trigger_unsupported_node: "DM 트리거 플로에는 지금은 메시지 보내기만 이어질 수 있습니다.",
+  dm_trigger_unsupported_variable: "DM 트리거 플로의 메시지에는 아직 변수를 쓸 수 없습니다.",
+  dm_keyword_conflict: "같은 계정에 켜진 다른 DM 키워드 플로와 키워드가 겹칩니다.",
+  dm_default_conflict: "같은 계정에 켜진 DM 기본 응답 플로가 이미 있습니다.",
 };
 function flowErrorMessage(code) {
   return Object.hasOwn(flowErrorMessages, code) ? flowErrorMessages[code] : `확인이 필요한 문제가 있습니다(${code}).`;

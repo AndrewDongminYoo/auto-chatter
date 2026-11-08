@@ -67,5 +67,6 @@ BEGIN;
 \ir ../db/migrations/065_campaign_runs.sql
 \ir ../db/migrations/066_campaign_delivery.sql
 \ir ../db/migrations/067_campaign_sweep_recovered_at.sql
+\ir ../db/migrations/068_dm_start_triggers.sql
 \ir supabase-access.sql
 COMMIT;

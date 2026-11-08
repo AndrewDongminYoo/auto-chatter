@@ -53,6 +53,9 @@ export const EXPORTED_TABLES: Record<string, { scope: "self" | "workspace" | "co
   flow_versions: { scope: "workspace" },
   flow_runs: { scope: "workspace" },
   flow_step_runs: { scope: "workspace" },
+  // A DM start event holds identifiers and the matched flow only, never the DM text.
+  instagram_dm_start_events: { scope: "workspace" },
+  flow_dm_deliveries: { scope: "workspace" },
   webhook_endpoints: { scope: "workspace" },
   // The sealed signing secret never leaves the database; the key ID and its dates are exported.
   webhook_signing_keys: { scope: "workspace", omit: ["secret_encrypted"] },

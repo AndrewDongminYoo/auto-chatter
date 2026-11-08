@@ -299,6 +299,26 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      VALUES($1,$2,$3,$4,$5,'2001','124','flow reply','failed')`,
     [workspace, connection, flowEvent, run, `comment-flow-${account}`],
   );
+  // A run that a DM started (#33): its start event, run and first-message row.
+  const dmStart = (
+    await pool.query(
+      `INSERT INTO instagram_dm_start_events(workspace_id,connection_id,message_id,sender_id,flow_id,flow_version_id,trigger_type,message_at)
+       VALUES($1,$2,$3,'901',$4,$5,'instagram_dm_keyword',now()) RETURNING id`,
+      [workspace, connection, `dm-start-${account}`, flow, version],
+    )
+  ).rows[0].id;
+  const dmRun = (
+    await pool.query(
+      `INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,dm_start_event_id,status)
+       VALUES($1,$2,$3,$4,$5,'delivering') RETURNING id`,
+      [workspace, connection, flow, version, dmStart],
+    )
+  ).rows[0].id;
+  await pool.query(
+    `INSERT INTO flow_dm_deliveries(workspace_id,connection_id,flow_run_id,recipient_id,message_text)
+     VALUES($1,$2,$3,'901','dm flow reply')`,
+    [workspace, connection, dmRun],
+  );
   const endpoint = (
     await pool.query("INSERT INTO webhook_endpoints(workspace_id,name,url) VALUES($1,'crm',$2) RETURNING id", [
       workspace,

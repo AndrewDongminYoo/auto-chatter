@@ -2,8 +2,11 @@ import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { lockWorkspaceForMember, workspaceFor } from "./settings.ts";
 import {
+  DM_TRIGGER_TYPES,
   EMPTY_FLOW,
+  dmTriggerConflicts,
   fieldWriteTargets,
+  flowTrigger,
   flowReferences,
   normalizeTag,
   parseFlowDocument,
@@ -11,6 +14,7 @@ import {
   webhookFieldIds,
   type FlowDocument,
   type FlowError,
+  type FlowNode,
   type PublishContext,
 } from "./flow-schema.ts";
 import {
@@ -152,6 +156,28 @@ async function versionFieldTypes(client: PoolClient, workspace: string, fieldIds
   );
 }
 
+// The trigger nodes of the other enabled DM trigger flows on a connection (#33). Publish and enable call it after
+// locking the connection FOR NO KEY UPDATE, and both lock it before changing a flow, so two flows that overlap
+// cannot both become enabled.
+async function enabledDmTriggers(
+  client: PoolClient,
+  workspace: string,
+  id: string,
+  connectionId: string,
+): Promise<FlowNode[]> {
+  const rows = await client.query<{ definition: unknown }>(
+    `SELECT v.definition FROM flows f JOIN flow_versions v ON v.id=f.published_version_id AND v.flow_id=f.id
+     WHERE f.workspace_id=$1 AND f.id<>$2 AND f.enabled AND NOT f.archived AND v.trigger_connection_id=$3
+       AND v.trigger_type=ANY($4::text[])`,
+    [workspace, id, connectionId, [...DM_TRIGGER_TYPES]],
+  );
+  return rows.rows.flatMap((row) => {
+    const parsed = parseFlowDocument(row.definition);
+    const node = "document" in parsed ? flowTrigger(parsed.document) : undefined;
+    return node ? [node] : [];
+  });
+}
+
 // What publish validates a draft against. With `lock` (publish), the connection row is locked FOR NO KEY
 // UPDATE and the field rows FOR SHARE, after the flow row its caller locked; rule enabling takes the same
 // connection lock. Without it (a test run), the same reads take no lock.
@@ -218,6 +244,10 @@ async function readPublishContext(
           )
         ).rows[0]!
       : { legacy: false, other: false };
+  const dmTriggers =
+    connection && DM_TRIGGER_TYPES.has(references?.trigger_type ?? "")
+      ? await enabledDmTriggers(client, workspace, id, connection.id)
+      : [];
   return {
     connection,
     fields,
@@ -226,6 +256,7 @@ async function readPublishContext(
     webhookFields,
     legacyRuleEnabled: conflicts.legacy,
     otherFlowPublished: conflicts.other,
+    dmTriggers,
   };
 }
 
@@ -277,10 +308,20 @@ export async function publishFlow(
     }
     const version = (
       await client.query(
-        `INSERT INTO flow_versions(flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,field_ids,published_by)
-         SELECT $1,$2,coalesce(max(version_no),0)+1,$8,$3::jsonb,$4,$5,$6::uuid[],$7 FROM flow_versions WHERE flow_id=$1
+        `INSERT INTO flow_versions(flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,field_ids,published_by,trigger_type)
+         SELECT $1,$2,coalesce(max(version_no),0)+1,$8,$3::jsonb,$4,$5,$6::uuid[],$7,$9 FROM flow_versions WHERE flow_id=$1
          RETURNING id,version_no,published_at`,
-        [id, workspace, JSON.stringify(flow.draft), connectionId, mediaId, references!.field_ids, user.id, expected],
+        [
+          id,
+          workspace,
+          JSON.stringify(flow.draft),
+          connectionId,
+          mediaId,
+          references!.field_ids,
+          user.id,
+          expected,
+          references!.trigger_type,
+        ],
       )
     ).rows[0]!;
     await client.query("UPDATE flows SET published_version_id=$2,updated_at=clock_timestamp() WHERE id=$1", [
@@ -352,7 +393,7 @@ export async function setFlowEnabled(
     await client.query("BEGIN");
     const flow = (
       await client.query(
-        `SELECT f.archived,v.definition,v.trigger_connection_id,v.field_ids FROM flows f
+        `SELECT f.archived,v.definition,v.trigger_connection_id,v.trigger_type,v.field_ids FROM flows f
          LEFT JOIN flow_versions v ON v.id=f.published_version_id AND v.flow_id=f.id
          WHERE f.id=$1 AND f.workspace_id=$2 FOR NO KEY UPDATE OF f`,
         [id, workspace],
@@ -374,6 +415,18 @@ export async function setFlowEnabled(
       const fieldTypes = await versionFieldTypes(client, workspace, flow.field_ids);
       const parsed = parseFlowDocument(flow.definition);
       const errors = "document" in parsed ? runnableErrors(parsed.document, connection, fieldTypes) : parsed.errors;
+      // At most one enabled default-reply flow and no overlapping keyword flows per connection (#33).
+      if (!errors.length && "document" in parsed && DM_TRIGGER_TYPES.has(flow.trigger_type)) {
+        const trigger = flowTrigger(parsed.document);
+        if (trigger)
+          errors.push(
+            ...dmTriggerConflicts(
+              trigger,
+              await enabledDmTriggers(client, workspace, id, flow.trigger_connection_id),
+              `nodes[${parsed.document.nodes.indexOf(trigger)}].config`,
+            ),
+          );
+      }
       if (errors.length) {
         await client.query("ROLLBACK");
         return { errors };
@@ -394,7 +447,8 @@ export async function setFlowEnabled(
   }
 }
 
-// Latest runs with the path each took and the delivery state of the reply it queued.
+// Latest runs with the path each took and the delivery state of the reply it queued: the private reply of a comment
+// run, or the first message of a DM-started run (#33), which has no failure code or send time until #291.
 // Sender IDs and comment text stay out of the history.
 export async function listFlowRuns(pool: Pool, user: User, id: string) {
   if (!isUuid(id)) throw new ApiError(400, "invalid_flow");
@@ -404,11 +458,12 @@ export async function listFlowRuns(pool: Pool, user: User, id: string) {
   return (
     await pool.query(
       `SELECT r.id,v.version_no,r.status,r.failure_code,r.created_at,r.resume_at,
-         reply.status AS delivery_status,reply.failure_code AS delivery_failure_code,reply.sent_at,
+         coalesce(reply.status,dm.status) AS delivery_status,reply.failure_code AS delivery_failure_code,reply.sent_at,
          coalesce((SELECT jsonb_agg(jsonb_build_object('node_id',s.node_id,'node_type',s.node_type,'outcome',s.outcome) ORDER BY s.seq)
            FROM flow_step_runs s WHERE s.run_id=r.id),'[]'::jsonb) AS steps
        FROM flow_runs r JOIN flow_versions v ON v.id=r.flow_version_id
        LEFT JOIN private_reply_outbox reply ON reply.flow_run_id=r.id
+       LEFT JOIN flow_dm_deliveries dm ON dm.flow_run_id=r.id
        WHERE r.flow_id=$1 AND r.workspace_id=$2 ORDER BY r.created_at DESC,r.id DESC LIMIT $3`,
       [id, workspace, RUN_HISTORY_LIMIT],
     )

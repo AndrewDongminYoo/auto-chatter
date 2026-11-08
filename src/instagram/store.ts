@@ -15,7 +15,7 @@ import { lockContact, replySavedFields } from "../app/contact-fields.ts";
 const ACTION_TYPES = new Set(["add_tag", "remove_tag", "set_field"]);
 // When a reply wait ends: the time its private reply was sent plus the timeout of the wait node in
 // the run's pinned version. Used where flow_runs is `run`, its reply `reply` and its version `v`.
-const REPLY_DEADLINE = `reply.sent_at+make_interval(mins=>jsonb_path_query_first(v.definition,
+export const REPLY_DEADLINE = `reply.sent_at+make_interval(mins=>jsonb_path_query_first(v.definition,
   'lax $.nodes[*] ? (@.id == $id && @.type == "wait_for_reply").config.timeout_minutes',
   jsonb_build_object('id',run.resume_node_id))::int)`;
 // A typed DM kept while the run's reply was being sent (#108) that the reconcile has not linked yet and
@@ -460,24 +460,28 @@ export async function resumeDueFlowRuns(pool: Pool, limit = 50): Promise<number>
   return advanced;
 }
 
+// A run started by a comment carries its comment; a run started by a DM (#33) carries no comment, and its
+// sender_id is the messaging sender ID from its start event.
 type ClaimedRun = {
   status: string;
   resume_node_id: string;
   flow_on: boolean;
   definition: unknown;
-  event_id: string;
-  comment_id: string;
-  media_id: string;
+  event_id: string | null;
+  comment_id: string | null;
+  media_id: string | null;
   sender_id: string;
-  comment_text: string;
+  comment_text: string | null;
   flow_id: string;
   version_no: number;
 };
 
 const CLAIMED_RUN = `SELECT run.status,run.resume_node_id,f.enabled AND NOT f.archived AS flow_on,v.definition,
-    run.event_id::text,e.comment_id,e.media_id,e.sender_id,e.comment_text,run.flow_id::text,v.version_no
+    run.event_id::text,e.comment_id,e.media_id,coalesce(e.sender_id,dm.sender_id) AS sender_id,e.comment_text,
+    run.flow_id::text,v.version_no
   FROM flow_runs run JOIN flows f ON f.id=run.flow_id JOIN flow_versions v ON v.id=run.flow_version_id
-  JOIN instagram_comment_events e ON e.id=run.event_id
+  LEFT JOIN instagram_comment_events e ON e.id=run.event_id
+  LEFT JOIN instagram_dm_start_events dm ON dm.id=run.dm_start_event_id
   LEFT JOIN private_reply_outbox reply ON reply.flow_run_id=run.id`;
 
 async function lockRunConnection(client: PoolClient, connectionId: string) {
@@ -606,6 +610,12 @@ async function continueFlowRun(
   }
   if (!run.flow_on) {
     await cancelled("inactive_flow");
+    return;
+  }
+  // Publishing refuses delays and waits in a DM-triggered flow, and its messages go to flow_dm_deliveries, which
+  // the walk below never writes (#33); a DM-started run that stopped anyway ends here.
+  if (run.event_id === null || run.comment_id === null || run.media_id === null || run.comment_text === null) {
+    await cancelled("unsupported_trigger");
     return;
   }
   const owner: ConnectionRow = { id: connectionId, workspace_id: connection.workspace_id };

@@ -3375,3 +3375,66 @@ test("a failing webhook endpoint or delivery step neither stops nor fails the me
   assert.equal(await consume(), "ack");
   assert.equal((await rows())[0].status, "sent");
 });
+
+test("a webhook DM starts a DM trigger flow, and neither the cron nor the queue reads its delivery row (#33)", async () => {
+  const workspace = "11111111-1111-4111-8111-111111111111";
+  const flow = (
+    await pool.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'DM default','{}') RETURNING id", [
+      workspace,
+    ])
+  ).rows[0].id;
+  const definition = {
+    schema_version: 1,
+    nodes: [
+      { id: "start", type: "instagram_dm_default", config: { connection_id: connectionId } },
+      { id: "reply", type: "instagram_message", config: { text: "Thanks, we will reply soon" } },
+    ],
+    edges: [{ from: "start", port: "next", to: "reply" }],
+  };
+  const version = (
+    await pool.query(
+      `INSERT INTO flow_versions(flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_type,published_by)
+       VALUES($1,$2,1,0,$3::jsonb,$4,'instagram_dm_default',$2) RETURNING id`,
+      [flow, workspace, JSON.stringify(definition), connectionId],
+    )
+  ).rows[0].id;
+  await pool.query("UPDATE flows SET published_version_id=$2,enabled=true WHERE id=$1", [flow, version]);
+  const body = JSON.stringify({
+    object: "instagram",
+    entry: [
+      {
+        id: "123",
+        messaging: [
+          {
+            sender: { id: "456" },
+            recipient: { id: "123" },
+            timestamp: Date.now(),
+            message: { mid: "dm-start-1", text: "hi" },
+          },
+        ],
+      },
+    ],
+  });
+  const dm = () =>
+    new Request("https://example.test/webhooks/instagram", {
+      method: "POST",
+      body,
+      headers: { "x-hub-signature-256": "sha256=" + createHmac("sha256", "test-secret").update(body).digest("hex") },
+    });
+  assert.equal((await worker.fetch(dm(), env)).status, 200);
+  assert.equal((await worker.fetch(dm(), env)).status, 200);
+  const deliveries = async () =>
+    (await pool.query("SELECT recipient_id,message_text,status FROM flow_dm_deliveries")).rows;
+  assert.deepEqual(await deliveries(), [
+    { recipient_id: "456", message_text: "Thanks, we will reply soon", status: "pending" },
+  ]);
+  await worker.scheduled({}, env);
+  assert.equal(await consume(), "ack");
+  assert.equal(await consume({ connectionId }), "ack");
+  assert.deepEqual(await deliveries(), [
+    { recipient_id: "456", message_text: "Thanks, we will reply soon", status: "pending" },
+  ]);
+  assert.deepEqual(published, []);
+  assert.equal(sends, 0);
+  assert.deepEqual(await rows(), []);
+});

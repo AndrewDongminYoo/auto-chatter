@@ -78,6 +78,39 @@ export async function deliveryRecipientOptedOut(
   return result.rows[0]?.opted_out === true;
 }
 
+// Whether a messaging sender ID that has no comment of its own is opted out (#33): a service reply revoke of the
+// ID itself as a DM recipient, or, for each comment sender that a provider-acknowledged reply bridged to this ID,
+// the deliveryRecipientOptedOutSql check of that comment sender (its own revoke and the revokes of every DM
+// recipient bridged to it). The bridge is read from the recipient side here; it is the same verified bridge, not
+// an assumption that the two IDs are equal.
+export async function messagingRecipientOptedOut(
+  queryable: ConsentQueryable,
+  input: { workspaceId: string; connectionId: string; recipientId: string },
+): Promise<boolean> {
+  const result = await queryable.query<{ opted_out: boolean }>(
+    `SELECT EXISTS(
+         SELECT 1 FROM channel_consent_state state
+         WHERE state.workspace_id=$1 AND state.connection_id=$2 AND state.channel='instagram'
+           AND state.identity_kind='dm_recipient' AND state.identity_value=$3
+           AND state.purpose='service_reply' AND state.decision='revoke'
+       ) OR EXISTS(
+         SELECT 1 FROM (
+           SELECT DISTINCT reply.sender_id
+           FROM private_reply_outbox reply
+           JOIN instagram_comment_events event ON event.id=reply.event_id
+             AND event.workspace_id=reply.workspace_id AND event.connection_id=reply.connection_id
+             AND event.sender_id=reply.sender_id
+           WHERE reply.workspace_id=$1 AND reply.connection_id=$2 AND reply.recipient_id=$3
+             AND reply.status='sent' AND reply.provider_message_id IS NOT NULL
+             AND length(btrim(reply.provider_message_id))>0
+         ) bridged
+         WHERE (${deliveryRecipientOptedOutSql("$1::uuid", "$2::uuid", "bridged.sender_id")})
+       ) AS opted_out`,
+    [input.workspaceId, input.connectionId, input.recipientId],
+  );
+  return result.rows[0]?.opted_out === true;
+}
+
 export interface RecordChannelConsentEventInput {
   requestKey: string;
   workspaceId: string;

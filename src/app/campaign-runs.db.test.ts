@@ -970,6 +970,8 @@ test("migration 065 replays over stored runs and reproduces the canonical deleti
   const sql = await readFile(new URL("../../db/migrations/065_campaign_runs.sql", import.meta.url), "utf8");
   await pool.query(sql);
   await pool.query(sql);
+  // 068 redefines the deletion functions again, so the runner's later body is restored after the replay.
+  await pool.query(await readFile(new URL("../../db/migrations/068_dm_start_triggers.sql", import.meta.url), "utf8"));
   assert.deepEqual(await definitions(), canonical);
   assert.equal(await approvalStatus(approval.id), "executed");
   assert.equal((await deliveries((await runOf(approval.id)).id)).length, 1);
