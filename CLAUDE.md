@@ -176,7 +176,7 @@ Fresh DB volumes initialize the current schema and a separate DML-only `automati
 PostgreSQL 18 mounts the existing `postgres_data` volume at `/var/lib/postgresql`, with default PGDATA `/var/lib/postgresql/18/docker`; PostgreSQL 17 data requires a separately approved backup/restore upgrade before startup, while SQL schema changes use the migration procedure in `docs/notes/2026-09-26-deployment-runbook.md`.
 Deployment smoke checks use synthetic credentials, a separate Compose project and loopback ports, with no live Meta calls.
 
-**CI**: `.github/workflows/ci.yaml` runs type checks, unit and PostgreSQL integration tests, a local workerd/Hyperdrive/Queue smoke check, Trunk, and a container deployment smoke check on PRs and pushes to `main`.
+**CI**: `.github/workflows/ci.yaml` runs type checks, unit and PostgreSQL integration tests, a local workerd/Hyperdrive/Queue smoke check, Trunk, and a container deployment smoke check on PRs and pushes to `main`; after it passes on `main`, `.github/workflows/deploy.yaml` deploys the Worker unless a migration must be applied by hand first.
 The deployment job verifies signed-event persistence, replay protection, restricted DB privileges and HTTPS with a local Caddy CA; it never starts a sending worker.
 
 Operating procedures: `docs/notes/2026-09-26-cloudflare-runbook.md` (Cloudflare) and `docs/notes/2026-09-26-multi-user-cutover.md` (migration and configuration).
