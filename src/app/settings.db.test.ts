@@ -2955,6 +2955,11 @@ test("scheduled manual reply changes are versioned idempotent scoped and cancell
   );
   assert.equal((await manualRequest("PATCH", `/${reply.id}/schedule`, edit, agent)).status, 403);
   assert.equal((await manualRequest("PATCH", `/${reply.id}/schedule`, edit, b)).status, 404);
+  // Security audit #62, fourth pass: cancel is refused the same way, and neither refusal changes the row, so the
+  // creator's edit below still applies to version 1.
+  const foreignCancel = { request_key: randomUUID(), expected_version: 1 };
+  assert.equal((await manualRequest("POST", `/${reply.id}/cancel`, foreignCancel, agent)).status, 403);
+  assert.equal((await manualRequest("POST", `/${reply.id}/cancel`, foreignCancel, b)).status, 404);
   const edited = await manualRequest("PATCH", `/${reply.id}/schedule`, edit);
   assert.equal(edited.status, 200);
   assert.equal((await edited.json()).schedule_version, 2);
@@ -3231,6 +3236,12 @@ test("scheduled manual reply permits its creator and administrators and keeps va
     schedule_local: await scheduleLocal(90),
   };
   assert.equal((await manualRequest("PATCH", `/${reply.id}/schedule`, body, creator)).status, 200);
+  // Security audit #62, fourth pass: another member cannot replay the creator's operation key, even unchanged.
+  const replayed = await manualRequest("PATCH", `/${reply.id}/schedule`, body);
+  assert.deepEqual(
+    [replayed.status, ((await replayed.json()) as { error: string }).error],
+    [409, "idempotency_conflict"],
+  );
   assert.equal(
     (
       await manualRequest("PATCH", `/${reply.id}/schedule`, {

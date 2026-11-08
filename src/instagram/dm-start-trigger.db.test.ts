@@ -43,7 +43,7 @@ beforeEach(async () => {
 
 after(async () => pool.end());
 
-function request(method: string, path: string, body?: unknown) {
+function request(method: string, path: string, body?: unknown, source: Pick<Pool, "query" | "connect"> = pool) {
   return appApi(
     new Request(`https://app.test${path}`, {
       method,
@@ -51,7 +51,12 @@ function request(method: string, path: string, body?: unknown) {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }),
     apiEnv,
-    () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
+    () =>
+      ({
+        query: source.query.bind(source),
+        connect: source.connect.bind(source),
+        end: async () => {},
+      }) as unknown as Pool,
     (async () =>
       Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
@@ -670,6 +675,140 @@ test("enable and publish refuse a second default reply and overlapping keywords 
   const versions = await pool.query("SELECT trigger_type,trigger_media_id FROM flow_versions ORDER BY published_at");
   assert.ok(
     versions.rows.every((row) => row.trigger_media_id === null && row.trigger_type.startsWith("instagram_dm_")),
+  );
+});
+
+// Security audit #62, fourth pass: starts an enable that holds its transaction after its UPDATE, before the commit,
+// and returns the backend that holds the connection lock. Fails instead of hanging the suite if the enable's UPDATE
+// text changes and the pause never matches.
+async function heldEnable(flowId: string) {
+  let reached!: (pid: number) => void;
+  const held = new Promise<number>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("the enable UPDATE was never reached")), 10_000);
+    timer.unref();
+    reached = (pid) => {
+      clearTimeout(timer);
+      resolve(pid);
+    };
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let paused = false;
+  const pausing = {
+    query: pool.query.bind(pool),
+    connect: async () => {
+      const client = await pool.connect();
+      return {
+        query: async (text: string, values?: unknown[]) => {
+          const result = await client.query(text, values);
+          if (!paused && /^UPDATE flows SET enabled=\$3/.test(text)) {
+            paused = true;
+            reached((await client.query("SELECT pg_backend_pid() AS pid")).rows[0].pid);
+            await gate;
+          }
+          return result;
+        },
+        release: (destroy?: boolean | Error) => client.release(destroy),
+      };
+    },
+  } as unknown as Pool;
+  const enable = request("POST", `/api/flows/${flowId}/enable`, undefined, pausing);
+  // An enable that fails before the pause must not leave the caller waiting for the full timeout.
+  enable.catch(() => undefined);
+  return { enable, holder: await held, release };
+}
+
+// Waits until another backend waits for `holder` on the connection row, and fails if `other` settles first or the
+// wait never shows, so the test cannot pass without the connection lock.
+async function waitsOnConnectionLock(holder: number, other: Promise<unknown>) {
+  let settled = false;
+  void other.then(
+    () => (settled = true),
+    () => (settled = true),
+  );
+  for (let attempt = 0; attempt < 250; attempt++) {
+    assert.equal(settled, false, "the second request finished without waiting for the connection lock");
+    const waiting = await pool.query(
+      `SELECT count(*)::int AS n FROM pg_stat_activity
+       WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)) AND query ~ 'FROM instagram_connections'`,
+      [holder],
+    );
+    if (waiting.rows[0].n > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.fail("the second request never waited for the connection lock");
+}
+
+// Security audit #62, fourth pass: two enables of different default-reply flows lock different flow rows, so only the
+// connection lock serializes them. The second enable must wait for the first one on the connection and then see its
+// commit.
+test("concurrent enables of two default-reply flows on one connection leave one enabled", async () => {
+  const first = await createFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  const second = await createFlow(dmDocument({ type: "instagram_dm_default" }, "Hello"));
+  for (const id of [first, second])
+    assert.equal((await request("POST", `/api/flows/${id}/publish`, { expected_revision: 0 })).status, 201);
+  const { enable: firstEnable, holder, release } = await heldEnable(first);
+  let secondEnable: Promise<Response> | undefined;
+  try {
+    secondEnable = request("POST", `/api/flows/${second}/enable`);
+    await waitsOnConnectionLock(holder, secondEnable);
+  } finally {
+    release();
+    await Promise.allSettled([firstEnable, ...(secondEnable ? [secondEnable] : [])]);
+  }
+  assert.deepEqual([(await firstEnable).status, (await secondEnable).status], [200, 422]);
+  assert.deepEqual(
+    (await pool.query("SELECT id::text FROM flows WHERE enabled")).rows.map((row) => row.id),
+    [first],
+  );
+});
+
+// Security audit #62, fourth pass: publishing a disabled keyword flow takes the same connection lock as enabling, so a
+// publish that overlaps an enable still in flight waits for it and is refused once that enable commits.
+test("a publish that overlaps an enable in flight waits for it and is refused", async () => {
+  const enabling = await createFlow(dmDocument({ type: "instagram_dm_keyword", keywords: ["price"] }, "Prices"));
+  assert.equal((await request("POST", `/api/flows/${enabling}/publish`, { expected_revision: 0 })).status, 201);
+  const overlapping = await createFlow(
+    dmDocument({ type: "instagram_dm_keyword", keywords: ["price list"], mode: "exact" }, "List"),
+  );
+  const { enable, holder, release } = await heldEnable(enabling);
+  let publish: Promise<Response> | undefined;
+  try {
+    publish = request("POST", `/api/flows/${overlapping}/publish`, { expected_revision: 0 });
+    await waitsOnConnectionLock(holder, publish);
+  } finally {
+    release();
+    await Promise.allSettled([enable, ...(publish ? [publish] : [])]);
+  }
+  assert.equal((await enable).status, 200);
+  const refused = await publish;
+  assert.equal(refused.status, 422);
+  assert.deepEqual(
+    ((await refused.json()) as { errors: { code: string }[] }).errors.map((error) => error.code),
+    ["dm_keyword_conflict"],
+  );
+});
+
+// Security audit #62, fourth pass: a DM starts only flows whose trigger names the connection that received it, even
+// when another connection of the same workspace has an enabled default reply.
+test("a DM starts only the flows of the connection that received it", async () => {
+  const otherConnection = "66666666-6666-4666-8666-666666666666";
+  await pool.query(
+    `INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,access_token_encrypted)
+     VALUES($1,$2,'other-account',true,true,'token')`,
+    [otherConnection, workspaceId],
+  );
+  const document = dmDocument({ type: "instagram_dm_default" }, "Other account");
+  document.nodes[0]!.config.connection_id = otherConnection;
+  const other = await enabledFlow(document);
+  await dm("9800", "hello");
+  assert.deepEqual(await started(), []);
+  await ingestMessages(pool, [
+    { accountId: "other-account", senderId: "9800", messageId: "in-other", text: "hello", timestamp: new Date() },
+  ]);
+  assert.deepEqual(
+    (await started()).map((row) => [row.flow_id, row.message_id, row.recipient_id]),
+    [[other, "in-other", "9800"]],
   );
 });
 
