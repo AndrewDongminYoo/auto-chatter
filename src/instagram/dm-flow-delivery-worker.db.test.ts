@@ -164,7 +164,8 @@ interface Options {
   post?: () => Response;
   // Runs inside the account verification read: after the first guard and before the second.
   onVerify?: () => Promise<void>;
-  me?: string | Error;
+  // The account read: a user_id, a thrown fetch error, or a raw 200 body.
+  me?: string | Error | { body: unknown };
   globalSendEnabled?: boolean;
 }
 const graph = (): Graph => ({ posts: [], gets: [] });
@@ -180,6 +181,7 @@ function transport(seen: Graph, options: Options = {}, guardPool: Pool = pool) {
     seen.gets.push(url.pathname);
     await options.onVerify?.();
     if (options.me instanceof Error) throw options.me;
+    if (typeof options.me === "object") return Response.json(options.me.body);
     return Response.json({ user_id: options.me ?? "100" });
   }) as typeof fetch;
   return new InstagramFollowTransport({
@@ -459,6 +461,13 @@ test("the account check: a mismatch blocks the row and a failed read defers it",
   assert.equal(await deliver(seen, { me: new Error("network") }), true);
   assert.deepEqual(
     [(await row(failed)).status, (await row(failed)).failure_code],
+    ["pending", "verification_unavailable"],
+  );
+  // A 200 body without a usable user_id is a failed read too, not a mismatch.
+  const empty = await dmRow("9003");
+  assert.equal(await deliver(seen, { me: { body: {} } }), true);
+  assert.deepEqual(
+    [(await row(empty)).status, (await row(empty)).failure_code],
     ["pending", "verification_unavailable"],
   );
   assert.deepEqual(seen.posts, []);

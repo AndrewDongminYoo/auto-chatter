@@ -3821,6 +3821,37 @@ test("manual reply verification failure defers without POST and nonfinite inboun
   assert.deepEqual(row, { status: "pending", failure_code: "verification_unavailable", delayed: true });
 });
 
+test("manual reply account read: a 200 without a usable user_id defers, another account fails", async () => {
+  const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
+  const { InstagramFollowTransport } = await import("../instagram/follow-transport.ts");
+  await readyManual();
+  assert.equal((await manualRequest("POST", "", manualBody)).status, 202);
+  let posts = 0;
+  const transport = (me: unknown) =>
+    new InstagramFollowTransport({
+      accountId: "123",
+      accessToken: "synthetic",
+      graphVersion: "v26.0",
+      fetchImpl: async (_input, init) => {
+        if (init?.method === "POST") {
+          posts++;
+          return Response.json({ message_id: "forbidden" });
+        }
+        return Response.json(me);
+      },
+    });
+  const state = async () =>
+    (await pool.query("SELECT status,failure_code,next_attempt_at>now() AS delayed FROM instagram_manual_replies"))
+      .rows[0];
+  assert.equal(await processNextManualReply(pool, connectionId, transport({}), "encrypted-test"), true);
+  assert.deepEqual(await state(), { status: "pending", failure_code: "verification_unavailable", delayed: true });
+  await pool.query("UPDATE instagram_manual_replies SET next_attempt_at=now()-interval '1 minute'");
+  assert.equal(await processNextManualReply(pool, connectionId, transport({ user_id: "999" }), "encrypted-test"), true);
+  const { status, failure_code } = await state();
+  assert.deepEqual([status, failure_code], ["failed", "authorization_unverified"]);
+  assert.equal(posts, 0);
+});
+
 test("manual reply sent audit failure preserves claim for unknown recovery instead of resending", async () => {
   const { processNextManualReply, recoverStaleManualReplies } = await import("../instagram/manual-reply-worker.ts");
   await readyManual();
