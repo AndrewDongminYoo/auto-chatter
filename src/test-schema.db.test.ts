@@ -54,7 +54,13 @@ test("resetTestSchema restores the foreign keys that an incomplete drop list lea
   const schema = await readFile(new URL("../db/schema.sql", import.meta.url), "utf8");
 
   // Baseline: drop every public table that the catalog lists, independent of the helper, then apply the schema.
+  // Refuse to drop a table that db/schema.sql does not create, so the baseline never deletes unrelated data.
   const existing = await publicTables();
+  const schemaTables = new Set(schemaTableNames(schema));
+  const unexpected = existing.filter((name) => !schemaTables.has(name));
+  if (unexpected.length > 0) {
+    throw new Error(`automations_test has tables that db/schema.sql does not create: ${unexpected.join(", ")}`);
+  }
   if (existing.length > 0) await pool.query(`DROP TABLE IF EXISTS ${existing.join(", ")} CASCADE`);
   await pool.query(schema);
   assert.deepEqual(
