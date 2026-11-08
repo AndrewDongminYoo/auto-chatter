@@ -4,10 +4,12 @@
 
 2026-11-08 [#33](https://github.com/AndrewDongminYoo/auto-chatter/issues/33)의 계획이 승인되었습니다.
 #33은 여러 PR로 나눕니다: ① 서버의 시작 기록(이 문서의 구현 범위), [#291](https://github.com/AndrewDongminYoo/auto-chatter/issues/291) 발송 worker, [#292](https://github.com/AndrewDongminYoo/auto-chatter/issues/292) 편집기, [#293](https://github.com/AndrewDongminYoo/auto-chatter/issues/293) 실계정 확인, [#294](https://github.com/AndrewDongminYoo/auto-chatter/issues/294) 스토리 응답·멘션.
-이 PR은 아무것도 보내지 않습니다: Graph 호출, transport, outbox 행, 큐 메시지, cron 단계가 없습니다.
-#33은 이 PR 뒤에도 열린 상태로 남습니다.
-migration 068은 코드 배포 전에 전체 실행기(`deploy/migrate-multi-user.sql`)로 적용해야 합니다.
-이 문서는 로컬 검사의 범위만 기록합니다. 운영 적용과 실계정 확인은 하지 않았습니다.
+PR ①은 아무것도 보내지 않았습니다: Graph 호출, transport, outbox 행, 큐 메시지, cron 단계가 없었습니다.
+PR ②([#291](https://github.com/AndrewDongminYoo/auto-chatter/issues/291))가 Cloudflare 큐와 cron 경로에서 첫 메시지를 보냅니다([발송](#발송)).
+2026-11-08 결정에 따라 Node worker는 이 행을 가져가지 않고, 메시징 ID 일시 중지를 켜고 끄는 API와 화면은 받은 메시지함 작업에서 따로 다룹니다.
+#33은 이 PR들 뒤에도 열린 상태로 남습니다.
+migration 068과 069는 코드 배포 전에 전체 실행기(`deploy/migrate-multi-user.sql`)로 적용해야 합니다.
+이 문서는 로컬 검사의 범위만 기록합니다. 운영 적용과 실계정 발송 확인은 하지 않았습니다(#293).
 
 ## 트리거 종류
 
@@ -138,18 +140,77 @@ DM으로만 들어온 보낸 사람은 메시징 sender ID로 식별하며, 댓�
   - 이 연결은 발송 경로가 쓰는 확인된 답장 연결을 수신자 쪽에서 읽은 것입니다. 두 ID가 같다고 가정하지 않으며, 연락처 데이터를 잇지도 않습니다. 확인되지 않은 답장(`unknown` 등)은 연결로 보지 않습니다.
 - 받은 메시지함의 상담 전환: 이 연결과 수신자(`instagram_inbox_handoffs.recipient_id`)의 상담 전환이 켜져 있으면 시작하지 않습니다.
 
-메시징 ID 단위의 자동화 일시 중지는 이 PR에 없습니다. 지금의 일시 중지(`instagram_contact_automation`)는 댓글 보낸 사람으로 저장되므로 메시징 ID에 쓸 수 없습니다.
-#291이 발송 직전 재검사와 함께 메시징 ID 일시 중지를 추가합니다. 그 전까지 이 공백이 남으며, 이 PR의 행은 보내지지 않으므로 발송으로 이어지지 않습니다.
+댓글 연락처의 일시 중지(`instagram_contact_automation`)는 댓글 보낸 사람으로 저장되므로 메시징 ID에 쓸 수 없습니다.
+그래서 #291은 메시징 ID 단위의 일시 중지(`instagram_dm_automation`)를 따로 둡니다. 키는 작업 공간, 연결, 메시징 ID이며 댓글 연락처와 잇지 않습니다.
+이 일시 중지는 시작 여부에는 쓰지 않고, 발송 claim과 POST 직전의 최종 확인에서 읽습니다([발송](#발송)).
+켜고 끄는 API와 화면은 아직 없으며, DB 테스트는 행을 직접 씁니다.
 
 ## 저장
 
 - `instagram_dm_start_events`: 트리거를 시작한 DM 하나당 한 행입니다. `(connection_id, message_id)`가 고유하고, 메시지 ID, 메시징 sender ID, DM 시각, 일치한 플로·버전·트리거 종류만 저장합니다. DM 본문은 저장하지 않습니다. 받은 메시지함(`inbox_enabled`)이 꺼져 있어도 씁니다.
 - `flow_runs`: 시작 원천이 댓글 이벤트(`event_id`) 또는 DM 시작 기록(`dm_start_event_id`) 중 정확히 하나입니다(CHECK `flow_runs_source`). 원천마다 중복 방지 고유 조건이 하나씩 있습니다(`(flow_id, event_id)`, `(flow_id, dm_start_event_id)`).
-- `flow_dm_deliveries`: DM으로 시작한 실행의 첫 메시지입니다. 수신자는 메시징 sender ID이고 상태는 `pending`뿐입니다. `private_reply_outbox`에는 쓰지 않습니다. outbox는 댓글 ID와 게시물 ID가 NOT NULL이고, `(connection, media, sender)` 고유 조건이 맞지 않으며, 그 claim 쿼리가 행을 가져가기 때문입니다. 실행 기록(`listFlowRuns`)과 실행 보고서(`flowRunReport`)는 이 행의 상태를 그 실행의 발송 상태로 읽으므로, DM으로 시작한 실행이 "연결된 답장 없음"으로 세어지지 않습니다.
+- `flow_dm_deliveries`: DM으로 시작한 실행의 첫 메시지입니다. 수신자는 메시징 sender ID이고, 처음 상태는 `pending`입니다. migration 069가 발송 상태(`pending`, `sending`, `sent`, `failed`, `blocked`, `unknown`)와 claim·재시도 열을 더합니다. `private_reply_outbox`에는 쓰지 않습니다. outbox는 댓글 ID와 게시물 ID가 NOT NULL이고, `(connection, media, sender)` 고유 조건이 맞지 않으며, 그 claim 쿼리가 행을 가져가기 때문입니다. 실행 기록(`listFlowRuns`)과 실행 보고서(`flowRunReport`)는 이 행의 상태를 그 실행의 발송 상태로 읽으므로, DM으로 시작한 실행이 "연결된 답장 없음"으로 세어지지 않습니다.
 - `flow_step_runs`: 댓글 실행과 같은 방식으로 트리거와 메시지 단계를 기록합니다.
 
-이 PR에서는 비공개 답장 claim, 팔로우·캠페인·수동 답장 worker, 실행 재개, Cloudflare cron과 큐 어느 것도 `flow_dm_deliveries`를 읽지 않습니다.
-#291이 발송 상태, claim, 24시간 창 검사, 삭제 함수의 발송 중 잠금을 추가합니다.
+비공개 답장 claim, 팔로우·캠페인·수동 답장 worker, 실행 재개는 `flow_dm_deliveries`를 읽지 않습니다. 이 행을 읽는 곳은 아래 [발송](#발송)의 worker, 깨우기, 운영 지표뿐입니다.
+
+## 발송
+
+#291의 범위입니다. worker는 `src/instagram/dm-flow-delivery-worker.ts`이며 Cloudflare 큐 소비자만 부릅니다. Node worker는 이 행을 가져가지 않습니다.
+
+### claim
+
+- 큐 메시지 하나는 연결의 행을 하나만 처리합니다. 순서는 수동 답장, 팔로우 응답, DM 플로 첫 메시지, 비공개 답장, 캠페인 행입니다. 자동 응답이 먼저이고 캠페인이 마지막입니다.
+- claim은 그 연결의 기한이 된 `pending` 행 하나를 `FOR UPDATE SKIP LOCKED`로 잡고 새 `attempt_id`로 `sending`으로 바꿉니다. 이후의 모든 상태 변경은 `status='sending' AND attempt_id=$n` 조건부이며, claim을 잃으면 오류를 냅니다.
+- 다음 행은 claim하지 않고 `pending`으로 둡니다: 아직 기한이 아닌 행, 메시징 ID가 일시 중지된 행, 그 메시징 ID의 상담 전환이 켜진 행, 연결이 일시 중지(`send_paused_until`)된 연결의 행. 댓글 연락처 일시 중지와 같은 방식입니다. 깨우기와 운영 지표도 같은 조건(`dmFlowDeliveryDueSql`)을 씁니다.
+
+### 최종 확인
+
+claim 직후, 계정 확인(`GET /me`) 뒤, 그리고 transport의 `beforeSend`에서 POST 직전에 한 문장으로 다시 읽습니다. Cloudflare의 `graphFetch`가 그 뒤에 연결을 한 번 더 확인합니다.
+막힘 사유는 재시도 사유보다 앞서며, 같은 종류 안에서는 아래 순서의 첫 사유를 기록합니다.
+
+| 조건                                                 | 결과                               |
+| ---------------------------------------------------- | ---------------------------------- |
+| 전역 발송 스위치(`SEND_ENABLED`)가 꺼짐              | `pending`/`global_send_disabled`   |
+| 실행이 `delivering`이 아님                           | `blocked`/`run_cancelled`          |
+| 플로가 꺼졌거나 보관됨                               | `blocked`/`inactive_flow`          |
+| 연결이 꺼졌거나 발송이 꺼졌거나 토큰이 없거나 만료됨 | `blocked`/`connection_unavailable` |
+| 그 밖에 토큰이 바뀜                                  | `pending`/`token_rotated`          |
+| 연결 일시 중지                                       | `pending`/`connection_paused`      |
+| 24시간 창 밖                                         | `blocked`/`reply_window_closed`    |
+| 메시징 ID 일시 중지                                  | `pending`/`contact_paused`         |
+| 상담 전환이 켜짐                                     | `pending`/`handoff_active`         |
+| 수신 거부(`messagingRecipientOptedOut`)              | `blocked`/`recipient_opted_out`    |
+| 수신 거부를 읽지 못함                                | `pending`/`consent_unavailable`    |
+
+- 플로 판단은 댓글 플로의 비공개 답장과 같습니다: 실행은 고정된 버전을 유지하므로, 다시 발행해도 멈추지 않고 끄거나 보관하면 멈춥니다.
+- `pending`으로 돌아간 행은 시도를 지우고 1분 뒤에 다시 claim될 수 있으며, 호출 제한 재시도 횟수를 쓰지 않습니다.
+
+### 24시간 창
+
+- 창은 그 연결에서 그 메시징 ID가 보낸 가장 최근 텍스트 DM부터 24시간입니다. 기준 시각은 그 보낸 사람의 모든 DM 시작 기록(이 실행의 시작 기록 포함)과 받은 메시지함에 저장된 그 사람의 텍스트 메시지(`kind='text'`) 가운데 가장 늦은 시각입니다. 팔로우 수신 기록에는 보낸 사람이 없어 쓰지 않습니다.
+- 받은 메시지함에 저장된 버튼 postback(`kind='postback'`)은 일부러 기준 시각에서 뺍니다. [수동 답장 명세](2026-09-27-inbox-manual-replies.md)가 확인 postback으로 창을 열지 않고 캠페인도 같은 `kind='text'` 기준을 쓰므로, 같은 보수적 기준을 따릅니다. 그래서 마지막 수신이 postback인 보낸 사람은 더 일찍 `reply_window_closed`가 될 수 있으며, 이는 보내지 않는 쪽으로 좁힌 기준입니다.
+- 수신은 최대 60초 미래 시각의 DM을 받으므로, 각 시각을 저장한 시각(`created_at`, `received_at`)으로 자릅니다. 그래서 막 받은 DM이 미래 시각이라는 이유로 창 밖이 되지 않습니다.
+- 비교는 데이터베이스 시계(`statement_timestamp()`)로 합니다. 창 밖이면 보내지 않고 `blocked`/`reply_window_closed`로 끝냅니다.
+
+### 결과 분류
+
+캠페인 worker와 같은 분류이며, 호출 제한은 비공개 답장과 같은 재시도 단계를 씁니다.
+
+- 성공: `sent`, `provider_message_id`, `sent_at`.
+- `PreSendVerificationError`: `retry`는 `pending`, `block`은 `blocked`.
+- `ProviderRejectedError`: `failed`/`meta_error_<code>`.
+- `ProviderRateLimitedError`: `pending`으로 돌리고 `rate_limit_retries`를 하나 올립니다. 지연은 15분, 1시간, 4시간 단계와 더 긴 `Retry-After` 가운데 긴 쪽이며, 연결의 `send_paused_until`도 같은 끝까지 미루고 행의 `next_attempt_at`을 그 끝으로 둡니다. 세 단계를 다 쓴 뒤의 호출 제한은 `failed`로 끝내되 연결은 그대로 멈춥니다.
+- 계정 확인이 다른 계정이면 `blocked`/`authorization_unverified`, 읽기에 실패하면 `pending`/`verification_unavailable`입니다.
+- 그 밖의 오류: `unknown`/`send_outcome_unknown`. 10분 넘게 `sending`인 행은 cron의 `stale_recovery`가 `unknown`/`worker_interrupted`로 바꿉니다. `unknown`은 자동으로 다시 보내지 않습니다.
+- 실행은 댓글 실행이 비공개 답장 뒤에 그러하듯 `delivering`으로 남고, 단계 기록도 더하지 않습니다. 실행 기록과 실행 보고서는 이 행의 상태, 실패 코드, 보낸 시각을 그 실행의 발송 상태로 읽습니다.
+
+### 예산과 깨우기
+
+- [발송 한도 명세](2026-10-12-send-quotas.md#비공개-답장-예산)는 Send API DM(수동 답장, 팔로우 응답)이 예산을 쓰지도, 예산에 막히지도 않는다고 정합니다. DM 플로 첫 메시지도 Send API DM이므로 같은 규칙을 따르며, 새 시간당 예산을 두지 않습니다. 연결 일시 중지와 호출 제한 재시도는 적용합니다.
+- 웹훅과 cron의 깨우기(`wakeDueReplies`)는 발송이 켜지고 토큰이 유효한 연결에 기한이 된 DM 플로 행이 있으면 그 연결을 큐에 넣습니다. 그래서 DM 행만 있는 연결도 깨어납니다.
+- `SEND_ENABLED=false`이면 깨우기, 큐 처리, `stale_recovery`가 모두 실행되지 않아 아무것도 보내지 않습니다.
+- 운영 지표는 기한이 된 행, `sending` 행, 24시간 결과(`unknown`, `failed`, `blocked`), 전체 `unknown` 수에 이 행을 셉니다.
 
 ## 재개 경로
 
@@ -165,15 +226,17 @@ DM 트리거가 있는 플로는 관리자에게도 읽기 전용으로 열리�
 
 ## 삭제, 내보내기, 권한
 
-- 연결 데이터 삭제와 작업 공간 삭제는 두 새 테이블을 지웁니다. 순서는 발송 행, 실행 단계, 실행, 시작 기록이며, 작업 공간 삭제는 시작 기록을 플로 버전보다 먼저 지웁니다.
-- 사람 데이터 삭제는 `dm_recipient` 신원(과 그 신원에 이어진 메시징 ID)으로 발송 행, DM으로 시작한 실행과 그 단계, 시작 기록을 지웁니다. 같은 숫자의 `comment_sender` 삭제는 메시징 신원에 닿지 않습니다.
-- 작업 공간 내보내기는 두 테이블을 모두 내보냅니다. 시작 기록에는 DM 본문이 없습니다.
-- 두 테이블 모두 연결 행을 참조하므로, 작업 공간 이동 검사는 기존의 연결 존재 검사가 이미 덮습니다.
-- `deploy/supabase-access.sql`이 두 테이블에 RLS를 켜고 서버 역할에 SELECT·INSERT·UPDATE만 줍니다. 기본 키가 uuid라서 시퀀스 권한은 필요하지 않습니다.
+- 연결 데이터 삭제와 작업 공간 삭제는 새 테이블을 지웁니다. 순서는 발송 행, 실행 단계, 실행, 시작 기록이며, 작업 공간 삭제는 시작 기록을 플로 버전보다 먼저 지웁니다. 메시징 ID 일시 중지(`instagram_dm_automation`)도 지웁니다.
+- 사람 데이터 삭제는 `dm_recipient` 신원(과 그 신원에 이어진 메시징 ID)으로 발송 행, DM으로 시작한 실행과 그 단계, 시작 기록, 메시징 ID 일시 중지를 지웁니다. 같은 숫자의 `comment_sender` 삭제는 메시징 신원에 닿지 않습니다.
+- 세 삭제 함수는 다른 발송 경로의 행처럼 DM 플로 발송 행을 `FOR UPDATE NOWAIT`로 잠근 뒤 `sending` 행이 있는지 봅니다(#291). 다른 트랜잭션이 잡고 있거나 `sending`인 행이 있으면 `sending_in_progress`(`AC003`)로 거절합니다. 사람 데이터 삭제는 신원 집합을 다시 풀 때마다 그 메시징 ID들의 행을 다시 모아 잠급니다.
+- 작업 공간 내보내기는 세 테이블과 메시징 ID 일시 중지(`instagram_dm_automation`)를 모두 내보냅니다. 시작 기록에는 DM 본문이 없습니다.
+- 네 테이블 모두 연결 행을 참조하므로, 작업 공간 이동 검사는 기존의 연결 존재 검사가 이미 덮습니다.
+- `deploy/supabase-access.sql`이 네 테이블(세 테이블과 `instagram_dm_automation`)에 RLS를 켜고 서버 역할에 SELECT·INSERT·UPDATE만 줍니다. 기본 키가 uuid이거나 텍스트 복합 키라서 시퀀스 권한은 필요하지 않습니다.
 
 ## 검증 범위
 
 `src/app/dm-start-trigger-schema.test.ts`가 트리거 설정, DM 플로 단계 제한, 겹침 규칙, 댓글 플로의 변하지 않은 검사를 확인합니다.
 `src/instagram/dm-start-trigger.db.test.ts`가 키워드(`all` 포함)·기본 응답 시작, 재전송, 응답 대기·팔로우 확인 우선, 이어 갈 수 있는 실행·대기 중인 팔로우 확인·보관된 DM 차단, 수신 거부(확인된 답장 연결을 거친 철회 포함)와 상담 전환, 실행 기록과 실행 보고서의 발송 상태, worker와 재개가 발송 행을 읽지 않음, 발행·켜기 충돌, 세 삭제 함수, migration 068 재실행을 확인합니다.
-`src/cloudflare/worker.db.test.ts`가 웹훅 DM으로 시작한 발송 행을 cron과 큐가 건드리지 않는 것을 확인합니다.
-이 검사들은 로컬 일회용 PostgreSQL과 workerd에서만 실행했으며, 운영 migration, 배포된 Worker, 실계정 수신을 증명하지 않습니다(#293).
+`src/instagram/dm-flow-delivery-worker.db.test.ts`(#291)가 모의 Graph 응답으로 발송, claim 순서와 건너뛰기, 24시간 창의 기준 시각(미래 시각, 나중의 받은 메시지), claim 뒤와 POST 직전의 재확인(24시간 창, 메시징 ID 일시 중지, 수신 거부, 상담 전환을 포함), 결과 분류와 호출 제한 재시도 단계, 오래된 `sending` 복구, 운영 지표, 삭제 함수의 거절과 일시 중지 삭제, migration 069 재실행을 확인합니다.
+`src/cloudflare/worker.db.test.ts`가 웹훅 DM으로 시작한 발송 행을 웹훅·cron 깨우기와 큐가 보내는 것, 같은 연결의 비공개 답장보다 먼저 보내는 것, 발송이 꺼져 있으면 아무것도 깨우거나 보내지 않는 것을 확인합니다.
+이 검사들은 로컬 일회용 PostgreSQL과 workerd에서만 실행했으며, 운영 migration, 배포된 Worker, 실계정 수신과 발송을 증명하지 않습니다(#293).
