@@ -6,6 +6,7 @@
 #33은 여러 PR로 나눕니다: ① 서버의 시작 기록(이 문서의 구현 범위), [#291](https://github.com/AndrewDongminYoo/auto-chatter/issues/291) 발송 worker, [#292](https://github.com/AndrewDongminYoo/auto-chatter/issues/292) 편집기, [#293](https://github.com/AndrewDongminYoo/auto-chatter/issues/293) 실계정 확인, [#294](https://github.com/AndrewDongminYoo/auto-chatter/issues/294) 스토리 응답·멘션.
 PR ①은 아무것도 보내지 않았습니다: Graph 호출, transport, outbox 행, 큐 메시지, cron 단계가 없었습니다.
 PR ②([#291](https://github.com/AndrewDongminYoo/auto-chatter/issues/291))가 Cloudflare 큐와 cron 경로에서 첫 메시지를 보냅니다([발송](#발송)).
+[#292](https://github.com/AndrewDongminYoo/auto-chatter/issues/292)가 대시보드 편집기에서 DM 트리거 플로를 만들고 고치게 합니다([편집기](#편집기)).
 2026-11-08 결정에 따라 Node worker는 이 행을 가져가지 않고, 메시징 ID 일시 중지를 켜고 끄는 API와 화면은 받은 메시지함 작업에서 따로 다룹니다.
 #33은 이 PR들 뒤에도 열린 상태로 남습니다.
 migration 068과 069는 코드 배포 전에 전체 실행기(`deploy/migrate-multi-user.sql`)로 적용해야 합니다.
@@ -219,9 +220,17 @@ claim 직후, 계정 확인(`GET /me`) 뒤, 그리고 transport의 `beforeSend`�
 
 ## 편집기
 
-편집기는 DM 트리거 단계를 편집할 수 없습니다(#292).
-DM 트리거가 있는 플로는 관리자에게도 읽기 전용으로 열리며, 저장·발행·켜기 버튼과 단계 편집 메뉴를 보여 주지 않습니다(`flowReadOnlyReason`).
-그래서 편집기에서 저장해 DM 트리거 플로를 망가뜨릴 수 없습니다. DM 트리거 플로는 API로만 만들고 발행하고 켭니다.
+#292부터 관리자는 편집기에서 DM 트리거 플로를 댓글 플로와 같이 만들고, 저장하고, 발행하고, 켭니다. 상담원에게는 댓글 플로처럼 읽기 전용으로 보입니다.
+
+- 트리거가 없는 플로는 시작 버튼 셋을 보입니다: 댓글 트리거, DM 키워드 트리거, DM 기본 응답 트리거. 트리거 종류는 바꾸지 않습니다. 하나뿐인 트리거는 삭제할 수 없으므로, 다른 종류로 시작하려면 새 플로를 만듭니다.
+- DM 키워드 트리거의 양식은 계정, 조건(키워드 포함·정확히 일치·모든 DM), 키워드, 제외 키워드입니다. 게시물 ID는 없습니다. DM 기본 응답 트리거의 양식은 계정 하나입니다. 저장하는 설정은 [트리거 종류](#트리거-종류)의 키와 같습니다(`flowConfig`).
+- DM 트리거 플로의 단계 추가 목록에는 메시지 보내기만 있습니다. 메시지 뒤에는 응답 기다리기만 올 수 있는데 DM 플로는 그것을 거절하므로, 트리거 뒤에 메시지 하나만 놓을 수 있습니다. 기존 단계로 연결할 때도 메시지만 고를 수 있습니다.
+- DM 트리거 플로의 메시지 양식은 변수 선택을 보이지 않고, 변수를 쓸 수 없다고 안내합니다.
+- API로 저장한 초안에 다른 단계나 변수가 있으면 편집기는 그 초안을 그대로 보이고, 발행할 때 서버의 `dm_trigger_unsupported_node`, `dm_trigger_unsupported_variable` 오류를 그 단계에 표시합니다. 발행과 켜기의 `dm_default_conflict`, `dm_keyword_conflict`도 트리거 단계에 표시합니다.
+- 테스트 실행은 입력란을 "DM 내용"으로 부르고, 태그·필드 값·응답 입력을 숨기며 요청에 넣지 않습니다. DM 플로에는 그 값을 읽는 단계가 없기 때문입니다. 이 판단은 화면의 초안 기준입니다.
+- 트리거에 관한 오류 문구(`trigger_count`, `trigger_has_incoming`, `unreachable_node`)와 트리거 조건에 맞지 않은 테스트 결과는 트리거 종류를 말하지 않습니다.
+
+화면 확인은 [DM 트리거 편집기 화면 검증](../notes/2026-11-08-dm-trigger-editor-ui-verification.md)에 있습니다.
 받은 메시지함에는 새 `kind`를 추가하지 않습니다. 수동 답장과 캠페인의 24시간 창은 `kind='text'`를 읽습니다.
 
 ## 삭제, 내보내기, 권한
