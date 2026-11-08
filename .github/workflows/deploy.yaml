@@ -1,0 +1,144 @@
+# Deploys the Cloudflare Worker after CI passes on a push to main, or on a manual run on main.
+# Kept apart from ci.yaml, whose cancel-in-progress concurrency would cancel a deploy mid-flight.
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      migrations_applied:
+        description: The database migrations of this release were applied by hand (deploy/migrate-multi-user.sql)
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: >-
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    # On the job, not the workflow, so a skipped run (failed CI, pull request) never takes the pending slot.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve the tested commit
+        id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          main=$(git rev-parse refs/remotes/origin/main)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          if [ "$main" != "$sha" ]; then
+            if [ "$EVENT_NAME" = workflow_run ]; then
+              echo "::notice::main moved from $sha to $main; the CI run of the newer commit deploys it."
+              echo "Skipped: \`main\` moved past \`$sha\` to \`$main\`; the CI run of the newer commit deploys it." >> "$GITHUB_STEP_SUMMARY"
+              echo "deploy=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::The checked-out commit $sha is not the main HEAD $main."
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yaml --event push --branch main \
+              --commit "$sha" --limit 1 --json status,conclusion,url \
+              --jq '.[0] // {} | [.status, .conclusion, .url] | map(if . == null or . == "" then "none" else . end) | join(" ")')
+            read -r ci_status ci_conclusion ci_url <<< "$run"
+            if [ "$ci_status" != completed ] || [ "$ci_conclusion" != success ]; then
+              echo "::error::The latest CI run for $sha is $ci_status/$ci_conclusion, not completed/success. ${ci_url}"
+              exit 1
+            fi
+            echo "CI passed for $sha: $ci_url"
+          fi
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
+      - if: steps.target.outputs.deploy == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - if: steps.target.outputs.deploy == 'true'
+        run: npm install -g corepack@0.36.0 && corepack enable
+      - if: steps.target.outputs.deploy == 'true'
+        run: corepack pnpm install --frozen-lockfile
+      - name: Stop when the database must be migrated by hand first
+        if: steps.target.outputs.deploy == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          MIGRATIONS_APPLIED: ${{ github.event_name == 'workflow_dispatch' && inputs.migrations_applied }}
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+        run: bash scripts/deploy-migration-guard.sh "$DEPLOY_SHA"
+      - name: Deploy the Worker
+        id: deploy
+        if: steps.target.outputs.deploy == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # --tag only labels the version; the deploy ships whatever is checked out.
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --short
+            echo "::error::The checkout is not clean; refusing to deploy."
+            exit 1
+          fi
+          corepack pnpm exec wrangler deploy --env-file /dev/null --tag "$DEPLOY_SHA" --message "$RUN_URL"
+          corepack pnpm exec wrangler deployments status --json --env-file /dev/null > "$RUNNER_TEMP/deployment.json"
+          version_id=$(jq -er 'if (.versions | length) == 1 and .versions[0].percentage == 100 then .versions[0].version_id else error("split") end' "$RUNNER_TEMP/deployment.json")
+          corepack pnpm exec wrangler versions view "$version_id" --json --env-file /dev/null > "$RUNNER_TEMP/version.json"
+          tag=$(jq -r '.annotations["workers/tag"] // empty' "$RUNNER_TEMP/version.json")
+          if [ "$tag" != "$DEPLOY_SHA" ]; then
+            echo "::error::The active version $version_id carries tag '${tag}', not $DEPLOY_SHA."
+            exit 1
+          fi
+          echo "version_id=$version_id" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Deployed"
+            echo ""
+            echo "- Version: \`$version_id\`"
+            echo "- Commit: \`$DEPLOY_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Public smoke check
+        if: steps.target.outputs.deploy == 'true'
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if bash scripts/production-smoke.sh > "$RUNNER_TEMP/smoke.log" 2>&1; then
+              result=passed
+              break
+            fi
+            result=failed
+            echo "Smoke attempt $attempt failed:"
+            cat "$RUNNER_TEMP/smoke.log"
+            if [ "$attempt" -lt 6 ]; then sleep 10; fi
+          done
+          cat "$RUNNER_TEMP/smoke.log"
+          {
+            echo "- Smoke check: $result (attempt $attempt)"
+            echo ""
+            echo '```log'
+            cat "$RUNNER_TEMP/smoke.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          test "$result" = passed

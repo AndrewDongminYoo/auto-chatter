@@ -31,6 +31,7 @@ EAAB
 efbbbf
 fbcdn
 fsize
+gpgsign
 hvpqangvavstdhyqkfww
 hyperdrive
 hyperdrives
@@ -53,6 +54,7 @@ nonmatching
 noproxy
 nosniff
 nosuid
+nosystem
 nxdomain
 Ollama
 Pago
