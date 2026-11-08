@@ -22,6 +22,17 @@ test("messages accept inbound text only and reject echo, self, deleted and misma
   ])
     assert.deepEqual(parseMessageEvents(body([changed])), []);
 });
+test("messages and postbacks with a NUL in the message ID are dropped before any query sees them", () => {
+  const mid = "message\u00001";
+  const postback = {
+    ...message,
+    message: undefined,
+    postback: { mid, title: "자료 받기", payload: "auto-chatter:confirm:42" },
+  };
+  assert.deepEqual(parseMessageEvents(body([{ ...message, message: { ...message.message, mid } }])), []);
+  assert.deepEqual(parseMessageEvents(body([postback])), []);
+  assert.equal(parseMessageEvents(body([{ ...message, message: { ...message.message, mid } }, message])).length, 1);
+});
 test("follow lookup distinguishes false from unknown and pins the account before lookup", async () => {
   for (const flag of [true, false, undefined]) {
     const calls: string[] = [];

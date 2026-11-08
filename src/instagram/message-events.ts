@@ -34,6 +34,7 @@ export function parseMessageEvents(body: Uint8Array): InstagramMessage[] {
         typeof message.mid !== "string" ||
         !message.mid ||
         message.mid.length > 512 ||
+        message.mid.includes("\u0000") ||
         typeof message.text !== "string" ||
         message.text.length > 10000 ||
         typeof event.timestamp !== "number" ||
