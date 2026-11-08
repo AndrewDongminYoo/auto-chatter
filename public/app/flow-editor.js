@@ -24,8 +24,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
   let numbers = {};
   const openMenus = new Set();
   const isAdmin = () => ["owner", "admin"].includes(getRole());
-  // Admins edit an open flow unless the editor cannot show it correctly (flowReadOnlyReason).
-  const canEdit = () => isAdmin() && !current?.readOnly;
+  const canEdit = isAdmin;
   const dirty = () => current !== null && changes !== savedChanges;
   const sameId = (left, right) => String(left).toLowerCase() === String(right).toLowerCase();
   const names = {
@@ -145,7 +144,6 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
       published: flow.published_version_no,
       enabled: flow.enabled,
       archived: flow.archived === true,
-      readOnly: flowReadOnlyReason(flow.draft) ?? null,
     };
     draft = JSON.parse(JSON.stringify(flow.draft));
     changes = 0;
@@ -197,15 +195,13 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     byId("flow-test-run").disabled = busy || archived;
     byId("flow-status").textContent = !isAdmin()
       ? "플로는 관리자와 소유자만 바꿀 수 있어 읽기 전용으로 보여 줍니다."
-      : current.readOnly
-        ? current.readOnly
-        : archived
-          ? "보관한 플로입니다. 저장할 수 없으니 필요한 내용을 옮긴 뒤 닫아 주세요."
-          : unsaved
-            ? "저장하지 않은 변경 사항이 있습니다. 발행과 초안 테스트는 저장한 초안으로 하므로 먼저 저장해 주세요."
-            : current.published
-              ? `저장한 초안입니다. 발행 버전은 v${current.published}이며, 초안을 발행해야 실행에 반영됩니다.`
-              : "저장한 초안입니다. 발행하고 켜야 새 댓글에 실행됩니다.";
+      : archived
+        ? "보관한 플로입니다. 저장할 수 없으니 필요한 내용을 옮긴 뒤 닫아 주세요."
+        : unsaved
+          ? "저장하지 않은 변경 사항이 있습니다. 발행과 초안 테스트는 저장한 초안으로 하므로 먼저 저장해 주세요."
+          : current.published
+            ? `저장한 초안입니다. 발행 버전은 v${current.published}이며, 초안을 발행해야 실행에 반영됩니다.`
+            : `저장한 초안입니다. 발행하고 켜야 새 ${flowStartName(draft)}에 실행됩니다.`;
     byId("flow-badges").replaceChildren(
       badge(current.published ? `발행 v${current.published}` : "미발행"),
       badge(current.enabled ? "켜짐" : "꺼짐", current.enabled ? "success" : ""),
@@ -219,6 +215,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     byId("flow-actions").hidden = !admin;
     byId("flow-test").hidden = !admin;
     controls();
+    syncTestForm();
     // The outline numbers the steps the error summary names, so it renders first.
     renderOutline();
     renderErrors();
@@ -238,6 +235,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     changes++;
     pathStale();
     controls();
+    syncTestForm();
     renderOutline();
     renderErrors();
     renderGraph();
@@ -378,6 +376,49 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     return typeof value === "number" || typeof value === "string" ? String(value) : "";
   }
 
+  // The Instagram account a trigger listens on; a trigger without one starts at "계정 선택".
+  function accountSelect(value) {
+    const account = select(
+      getConnections().map((connection) => [connection.id, connection.username ?? connection.account_id]),
+      value || undefined,
+    );
+    if (!value) {
+      account.add(new Option("계정 선택", ""), 0);
+      account.value = "";
+    }
+    return account;
+  }
+  // The keyword controls of a comment or DM keyword trigger; `all` names what that mode matches.
+  function keywordControls(config, all, excludedHint) {
+    const mode = select(
+      [
+        ["contains", "키워드 포함"],
+        ["exact", "정확히 일치"],
+        ["all", all],
+      ],
+      config.match_mode,
+    );
+    const keywords = document.createElement("textarea");
+    keywords.rows = 3;
+    keywords.value = flowStoredList(config.keywords).join("\n");
+    const excluded = document.createElement("textarea");
+    excluded.rows = 2;
+    excluded.value = flowStoredList(config.excluded_keywords).join("\n");
+    const keywordLabel = labelled("키워드", keywords, "한 줄에 하나씩 최대 20개, 각각 100자까지");
+    const sync = () => (keywordLabel.hidden = mode.value === "all");
+    sync();
+    return {
+      mode,
+      sync,
+      values: () => ({
+        keywords: flowLines(keywords.value),
+        match_mode: mode.value,
+        excluded_keywords: flowLines(excluded.value),
+      }),
+      labels: [keywordLabel, labelled("제외 키워드", excluded, excludedHint)],
+    };
+  }
+
   function configForm(item, summary) {
     const box = node("div", "", "flow-config");
     const config = item.config;
@@ -386,52 +427,48 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
       configChanged(item, summary);
     };
     switch (item.type) {
-      case "instagram_comment": {
-        const account = select(
-          getConnections().map((connection) => [connection.id, connection.username ?? connection.account_id]),
-          config.connection_id || undefined,
+      case "instagram_dm_keyword": {
+        const account = accountSelect(config.connection_id);
+        const condition = keywordControls(config, "모든 DM", "이 단어가 들어간 DM에는 실행하지 않습니다.");
+        box.addEventListener("input", () => {
+          condition.sync();
+          update({ connection_id: account.value, ...condition.values() });
+        });
+        box.append(
+          labelled("Instagram 계정", account, "이 계정이 받은 일반 텍스트 DM에서 시작합니다."),
+          labelled("DM 조건", condition.mode),
+          ...condition.labels,
         );
-        if (!config.connection_id) {
-          account.add(new Option("계정 선택", ""), 0);
-          account.value = "";
-        }
+        break;
+      }
+      case "instagram_dm_default": {
+        const account = accountSelect(config.connection_id);
+        account.addEventListener("input", () => update({ connection_id: account.value }));
+        box.append(
+          labelled(
+            "Instagram 계정",
+            account,
+            "켜진 DM 키워드 플로 어디에도 맞지 않은 일반 텍스트 DM에서 시작합니다. 계정마다 하나만 켤 수 있습니다.",
+          ),
+        );
+        break;
+      }
+      case "instagram_comment": {
+        const account = accountSelect(config.connection_id);
         const media = document.createElement("input");
         media.inputMode = "numeric";
         media.maxLength = 40;
         media.value = config.media_id ?? "";
-        const mode = select(
-          [
-            ["contains", "키워드 포함"],
-            ["exact", "정확히 일치"],
-            ["all", "모든 댓글"],
-          ],
-          config.match_mode,
-        );
-        const keywords = document.createElement("textarea");
-        keywords.rows = 3;
-        keywords.value = flowStoredList(config.keywords).join("\n");
-        const excluded = document.createElement("textarea");
-        excluded.rows = 2;
-        excluded.value = flowStoredList(config.excluded_keywords).join("\n");
-        const keywordLabel = labelled("키워드", keywords, "한 줄에 하나씩 최대 20개, 각각 100자까지");
-        const sync = () => (keywordLabel.hidden = mode.value === "all");
-        sync();
+        const condition = keywordControls(config, "모든 댓글", "이 단어가 들어간 댓글에는 실행하지 않습니다.");
         box.addEventListener("input", () => {
-          sync();
-          update({
-            connection_id: account.value,
-            media_id: media.value.trim(),
-            keywords: flowLines(keywords.value),
-            match_mode: mode.value,
-            excluded_keywords: flowLines(excluded.value),
-          });
+          condition.sync();
+          update({ connection_id: account.value, media_id: media.value.trim(), ...condition.values() });
         });
         box.append(
           labelled("Instagram 계정", account),
           labelled("게시물 ID", media, "자동화할 게시물의 숫자 ID입니다."),
-          labelled("댓글 조건", mode),
-          keywordLabel,
-          labelled("제외 키워드", excluded, "이 단어가 들어간 댓글에는 실행하지 않습니다."),
+          labelled("댓글 조건", condition.mode),
+          ...condition.labels,
         );
         break;
       }
@@ -440,6 +477,14 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
         text.rows = 4;
         text.maxLength = flowLimit("messageLength");
         text.value = config.text ?? "";
+        text.addEventListener("input", () => update({ text: text.value }));
+        // Publish refuses every variable in a DM flow's messages (dm_trigger_unsupported_variable).
+        if (flowIsDmFlow(draft)) {
+          box.append(
+            labelled("보낼 메시지", text, "최대 1,000자입니다. DM 트리거 플로의 메시지에는 변수를 쓸 수 없습니다."),
+          );
+          break;
+        }
         const variables = select([
           ["{{comment.text}}", "댓글 본문"],
           ...fields
@@ -455,7 +500,6 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
         });
         const variableRow = node("div", "", "flow-slot-form");
         variableRow.append(labelled("변수", variables), insert);
-        text.addEventListener("input", () => update({ text: text.value }));
         box.append(
           labelled("보낼 메시지", text, "최대 1,000자입니다. 변수는 보내기 전에 한 번만 채웁니다."),
           variableRow,
@@ -810,15 +854,30 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     const parts = [];
     if (!outline.trigger) {
       if (canEdit()) {
-        const start = node("button", "댓글 트리거 만들기");
-        start.type = "button";
-        start.addEventListener("click", () => {
-          const { document: next, id } = flowAddTrigger(draft, defaults("instagram_comment"));
-          openMenus.add(id);
-          change(next, `#flow-step-${id} .flow-config select`);
-        });
-        parts.push(node("p", "플로는 댓글 트리거 하나에서 시작합니다.", "hint"), start);
-      } else parts.push(node("p", "아직 댓글 트리거가 없습니다.", "hint"));
+        const starts = node("div", "", "flow-actions");
+        for (const [type, text] of [
+          ["instagram_comment", "댓글 트리거 만들기"],
+          ["instagram_dm_keyword", "DM 키워드 트리거 만들기"],
+          ["instagram_dm_default", "DM 기본 응답 트리거 만들기"],
+        ]) {
+          const start = node("button", text, type === "instagram_comment" ? "" : "secondary");
+          start.type = "button";
+          start.addEventListener("click", () => {
+            const { document: next, id } = flowAddTrigger(draft, defaults(type), type);
+            openMenus.add(id);
+            change(next, `#flow-step-${id} .flow-config select`);
+          });
+          starts.append(start);
+        }
+        parts.push(
+          node(
+            "p",
+            "플로는 트리거 하나에서 시작합니다. 트리거 종류는 만든 뒤 바꿀 수 없으니, 다른 종류로 시작하려면 새 플로를 만들어 주세요. DM 트리거 플로에는 메시지 보내기 하나만 이어집니다.",
+            "hint",
+          ),
+          starts,
+        );
+      } else parts.push(node("p", "아직 트리거가 없습니다.", "hint"));
     }
     if (outline.steps.length) parts.push(sequence(outline.steps));
     if (outline.unreachable.length) {
@@ -915,6 +974,14 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
   // Test run
 
   const testFields = new Map();
+  // A DM flow holds no tag or field condition, action or reply wait (dm_trigger_unsupported_node), so a test
+  // run of it reads only the text; the other inputs are hidden and not sent. The draft on screen decides.
+  function syncTestForm() {
+    const dm = flowIsDmFlow(draft);
+    byId("flow-test-text-label").textContent = dm ? "DM 내용" : "댓글 본문";
+    for (const id of ["flow-test-tags", "flow-test-values", "flow-test-reply", "flow-test-branch"])
+      byId(id).hidden = dm;
+  }
   function resetTestForm() {
     const form = byId("flow-test-form");
     form.reset();
@@ -950,6 +1017,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
   }
   function testRunBody() {
     const values = byId("flow-test-form").elements;
+    if (flowIsDmFlow(draft)) return { source: values.source.value, comment_text: values.comment_text.value };
     return {
       source: values.source.value,
       comment_text: values.comment_text.value,
@@ -1034,7 +1102,9 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     parts.push(
       node(
         "p",
-        "실제로 보내거나 저장한 것은 없습니다. 저장된 연락처, 동의, 상담 상태와 7일 댓글 답장 기간은 확인하지 않았습니다.",
+        flowIsDmFlow(flowReadable(ran) ? ran : draft)
+          ? "실제로 보내거나 저장한 것은 없습니다. 수신 거부, 상담 상태와 DM 24시간 응답 기간은 확인하지 않았습니다."
+          : "실제로 보내거나 저장한 것은 없습니다. 저장된 연락처, 동의, 상담 상태와 7일 댓글 답장 기간은 확인하지 않았습니다.",
         "hint",
       ),
     );
@@ -1063,7 +1133,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
       }
       close();
       void loadList();
-      if (await load(created.id)) notice("플로를 만들었습니다. 댓글 트리거부터 단계를 추가해 주세요.");
+      if (await load(created.id)) notice("플로를 만들었습니다. 트리거를 만든 뒤 단계를 추가해 주세요.");
     });
   });
   byId("flow-close").addEventListener("click", () => {
@@ -1140,7 +1210,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
         notice(
           published.replayed
             ? `이미 발행한 초안입니다. 발행 버전은 v${published.version_no}입니다.`
-            : `v${published.version_no}을 발행했습니다. ${current.enabled ? "켜져 있으므로 새 댓글부터 이 버전으로 실행합니다." : "켜야 새 댓글에 실행됩니다."}`,
+            : `v${published.version_no}을 발행했습니다. ${current.enabled ? `켜져 있으므로 새 ${flowStartName(checked)}부터 이 버전으로 실행합니다.` : `켜야 새 ${flowStartName(checked)}에 실행됩니다.`}`,
         );
         void loadList();
       } catch (error) {
@@ -1161,7 +1231,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     if (
       !enable &&
       !confirm(
-        "이 플로를 끌까요? 새 댓글로 실행을 시작하지 않고, 기다리는 중인 실행은 재개할 때 취소되며, 대기열의 답장도 보내지 않습니다. 다시 켜도 취소된 실행은 되살아나지 않습니다.",
+        `이 플로를 끌까요? 새 ${flowIsDmFlow(draft) ? "DM으로" : "댓글로"} 실행을 시작하지 않고, 기다리는 중인 실행은 재개할 때 취소되며, 대기열의 답장도 보내지 않습니다. 다시 켜도 취소된 실행은 되살아나지 않습니다.`,
       )
     )
       return;
@@ -1173,7 +1243,11 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
         if (session !== epoch || current?.id !== id) return;
         current.enabled = result.enabled;
         clearErrors();
-        notice(result.enabled ? "플로를 켰습니다. 새 댓글부터 발행 버전으로 실행합니다." : "플로를 껐습니다.");
+        notice(
+          result.enabled
+            ? `플로를 켰습니다. 새 ${flowStartName(draft)}부터 발행 버전으로 실행합니다.`
+            : "플로를 껐습니다.",
+        );
         void loadList();
       } catch (error) {
         if (session !== epoch || current?.id !== id) return;

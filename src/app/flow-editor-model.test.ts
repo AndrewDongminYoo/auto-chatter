@@ -12,8 +12,10 @@ type Item =
   | { kind: "empty"; from: string; port: string };
 interface FlowModel {
   flowTypes(): string[];
-  flowReadOnlyReason(document: Doc): string | null;
   flowTrigger(document: Doc): { id: string } | undefined;
+  flowIsTrigger(type: string): boolean;
+  flowIsDmFlow(document: Doc): boolean;
+  flowStartName(document: Doc): string;
   flowPorts(type: string): string[];
   flowTypeLabel(type: string): string;
   flowPortLabel(port: string): string;
@@ -23,7 +25,7 @@ interface FlowModel {
   flowStoredList(value: unknown): unknown[];
   flowSlotTypes(document: Doc, from: string, port: string): string[];
   flowLinkTargets(document: Doc, from: string): string[];
-  flowAddTrigger(document: Doc, config: Record<string, unknown>): { document: Doc; id: string };
+  flowAddTrigger(document: Doc, config: Record<string, unknown>, type?: string): { document: Doc; id: string };
   flowInsert(
     document: Doc,
     from: string,
@@ -114,7 +116,12 @@ function triggerDoc(): { document: Doc; id: string } {
   );
 }
 
-test("a flow with a DM trigger opens read-only and its outline starts at that trigger (#33)", () => {
+function dmDoc(type: "instagram_dm_keyword" | "instagram_dm_default", values: Record<string, unknown> = {}) {
+  const added = model.flowAddTrigger(empty, model.flowConfig(type, { connection_id: connection, ...values }), type);
+  return { ...added, document: added.document };
+}
+
+test("a flow with a DM trigger is edited like any flow and its outline starts at that trigger (#292)", () => {
   const dm: Doc = {
     schema_version: 1,
     nodes: [
@@ -123,8 +130,10 @@ test("a flow with a DM trigger opens read-only and its outline starts at that tr
     ],
     edges: [{ from: "start", port: "next", to: "m" }],
   };
-  assert.match(model.flowReadOnlyReason(dm) ?? "", /읽기 전용/);
+  assert.equal((model as unknown as Record<string, unknown>).flowReadOnlyReason, undefined);
   assert.equal(model.flowTrigger(dm)?.id, "start");
+  assert.equal(model.flowIsDmFlow(dm), true);
+  assert.equal(model.flowStartName(dm), "DM");
   const outline = plain(model.flowOutline(dm));
   assert.equal(outline.trigger, "start");
   assert.deepEqual(outline.steps, [
@@ -133,13 +142,135 @@ test("a flow with a DM trigger opens read-only and its outline starts at that tr
     { kind: "empty", from: "m", port: "next" },
   ]);
   assert.equal(outline.unreachable.length, 0);
-  assert.doesNotMatch(model.flowTypeLabel("instagram_dm_keyword"), /[a-z_]/);
-  const keyword: Doc = {
-    ...dm,
-    nodes: [{ id: "start", type: "instagram_dm_keyword", config: { connection_id: "c" } }, dm.nodes[1]!],
+  for (const type of ["instagram_comment", "instagram_dm_keyword", "instagram_dm_default"]) {
+    assert.equal(model.flowIsTrigger(type), true, type);
+    assert.doesNotMatch(model.flowTypeLabel(type), /[a-z_]/, type);
+  }
+  assert.equal(model.flowIsTrigger("instagram_message"), false);
+  assert.equal(model.flowIsDmFlow(empty), false);
+  assert.equal(model.flowStartName(triggerDoc().document), "댓글");
+  const names = {
+    field: () => null,
+    endpoint: () => null,
+    connection: (id: string) => (id === connection ? "shop" : null),
   };
-  assert.match(model.flowReadOnlyReason(keyword) ?? "", /읽기 전용/);
-  assert.equal(model.flowReadOnlyReason({ schema_version: 1, nodes: [], edges: [] }), null);
+  const summary = (type: string, config: Record<string, unknown>) =>
+    model.flowSummary({ id: "x", type, config }, names);
+  assert.equal(
+    summary("instagram_dm_keyword", {
+      connection_id: connection,
+      keywords: ["가격", "링크"],
+      match_mode: "exact",
+      excluded_keywords: ["광고"],
+    }),
+    "shop · 정확히 일치: 가격, 링크 · 제외 광고",
+  );
+  assert.equal(summary("instagram_dm_keyword", { match_mode: "all" }), "계정 미선택 · 모든 DM");
+  assert.equal(summary("instagram_dm_keyword", { match_mode: "contains" }), "계정 미선택 · 키워드 포함: 키워드 미입력");
+  assert.equal(
+    summary("instagram_dm_default", { connection_id: connection }),
+    "shop · 키워드 트리거에 맞지 않은 DM에 답장",
+  );
+  assert.equal(
+    summary("instagram_dm_default", { connection_id: "55555555-5555-4555-8555-555555555555" }),
+    "알 수 없는 계정 · 키워드 트리거에 맞지 않은 DM에 답장",
+  );
+});
+
+test("DM trigger configs keep the schema's keys and pass the publish and execution checks with one message", () => {
+  const dmContext = (): PublishContext => ({ ...publishContext(), dmTriggers: [] });
+  assert.deepEqual(plain(model.flowConfig("instagram_dm_default", { connection_id: connection, media_id: "1" })), {
+    connection_id: connection,
+  });
+  const keywordConfig = plain(
+    model.flowConfig("instagram_dm_keyword", { connection_id: connection, media_id: "1", keywords: ["가격"] }),
+  );
+  assert.deepEqual(keywordConfig, {
+    connection_id: connection,
+    keywords: ["가격"],
+    match_mode: "contains",
+    excluded_keywords: [],
+  });
+  for (const [type, values] of [
+    ["instagram_dm_keyword", { keywords: ["가격"], match_mode: "contains" }],
+    ["instagram_dm_keyword", { keywords: ["가격"], match_mode: "exact", excluded_keywords: ["환불"] }],
+    ["instagram_dm_keyword", { keywords: [], match_mode: "all" }],
+    ["instagram_dm_default", {}],
+  ] as const) {
+    let { document, id } = dmDoc(type, values);
+    assert.equal(model.flowTrigger(document)?.id, id);
+    assert.deepEqual(plain(model.flowSlotTypes(document, id, "next")), ["instagram_message"], type);
+    document = plain(model.flowInsert(document, id, "next", "instagram_message", { text: "안녕하세요" }).document);
+    assert.deepEqual(validateFlowForPublish(document, dmContext()), [], `${type} ${JSON.stringify(values)}`);
+    assert.deepEqual(flowExecutionErrors(document, publishContext().fields), []);
+  }
+  // Keywords are required unless the mode is "all"; publish names the trigger.
+  for (const mode of ["contains", "exact"]) {
+    const { document, id } = dmDoc("instagram_dm_keyword", { keywords: [], match_mode: mode });
+    const message = model.flowInsert(document, id, "next", "instagram_message", { text: "hi" }).document;
+    assert.deepEqual(
+      validateFlowForPublish(plain(message), dmContext()).map((error) => [error.code, error.node_id]),
+      [["invalid_config", id]],
+      mode,
+    );
+  }
+});
+
+test("a DM flow offers only one message after its trigger and links to nothing else", () => {
+  let { document, id: trigger } = dmDoc("instagram_dm_keyword", { keywords: ["a"] });
+  const message = model.flowInsert(document, trigger, "next", "instagram_message", { text: "hi" });
+  document = message.document;
+  // A message is followed only by a reply wait, which a DM flow refuses; nothing fits in front of it either.
+  assert.deepEqual(plain(model.flowSlotTypes(document, message.id, "next")), []);
+  assert.deepEqual(plain(model.flowSlotTypes(document, trigger, "next")), []);
+  // A draft saved through the API may hold other steps; the trigger links only to an unconnected message.
+  const saved: Doc = plain({
+    ...document,
+    nodes: [
+      ...document.nodes,
+      { id: "tag", type: "add_tag", config: { tag: "a" } },
+      { id: "spare", type: "instagram_message", config: { text: "other" } },
+      { id: "other", type: "instagram_dm_default", config: { connection_id: connection } },
+    ],
+    edges: [],
+  });
+  assert.deepEqual(plain(model.flowLinkTargets(saved, trigger)), [message.id, "spare"]);
+  assert.deepEqual(plain(model.flowLinkTargets(saved, "tag")), [message.id, "spare"], "only messages");
+  // With two triggers either one may be deleted, whatever their types.
+  assert.equal(model.flowRemovable(saved, trigger), true);
+  assert.equal(model.flowRemovable(saved, "other"), true);
+  assert.equal(model.flowRemovable(document, trigger), false, "the only trigger stays");
+  const mixed: Doc = plain({ ...triggerDoc().document });
+  mixed.nodes.push({ id: "dm", type: "instagram_dm_default", config: { connection_id: connection } });
+  assert.equal(model.flowRemovable(mixed, "dm"), true);
+  assert.equal(model.flowRemovable(mixed, mixed.nodes[0]!.id), true);
+  assert.ok(!model.flowLinkTargets(mixed, mixed.nodes[0]!.id).includes("dm"), "no link leads into a trigger");
+});
+
+test("a comment flow keeps its config, outline and step menu", () => {
+  const { document, id } = triggerDoc();
+  assert.deepEqual(plain(document.nodes), [
+    {
+      id,
+      type: "instagram_comment",
+      config: {
+        connection_id: connection,
+        media_id: "1789",
+        keywords: ["link"],
+        match_mode: "contains",
+        excluded_keywords: [],
+      },
+    },
+  ]);
+  assert.equal(model.flowIsDmFlow(document), false);
+  assert.deepEqual(plain(model.flowOutline(document).steps), [
+    { kind: "step", id, branches: [] },
+    { kind: "empty", from: id, port: "next" },
+  ]);
+  assert.deepEqual(
+    plain(model.flowSlotTypes(document, id, "next")),
+    plain(model.flowTypes()).filter((type) => !["instagram_comment", "wait_for_reply"].includes(type)),
+  );
 });
 
 test("the offered types are the executable types with the ports of the schema", () => {
