@@ -29,7 +29,7 @@ before(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query("TRUNCATE workspaces CASCADE");
+  await pool.query("TRUNCATE workspaces,workspace_deletion_records CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1)", [workspaceId]);
   await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2)", [workspaceId, userId]);
   // Inbox storage stays off: start events are written whether or not inbox_enabled is set.

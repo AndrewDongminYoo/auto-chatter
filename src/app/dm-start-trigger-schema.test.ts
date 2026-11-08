@@ -9,6 +9,7 @@ import {
   type PublishContext,
 } from "./flow-schema.ts";
 import { flowExecutionErrors, matchesFlowTrigger, planFlowRun } from "./flow-runtime.ts";
+import { dmPlan } from "../instagram/dm-start-trigger.ts";
 
 // Publish rules of DM start triggers (#33): trigger configs, the DM-flow node set, overlap with other enabled DM
 // flows, and comment flows unchanged.
@@ -173,6 +174,20 @@ test("DM triggers run: references, matching and the walk to one message", () => 
   const fallbackFlow = parseFlowDocument(dmFlow(fallback()));
   assert.ok("document" in fallbackFlow);
   assert.equal(matchesFlowTrigger(fallbackFlow.document, "anything at all"), true);
+});
+
+test("a stored DM version with a message variable fails at execution instead of rendering it empty", () => {
+  const plain = parseFlowDocument(dmFlow(keyword()));
+  assert.ok("document" in plain);
+  assert.equal(dmPlan(plain.document).status, "message");
+  for (const text of ["Echo: {{comment.text}}", `Hi {{field:${field}}}`, "Hi }}"]) {
+    const parsed = parseFlowDocument(dmFlow(keyword(), text));
+    assert.ok("document" in parsed, text);
+    const plan = dmPlan(parsed.document);
+    assert.equal(plan.status, "failed", text);
+    assert.equal(plan.status === "failed" && plan.failure_code, "unsupported_node", text);
+    assert.deepEqual(plan.steps, [], text);
+  }
 });
 
 test("comment flows keep their references, validation and conflicts", () => {

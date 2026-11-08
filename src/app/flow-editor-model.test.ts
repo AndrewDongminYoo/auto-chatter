@@ -125,8 +125,20 @@ test("a flow with a DM trigger opens read-only and its outline starts at that tr
   };
   assert.match(model.flowReadOnlyReason(dm) ?? "", /읽기 전용/);
   assert.equal(model.flowTrigger(dm)?.id, "start");
-  assert.equal(plain(model.flowOutline(dm)).unreachable.length, 0);
+  const outline = plain(model.flowOutline(dm));
+  assert.equal(outline.trigger, "start");
+  assert.deepEqual(outline.steps, [
+    { kind: "step", id: "start", branches: [] },
+    { kind: "step", id: "m", branches: [] },
+    { kind: "empty", from: "m", port: "next" },
+  ]);
+  assert.equal(outline.unreachable.length, 0);
   assert.doesNotMatch(model.flowTypeLabel("instagram_dm_keyword"), /[a-z_]/);
+  const keyword: Doc = {
+    ...dm,
+    nodes: [{ id: "start", type: "instagram_dm_keyword", config: { connection_id: "c" } }, dm.nodes[1]!],
+  };
+  assert.match(model.flowReadOnlyReason(keyword) ?? "", /읽기 전용/);
   assert.equal(model.flowReadOnlyReason({ schema_version: 1, nodes: [], edges: [] }), null);
 });
 

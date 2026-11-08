@@ -111,9 +111,13 @@ export async function startDmTriggerFlow(client: PoolClient, message: InstagramM
 // The walk of a DM-triggered version: no contact facts (the messaging sender is not a comment contact) and no
 // comment. Publishing allows only the trigger and messages without variables, so the walk ends, fails or reaches
 // one message with nothing after it. A version that would change contact data, queue a webhook or stop at a wait
-// fails as unsupported_node rather than writing anything keyed by the wrong identity.
-function dmPlan(document: FlowDocument): Extract<FlowPlan, { status: "message" | "ended" | "failed" }> {
+// fails as unsupported_node rather than writing anything keyed by the wrong identity, and so does a message with a
+// variable, which publishing refuses too (dm_trigger_unsupported_variable): the walk has no comment, so
+// {{comment.text}} would render empty instead of failing.
+export function dmPlan(document: FlowDocument): Extract<FlowPlan, { status: "message" | "ended" | "failed" }> {
   const changes = { tags: new Map<string, boolean>(), fields: new Map<string, unknown>() };
+  if (document.nodes.some((node) => node.type === "instagram_message" && /\{\{|\}\}/.test(String(node.config.text))))
+    return { status: "failed", steps: [], failure_code: "unsupported_node", changes };
   const plan = planFlowRun(
     document,
     { tags: new Set(), fields: new Map() },
