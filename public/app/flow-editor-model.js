@@ -32,17 +32,21 @@ function flowCatalogEntry(type) {
 function flowTypes() {
   return flowTypeCatalog.map((entry) => entry.type);
 }
-// DM trigger steps (#33) run on the server but the editor cannot edit them yet (#292); a flow that has one
-// opens read-only (flowReadOnlyReason).
+// The DM trigger types (#33, editable since #292). They stay out of flowTypeCatalog, which lists the step types
+// a slot may take; a flow starts from exactly one trigger of any of the three types (flowIsTrigger).
 var flowDmTriggerLabels = { instagram_dm_keyword: "DM 키워드 트리거", instagram_dm_default: "DM 기본 응답 트리거" };
+var flowTriggerTypes = ["instagram_comment", "instagram_dm_keyword", "instagram_dm_default"];
+function flowIsTrigger(type) {
+  return flowTriggerTypes.includes(type);
+}
 function flowTypeLabel(type) {
   return (
     flowCatalogEntry(type)?.label ??
     (Object.hasOwn(flowDmTriggerLabels, type) ? flowDmTriggerLabels[type] : `지원하지 않는 단계(${type})`)
   );
 }
-// The editor does not offer follows_account or the DM triggers, but a draft saved through the API may hold
-// them; their ports keep the outline following every branch.
+// The editor does not offer follows_account, but a draft saved through the API may hold it; its ports keep the
+// outline following every branch. The DM triggers are offered only as a flow's start (flowAddTrigger).
 var flowOtherPorts = {
   follows_account: ["true", "false"],
   instagram_dm_keyword: ["next"],
@@ -70,6 +74,16 @@ function flowConfig(type, values) {
         match_mode: values.match_mode ?? "contains",
         excluded_keywords: values.excluded_keywords ?? [],
       };
+    // The comment trigger's shape without media_id: "all" matches every DM except the excluded keywords.
+    case "instagram_dm_keyword":
+      return {
+        connection_id: values.connection_id ?? "",
+        keywords: values.keywords ?? [],
+        match_mode: values.match_mode ?? "contains",
+        excluded_keywords: values.excluded_keywords ?? [],
+      };
+    case "instagram_dm_default":
+      return { connection_id: values.connection_id ?? "" };
     case "instagram_message":
       return { text: values.text ?? "" };
     case "has_tag":
@@ -133,16 +147,16 @@ function flowNodeById(document, id) {
   return document.nodes.find((node) => node.id === id);
 }
 function flowTrigger(document) {
-  return document.nodes.find(
-    (node) => node.type === "instagram_comment" || Object.hasOwn(flowDmTriggerLabels, node.type),
-  );
+  return document.nodes.find((node) => flowIsTrigger(node.type));
 }
-// Why the editor shows a document without editing controls, or null when it may be edited. A save from the
-// editor would keep a DM trigger it cannot show correctly, so a flow that has one is read-only until #292.
-function flowReadOnlyReason(document) {
-  return document.nodes.some((node) => Object.hasOwn(flowDmTriggerLabels, node.type))
-    ? "DM 트리거 플로는 아직 편집기에서 바꿀 수 없어 읽기 전용으로 보여 줍니다."
-    : null;
+// Whether the flow starts from a DM trigger. Publish then accepts only messages without variables after the
+// trigger (dm_trigger_unsupported_node, dm_trigger_unsupported_variable), so the editor offers nothing else.
+function flowIsDmFlow(document) {
+  return Object.hasOwn(flowDmTriggerLabels, flowTrigger(document)?.type ?? "");
+}
+// What starts a run of the flow, as the screen names it: "DM" or "댓글".
+function flowStartName(document) {
+  return flowIsDmFlow(document) ? "DM" : "댓글";
 }
 // The edge a run follows from a port: the first one, as planFlowRun reads it.
 function flowEdge(document, from, port) {
@@ -189,10 +203,12 @@ function flowHasMessageFrom(document, start) {
 
 // Whether a node of `type` may sit on the slot (from, port) and lead to `to` (undefined for an empty slot):
 // a message is followed only by a reply wait, a reply wait follows only a message, and no message comes
-// after a reply wait (wait_requires_message, unsupported_after_message, message_after_wait).
+// after a reply wait (wait_requires_message, unsupported_after_message, message_after_wait). A DM flow takes
+// only messages (dm_trigger_unsupported_node).
 function flowFits(document, from, type, to) {
   const source = flowNodeById(document, from);
-  if (!source || type === "instagram_comment" || !flowCatalogEntry(type)) return false;
+  if (!source || flowIsTrigger(type) || !flowCatalogEntry(type)) return false;
+  if (flowIsDmFlow(document) && type !== "instagram_message") return false;
   if ((source.type === "instagram_message") !== (type === "wait_for_reply")) return false;
   const afterWait = source.type === "wait_for_reply" || flowAfterWait(document).has(from);
   if (type === "instagram_message" && afterWait) return false;
@@ -213,9 +229,11 @@ function flowLinkTargets(document, from) {
   const source = flowNodeById(document, from);
   if (!source) return [];
   const afterWait = source.type === "wait_for_reply" || flowAfterWait(document).has(from);
+  const dm = flowIsDmFlow(document);
   return document.nodes
     .filter((node) => {
-      if (node.id === from || node.type === "instagram_comment") return false;
+      if (node.id === from || flowIsTrigger(node.type)) return false;
+      if (dm && node.type !== "instagram_message") return false;
       if (flowReachable(document, node.id).has(from)) return false;
       if ((source.type === "instagram_message") !== (node.type === "wait_for_reply")) return false;
       if (afterWait && flowHasMessageFrom(document, node.id)) return false;
@@ -224,10 +242,12 @@ function flowLinkTargets(document, from) {
     .map((node) => node.id);
 }
 
-function flowAddTrigger(document, config) {
+// Adds a trigger of `type` (the comment trigger by default) first in the document. The editor offers it only
+// to a flow without one; its type is not changed later, it is deleted and another one is added.
+function flowAddTrigger(document, config, type = "instagram_comment") {
   const next = flowCopy(document);
   const id = flowNextId(next);
-  next.nodes.unshift({ id, type: "instagram_comment", config });
+  next.nodes.unshift({ id, type, config });
   return { document: next, id };
 }
 // Adds a node on (from, port). When the slot already leads somewhere, the new node takes that place and
@@ -269,7 +289,7 @@ function flowChildCount(document, id) {
 function flowRemovable(document, id) {
   const node = flowNodeById(document, id);
   if (!node) return false;
-  return node.type !== "instagram_comment" || document.nodes.filter((other) => other.type === node.type).length > 1;
+  return !flowIsTrigger(node.type) || document.nodes.filter((other) => flowIsTrigger(other.type)).length > 1;
 }
 
 // The outline from the trigger. A sequence is a list of items: a step ("step"), a link to a step shown
@@ -421,20 +441,27 @@ function flowValueText(value) {
 function flowSummary(node, names) {
   const config = node.config ?? {};
   const field = (id) => (id ? (names.field(id) ?? "사용할 수 없는 필드") : "필드 미선택");
+  const account = () =>
+    config.connection_id ? (names.connection(config.connection_id) ?? "알 수 없는 계정") : "계정 미선택";
+  // The keyword condition of a comment or DM keyword trigger; `all` names what it matches.
+  const match = (all) => {
+    const keywords = flowStoredList(config.keywords);
+    const condition =
+      config.match_mode === "all"
+        ? all
+        : `${config.match_mode === "exact" ? "정확히 일치" : config.match_mode === "contains" ? "키워드 포함" : "조건 미선택"}: ${keywords.length ? keywords.join(", ") : "키워드 미입력"}`;
+    const excluded = flowStoredList(config.excluded_keywords);
+    return `${condition}${excluded.length ? ` · 제외 ${excluded.join(", ")}` : ""}`;
+  };
   switch (node.type) {
     case "instagram_comment": {
-      const account = config.connection_id
-        ? (names.connection(config.connection_id) ?? "알 수 없는 계정")
-        : "계정 미선택";
       const media = config.media_id ? `게시물 ${config.media_id}` : "게시물 미입력";
-      const keywords = flowStoredList(config.keywords);
-      const match =
-        config.match_mode === "all"
-          ? "모든 댓글"
-          : `${config.match_mode === "exact" ? "정확히 일치" : config.match_mode === "contains" ? "키워드 포함" : "조건 미선택"}: ${keywords.length ? keywords.join(", ") : "키워드 미입력"}`;
-      const excluded = flowStoredList(config.excluded_keywords);
-      return `${account} · ${media} · ${match}${excluded.length ? ` · 제외 ${excluded.join(", ")}` : ""}`;
+      return `${account()} · ${media} · ${match("모든 댓글")}`;
     }
+    case "instagram_dm_keyword":
+      return `${account()} · ${match("모든 DM")}`;
+    case "instagram_dm_default":
+      return `${account()} · 키워드 트리거에 맞지 않은 DM에 답장`;
     case "instagram_message":
       return typeof config.text === "string" && config.text.trim() ? config.text : "메시지 미입력";
     case "has_tag":
@@ -486,13 +513,13 @@ var flowErrorMessages = {
     "응답을 저장하는 필드는 외부로 보낼 수 없습니다. 이 플로나 다른 플로에서 응답 저장과 외부 전송에 같은 필드를 쓰고 있습니다.",
   endpoint_unavailable: "켜져 있는 외부 전송 주소를 선택해 주세요.",
   invalid_variable: "메시지 변수는 {{comment.text}}와 {{field:필드 ID}}만 쓸 수 있습니다.",
-  trigger_count: "댓글 트리거가 정확히 하나 있어야 합니다.",
+  trigger_count: "트리거가 정확히 하나 있어야 합니다.",
   missing_reference: "없는 단계로 이어지는 연결이 있습니다.",
   invalid_port: "이 단계에 없는 가지로 연결되어 있습니다.",
   duplicate_port: "한 가지에 연결이 둘 이상 있습니다.",
-  trigger_has_incoming: "댓글 트리거 앞에는 단계를 연결할 수 없습니다.",
+  trigger_has_incoming: "트리거 앞에는 단계를 연결할 수 없습니다.",
   wait_requires_message: "응답 기다리기는 메시지 보내기 바로 뒤에만 둘 수 있습니다.",
-  unreachable_node: "댓글 트리거에서 이어지지 않는 단계입니다. 연결하거나 삭제해 주세요.",
+  unreachable_node: "트리거에서 이어지지 않는 단계입니다. 연결하거나 삭제해 주세요.",
   message_after_wait: "응답 기다리기 뒤에는 메시지를 보낼 수 없습니다.",
   immediate_cycle: "단계가 돌아서 다시 이어지는 연결이 있습니다. 순환을 끊어 주세요.",
   delay_exceeds_reply_window: "메시지 앞의 지연과 시각 대기를 합치면 댓글 답장 기간(7일)을 넘습니다.",
@@ -604,7 +631,7 @@ function flowCheckedFieldIds(boxes) {
 }
 
 var flowTestStatuses = {
-  not_matched: "댓글이 트리거 조건에 맞지 않아 실행을 만들지 않습니다.",
+  not_matched: "입력한 내용이 트리거 조건에 맞지 않아 실행을 만들지 않습니다.",
   ended: "마지막 단계까지 진행했습니다.",
   delivering: "마지막 메시지를 발송 대기열에 넣는 데까지 진행합니다.",
   failed: "실행이 실패로 끝납니다.",
