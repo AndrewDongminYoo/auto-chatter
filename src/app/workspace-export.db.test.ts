@@ -45,9 +45,11 @@ before(async () => {
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
 });
 
+let seeded: Awaited<ReturnType<typeof seedWorkspace>>;
+
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
-  await seedWorkspace(pool, workspaceId, userId, connectionId, "account-own");
+  seeded = await seedWorkspace(pool, workspaceId, userId, connectionId, "account-own");
   await seedWorkspace(pool, otherWorkspaceId, otherUserId, foreignConnectionId, "account-foreign");
 });
 
@@ -111,6 +113,16 @@ test("exports every table of the caller's workspace and nothing from another wor
   assert.equal(body.tables.webhook_endpoints[0].url, "https://hooks.example.test/account-own");
   assert.equal(body.tables.webhook_deliveries[0].status, "dead");
   assert.equal(body.tables.webhook_redelivery_events[0].actor_id, userId);
+  // The DM-started run and its DM-trigger version are exported by ID, apart from the comment flow's rows (#33).
+  const dmVersion = body.tables.flow_versions.find((row: { id: string }) => row.id === seeded.dmVersion);
+  assert.equal(dmVersion?.trigger_type, "instagram_dm_keyword");
+  assert.equal(dmVersion?.trigger_media_id, null);
+  const dmRun = body.tables.flow_runs.find((row: { id: string }) => row.id === seeded.dmRun);
+  assert.equal(dmRun?.flow_version_id, seeded.dmVersion);
+  assert.equal(dmRun?.dm_start_event_id, seeded.dmStart);
+  assert.equal(dmRun?.event_id, null);
+  const dmStart = body.tables.instagram_dm_start_events.find((row: { id: string }) => row.id === seeded.dmStart);
+  assert.equal(dmStart?.flow_version_id, seeded.dmVersion);
 });
 
 test("the export carries the caller's workspace row with its time zone and plan and no other workspace", async () => {
