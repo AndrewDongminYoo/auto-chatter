@@ -157,6 +157,21 @@ test("unknown profile never selects nonfollower content and expired windows neve
   assert.equal((await state()).failure_code, "response_window_expired");
   assert.equal(sends, 0);
 });
+test("a failed account read during the follow lookup retries the row instead of blocking it", async () => {
+  let sends = 0;
+  await ingestMessages(pool, [incoming()]);
+  await processNextFollowReply(pool, connection, {
+    followStatus: async () => {
+      throw new Error("Meta Graph account read returned no user_id");
+    },
+    send: async () => {
+      sends++;
+      return { messageId: "bad" };
+    },
+  });
+  assert.deepEqual([(await state()).status, (await state()).failure_code], ["pending", "follow_status_unavailable"]);
+  assert.equal(sends, 0);
+});
 test("a rule disabled during profile lookup prevents the POST", async () => {
   let sends = 0;
   await ingestMessages(pool, [incoming()]);

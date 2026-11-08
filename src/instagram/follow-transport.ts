@@ -7,6 +7,9 @@ import {
   type IdentityObserver,
 } from "./meta-graph-error.ts";
 import { PreSendVerificationError } from "./reply-worker.ts";
+// The identity read resolves to this, not null, when Meta definitely refused the GET, so that a refusal stays
+// distinct from a 2xx body that happens to be null.
+const REFUSED = Symbol("refused");
 export interface FollowSendContext {
   replyId: string;
   attemptId: string;
@@ -47,17 +50,23 @@ export class InstagramFollowTransport implements FollowTransport {
       if (identity && (await metaTokenRejected(response))) await reportIdentity(this.config.onIdentity, "rejected");
       const error = await classifyMetaGraphFailure(response, method, new Date());
       if (error) throw error;
-      if (method === "GET") return null;
+      if (method === "GET") return identity ? REFUSED : null;
       throw new Error("Meta send outcome unknown");
     }
     return response.json();
   }
+  // false only for a definite answer: Meta refused the GET (a non-transient 4xx) or named another numeric account.
+  // A 2xx body without a numeric user_id is a read failure and throws, so the caller defers the row.
   async verifyAccount(): Promise<boolean> {
     const me = await this.request("me?fields=user_id", undefined, true);
+    if (me === REFUSED) return false;
     const profile = isRecord(me) && Array.isArray(me.data) ? me.data[0] : me;
-    const verified = isRecord(profile) && profile.user_id === this.config.accountId;
-    if (verified) await reportIdentity(this.config.onIdentity, "verified");
-    return verified;
+    const userId = isRecord(profile) ? profile.user_id : undefined;
+    if (typeof userId !== "string" || !/^\d+$/.test(userId))
+      throw new Error("Meta Graph account read returned no user_id");
+    if (userId !== this.config.accountId) return false;
+    await reportIdentity(this.config.onIdentity, "verified");
+    return true;
   }
   async followStatus(recipientId: string): Promise<boolean | null> {
     if (!/^\d+$/.test(recipientId) || recipientId === this.config.accountId) return null;

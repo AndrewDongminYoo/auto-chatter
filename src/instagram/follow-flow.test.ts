@@ -150,7 +150,20 @@ test("normal nonfollower DM includes the bound confirmation button and rejects l
 });
 
 test("manual account verification checks only the stored Instagram user_id", async () => {
-  for (const user_id of ["123", "999", undefined]) {
+  const cases: Array<[string, () => Response, boolean | "throws"]> = [
+    ["the stored account", () => Response.json({ user_id: "123" }), true],
+    ["the stored account in data[0]", () => Response.json({ data: [{ user_id: "123" }] }), true],
+    ["another numeric account", () => Response.json({ user_id: "999" }), false],
+    ["another numeric account in data[0]", () => Response.json({ data: [{ user_id: "999" }] }), false],
+    ["a refused GET", () => Response.json({ error: { code: 190 } }, { status: 400 }), false],
+    ["an empty body", () => Response.json({}), "throws"],
+    ["an empty data list", () => Response.json({ data: [] }), "throws"],
+    ["a null body", () => Response.json(null), "throws"],
+    ["a non-numeric user_id", () => Response.json({ user_id: "abc" }), "throws"],
+    ["an empty user_id", () => Response.json({ user_id: "" }), "throws"],
+    ["a numeric-type user_id", () => Response.json({ user_id: 123 }), "throws"],
+  ];
+  for (const [label, me, expected] of cases) {
     const transport = new InstagramFollowTransport({
       accountId: "123",
       accessToken: "synthetic",
@@ -158,10 +171,33 @@ test("manual account verification checks only the stored Instagram user_id", asy
       fetchImpl: async (input, init) => {
         assert.equal(String(input), "https://graph.instagram.com/v26.0/me?fields=user_id");
         assert.equal(init?.method, "GET");
-        return Response.json({ user_id });
+        return me();
       },
     });
-    assert.equal(await transport.verifyAccount(), user_id === "123");
+    if (expected === "throws") await assert.rejects(transport.verifyAccount(), /^Error: Meta Graph/, label);
+    else assert.equal(await transport.verifyAccount(), expected, label);
+  }
+});
+
+test("follow lookup treats an unusable account read as unavailable, never as a refusal", async () => {
+  for (const [me, expected] of [
+    [() => Response.json({}), "throws"],
+    [() => Response.json({ error: { code: 190 } }, { status: 400 }), null],
+  ] as const) {
+    const calls: string[] = [];
+    const transport = new InstagramFollowTransport({
+      accountId: "123",
+      accessToken: "synthetic",
+      graphVersion: "v26.0",
+      fetchImpl: async (input) => {
+        calls.push(new URL(String(input)).pathname);
+        return me();
+      },
+    });
+    // processNextFollowReply maps both a rejection and null to pending/follow_status_unavailable.
+    if (expected === "throws") await assert.rejects(transport.followStatus("456"), /^Error: Meta Graph/);
+    else assert.equal(await transport.followStatus("456"), expected);
+    assert.deepEqual(calls, ["/v26.0/me"]);
   }
 });
 

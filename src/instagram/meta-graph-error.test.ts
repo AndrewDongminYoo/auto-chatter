@@ -76,6 +76,7 @@ test("both transports report an accepted or rejected identity read and nothing e
     ["rejected code 190", () => graphError(400, { code: 190 }), ["rejected"]],
     ["permission code 10", () => graphError(403, { code: 10 }), ["rejected"]],
     ["other account", () => Response.json({ user_id: "999" }), []],
+    ["empty 200", () => Response.json({}), []],
     ["throttled", () => graphError(400, { code: 4 }), []],
     ["server error", () => graphError(500, { code: 190 }), []],
   ];
