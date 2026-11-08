@@ -448,7 +448,7 @@ export async function setFlowEnabled(
 }
 
 // Latest runs with the path each took and the delivery state of the reply it queued: the private reply of a comment
-// run, or the first message of a DM-started run (#33), which has no failure code or send time until #291.
+// run, or the first message of a DM-started run (#33, delivered since #291).
 // Sender IDs and comment text stay out of the history.
 export async function listFlowRuns(pool: Pool, user: User, id: string) {
   if (!isUuid(id)) throw new ApiError(400, "invalid_flow");
@@ -458,7 +458,8 @@ export async function listFlowRuns(pool: Pool, user: User, id: string) {
   return (
     await pool.query(
       `SELECT r.id,v.version_no,r.status,r.failure_code,r.created_at,r.resume_at,
-         coalesce(reply.status,dm.status) AS delivery_status,reply.failure_code AS delivery_failure_code,reply.sent_at,
+         coalesce(reply.status,dm.status) AS delivery_status,
+         coalesce(reply.failure_code,dm.failure_code) AS delivery_failure_code,coalesce(reply.sent_at,dm.sent_at) AS sent_at,
          coalesce((SELECT jsonb_agg(jsonb_build_object('node_id',s.node_id,'node_type',s.node_type,'outcome',s.outcome) ORDER BY s.seq)
            FROM flow_step_runs s WHERE s.run_id=r.id),'[]'::jsonb) AS steps
        FROM flow_runs r JOIN flow_versions v ON v.id=r.flow_version_id

@@ -3376,7 +3376,8 @@ test("a failing webhook endpoint or delivery step neither stops nor fails the me
   assert.equal((await rows())[0].status, "sent");
 });
 
-test("a webhook DM starts a DM trigger flow, and neither the cron nor the queue reads its delivery row (#33)", async () => {
+// A published, enabled DM default-reply flow on the fixture connection (#33).
+async function dmDefaultFlow() {
   const workspace = "11111111-1111-4111-8111-111111111111";
   const flow = (
     await pool.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'DM default','{}') RETURNING id", [
@@ -3399,6 +3400,9 @@ test("a webhook DM starts a DM trigger flow, and neither the cron nor the queue 
     )
   ).rows[0].id;
   await pool.query("UPDATE flows SET published_version_id=$2,enabled=true WHERE id=$1", [flow, version]);
+}
+// A signed webhook request carrying one typed DM from messaging sender 456.
+function dmRequest(mid = "dm-start-1"): Request {
   const body = JSON.stringify({
     object: "instagram",
     entry: [
@@ -3409,30 +3413,107 @@ test("a webhook DM starts a DM trigger flow, and neither the cron nor the queue 
             sender: { id: "456" },
             recipient: { id: "123" },
             timestamp: Date.now(),
-            message: { mid: "dm-start-1", text: "hi" },
+            message: { mid, text: "hi" },
           },
         ],
       },
     ],
   });
-  const dm = () =>
-    new Request("https://example.test/webhooks/instagram", {
-      method: "POST",
-      body,
-      headers: { "x-hub-signature-256": "sha256=" + createHmac("sha256", "test-secret").update(body).digest("hex") },
+  return new Request("https://example.test/webhooks/instagram", {
+    method: "POST",
+    body,
+    headers: { "x-hub-signature-256": "sha256=" + createHmac("sha256", "test-secret").update(body).digest("hex") },
+  });
+}
+const dmDeliveries = async () =>
+  (await pool.query("SELECT recipient_id,message_text,status,failure_code FROM flow_dm_deliveries")).rows;
+// The default Graph mock that also records each POST body.
+function recordGraphPosts(): unknown[] {
+  const posts: unknown[] = [];
+  restoreMocks();
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const graphUrl = new URL(String(input));
+    assert.equal(graphUrl.hostname, "graph.instagram.com");
+    if (init?.method === "POST") {
+      sends++;
+      posts.push(JSON.parse(String(init.body)));
+      return Response.json({ message_id: `message-${posts.length}` });
+    }
+    if (graphUrl.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (graphUrl.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
+    return Response.json({
+      id: graphUrl.pathname.split("/").at(-1),
+      from: { id: "sender-1" },
+      media: { id: "media-1" },
+      timestamp: new Date().toISOString(),
     });
-  assert.equal((await worker.fetch(dm(), env)).status, 200);
-  assert.equal((await worker.fetch(dm(), env)).status, 200);
-  const deliveries = async () =>
-    (await pool.query("SELECT recipient_id,message_text,status FROM flow_dm_deliveries")).rows;
-  assert.deepEqual(await deliveries(), [
-    { recipient_id: "456", message_text: "Thanks, we will reply soon", status: "pending" },
+  });
+  return posts;
+}
+
+test("a webhook DM starts a DM trigger flow, and the wake, the cron and the queue send its first message (#291)", async () => {
+  await dmDefaultFlow();
+  const posts = recordGraphPosts();
+  assert.equal((await worker.fetch(dmRequest(), env)).status, 200);
+  assert.equal((await worker.fetch(dmRequest(), env)).status, 200);
+  assert.deepEqual(await dmDeliveries(), [
+    { recipient_id: "456", message_text: "Thanks, we will reply soon", status: "pending", failure_code: null },
   ]);
+  // The webhook wakes the connection, and so does the cron while the row is due: it has no other work.
+  assert.deepEqual(published, [{ connectionId }, { connectionId }]);
+  published = [];
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, [{ connectionId }]);
+  assert.equal(sends, 0);
+  assert.equal(await consume(), "ack");
+  assert.deepEqual(posts, [{ recipient: { id: "456" }, message: { text: "Thanks, we will reply soon" } }]);
+  assert.deepEqual(await dmDeliveries(), [
+    { recipient_id: "456", message_text: "Thanks, we will reply soon", status: "sent", failure_code: null },
+  ]);
+  // Nothing is left: a later queue message and cron run send nothing.
+  published = [];
+  assert.equal(await consume(), "ack");
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, []);
+  assert.equal(sends, 1);
+  assert.deepEqual(await rows(), []);
+});
+
+test("the queue sends a due DM flow row before the connection's private reply (#291)", async () => {
+  await dmDefaultFlow();
+  const posts = recordGraphPosts();
+  assert.equal((await worker.fetch(request(), env)).status, 200);
+  assert.equal((await worker.fetch(dmRequest(), env)).status, 200);
+  assert.deepEqual(
+    (await rows()).map((row) => row.status),
+    ["pending"],
+  );
+  assert.equal(await consume(), "ack");
+  assert.deepEqual(posts, [{ recipient: { id: "456" }, message: { text: "Thanks, we will reply soon" } }]);
+  assert.deepEqual(
+    (await rows()).map((row) => row.status),
+    ["pending"],
+  );
+  assert.equal(await consume(), "ack");
+  assert.equal(posts.length, 2);
+  assert.deepEqual((posts[1] as { recipient: unknown }).recipient, { comment_id: "comment-1" });
+  assert.deepEqual(
+    (await rows()).map((row) => row.status),
+    ["sent"],
+  );
+  assert.equal((await dmDeliveries())[0].status, "sent");
+});
+
+test("with sending off a webhook DM wakes nothing and neither the cron nor the queue sends its row (#291)", async () => {
+  env.SEND_ENABLED = "false";
+  await dmDefaultFlow();
+  assert.equal((await worker.fetch(dmRequest(), env)).status, 200);
+  assert.equal((await worker.fetch(dmRequest(), env)).status, 200);
   await worker.scheduled({}, env);
   assert.equal(await consume(), "ack");
   assert.equal(await consume({ connectionId }), "ack");
-  assert.deepEqual(await deliveries(), [
-    { recipient_id: "456", message_text: "Thanks, we will reply soon", status: "pending" },
+  assert.deepEqual(await dmDeliveries(), [
+    { recipient_id: "456", message_text: "Thanks, we will reply soon", status: "pending", failure_code: null },
   ]);
   assert.deepEqual(published, []);
   assert.equal(sends, 0);
