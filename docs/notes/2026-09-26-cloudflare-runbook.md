@@ -759,12 +759,59 @@ Workers가 지원하지 않는 Fetch `redirect: error`는 어댑터에서 `manua
 실제 바인딩과 운영 승인을 확인하고 [다중 사용자 배포 전환](2026-09-26-multi-user-cutover.md)의 DB 마이그레이션·Auth·OAuth 설정을 마친 뒤 배포합니다.
 
 ```bash
-corepack pnpm exec wrangler deploy --env-file /dev/null
+corepack pnpm exec wrangler deploy --env-file /dev/null --tag "$(git rev-parse HEAD)"
 ```
+
+평소 배포는 아래 GitHub Actions 워크플로가 하며, 직접 배포가 필요하면 그 워크플로의 수동 실행을 씁니다.
+노트북에서 배포할 때는 테스트한 커밋의 깨끗한 checkout에서 위처럼 `--tag`에 전체 SHA를 넘깁니다.
+태그 없이 배포하면 다음 자동 실행이 마이그레이션 검사에서 멈춥니다.
 
 `SEND_ENABLED=false`에서 공개 주소의 구독 확인, 잘못된 서명 거부, 실제 댓글 event/outbox 저장, 중복 이벤트 제거를 먼저 확인합니다.
 DB 저장 실패는 503을 반환합니다.
 DB 커밋 뒤 Queue 발행 실패는 200을 반환하고 고정 오류 문구를 남기며, 발송 활성화 후 Cron이 due 작업을 복구합니다.
+
+### GitHub Actions 자동 배포
+
+`.github/workflows/deploy.yaml`은 `main` push의 `CI` 워크플로가 성공하면 그 실행이 검사한 커밋을 배포합니다.
+PR의 CI 실행은 배포하지 않습니다.
+그 사이 `main`이 더 새 커밋으로 움직였으면 배포하지 않고 성공으로 끝나며, 새 커밋의 CI 실행이 배포합니다.
+배포는 `wrangler deploy --env-file /dev/null --tag <커밋 SHA> --message <실행 URL>`이며 `--var`를 넘기지 않으므로 `SEND_ENABLED`는 `wrangler.json`의 `false`를 유지합니다.
+배포 뒤 활성 버전의 `workers/tag`가 배포한 커밋과 같은지 읽어 확인하고, `scripts/production-smoke.sh`로 공개 스모크 검사를 최대 6번(10초 간격) 실행합니다.
+스모크 검사는 공개 페이지 200, 잘못된 구독 토큰과 서명 없는 webhook 403, 교차 출처 `POST /api/workspace` 403, 세션 없는 `GET /api/inbox` 401, `public/app/` 파일과 `/app/` 응답의 SHA-256 일치를 확인하며 메시지를 보내지 않고 자격 증명이 필요 없습니다.
+로컬에서도 `bash scripts/production-smoke.sh [기준 URL]`로 같은 검사를 실행합니다.
+배포한 버전 ID, 커밋, 스모크 결과는 실행의 job summary에 남습니다.
+
+**병합이 곧 배포**: 자동 배포에서는 위의 "배포 전에 마칠 설정"이 병합 전에 마칠 설정이 됩니다.
+새 `wrangler secret put` 값, 바인딩, Auth·OAuth 설정이 필요한 변경은 그 설정을 마친 뒤 병합합니다.
+미리 할 수 없으면 병합 전에 Deploy 워크플로를 끄고(`gh workflow disable deploy.yaml` 또는 Actions 화면), 설정을 마친 뒤 다시 켜고 수동 실행합니다.
+마이그레이션 검사는 DB 파일만 보므로 이런 설정 누락은 막지 않습니다.
+
+**롤백 중에는 자동 배포를 끕니다**: `wrangler rollback`으로 되돌리기 전에 Deploy 워크플로를 끕니다.
+되돌린 버전도 자기 `workers/tag`를 가지고 있어 마이그레이션 검사를 통과하므로, 켜 두면 다음 병합이 되돌린 코드를 포함한 `main` HEAD를 다시 배포합니다.
+수정이 `main`에 들어간 뒤 `gh workflow enable deploy.yaml`로 다시 켜고, 그 커밋을 수동 실행으로 배포합니다.
+
+**마이그레이션 정지**: 배포 전에 `scripts/deploy-migration-guard.sh`가 활성 버전의 `workers/tag`를 읽습니다.
+태그 커밋부터 배포 커밋까지 `db/migrations/`, `db/schema.sql`, `deploy/*.sql` 중 하나라도 바뀌었으면 자동 배포는 실패로 멈춥니다.
+태그가 없거나, 전체 SHA가 아니거나, 배포 커밋의 조상이 아니거나, 활성 배포가 한 버전 100%가 아니어도 같은 방식으로 멈춥니다.
+GitHub에는 DB 관리자 자격 증명을 두지 않으므로, 멈추면 지금처럼 로컬 관리자 연결로 백업한 뒤 `psql -f deploy/migrate-multi-user.sql`을 적용합니다([다중 사용자 배포 전환](2026-09-26-multi-user-cutover.md)).
+그다음 Actions의 Deploy 워크플로를 `main`에서 수동 실행하고 `migrations_applied`를 켭니다.
+수동 실행은 현재 `main` HEAD를 배포하며, 그 SHA의 최신 `CI` push 실행이 성공으로 끝나지 않았으면 멈춥니다.
+`migrations_applied`를 끄고 수동 실행하면 자동 실행과 같은 마이그레이션 검사를 거칩니다.
+
+2026-11-08에 배포된 활성 버전에는 태그가 없으므로, 이 워크플로가 병합된 뒤 첫 자동 실행은 마이그레이션 검사에서 멈추는 것이 정상입니다.
+첫 배포는 적용할 마이그레이션이 없는지 확인한 뒤 `migrations_applied`를 켠 수동 실행으로 합니다.
+그 뒤 버전에는 커밋 SHA 태그가 붙어 자동 배포가 이어집니다.
+
+**한 번만 하는 설정**: 워크플로를 병합하기 전에 저장소 Settings → Environments에서 `production` Environment를 만들고 Environment secret `CLOUDFLARE_API_TOKEN`을 등록합니다.
+설정 전에 병합하면 첫 자동 실행은 태그 검사 전에 활성 배포를 읽지 못해 멈춥니다.
+토큰은 계정 소유자가 이 계정만 대상으로 만든 Cloudflare API 토큰이며 Workers Scripts 편집 권한을 줍니다.
+`wrangler.json`의 `auto-chat.donminzzi.kr` custom domain도 배포 때 갱신되므로 그 zone의 Workers Routes 편집 권한도 줍니다([Cloudflare Workers 권한](https://developers.cloudflare.com/workers/authorization/)).
+Cloudflare의 "Edit Cloudflare Workers" 토큰 템플릿으로 만들면 계정과 zone 범위를 고르는 단계가 있으므로 이 계정과 `donminzzi.kr` zone으로 좁힙니다([GitHub Actions 안내](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)).
+Queue consumer와 Cron trigger 갱신에 권한이 더 필요한지는 확인하지 않았습니다.
+첫 수동 실행이 권한 오류로 실패하면 토큰에 바로 권한을 더하지 않고, 오류에 나온 권한을 검토해 승인한 뒤에만 같은 계정 범위로 추가합니다.
+계정 ID는 `wrangler.json`에 있으므로 secret으로 두지 않습니다.
+
+`scheduled_steps`로 확인하는 Cron 점검은 운영 DB 읽기가 필요하므로 워크플로에 넣지 않고, 배포 뒤 수동으로 확인합니다.
 
 ## 5. 발송 전환과 복구
 
