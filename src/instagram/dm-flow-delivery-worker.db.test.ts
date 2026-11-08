@@ -289,6 +289,13 @@ test("the 24-hour window is anchored on the sender's latest inbound DM and read 
     [(await row(stale)).status, (await row(stale)).failure_code, (await row(stale)).called],
     ["blocked", "reply_window_closed", false],
   );
+  // The history reads the blocked DM row's failure code, not only a private reply's.
+  const staleRun = (await pool.query("SELECT flow_run_id FROM flow_dm_deliveries WHERE id=$1", [stale])).rows[0]
+    .flow_run_id;
+  const run = (await listFlowRuns(pool, { id: owner, email: "owner@example.test" }, flow!.id)).find(
+    (entry) => entry.id === staleRun,
+  );
+  assert.deepEqual([run?.delivery_status, run?.delivery_failure_code], ["blocked", "reply_window_closed"]);
   assert.deepEqual(recipients(seen), ["9001", "9002"]);
 });
 
@@ -657,9 +664,21 @@ test("the deletion functions refuse while a DM flow row is sending or held, and 
 });
 
 test("migration 069 replays over stored rows, keeps the canonical deletion functions and runs in the runner", async () => {
-  const pending = await dmRow("9001");
-  const sent = await dmRow("9002");
-  await deliver(graph());
+  const first = await dmRow("9001");
+  const second = await dmRow("9002");
+  const named = [
+    "flow_dm_delivery_attempt",
+    "flow_dm_delivery_failure",
+    "flow_dm_delivery_sent",
+    "flow_dm_delivery_status",
+  ];
+  const constraints = async () =>
+    (
+      await pool.query(
+        "SELECT conname FROM pg_constraint WHERE conrelid='flow_dm_deliveries'::regclass AND conname=ANY($1) ORDER BY conname",
+        [[...named, "flow_dm_deliveries_status_check"]],
+      )
+    ).rows.map(({ conname }) => conname);
   const definitions = async () =>
     (
       await pool.query(
@@ -668,17 +687,41 @@ test("migration 069 replays over stored rows, keeps the canonical deletion funct
     ).rows;
   const canonical = await definitions();
   for (const { definition } of canonical) assert.match(definition, /instagram_dm_automation/);
+  // db/schema.sql already holds the 069 constraints; return the table to the migration 068 constraint set, so the
+  // first replay runs the install path of 069 over stored pending rows.
+  await pool.query(
+    `ALTER TABLE flow_dm_deliveries DROP CONSTRAINT flow_dm_delivery_attempt,DROP CONSTRAINT flow_dm_delivery_failure,
+       DROP CONSTRAINT flow_dm_delivery_sent,DROP CONSTRAINT flow_dm_delivery_status,
+       ADD CONSTRAINT flow_dm_deliveries_status_check CHECK(status IN ('pending'))`,
+  );
+  assert.deepEqual(await constraints(), ["flow_dm_deliveries_status_check"]);
   const sql = await readFile(new URL("../../db/migrations/069_dm_flow_delivery.sql", import.meta.url), "utf8");
   await pool.query(sql);
+  assert.deepEqual(await constraints(), named);
+  await deliver(graph());
+  // The second replay runs over a sent row and keeps the installed constraints.
   await pool.query(sql);
+  assert.deepEqual(await constraints(), named);
   assert.deepEqual(await definitions(), canonical);
-  assert.deepEqual([(await row(pending)).status, (await row(sent)).status].sort(), ["pending", "sent"].sort());
-  // The status set and the attempt rule hold.
-  await assert.rejects(pool.query("UPDATE flow_dm_deliveries SET status='cancelled' WHERE id=$1", [pending]), {
-    code: "23514",
-  });
+  const stored = (
+    await pool.query("SELECT id,status FROM flow_dm_deliveries WHERE id=ANY($1) ORDER BY status", [[first, second]])
+  ).rows;
+  assert.deepEqual(
+    stored.map(({ status }) => status),
+    ["pending", "sent"],
+  );
+  const pending = stored[0].id;
+  // The status set and the attempt rule hold; each update breaks only the named constraint.
+  await assert.rejects(
+    pool.query(
+      "UPDATE flow_dm_deliveries SET status='cancelled',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE id=$1",
+      [pending],
+    ),
+    { code: "23514", constraint: "flow_dm_delivery_status" },
+  );
   await assert.rejects(pool.query("UPDATE flow_dm_deliveries SET status='sending' WHERE id=$1", [pending]), {
     code: "23514",
+    constraint: "flow_dm_delivery_attempt",
   });
   const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
   assert.ok(
