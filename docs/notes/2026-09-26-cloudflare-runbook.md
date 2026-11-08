@@ -800,6 +800,9 @@ PR의 CI 실행은 배포하지 않습니다.
 
 **롤백 중에는 자동 배포를 끕니다**: `wrangler rollback`으로 되돌리기 전에 Deploy 워크플로를 끕니다.
 되돌린 버전도 자기 `workers/tag`를 가지고 있어 마이그레이션 검사를 통과하므로, 켜 두면 다음 병합이 되돌린 코드를 포함한 `main` HEAD를 다시 배포합니다.
+워크플로를 꺼도 이미 만들어진 실행은 취소되지 않고, 되돌린 뒤에도 `main` HEAD는 문제 커밋이라 남은 실행이 그 커밋을 다시 배포할 수 있습니다.
+그래서 끈 뒤 `gh run list --workflow deploy.yaml --status <상태>`를 `queued`, `requested`, `waiting`, `pending`, `in_progress`마다 실행해, 아직 시작하지 않은 실행은 `gh run cancel <실행 ID>`로 취소하고 `in_progress` 실행은 끝날 때까지 기다립니다.
+다섯 목록이 모두 비었을 때 되돌립니다.
 수정이 `main`에 들어간 뒤 `gh workflow enable deploy.yaml`로 다시 켜고, 그 커밋을 수동 실행으로 배포합니다.
 
 **마이그레이션 정지**: 배포 전에 `scripts/deploy-migration-guard.sh`가 활성 버전의 `workers/tag`를 읽습니다.
@@ -833,6 +836,14 @@ OAuth로 연결한 계정의 유효한 토큰, `active=true`, `send_enabled=true
 Cron은 기존 pending 행도 처리하므로 활성화 전에 backlog를 검토합니다.
 migration 065 뒤에는 남은 캠페인 승인도 첫 Cron에서 실행을 시작하므로, 전환 직전에 [기존 승인 점검 절차](../specs/2026-10-27-campaign-runs.md#이미-있는-승인과-배포-순서)를 따릅니다.
 
+**발송을 켠 동안에는 자동 배포를 끕니다**: [자동 배포](#github-actions-자동-배포)는 `--var`를 넘기지 않으므로, `--var SEND_ENABLED:true`로 켠 발송은 다음 병합에서 `wrangler.json`의 `false`로 돌아가 멈춥니다.
+발송을 켜기 전에 Deploy 워크플로를 끄고(`gh workflow disable deploy.yaml`), 끄기 전에 시작된 실행이 대기 중이거나 진행 중이 아닌지 `gh run list --workflow deploy.yaml`로 확인해 끝나기를 기다리거나 취소합니다.
+그다음 활성 버전의 `workers/tag` 커밋을 깨끗한 checkout에서 `--tag`에 그 전체 SHA를 넘기고 `--var SEND_ENABLED:true`를 더해 배포합니다.
+워크플로를 꺼 둔 동안 병합한 커밋은 배포되지 않습니다.
+발송을 끌 때는 장애 대응을 포함해 같은 커밋을 `--var` 없이 `--tag`만 넘겨 배포하고, 활성 버전 조회에서 `SEND_ENABLED=false`를 확인한 뒤에만 `gh workflow enable deploy.yaml`로 다시 켭니다.
+그 사이 `main`이 움직였으면 다시 켠 뒤 수동 실행으로 최신 커밋을 배포합니다.
+`wrangler.json`의 `SEND_ENABLED`는 커밋에서 `false`로 유지하므로, 장애 때 끈 발송을 다음 자동 배포가 다시 켜지는 않습니다.
+
 기존 발송 상태와 속도 제한 backoff를 유지합니다.
 Queue 알림 재시도와 Meta 발송 재시도는 별개입니다.
 소비자 오류로 다시 전달된 알림도 DB의 `sending`·완료 행을 다시 claim하지 않습니다.
@@ -842,7 +853,7 @@ Queue 알림 재시도와 Meta 발송 재시도는 별개입니다.
 연결 cooldown이 있으면 기존 claim 정책대로 만료 후 처리합니다.
 Queue 동시 실행 수는 1이며 이미 발송에 들어간 요청은 설정 변경으로 취소되지 않습니다.
 
-장애 시 `SEND_ENABLED=false`로 배포하고 진행 중 요청 종료를 확인합니다.
+장애 시 위 자동 배포 절차대로 `SEND_ENABLED=false`로 배포하고 진행 중 요청 종료를 확인합니다.
 DB 상태와 고정 오류 로그를 확인하고 `unknown`을 일괄 pending으로 되돌리지 않습니다.
 롤백 때도 같은 DB를 유지하며 Cloudflare와 Node 발송 워커를 동시에 켜지 않습니다.
 백업·복구 옵션과 요금은 선택한 Supabase 프로젝트 플랜에서 별도 확인합니다.
