@@ -3,7 +3,6 @@ import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 import { openSecret, sealSecret } from "../app/secrets.ts";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, afterEach, before, beforeEach, mock, test } from "node:test";
 import { Pool } from "pg";
 import worker, { type Env } from "./index.ts";
@@ -11,6 +10,7 @@ import { operationsHealth } from "../app/operations-health.ts";
 import { signingKeyContext } from "../app/webhook-delivery.ts";
 import { CAMPAIGN_HOURLY_BUDGET, PRIVATE_REPLY_HOURLY_BUDGET } from "../instagram/send-quota.ts";
 import { startDueCampaignRuns } from "../app/campaign-runs.ts";
+import { resetTestSchema } from "../test-schema.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
@@ -165,10 +165,7 @@ function failConsentRead(failAt: number): () => number {
 }
 
 before(async () => {
-  await pool.query(
-    "DROP TABLE IF EXISTS campaign_deliveries, campaign_runs, campaign_approval_events, campaign_approvals, campaign_drafts, instagram_contact_identity_links, instagram_contact_identity_link_events, workspace_reply_templates, webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_reminder_events, instagram_inbox_reminders, instagram_inbox_notes, instagram_inbox_label_events, instagram_inbox_label_rules, instagram_inbox_conversation_labels, instagram_inbox_labels, instagram_inbox_read_state, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_segment_snapshot_members, instagram_segment_snapshots, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
-  );
-  await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
+  await resetTestSchema(pool);
 });
 beforeEach(async () => {
   mock.restoreAll();

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { Pool } from "pg";
 import { recordSteps } from "../app/operations-health.ts";
+import { resetTestSchema } from "../test-schema.ts";
 
 test("Supabase roles cannot read product data; the server role has DML without DELETE or DDL", async () => {
   const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -13,10 +14,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
   const pool = new Pool({ connectionString: databaseUrl });
   const client = await pool.connect();
   try {
-    await client.query(
-      "DROP TABLE IF EXISTS campaign_deliveries, campaign_runs, campaign_approval_events, campaign_approvals, campaign_drafts, instagram_contact_identity_links, instagram_contact_identity_link_events, webhook_redelivery_events, webhook_deliveries, webhook_signing_keys, webhook_endpoints, scheduled_steps, workspace_invites, data_deletion_records, instagram_inbox_reminder_events, instagram_inbox_reminders, instagram_inbox_notes, instagram_inbox_label_events, workspace_reply_templates, instagram_inbox_label_rules, instagram_inbox_conversation_labels, instagram_inbox_labels, instagram_inbox_read_state, instagram_inbox_conversation_events, instagram_inbox_conversations, flow_step_runs, flow_runs, flow_versions, flows, channel_consent_state, channel_consent_events, instagram_manual_reply_events, instagram_manual_replies, instagram_inbox_handoff_events, instagram_inbox_handoffs, instagram_inbox_messages, instagram_unmatched_replies, instagram_contact_automation, instagram_contact_field_values, instagram_contact_fields, instagram_segment_snapshot_members, instagram_segment_snapshots, instagram_contact_segments, instagram_contact_tags, instagram_message_receipts, instagram_follow_conversations, instagram_oauth_states, workspace_members, private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
-    );
-    await client.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
+    await resetTestSchema(client);
     await client.query(
       "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF; IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='auto_chatter_server') THEN CREATE ROLE auto_chatter_server; END IF; END $$",
     );

@@ -7,6 +7,7 @@ BYPASSRLS
 confrelid
 conkey
 conname
+connamespace
 conrelid
 constraintdef
 contype
@@ -22,6 +23,7 @@ indisvalid
 libpq
 locktype
 ndims
+nspname
 nspowner
 pg_dumpall
 pgdata
