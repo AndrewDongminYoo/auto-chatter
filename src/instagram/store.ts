@@ -524,7 +524,8 @@ async function resumeFlowRun(client: PoolClient, runId: string, connectionId: st
 // advance two runs, as they would one after the other. Each lookup and claim is a new statement and
 // sees what committed meanwhile. The run keeps the message ID it ended on, so a redelivered message,
 // even one delivered concurrently, advances neither that run again nor another run waiting on the
-// same person.
+// same person. A message ID that already started a DM trigger flow on the run's connection (a redelivery,
+// #291) advances no run either.
 export async function resumeRepliedFlowRun(
   client: PoolClient,
   message: { accountId: string; senderId: string; messageId: string; text: string; timestamp: Date },
@@ -532,7 +533,9 @@ export async function resumeRepliedFlowRun(
 ): Promise<boolean> {
   const since = early ? "reply.attempt_started_at" : "reply.sent_at";
   const unanswered = `NOT EXISTS(SELECT 1 FROM flow_runs answered WHERE answered.connection_id=run.connection_id
-    AND answered.reply_message_id=$4)`;
+    AND answered.reply_message_id=$4)
+    AND NOT EXISTS(SELECT 1 FROM instagram_dm_start_events started WHERE started.connection_id=run.connection_id
+    AND started.message_id=$4)`;
   const lost: string[] = [];
   for (;;) {
     const candidates = await client.query<{ id: string; connection_id: string }>(

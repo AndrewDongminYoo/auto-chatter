@@ -9,6 +9,7 @@ import { processNextPrivateReply, type PrivateReplyTransport } from "./reply-wor
 import { processNextCampaignDelivery } from "./campaign-delivery-worker.ts";
 import { processNextManualReply } from "./manual-reply-worker.ts";
 import { recordChannelConsentEvent } from "./channel-consent.ts";
+import type { InstagramMessage } from "./message-events.ts";
 
 // DM start triggers, PR 1 (#33): a typed DM starts a published DM keyword or default-reply flow, records a start
 // event, the run and its first message in flow_dm_deliveries, and sends nothing.
@@ -320,6 +321,171 @@ test("a follow confirmation takes its DM, and a pending confirmation blocks the 
   await pool.query("UPDATE instagram_follow_conversations SET status='sent'");
   await dm("9300", "hello again");
   assert.equal((await started()).length, 1);
+});
+
+// #291: ingestion accepts a DM dated up to 60 seconds ahead, so a DM can start a DM trigger flow before a private
+// reply to its sender is recorded as sent. When Meta then delivers the same message ID again, the reply's follow
+// confirmation, reply wait and kept-DM store would otherwise all accept it.
+test("a redelivered DM that started a DM flow is taken by neither the follow confirmation nor the kept-DM store", async () => {
+  await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  const at = new Date(Date.now() + 50_000);
+  await dm("9500", "OK", { id: "started", at });
+  assert.equal((await started()).length, 1);
+  // Sent a minute ago, so the follow confirmation accepts a DM dated `at`.
+  const reply = await sentReply("9500", true);
+  await pool.query(
+    `INSERT INTO instagram_follow_conversations(reply_id,connection_id,recipient_id,confirmation_keyword,follower_reply_text,non_follower_reply_text,status)
+     VALUES($1,$2,'9500','ok','yes','no','waiting')`,
+    [reply, connectionId],
+  );
+  // A reply of the connection in `sending` makes ingestion keep a DM that nothing took.
+  const sending = await sentReply("9501");
+  await pool.query(
+    `UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now(),
+       provider_message_id=NULL,recipient_id=NULL,sent_at=NULL WHERE id=$1`,
+    [sending],
+  );
+  await dm("9500", "OK", { id: "started", at });
+  assert.equal((await pool.query("SELECT 1 FROM instagram_message_receipts")).rowCount, 0);
+  assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "waiting");
+  assert.equal((await pool.query("SELECT 1 FROM instagram_unmatched_replies")).rowCount, 0);
+  assert.equal((await started()).length, 1);
+  // Another message ID from the same sender is still taken and kept as before.
+  await dm("9500", "OK", { id: "confirm", at });
+  assert.deepEqual(
+    (await pool.query("SELECT message_id FROM instagram_message_receipts")).rows.map((row) => row.message_id),
+    ["confirm"],
+  );
+  assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "pending");
+  await dm("9500", "later", { id: "kept", at });
+  assert.deepEqual(
+    (await pool.query("SELECT message_id FROM instagram_unmatched_replies")).rows.map((row) => row.message_id),
+    ["kept"],
+  );
+  assert.equal((await started()).length, 1);
+});
+
+test("a redelivered DM that started a DM flow does not answer a reply wait", async () => {
+  await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  const at = new Date(Date.now() + 50_000);
+  await dm("9600", "XL", { id: "started", at });
+  assert.equal((await started()).length, 1);
+  const flow = await createFlow({
+    schema_version: 1,
+    nodes: [
+      {
+        id: "start",
+        type: "instagram_comment",
+        config: {
+          connection_id: connectionId,
+          media_id: "1789",
+          keywords: ["size"],
+          match_mode: "contains",
+          excluded_keywords: [],
+        },
+      },
+      { id: "ask", type: "instagram_message", config: { text: "Which size?" } },
+      { id: "wait", type: "wait_for_reply", config: { timeout_minutes: 60 } },
+    ],
+    edges: [
+      { from: "start", port: "next", to: "ask" },
+      { from: "ask", port: "next", to: "wait" },
+    ],
+  });
+  assert.equal((await request("POST", `/api/flows/${flow}/publish`, { expected_revision: 0 })).status, 201);
+  assert.equal((await request("POST", `/api/flows/${flow}/enable`)).status, 200);
+  await ingestComments(pool, [
+    { accountId: "owned-account", commentId: "c1", postId: "1789", senderId: "123", text: "size" },
+  ]);
+  const transport: PrivateReplyTransport = {
+    verify: async () => ({ commentCreatedAt: new Date(), authorizationVerified: true, mediaOwned: true }),
+    send: async () => ({ messageId: "mid-c1", recipientId: "9600" }),
+  };
+  assert.equal(await processNextPrivateReply(pool, transport, () => new Date(), connectionId), true);
+  const waitingRun = "SELECT status,reply_message_id FROM flow_runs WHERE event_id IS NOT NULL";
+  assert.deepEqual((await pool.query(waitingRun)).rows, [{ status: "awaiting_reply", reply_message_id: null }]);
+  await dm("9600", "XL", { id: "started", at });
+  assert.deepEqual((await pool.query(waitingRun)).rows, [{ status: "awaiting_reply", reply_message_id: null }]);
+  // Another message ID from the same sender still answers the wait.
+  await dm("9600", "XL", { id: "answer", at });
+  assert.deepEqual((await pool.query(waitingRun)).rows, [{ status: "ended", reply_message_id: "answer" }]);
+  assert.equal((await started()).length, 1);
+});
+
+// Runs the first delivery of a message through ingestMessages and holds its transaction just before COMMIT, after the
+// start event was written, until `release` is called.
+function deliveryHeldBeforeCommit(message: InstagramMessage) {
+  let reached!: () => void;
+  let release!: () => void;
+  const atCommit = new Promise<void>((resolve) => (reached = resolve));
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const connect = async () => {
+    const client = await pool.connect();
+    return new Proxy(client, {
+      get(target, key) {
+        if (key === "query")
+          return async (text: string, values?: unknown[]) => {
+            if (text === "COMMIT") {
+              reached();
+              await released;
+            }
+            return target.query(text, values);
+          };
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  };
+  const done = ingestMessages({ connect } as unknown as Pool, [message]);
+  return { done, atCommit, release };
+}
+
+async function waitForMessageLock() {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const waiting = await pool.query(
+      "SELECT 1 FROM pg_stat_activity WHERE wait_event='advisory' AND query LIKE '%instagram-message:%'",
+    );
+    if (waiting.rowCount) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.fail("the redelivery did not wait for the message lock");
+}
+
+// With inbox storage off no conversation lock serializes the two deliveries; the message lock does. The reply is
+// recorded as sent and its follow confirmation starts waiting while the first delivery is uncommitted, so the
+// redelivery would otherwise miss the uncommitted start event and take the message.
+test("a concurrent redelivery waits for the delivery that started a DM flow and is not taken", async () => {
+  await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  const message: InstagramMessage = {
+    accountId: "owned-account",
+    senderId: "9700",
+    messageId: "started",
+    text: "OK",
+    timestamp: new Date(Date.now() + 50_000),
+  };
+  const first = deliveryHeldBeforeCommit(message);
+  let redelivery: Promise<void> | undefined;
+  try {
+    await Promise.race([first.atCommit, first.done.then(() => assert.fail("the first delivery did not reach COMMIT"))]);
+    const reply = await sentReply("9700", true);
+    await pool.query(
+      `INSERT INTO instagram_follow_conversations(reply_id,connection_id,recipient_id,confirmation_keyword,follower_reply_text,non_follower_reply_text,status)
+       VALUES($1,$2,'9700','ok','yes','no','waiting')`,
+      [reply, connectionId],
+    );
+    redelivery = ingestMessages(pool, [message]);
+    await waitForMessageLock();
+  } finally {
+    first.release();
+  }
+  await first.done;
+  await redelivery;
+  assert.equal((await pool.query("SELECT 1 FROM instagram_message_receipts")).rowCount, 0);
+  assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "waiting");
+  assert.deepEqual(
+    (await started()).map((row) => row.message_id),
+    ["started"],
+  );
 });
 
 test("a kept DM inside its 15-minute window blocks its sender until it is matched or expires", async () => {
