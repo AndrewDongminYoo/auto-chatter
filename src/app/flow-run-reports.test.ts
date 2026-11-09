@@ -124,6 +124,9 @@ function harness(api: (url: string) => Promise<unknown>) {
     remove(): void;
     href: string;
     download: string;
+    attributes: Map<string, string>;
+    setAttribute(name: string, value: string): void;
+    removeAttribute(name: string): void;
   }
   const element = (text = "", value = ""): Element => ({
     textContent: text,
@@ -132,6 +135,13 @@ function harness(api: (url: string) => Promise<unknown>) {
     hidden: false,
     children: [] as ReturnType<typeof element>[],
     listeners: new Map<string, Listener>(),
+    attributes: new Map<string, string>(),
+    setAttribute(name: string, value: string) {
+      this.attributes.set(name, value);
+    },
+    removeAttribute(name: string) {
+      this.attributes.delete(name);
+    },
     append(...items: ReturnType<typeof element>[]) {
       this.children.push(...items);
     },
@@ -315,6 +325,12 @@ test("flow report renders a breakdown table with loaded labels and exports group
   const [table] = h.get("flow-report-groups").children;
   const [caption, thead, tbody] = table!.children;
   assert.match(caption!.textContent, /계정별/);
+  // Safari never focuses a scroller by itself, so the table's container is a named tab stop.
+  assert.deepEqual(Object.fromEntries(h.get("flow-report-groups").attributes), {
+    role: "region",
+    tabindex: "0",
+    "aria-label": `${caption!.textContent} 표`,
+  });
   // The first header row names each area over its columns, so '응답 대기' and '답장 대기 도달' stay apart.
   const [areaRow, metricRow] = thead!.children;
   const areas = areaRow!.children as unknown as { textContent: string; colSpan?: number; rowSpan?: number }[];
@@ -367,18 +383,26 @@ test("flow report renders a breakdown table with loaded labels and exports group
   h.inputs.group_by.value = "day";
   await h.form.dispatch("change");
   assert.equal(h.get("flow-report-groups").children.length, 0);
+  assert.equal(h.get("flow-report-groups").attributes.size, 0);
   assert.equal(h.get("flow-report-wait-counts").children.length, 0);
   assert.equal(h.get("flow-report-download").disabled, true);
 });
 
 test("flow report shows an empty breakdown and never lets a late grouped response overwrite newer input", async () => {
+  let reports = 0;
   const h = harness(async (url) =>
-    url === "/api/flows" ? { flows: [] } : { ...grouped, group_by: "day", groups: [] },
+    url === "/api/flows"
+      ? { flows: [] }
+      : { ...grouped, group_by: "day", groups: reports++ === 0 ? grouped.groups : [] },
   );
   await h.controller.configure("owner", "Asia/Seoul", []);
   h.inputs.group_by.value = "day";
   await h.form.dispatch("submit");
+  assert.equal(h.get("flow-report-groups").attributes.get("tabindex"), "0");
+  // A later empty cohort leaves only a hint, so the container stops being a tab stop.
+  await h.form.dispatch("submit");
   assert.match(h.get("flow-report-groups").children[0]!.textContent, /실행이 없습니다/);
+  assert.equal(h.get("flow-report-groups").attributes.size, 0);
 
   let resolveReport!: (value: unknown) => void;
   const late = harness(async (url) =>

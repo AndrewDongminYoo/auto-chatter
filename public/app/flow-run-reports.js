@@ -68,6 +68,8 @@ function createFlowRunReports({ api, node }) {
     submit.textContent = "조회";
     for (const [, , output] of groups) output.replaceChildren();
     breakdown.replaceChildren();
+    // An empty container is never a tab stop or a named region.
+    for (const name of ["aria-label", "role", "tabindex"]) breakdown.removeAttribute(name);
     summary.textContent = message;
   }
   function reset() {
@@ -195,7 +197,12 @@ function createFlowRunReports({ api, node }) {
       return;
     }
     const table = node("table");
-    table.append(node("caption", `${dimension}별 ${groups.map(([, , , , title]) => title).join(" · ")}`));
+    const heading = `${dimension}별 ${groups.map(([, , , , title]) => title).join(" · ")}`;
+    table.append(node("caption", heading));
+    // Safari does not focus a scroller on its own, so the clipped columns need a named tab stop for the keyboard.
+    breakdown.setAttribute("role", "region");
+    breakdown.setAttribute("tabindex", "0");
+    breakdown.setAttribute("aria-label", `${heading} 표`);
     // Area titles head their metric columns, so the run state '응답 대기' is never read as a reply-wait count.
     const areas = node("tr");
     const corner = node("th", dimension);
