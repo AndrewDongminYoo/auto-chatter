@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { checkInstagramSubscription, classifySubscribedApps } from "./instagram-subscription-check.ts";
+import {
+  checkInstagramSubscription,
+  classifySubscribedApps,
+  REQUIRED_SUBSCRIPTION_FIELDS,
+} from "./instagram-subscription-check.ts";
 import { sealSecret } from "./secrets.ts";
 
 const key = Buffer.alloc(32, 3).toString("base64");
@@ -157,4 +161,9 @@ test("a token that does not decrypt makes no Meta request", async () => {
     { status: "undecryptable", identityAccepted: false },
   );
   assert.deepEqual(provider.paths, []);
+});
+
+test("messaging_seen is subscribed on connect but not required, so older connections keep fields_present (#312)", () => {
+  assert.deepEqual(REQUIRED_SUBSCRIPTION_FIELDS, ["comments", "messages", "messaging_postbacks"]);
+  assert.equal(classifySubscribedApps(allFields), "fields_present");
 });

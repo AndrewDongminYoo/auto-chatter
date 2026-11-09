@@ -1,5 +1,6 @@
 import { instagramAdapter, partitionInstagramEvents } from "./channel-adapter.ts";
 import { ingestMessages } from "./follow-flow.ts";
+import { ingestMessageReads, parseMessageReadEvents } from "./message-reads.ts";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Pool } from "pg";
 import { ingestComments } from "./store.ts";
@@ -60,8 +61,10 @@ async function handleRequest(
 
   let comments;
   let messages;
+  let reads;
   try {
     ({ comments, messages } = partitionInstagramEvents(instagramAdapter.decodeWebhook(body)));
+    reads = parseMessageReadEvents(body);
   } catch {
     response.writeHead(400).end();
     return;
@@ -69,6 +72,7 @@ async function handleRequest(
 
   await ingestComments(config.pool, comments);
   await ingestMessages(config.pool, messages);
+  await ingestMessageReads(config.pool, reads);
   response.writeHead(200).end();
 }
 

@@ -258,7 +258,11 @@ export async function finishInstagramOAuth(
     {
       method: "POST",
       headers: { Authorization: `Bearer ${long.access_token}`, "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ subscribed_fields: "comments,messages,messaging_postbacks" }).toString(),
+      // messaging_seen (#312) stores reads of messages the service sent. It is not a required field of the
+      // subscription check, so a connection subscribed before it was added does not count as missing a field.
+      body: new URLSearchParams({
+        subscribed_fields: "comments,messages,messaging_postbacks,messaging_seen",
+      }).toString(),
     },
   );
   if (!isRecord(subscribed) || subscribed.success !== true) throw new ApiError(502, "instagram_subscription_failed");
