@@ -10,6 +10,7 @@
     <script src="./manual-reply-reports.js" defer></script>
     <script src="./flow-run-reports.js" defer></script>
     <script src="./handoff-reports.js" defer></script>
+    <script src="./campaign-run-reports.js" defer></script>
     <script src="./contact-csv-preview.js" defer></script>
     <script src="./inbox.js" defer></script>
     <script src="./webhook-labels.js" defer></script>
@@ -272,6 +273,40 @@
             <p class="hint">
               해제는 자동 발송 재개나 상담 해결을 뜻하지 않습니다. 다른 중지 사유가 남아 있을 수 있습니다. 현재 상담
               상태·성공 전환율·플로 귀속은 계산하지 않으며 삭제된 이력은 제외됩니다.
+            </p>
+          </section>
+          <section id="campaign-reports-section" class="card" aria-labelledby="campaign-reports-title" hidden>
+            <div class="section-heading">
+              <h2 id="campaign-reports-title">캠페인 실행 현황</h2>
+              <button id="campaign-report-download" type="button" class="secondary" disabled>조회 결과 CSV</button>
+            </div>
+            <p class="hint">
+              선택 기간에 시작한 캠페인 실행의 상태, 시작 시점 대상 평가, 그 실행들의 발송 행 상태를 각각 보여 줍니다.
+            </p>
+            <form id="campaign-report-form" class="filter-form">
+              <label>시작일<input name="from" type="date" required /></label>
+              <label>종료일(미포함)<input name="before" type="date" required /></label>
+              <label
+                >캠페인<select name="draft_id">
+                  <option value="">모든 캠페인(보관 포함)</option>
+                </select></label
+              >
+              <button type="submit">조회</button>
+            </form>
+            <p id="campaign-report-zone" class="hint"></p>
+            <p id="campaign-report-options-status" class="hint"></p>
+            <p id="campaign-report-summary" class="hint" role="status" aria-live="polite"></p>
+            <h3>실행 상태</h3>
+            <dl id="campaign-report-run-counts" class="manual-report-counts"></dl>
+            <h3>시작 시점 대상 평가</h3>
+            <dl id="campaign-report-start-counts" class="manual-report-counts"></dl>
+            <h3>발송 행 상태</h3>
+            <dl id="campaign-report-delivery-counts" class="manual-report-counts"></dl>
+            <p class="hint">
+              발송 행은 선택 기간에 시작한 실행의 행이며, 그 기간에 보낸 건수가 아닙니다. ‘보냄’은 Meta가 요청을
+              접수했다는 뜻이며 전달·읽음·전환을 뜻하지 않습니다. 계정·이용자 데이터를 삭제하면 발송 행이 사라지므로
+              발송 행 합계는 ‘조건 통과’보다 작을 수 있습니다. 월 발송 한도로 시작하지 않은 실행은 발송 행이 없고, 그
+              인원은 ‘조건 통과’가 아닌 ‘월 발송 한도 초과’로 셉니다.
             </p>
           </section>
         </div>

@@ -3,6 +3,7 @@ const contactSessionSource = crypto.randomUUID();
 const manualReports = createManualReplyReports({ api, node });
 const flowReports = createFlowRunReports({ api, node });
 const handoffReports = createHandoffReports({ api, node });
+const campaignReports = createCampaignRunReports({ api, node });
 // Approvers are labelled "나" only for the signed-in user; admins cannot read the member list.
 const campaignDrafts = createCampaignDrafts({ api, node, userId: () => currentUserId });
 // Members are shown by the account's current username from the loaded connection list; the server returns IDs only.
@@ -260,6 +261,7 @@ function resetSession() {
   manualReports.reset();
   flowReports.reset();
   handoffReports.reset();
+  campaignReports.reset();
   invalidateContactExport();
   byId("contacts-export").hidden = true;
   byId("contacts-export-help").hidden = true;
@@ -1359,6 +1361,7 @@ async function loadWorkspace() {
   manualReports.reset();
   flowReports.reset();
   handoffReports.reset();
+  campaignReports.reset();
   invalidateContactExport();
   const generation = segmentsGeneration,
     workspaceSession = workspaceGeneration;
@@ -1399,6 +1402,7 @@ async function loadWorkspace() {
   manualReports.configure(currentRole, workspaceTimeZone, connections);
   void flowReports.configure(currentRole, workspaceTimeZone, connections);
   handoffReports.configure(currentRole, workspaceTimeZone, connections);
+  void campaignReports.configure(currentRole, workspaceTimeZone);
   const selectedConnection = form.elements.connection_id.value;
   byId("startup").hidden = true;
   byId("retry-load").hidden = true;
@@ -2048,6 +2052,7 @@ byId("time-zone-form").addEventListener("submit", (event) => {
       manualReports.configure(currentRole, workspaceTimeZone, connections);
       void flowReports.configure(currentRole, workspaceTimeZone, connections);
       handoffReports.configure(currentRole, workspaceTimeZone, connections);
+      void campaignReports.configure(currentRole, workspaceTimeZone);
     }
     notice(`시간대를 저장했습니다(${saved.time_zone}). 지금부터 정한 시각까지 기다리기 시작하는 실행에 적용됩니다.`);
   });
