@@ -106,7 +106,9 @@ test("flow report accepts each breakdown, rejects any other or repeated one and 
     });
 });
 
-function harness(api: (url: string) => Promise<unknown>) {
+// With `clock`, `new Date()` reads that instant and the real Intl formats the workspace zone; without it, every zone
+// is unsupported so the manual-date fallback runs.
+function harness(api: (url: string) => Promise<unknown>, clock?: string) {
   type Listener = (event: { preventDefault(): void }) => unknown;
   interface Element {
     textContent: string;
@@ -186,6 +188,10 @@ function harness(api: (url: string) => Promise<unknown>) {
   };
   let blob: Blob | undefined;
   class UnsupportedDate extends Date {
+    constructor(value?: string | number | Date) {
+      if (value === undefined) super(clock ?? Date.now());
+      else super(value);
+    }
     override toLocaleString(): string {
       throw new RangeError("Invalid time zone");
     }
@@ -196,13 +202,16 @@ function harness(api: (url: string) => Promise<unknown>) {
       return element(label, value);
     },
     Date: UnsupportedDate,
-    Intl: {
-      DateTimeFormat: class {
-        constructor() {
-          throw new RangeError("Invalid time zone");
-        }
-      },
-    },
+    Intl:
+      clock === undefined
+        ? {
+            DateTimeFormat: class {
+              constructor() {
+                throw new RangeError("Invalid time zone");
+              }
+            },
+          }
+        : Intl,
     URLSearchParams,
     Blob,
     URL: {
@@ -423,4 +432,20 @@ test("flow report shows an empty breakdown and never lets a late grouped respons
   assert.equal(late.get("flow-report-download").disabled, true);
   late.controller.reset();
   assert.equal(late.inputs.group_by.value, "");
+});
+
+test("flow report defaults to the last seven days of the workspace calendar, not the browser's", async () => {
+  // The browser (UTC) date is 2026-03-01 in both cases: at 03:00Z Los Angeles is still on 2026-02-28, and at 12:00Z
+  // Kiritimati (UTC+14) is already on 2026-03-02.
+  const cases = [
+    ["2026-03-01T03:00:00Z", "America/Los_Angeles", "2026-02-22", "2026-03-01"],
+    ["2026-03-01T12:00:00Z", "Pacific/Kiritimati", "2026-02-24", "2026-03-03"],
+  ] as const;
+  for (const [clock, zone, from, before] of cases) {
+    const h = harness(async () => ({ flows: [] }), clock);
+    await h.controller.configure("owner", zone, []);
+    assert.equal(h.inputs.from.value, from, zone);
+    assert.equal(h.inputs.before.value, before, zone);
+    assert.doesNotMatch(h.get("flow-report-zone").textContent, /직접 입력/);
+  }
 });
