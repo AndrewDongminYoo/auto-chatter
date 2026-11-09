@@ -356,6 +356,19 @@ test("CSV preview shows tag clearing and rejects invalid rows before duplicate d
   assert.deepEqual((await pool.query("SELECT tags FROM instagram_contact_tags")).rows[0].tags, ["old"]);
 });
 
+test("CSV preview refuses a data row with one cell missing or one extra cell", async () => {
+  await add("00123");
+  // A row of 13 cells still has tags_json in its last cell, so only the cell count makes it invalid.
+  const cells = parseContactCsv(previewCsv([{}]))[1]!;
+  assert.equal(cells.length, csv.CONTACT_CSV_HEADER.length);
+  const file = previewCsv([]) + csv.contactCsvRow(cells.slice(0, -1)) + csv.contactCsvRow([...cells, "extra"]);
+  const result = await previewContactCsv(pool, user, { csv: file });
+  assert.deepEqual(result.rows, [
+    { row: 1, status: "invalid" },
+    { row: 2, status: "invalid" },
+  ]);
+});
+
 test("CSV tag apply writes exactly the changed rows once and a repeated file changes nothing", async () => {
   await add("00123");
   await add("00123", second);
@@ -431,6 +444,8 @@ test("CSV tag apply refuses a file with an invalid duplicate or unavailable row 
     [{ connection_id: second, tags_json: '["x"]' }, "duplicate"],
     [{ sender_id: "'missing" }, "not_found"],
     [{ connection_id: other }, "not_found"],
+    // A row of a file exported from another workspace, replayed here, is refused as invalid.
+    [{ workspace_id: foreign }, "invalid"],
   ] as const) {
     const rows = [{}, { connection_id: second, tags_json: '["x"]' }, bad];
     const file = previewCsv(rows);
@@ -449,6 +464,38 @@ test("CSV tag apply refuses a file with an invalid duplicate or unavailable row 
     assert.equal(statements.includes("COMMIT"), false);
     statements.length = 0;
   }
+  assert.deepEqual(await databaseSnapshot(), before);
+});
+
+test("CSV duplicate detection compares account IDs without case in the preview and the apply", async () => {
+  // An account ID with letters, so its uppercase spelling is a different string for the same account.
+  const lettered = "abcdef12-3456-4789-8abc-def012345678";
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'125',true)", [
+    lettered,
+    workspace,
+  ]);
+  await add("00123", lettered);
+  const file = previewCsv([
+    { connection_id: lettered, tags_json: '["a"]' },
+    { connection_id: lettered.toUpperCase(), tags_json: '["b"]' },
+  ]);
+  const preview = await previewContactCsv(pool, user, { csv: file });
+  assert.deepEqual(preview.rows, [
+    { row: 1, status: "duplicate" },
+    { row: 2, status: "duplicate" },
+  ]);
+  const before = await databaseSnapshot();
+  const response = await applyRequest({
+    csv: file,
+    expected: [
+      { row: 1, current_tags: [] },
+      { row: 2, current_tags: [] },
+    ],
+  });
+  assert.equal(response.status, 422, await response.clone().text());
+  const body = await response.json();
+  assert.equal(body.error, "contact_import_rejected");
+  assert.deepEqual(body.counts, { total: 2, changed: 0, unchanged: 0, invalid: 0, duplicate: 2, not_found: 0 });
   assert.deepEqual(await databaseSnapshot(), before);
 });
 

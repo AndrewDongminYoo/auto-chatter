@@ -192,8 +192,11 @@ test("reply template validation rejects unsupported variables and retains litera
     { name: "", body: "a" },
     { name: "x".repeat(61), body: "a" },
     { name: "a\n", body: "a", extra: 1 },
+    // A control character inside the name, which trimming cannot remove, on its own.
+    { name: "a\u0007b", body: "a" },
+    { name: "a\u007fb", body: "a" },
   ])
-    assert.equal((await request(owner, "POST", prefix, input)).status, 400);
+    assert.equal((await request(owner, "POST", prefix, input)).status, 400, JSON.stringify(input));
   await create("Same", "literal {braces} and 😀");
   assert.equal((await request(owner, "POST", prefix, { name: " same ", body: "duplicate" })).status, 409);
   const t = await create("Length", "😀".repeat(500));

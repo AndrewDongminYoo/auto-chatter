@@ -291,6 +291,32 @@ test("condition trees evaluate all and any at both levels over tag and typed fie
   );
 });
 
+test("tag and text conditions compare stored values exactly, so quotes and LIKE wildcards stay literal", async () => {
+  const plan = await field("plan", "text");
+  // As a LIKE pattern, the first value would also match the second: % spans " percent" and _ the space.
+  const exact = "50%_off'",
+    lookalike = "50 percent off'";
+  for (const [sender, text] of [
+    ["w1", exact],
+    ["w2", lookalike],
+  ]) {
+    await comment(sender);
+    await tags(sender, [text]);
+    await value(sender, plan, text);
+  }
+  const list = async (options: URLSearchParams) => senders(await listContacts(pool, owner, options));
+  assert.deepEqual(await list(query({ tag: exact })), ["w1"]);
+  assert.deepEqual(await list(query({ field_id: plan, field_operator: "eq", field_value: JSON.stringify(exact) })), [
+    "w1",
+  ]);
+  for (const leaf of [has(exact), { field_id: plan, field_operator: "eq", field_value: exact }]) {
+    assert.deepEqual(await list(byTree(tree("all", group("all", leaf)))), ["w1"]);
+    const preview = await listContacts(pool, owner, byTree(tree("all", group("all", leaf)), { preview: "true" }));
+    assert.equal(preview.total, "1");
+    assert.deepEqual(preview.excluded, { conditions: "1" });
+  }
+});
+
 test("condition trees are an AND with every outer limit, and the preview excludes conditions after the limits", async () => {
   const fields = await fixture();
   const T = vipOrEvent(fields);
