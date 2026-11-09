@@ -472,6 +472,8 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
     const campaignWorkspace = "11111111-1111-4111-8111-111111111111";
     const campaignConnection = "22222222-2222-4222-8222-222222222222";
     const campaignUser = "44444444-4444-4444-8444-444444444444";
+    // A new workspace starts on free, which sends no campaign (#52).
+    await pool.query("UPDATE workspaces SET plan='advanced' WHERE id=$1", [campaignWorkspace]);
     const campaignEvent = (
       await pool.query(
         `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
@@ -2237,7 +2239,9 @@ test("workerd segment snapshots use restricted server privileges and refuse an a
         .status,
       404,
     );
-    // An execution approval is written, rescheduled and cancelled under the restricted role, and sends nothing.
+    // An execution approval is written, rescheduled and cancelled under the restricted role, and sends nothing. A new
+    // workspace starts on free, which approves no campaign (#52).
+    await pool.query("UPDATE workspaces SET plan='advanced' WHERE id=$1", [workspace]);
     const approvalId = randomUUID();
     const approvalPath = `https://app.test/api/campaign-approvals/${approvalId}`;
     const approved = await runtime.dispatchFetch(campaignPath + "/approvals", {

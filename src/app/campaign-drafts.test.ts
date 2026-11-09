@@ -116,7 +116,14 @@ const previewResponse = {
   candidate_meaning: "passed_recorded_conditions_at_as_of",
   sendability_claimed: false,
   estimated_provider_calls: "9007199254740993",
-  plan_broadcast_limit: null as string | null,
+  // A limit far above the candidates, so the limit warning stays off unless a test lowers it (#52).
+  plan_broadcast_limit: {
+    month: "2026-10",
+    limit: "50000000000000000000",
+    used: "1",
+    reserved: "2",
+    remaining: "49999999999999999997",
+  } as Record<string, string> | null,
   channel_marketing_supported: false,
   global_send_enabled: false,
 };
@@ -148,6 +155,7 @@ const storedApproval = {
   delivery_available: true,
   run_id: null as string | null,
   run_status: null as string | null,
+  run_limited: null as boolean | null,
 };
 type Approval = typeof storedApproval;
 // The run API's real shape (src/app/campaign-runs.ts detail()): decimal-string counts, no recipient identifiers.
@@ -182,7 +190,13 @@ const storedRun = {
   delivery_available: true,
 };
 type Run = typeof storedRun;
-const executedApproval: Approval = { ...storedApproval, status: "executed", run_id: runId, run_status: "running" };
+const executedApproval: Approval = {
+  ...storedApproval,
+  status: "executed",
+  run_id: runId,
+  run_status: "running",
+  run_limited: false,
+};
 type DraftApi = (path: string, method?: string, body?: Record<string, unknown>) => Promise<unknown>;
 function draftHarness(override?: DraftApi, initialApprovals: Approval[] = []) {
   const nodes = new Map<string, DraftElement>();
@@ -698,7 +712,10 @@ test("the preview is fetched only by its button, once per click, and renders war
   assert.match(summary, /원래 인원\s+4명/);
   assert.match(summary, /현재 남은 인원\s+9,007,199,254,741,014명/, "counts beyond 2^53 must not round");
   assert.match(summary, /예상 공급자 호출 수\s+9,007,199,254,740,993회/);
-  assert.match(summary, /요금제 일괄 발송 한도\s+정해지지 않음/);
+  assert.match(
+    summary,
+    /요금제 월 캠페인 발송 한도\s+2026년 10월 50,000,000,000,000,000,000건 · 사용 1건 · 다른 승인 2건 · 남음 49,999,999,999,999,999,997건/,
+  );
   // The day-period word (오후 or PM) comes from the runtime's ICU data, so build the expected text with the same formatter.
   const asOf = new Date(previewResponse.as_of);
   const seoulAsOf = asOf.toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
@@ -711,24 +728,63 @@ test("the preview is fetched only by its button, once per click, and renders war
   assert.equal(previewRequests(h), 2, "each click reads the preview again");
 });
 
-test("the preview hides warnings that do not apply and shows a defined plan limit as given", async () => {
-  const h = await adminDraft(async (path) => {
-    if (path.endsWith("/preview"))
-      return {
-        ...previewResponse,
-        channel_marketing_supported: true,
-        global_send_enabled: true,
-        plan_broadcast_limit: "12345678901234567890",
-      };
-  });
-  await openSaved(h);
-  await runPreview(h);
-  assert.equal(h.get("campaign-draft-preview-warnings").children.length, 0);
+test("the preview hides warnings that do not apply and warns when the month's campaign sends cannot hold the candidates", async () => {
+  const limited =
+    (allowance: Record<string, string> | null, candidate = "9007199254740993") =>
+    async (path: string) => {
+      if (path.endsWith("/preview"))
+        return {
+          ...previewResponse,
+          counts: { ...previewResponse.counts, candidate },
+          channel_marketing_supported: true,
+          global_send_enabled: true,
+          plan_broadcast_limit: allowance,
+        };
+    };
+  const roomy = await adminDraft(limited(previewResponse.plan_broadcast_limit));
+  await openSaved(roomy);
+  await runPreview(roomy);
+  assert.equal(roomy.get("campaign-draft-preview-warnings").children.length, 0);
+  // Exactly the remaining allowance still fits; one more candidate does not.
+  const month = { month: "2026-11", limit: "1000", used: "990", reserved: "5" };
+  const exact = await adminDraft(limited({ ...month, remaining: "5" }, "5"));
+  await openSaved(exact);
+  await runPreview(exact);
+  assert.equal(exact.get("campaign-draft-preview-warnings").children.length, 0);
   assert.match(
-    h.get("campaign-draft-preview-summary").allText(),
-    /요금제 일괄 발송 한도\s+12,345,678,901,234,567,890명/,
+    exact.get("campaign-draft-preview-summary").allText(),
+    /요금제 월 캠페인 발송 한도\s+2026년 11월 1,000건 · 사용 990건 · 다른 승인 5건 · 남음 5건/,
   );
-  assert.doesNotMatch(previewText(h), /발송\s*가능/);
+  const over = await adminDraft(limited({ ...month, remaining: "5" }, "6"));
+  await openSaved(over);
+  await runPreview(over);
+  assert.deepEqual(
+    over.get("campaign-draft-preview-warnings").children.map((child) => child.textContent),
+    [
+      "조건 통과 인원이 이번 달 남은 캠페인 발송 한도보다 많아 즉시 또는 이번 달 실행으로는 승인할 수 없습니다. 다음 달 실행으로 예약하거나 다른 승인을 취소해 주세요.",
+    ],
+  );
+  const free = await adminDraft(
+    limited({ month: "2026-11", limit: "0", used: "0", reserved: "0", remaining: "0" }, "0"),
+  );
+  await openSaved(free);
+  await runPreview(free);
+  assert.deepEqual(
+    free.get("campaign-draft-preview-warnings").children.map((child) => child.textContent),
+    ["현재 요금제에서는 캠페인을 승인할 수 없습니다."],
+  );
+  assert.match(
+    free.get("campaign-draft-preview-summary").allText(),
+    /요금제 월 캠페인 발송 한도\s+현재 요금제에서는 캠페인을 승인할 수 없음 \(2026년 11월\)/,
+  );
+  // A missing or malformed allowance is a malformed response: nothing renders.
+  for (const allowance of [null, { ...month, remaining: "-1" }, { ...month, month: "11/2026", remaining: "5" }]) {
+    const broken = await adminDraft(limited(allowance));
+    await openSaved(broken);
+    await runPreview(broken);
+    assert.equal(rendered(broken), false, JSON.stringify(allowance));
+  }
+  assert.doesNotMatch(previewText(over), /발송\s*가능/);
 });
 
 test("the preview button reports a busy state while its read is pending", async () => {
@@ -1343,6 +1399,99 @@ test("an executed draft version is refused with the executed approval and leaves
   assert.equal(approvalWrites(h).length, 1);
 });
 
+test("an executed version whose run the monthly limit kept from starting says nothing was sent", async () => {
+  const executed = {
+    ...storedApproval,
+    status: "executed",
+    run_id: "run-1",
+    run_status: "completed",
+    run_limited: true,
+  };
+  const h = await adminDraft(async (path, method) => {
+    if (path.endsWith("/approvals") && method === "POST")
+      throw { status: 409, code: "campaign_version_executed", approval: executed };
+  });
+  await openSaved(h);
+  await approveNow(h);
+  assert.equal(h.get("campaign-approval-current-title").textContent, "최근 승인 · 실행을 시작하지 않음");
+  assert.equal(
+    h.get("campaign-approval-status").textContent,
+    "이 초안 버전의 실행은 월 캠페인 발송 한도를 넘어 시작하지 않았고 아무에게도 보내지 않았습니다. 다시 보내려면 초안을 수정해 저장한 뒤 승인해 주세요. 그 승인을 표시합니다.",
+  );
+  assert.doesNotMatch(h.get("campaign-approval-summary").allText(), /실행 시작됨/);
+  assertDraftLocked(h, false);
+});
+
+test("an approval refused by the monthly campaign send limit names the month and its allowance", async () => {
+  const allowance = {
+    month: "2026-11",
+    limit: "1000",
+    used: "990",
+    reserved: "5",
+    remaining: "5",
+    requested: "1234",
+  };
+  let body: Record<string, unknown> | null = allowance;
+  const h = await adminDraft(async (path, method) => {
+    if (path.endsWith("/approvals") && method === "POST")
+      throw { status: 409, code: "broadcast_limit_reached", broadcast_limit: body };
+  });
+  await openSaved(h);
+  await approveNow(h);
+  assert.equal(
+    h.get("campaign-approval-status").textContent,
+    "2026년 11월 캠페인 발송 한도 1,000건 중 남은 5건으로는 조건 통과 1,234명을 승인할 수 없습니다(이번 달 사용 990건, 같은 달 다른 승인 5건). 실행 시점을 다른 달로 옮기거나 다른 승인을 취소해 주세요.",
+  );
+  assert.equal(approvalShown(h), false, "nothing was recorded");
+  assertDraftLocked(h, false);
+  assert.equal(approvalWrites(h).length, 1);
+  // The refusal is final for that request: a new confirmation sends a new request.
+  body = { ...allowance, limit: "0", remaining: "0" };
+  await approveNow(h);
+  assert.equal(approvalWrites(h).length, 2);
+  assert.notEqual(approvalWrites(h)[0]!.body.id, approvalWrites(h)[1]!.body.id);
+  assert.match(h.get("campaign-approval-status").textContent, /현재 요금제에서는 캠페인을 승인할 수 없습니다/);
+  body = null;
+  await approveNow(h);
+  assert.match(
+    h.get("campaign-approval-status").textContent,
+    /^요금제의 이번 달 캠페인 발송 한도를 넘어 승인할 수 없습니다/,
+  );
+});
+
+test("a schedule change refused by the monthly campaign send limit keeps the approval shown", async () => {
+  const h = await adminDraft(
+    async (path, method) => {
+      if (path.endsWith("/schedule") && method === "PUT")
+        throw {
+          status: 409,
+          code: "broadcast_limit_reached",
+          approval: storedApproval,
+          broadcast_limit: {
+            month: "2026-10",
+            limit: "1000",
+            used: "1000",
+            reserved: "0",
+            remaining: "0",
+            requested: "3",
+          },
+        };
+    },
+    [storedApproval],
+    "America/New_York",
+  );
+  await openSaved(h);
+  await chooseSchedule(h, null);
+  await click(h, "campaign-approval-reschedule");
+  assert.match(
+    h.get("campaign-approval-status").textContent,
+    /^2026년 10월 캠페인 발송 한도 1,000건 중 남은 0건으로는/,
+  );
+  assert.equal(approvalShown(h), true);
+  assert.equal(h.get("campaign-approval-current-title").textContent, "유효한 승인");
+  assertDraftLocked(h, true);
+});
+
 test("a draft conflict on approval shows the current draft, reads the approval again and approves that version", async () => {
   let conflicted = false;
   const h = await adminDraft(async (path, method) => {
@@ -1661,6 +1810,9 @@ test("a malformed approval row renders nothing and leaves approval off", async (
   assert.equal(approvalShown(h), false);
   assert.equal(h.get("campaign-approval-start").disabled, true);
   assert.match(h.get("campaign-approval-status").textContent, /불러오지 못했습니다/);
+  const marker = await adminDraft(undefined, [{ ...executedApproval, run_limited: "yes" as unknown as boolean }]);
+  await openSaved(marker);
+  assert.equal(approvalShown(marker), false, "a malformed limit marker is a malformed row");
 });
 
 test("the shared api wrapper forwards a refused campaign write's current approval, draft and run", async () => {
@@ -1760,6 +1912,80 @@ function deferred() {
   });
   return { promise, resolve };
 }
+
+test("a run the monthly campaign send limit kept from starting says so instead of completed", async () => {
+  const limitedRun = {
+    ...storedRun,
+    status: "completed",
+    start: {
+      ...storedRun.start,
+      counts: { ...storedRun.start.counts, candidate: "0" },
+      broadcast_limit_exceeded: { candidate: "1234", limit: "1000", used: "999", reserved: "5" } as Record<
+        string,
+        string
+      > | null,
+    },
+    delivery_counts: Object.fromEntries(Object.keys(storedRun.delivery_counts).map((key) => [key, "0"])),
+  };
+  const limitedApproval = { ...executedApproval, run_status: "completed", run_limited: true };
+  const h = await openExecuted(
+    async (path) => {
+      if (path === `/api/campaign-runs/${runId}`) return limitedRun;
+    },
+    [limitedApproval],
+  );
+  assert.equal(runShown(h), true);
+  // The approval panel above the run says the same; it never claims the run started.
+  assert.equal(h.get("campaign-approval-current-title").textContent, "최근 승인 · 실행을 시작하지 않음");
+  assert.deepEqual(pairs(h.get("campaign-approval-summary"))[0], [
+    "상태",
+    "실행을 시작하지 않음 · 이번 달 캠페인 발송 한도 초과",
+  ]);
+  assert.deepEqual(pairs(h.get("campaign-run-summary")).slice(0, 2), [
+    ["상태", "시작하지 않음 · 이번 달 캠페인 발송 한도 초과"],
+    [
+      "시작하지 않은 이유",
+      "실행 시작 시점에 이번 달 캠페인 발송 한도 1,000건 중 999건을 이미 사용했고 같은 달 다른 승인에 5건이 예정되어 있어, 조건 통과 1,234명 모두에게 보내지 않았습니다.",
+    ],
+  ]);
+  assert.deepEqual(
+    h
+      .get("campaign-run-rows")
+      .children.slice(-2)
+      .map((row) => row.children.map((cell) => cell.textContent)),
+    [
+      ["조건 통과", "0명"],
+      ["월 발송 한도 초과", "1,234명"],
+    ],
+  );
+  assert.equal(h.get("campaign-run-cancel").hidden, true, "a completed run has nothing to cancel");
+  const free = await openExecuted(async (path) => {
+    if (path === `/api/campaign-runs/${runId}`)
+      return {
+        ...limitedRun,
+        start: {
+          ...limitedRun.start,
+          broadcast_limit_exceeded: { candidate: "2", limit: "0", used: "0", reserved: "0" },
+        },
+      };
+  });
+  assert.equal(
+    pairs(free.get("campaign-run-summary"))[1]![1],
+    "현재 요금제에서는 캠페인을 보낼 수 없어 조건 통과 2명 모두에게 보내지 않았습니다.",
+  );
+  // An ordinary completed run keeps its label, and a malformed marker is a malformed response.
+  const ordinary = await openExecuted(async (path) => {
+    if (path === `/api/campaign-runs/${runId}`)
+      return { ...limitedRun, start: { ...limitedRun.start, broadcast_limit_exceeded: null } };
+  });
+  assert.deepEqual(pairs(ordinary.get("campaign-run-summary"))[0], ["상태", "완료"]);
+  assert.equal(ordinary.get("campaign-run-rows").children.length, 7, "an ordinary run has only the seven reasons");
+  const broken = await openExecuted(async (path) => {
+    if (path === `/api/campaign-runs/${runId}`)
+      return { ...limitedRun, start: { ...limitedRun.start, broadcast_limit_exceeded: { candidate: "x" } } };
+  });
+  assert.equal(runShown(broken), false);
+});
 
 test("an executed approval shows its run's status, start counts and every delivery status from one read", async () => {
   const h = await openExecuted();
@@ -2331,6 +2557,13 @@ const replays: [string, Approval, string, string][] = [
     { ...executedApproval, id: input.id },
     "최근 승인 · 실행 시작됨",
     "실행 승인이 이미 기록되어 실행이 시작되었습니다. 보내기 직전마다 모든 조건을 다시 확인합니다.",
+  ],
+  [
+    // The cron can start the run while the create is unknown, and the monthly limit can keep that run from starting.
+    "its executed approval whose run the monthly limit kept from starting",
+    { ...executedApproval, id: input.id, run_status: "completed", run_limited: true },
+    "최근 승인 · 실행을 시작하지 않음",
+    "실행 승인이 이미 기록되었지만, 이번 달 캠페인 발송 한도를 넘어 실행을 시작하지 않았고 아무에게도 보내지 않았습니다.",
   ],
   [
     "its cancelled approval",

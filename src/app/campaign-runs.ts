@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { CAMPAIGN_PREVIEW_REASONS, evaluateCampaignStart, transaction, utc } from "./campaign-drafts.ts";
 import { CampaignStartFailedError, failureCode, logOperation } from "./operations-log.ts";
+import { campaignSendAllowance, campaignSendsFit } from "./plans.ts";
 
 // Campaign runs (#36, docs/specs/2026-10-27-campaign-runs.md). Starting a run writes one pending delivery row per
 // candidate member; nothing here calls a provider, publishes a queue message or writes an outbox row. The delivery
@@ -58,17 +59,33 @@ async function startOne(client: PoolClient, workspace: string, id: string): Prom
     evaluated.snapshot_id !== approval.snapshot_id
   )
     throw new Error("Campaign approval no longer matches its draft");
-  const counts = Object.fromEntries(
+  const counts: Record<string, string> = Object.fromEntries(
     COUNT_KEYS.map((key) =>
       key === "original_member_count" || key === "remaining_member_count"
         ? [key, evaluated[key]]
         : [key, evaluated.counts[key]],
     ),
   );
+  const { candidates } = evaluated;
+  // The monthly campaign send limit (#52) of the month that holds started_at, under the workspace lock above, with
+  // the approval's own count: the month's used rows + the other approvals in force due in that month + this run's
+  // candidates. When they do not fit, the whole run does not start: it is recorded completed with no delivery row, its
+  // candidates move from `candidate` to `plan_limit_exceeded`, and the approval is executed.
+  // as_of is also the reference clock, so the other approvals' reservations fall in the run's month.
+  const allowance = await campaignSendAllowance(client, workspace, evaluated.as_of, id, evaluated.as_of);
+  const limited = !campaignSendsFit(allowance, candidates.length);
+  if (limited)
+    Object.assign(counts, {
+      candidate: "0",
+      plan_limit_exceeded: String(candidates.length),
+      plan_limit: String(allowance.limit),
+      plan_limit_used: String(allowance.used),
+      plan_limit_reserved: String(allowance.reserved),
+    });
   const run = (
     await client.query<{ id: string }>(
-      `INSERT INTO campaign_runs(workspace_id,approval_id,draft_id,draft_version,snapshot_id,started_at,start_counts)
-       VALUES($1,$2,$3,$4,$5,$6::timestamptz,$7::jsonb) RETURNING id`,
+      `INSERT INTO campaign_runs(workspace_id,approval_id,draft_id,draft_version,snapshot_id,started_at,start_counts,status)
+       VALUES($1,$2,$3,$4,$5,$6::timestamptz,$7::jsonb,$8) RETURNING id`,
       [
         workspace,
         id,
@@ -77,11 +94,11 @@ async function startOne(client: PoolClient, workspace: string, id: string): Prom
         approval.snapshot_id,
         evaluated.as_of,
         JSON.stringify(counts),
+        limited ? "completed" : "running",
       ],
     )
   ).rows[0]!.id;
-  const { candidates } = evaluated;
-  if (candidates.length)
+  if (candidates.length && !limited)
     await client.query(
       `INSERT INTO campaign_deliveries(workspace_id,run_id,connection_id,sender_id,recipient_id)
        SELECT $1,$2,member.connection_id,member.sender_id,member.recipient_id
@@ -180,6 +197,17 @@ async function detail(client: PoolClient, workspace: string, id: string) {
       original_member_count: start_counts.original_member_count as string,
       remaining_member_count: start_counts.remaining_member_count as string,
       counts: Object.fromEntries(CAMPAIGN_PREVIEW_REASONS.map((reason) => [reason, start_counts[reason] as string])),
+      // A run the monthly campaign send limit kept from starting (#52): its candidates, the limit, the month's rows
+      // and the other approvals' reservations counted at the start. Null for every other run.
+      broadcast_limit_exceeded:
+        start_counts.plan_limit_exceeded === undefined
+          ? null
+          : {
+              candidate: start_counts.plan_limit_exceeded as string,
+              limit: start_counts.plan_limit as string,
+              used: start_counts.plan_limit_used as string,
+              reserved: start_counts.plan_limit_reserved as string,
+            },
     },
     delivery_counts: Object.fromEntries(
       CAMPAIGN_DELIVERY_STATUSES.map((status) => [status, (delivery_counts[status] as string | undefined) ?? "0"]),

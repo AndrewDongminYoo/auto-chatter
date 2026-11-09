@@ -2833,6 +2833,8 @@ test("campaign_start executes a due approval only while sending is on, and sends
 const campaignApprover = "77777777-7777-4777-8777-777777777777";
 async function campaignFixture(members: Array<[string, string]>) {
   const workspace = "11111111-1111-4111-8111-111111111111";
+  // A new workspace starts on free, which sends no campaign (#52).
+  await pool.query("UPDATE workspaces SET plan='advanced' WHERE id=$1", [workspace]);
   await pool.query(
     "UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=least(coalesce(inbox_enabled_at,now()),now()-interval '1 hour')",
   );

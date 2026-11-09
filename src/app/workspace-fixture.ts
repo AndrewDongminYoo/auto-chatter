@@ -366,3 +366,75 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
   );
   return { dmVersion: dmVersion as string, dmRun: dmRun as string, dmStart: dmStart as string };
 }
+
+const ZERO_COUNTS = JSON.stringify(
+  Object.fromEntries(
+    [
+      "original_member_count",
+      "remaining_member_count",
+      "connection_unavailable",
+      "contact_paused",
+      "no_dm_identity",
+      "opted_out",
+      "marketing_consent_required",
+      "reply_window_closed",
+      "candidate",
+    ].map((key) => [key, "0"]),
+  ),
+);
+
+// One executed campaign approval whose completed run started at `startedAt` (a timestamptz SQL expression) with
+// `count` delivery rows on `connection`, for the monthly campaign send count (#52). Every row gets `status`; a
+// cancelled row records a provider call only when `providerCalled` is set. Returns the run ID.
+export async function seedCampaignSends(
+  pool: Pool,
+  workspace: string,
+  connection: string,
+  user: string,
+  count: number,
+  startedAt: string,
+  rows: { status?: "pending" | "cancelled"; providerCalled?: boolean } = {},
+): Promise<string> {
+  const segment = (
+    await pool.query(
+      "INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'Sent '||gen_random_uuid()) RETURNING id",
+      [workspace],
+    )
+  ).rows[0].id;
+  const snapshot = (
+    await pool.query(
+      `INSERT INTO instagram_segment_snapshots(workspace_id,segment_id,created_by,as_of,definition,segment_name,counts,member_count)
+       VALUES($1,$2,$3,now(),'{}','Sent','{}',0) RETURNING id`,
+      [workspace, segment, user],
+    )
+  ).rows[0].id;
+  const draft = (
+    await pool.query(
+      `INSERT INTO campaign_drafts(id,workspace_id,snapshot_id,name,body,create_request_hash,created_by,updated_by)
+       VALUES(gen_random_uuid(),$1,$2,'Sent','Sent',repeat('0',64),$3,$3) RETURNING id`,
+      [workspace, snapshot, user],
+    )
+  ).rows[0].id;
+  const approval = (
+    await pool.query(
+      `INSERT INTO campaign_approvals(workspace_id,id,draft_id,draft_version,snapshot_id,name,body,schedule_kind,
+         preview_as_of,preview_counts,create_request_hash,approved_by,status)
+       VALUES($1,gen_random_uuid(),$2,1,$3,'Sent','Sent','immediate',now(),$4::jsonb,repeat('0',64),$5,'executed')
+       RETURNING id`,
+      [workspace, draft, snapshot, ZERO_COUNTS, user],
+    )
+  ).rows[0].id;
+  const run = (
+    await pool.query(
+      `INSERT INTO campaign_runs(workspace_id,approval_id,draft_id,draft_version,snapshot_id,started_at,start_counts,status)
+       VALUES($1,$2,$3,1,$4,${startedAt},$5::jsonb,'completed') RETURNING id`,
+      [workspace, approval, draft, snapshot, ZERO_COUNTS],
+    )
+  ).rows[0].id as string;
+  await pool.query(
+    `INSERT INTO campaign_deliveries(workspace_id,run_id,connection_id,sender_id,recipient_id,status,provider_called_at)
+     SELECT $1,$2,$3,'sent-'||g,'9'||g,$5,CASE WHEN $6 THEN now() END FROM generate_series(1,$4::int) g`,
+    [workspace, run, connection, count, rows.status ?? "pending", rows.providerCalled ?? false],
+  );
+  return run;
+}

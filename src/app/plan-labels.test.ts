@@ -6,14 +6,15 @@ import { isPlanKey, PLANS, planLimits, type PlanKey } from "./plans.ts";
 
 interface Entitlements {
   plan: string;
-  limits: { seats: number; connections: number };
-  usage: { seats: number; connections: number };
+  limits: { seats: number; connections: number; campaign_sends_per_month: number };
+  usage: { seats: number; connections: number; campaign_sends: number };
 }
 interface PlanLabels {
   planName(plan: string): string;
   planSeatsFull(entitlements: Entitlements | undefined): boolean;
   planConnectionsFull(entitlements: Entitlements | undefined): boolean;
   planSummary(entitlements: Entitlements | undefined): string;
+  planCampaignUsage(entitlements: Entitlements): string;
   planSeatHelp(entitlements: Entitlements | undefined): string;
   planConnectionHelp(entitlements: Entitlements | undefined): string;
   planAcceptSeatRefusal(): string;
@@ -24,19 +25,19 @@ const context = vm.createContext({});
 vm.runInContext(readFileSync(new URL("../../public/app/plan-labels.js", import.meta.url), "utf8"), context);
 const labels = context as unknown as PlanLabels;
 
-const entitlements = (plan: PlanKey, seats: number, connections: number): Entitlements => ({
+const entitlements = (plan: PlanKey, seats: number, connections: number, campaignSends = 0): Entitlements => ({
   plan,
   limits: { ...planLimits(plan) },
-  usage: { seats, connections },
+  usage: { seats, connections, campaign_sends: campaignSends },
 });
 
-test("the catalog holds the five plans with the agreed seat and connection limits", () => {
+test("the catalog holds the five plans with the agreed seat, connection and monthly campaign send limits", () => {
   assert.deepEqual(PLANS, {
-    free: { seats: 1, connections: 1 },
-    essential: { seats: 2, connections: 2 },
-    pro: { seats: 3, connections: 3 },
-    business: { seats: 5, connections: 5 },
-    advanced: { seats: 10, connections: 10 },
+    free: { seats: 1, connections: 1, campaign_sends_per_month: 0 },
+    essential: { seats: 2, connections: 2, campaign_sends_per_month: 1000 },
+    pro: { seats: 3, connections: 3, campaign_sends_per_month: 5000 },
+    business: { seats: 5, connections: 5, campaign_sends_per_month: 20000 },
+    advanced: { seats: 10, connections: 10, campaign_sends_per_month: 50000 },
   });
   for (const key of Object.keys(PLANS)) assert.ok(isPlanKey(key), key);
   for (const value of ["gold", "", "toString", "__proto__", null, 1]) assert.equal(isPlanKey(value), false);
@@ -47,8 +48,16 @@ test("every plan has a Korean name, and the summary shows usage against the limi
   for (const key of Object.keys(PLANS)) assert.doesNotMatch(labels.planName(key), /[a-z]/, key);
   assert.equal(labels.planName("gold"), "알 수 없는 요금제(gold)");
   assert.equal(
-    labels.planSummary(entitlements("pro", 2, 3)),
-    "요금제: 프로 · 멤버 2/3명(대기 중인 초대 포함) · Instagram 계정 3/3개",
+    labels.planSummary(entitlements("pro", 2, 3, 1234)),
+    "요금제: 프로 · 멤버 2/3명(대기 중인 초대 포함) · Instagram 계정 3/3개 · 이번 달 캠페인 발송 1,234/5,000건",
+  );
+  // A plan without campaigns says so, with this month's rows when a downgrade left some.
+  assert.equal(labels.planCampaignUsage(entitlements("free", 1, 1)), "캠페인 발송 불가");
+  assert.equal(labels.planCampaignUsage(entitlements("free", 1, 1, 1500)), "캠페인 발송 불가(이번 달 1,500건 발송)");
+  assert.equal(
+    labels.planCampaignUsage(entitlements("essential", 1, 1, 1001)),
+    "이번 달 캠페인 발송 1,001/1,000건",
+    "a downgrade can leave the month over its limit",
   );
   assert.equal(labels.planSummary(undefined), "");
 });
@@ -67,9 +76,9 @@ test("the limit help appears only when a limit is reached, including after a dow
   assert.equal(labels.planSeatsFull(undefined), false);
 });
 
-test("the dashboard explains both limit codes, and the callback's limit code is shown on return", () => {
+test("the dashboard explains every limit code, and the callback's limit code is shown on return", () => {
   const app = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
-  for (const code of ["seat_limit_reached", "connection_limit_reached"])
+  for (const code of ["seat_limit_reached", "connection_limit_reached", "broadcast_limit_reached"])
     assert.match(app, new RegExp(`^  ${code}:\\s*"[^"]*[가-힣][^"]*",$`, "m"), code);
   assert.match(app, /const instagramErrors = \[[^\]]*"connection_limit_reached"/);
 });

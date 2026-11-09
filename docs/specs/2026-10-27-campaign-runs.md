@@ -48,9 +48,9 @@ capability는 지원 여부를 알리는 값일 뿐이며 자격 검사나 최�
 실행된 승인 하나에 실행 하나입니다(`(workspace_id, approval_id)` 고유). 승인 ID는 클라이언트가 정하고 작업 공간 안에서만 고유하므로, 고유 제약도 작업 공간 단위입니다.
 열은 작업 공간, `id`, `approval_id`, 승인에서 복사한 `draft_id`·`draft_version`·`snapshot_id`, `started_at`, `start_counts`, `status`, `version`, `cancelled_by`·`cancelled_at`, `updated_at`입니다.
 
-- `start_counts`는 시작 시점에 다시 평가한 미리보기 수입니다. 키 아홉 개(`original_member_count`, `remaining_member_count`, 일곱 사유)와 10진 문자열 형식은 `campaign_approvals.preview_counts`와 같고, 저장 뒤 다시 계산하지 않습니다.
+- `start_counts`는 시작 시점에 다시 평가한 미리보기 수입니다. 키 아홉 개(`original_member_count`, `remaining_member_count`, 일곱 사유)와 10진 문자열 형식은 `campaign_approvals.preview_counts`와 같고, 저장 뒤 다시 계산하지 않습니다. 2026-11-09부터 [월 캠페인 발송 한도로 시작하지 않은 실행](2026-10-12-plan-entitlements.md#한도로-시작하지-않은-실행)은 `candidate`가 `"0"`이고 `plan_limit_exceeded`·`plan_limit`·`plan_limit_used`·`plan_limit_reserved` 키를 더 가집니다.
 - `started_at`은 그 평가 문장의 `as_of`입니다.
-- `status`는 `running`·`cancelled`·`completed`입니다. 이 PR은 `running`과 `cancelled`만 씁니다. `completed`는 PR ②가 모든 행이 끝났을 때 씁니다. 후보가 없는 실행도 PR ②가 완료할 때까지 `running`입니다.
+- `status`는 `running`·`cancelled`·`completed`입니다. 이 PR은 `running`과 `cancelled`만 씁니다. `completed`는 PR ②가 모든 행이 끝났을 때 씁니다. 후보가 없는 실행도 PR ②가 완료할 때까지 `running`입니다. 2026-11-09부터는 시작 단계도 월 캠페인 발송 한도로 시작하지 않은 실행을 처음부터 `completed`로 씁니다(아래 [한 승인의 트랜잭션](#한-승인의-트랜잭션)).
 - 취소 열은 `cancelled`일 때만 채워집니다(CHECK).
 
 ### campaign_deliveries
@@ -72,7 +72,7 @@ capability는 지원 여부를 알리는 값일 뿐이며 자격 검사나 최�
 초안을 수정하지 않고 같은 버전을 다시 승인할 수도 있습니다. 그 승인은 같은 고정 대상으로 두 번째 실행을 시작하고, 중복 키는 실행마다 따로이므로 같은 사람에게 두 번째 발송 행이 생깁니다.
 ~~같은 초안 버전의 재승인을 막을지, 실행 사이의 중복 발송을 막을지는 PR ②가 실제로 보내기 전에 운영자가 정할 결정입니다.~~
 2026-10-29 운영자 결정(PR ②): 실행된 초안 버전은 다시 승인하지 않습니다. [재승인 거절](#재승인-거절)을 봅니다. 초안을 수정한 새 버전은 다시 승인할 수 있으며, 실행 사이의 중복 발송은 막지 않습니다.
-승인 목록과 상세 응답에는 `run_id`와 `run_status`가 추가됩니다(실행이 없으면 `null`). 기존 키의 의미는 바뀌지 않으며 ~~`delivery_available`은 계속 거짓입니다~~ `delivery_available`은 PR ②부터 참입니다.
+승인 목록과 상세 응답에는 `run_id`와 `run_status`가 추가됩니다(실행이 없으면 `null`). 2026-11-09부터 `run_limited`(실행이 월 캠페인 발송 한도로 시작하지 않았으면 `true`, 아니면 `false`, 실행이 없으면 `null`)도 추가됩니다. 기존 키의 의미는 바뀌지 않으며 ~~`delivery_available`은 계속 거짓입니다~~ `delivery_available`은 PR ②부터 참입니다.
 
 ## 시작: cron 단계 campaign_start
 
@@ -99,6 +99,8 @@ Cloudflare cron에 `campaign_start` 단계를 추가합니다.
 3. 고정 대상의 연결을 ID 순서로 `FOR SHARE` 잠급니다. 고정 대상 생성과 같은 방식이며, 연결 삭제(`FOR UPDATE`)와 개인 삭제(`FOR NO KEY UPDATE`)가 시작을 기다리거나 시작이 삭제를 기다립니다. 그래서 삭제가 커밋된 뒤 그 대상의 발송 행이 생기지 않습니다.
 4. 미리보기 평가(`src/app/campaign-drafts.ts`의 `EVALUATION_SQL`)를 다시 실행합니다. 미리보기 API와 같은 SQL 본문에 후보 키를 덧붙인 한 문장이므로, 저장하는 수와 쓰는 행이 같은 스냅숏과 같은 시각에서 나옵니다.
 5. 실행 행 하나와 `candidate`인 대상마다 `pending` 발송 행 하나를 넣고, 승인을 `executed`로 바꿉니다.
+
+2026-11-09부터 4와 5 사이에서 `started_at`(평가의 `as_of`)이 속한 달의 [월 캠페인 발송 한도](2026-10-12-plan-entitlements.md#검사-위치)를 1의 작업 공간 잠금 아래에서 셉니다. 그 달의 사용한 발송 + 같은 달에 기한이 되는 다른 유효한 승인의 예약 + 이번 후보 수가 한도를 넘거나 한도가 0이면, 5 대신 `completed` 실행 하나만 쓰고 발송 행은 쓰지 않으며 승인을 `executed`로 바꿉니다([한도로 시작하지 않은 실행](2026-10-12-plan-entitlements.md#한도로-시작하지-않은-실행)). 잠금은 새로 더하지 않습니다.
 
 후보가 아닌 대상에는 행이 없으며, 그 수는 실행의 `start_counts`에만 남습니다.
 승인 시점 이후 사실이 바뀌었다면 `start_counts`는 승인의 `preview_counts`와 다를 수 있습니다.
@@ -130,7 +132,7 @@ Cloudflare cron에 `campaign_start` 단계를 추가합니다.
 
 ## 조회
 
-`GET /api/campaign-runs/:id`(`admin`)는 실행 열, 저장된 시작 수(`start: {as_of, original_member_count, remaining_member_count, counts}`), 상태별 발송 행 수(`delivery_counts`, 일곱 상태 모두 10진 문자열), ~~`delivery_available: false`~~ `delivery_available`(PR ②부터 `true`)을 돌려줍니다.
+`GET /api/campaign-runs/:id`(`admin`)는 실행 열, 저장된 시작 수(`start: {as_of, original_member_count, remaining_member_count, counts, broadcast_limit_exceeded}`, 마지막 키는 2026-11-09부터이며 한도로 시작하지 않은 실행만 `{candidate, limit, used, reserved}`이고 나머지는 `null`), 상태별 발송 행 수(`delivery_counts`, 일곱 상태 모두 10진 문자열), ~~`delivery_available: false`~~ `delivery_available`(PR ②부터 `true`)을 돌려줍니다.
 댓글 작성자·DM 수신자 식별자는 응답에 없습니다.
 화면(PR ③)은 승인의 `run_id`로 실행을 찾습니다.
 
@@ -255,7 +257,7 @@ PR ② 이전에 기록된 데이터에는 같은 버전에 실행된 승인과 
 ### 응답, 화면, 운영 상태
 
 - 승인과 실행 응답의 `delivery_available`은 `true`입니다. 전역 발송 스위치가 실행 여부를 계속 정합니다.
-- 승인 화면은 "실행 시점이 되면 서비스 전체 발송이 켜져 있을 때만 실행이 시작되고, 보내기 직전마다 모든 조건을 다시 확인한다"고 안내합니다. 실행된 승인의 상태 문구는 "실행 시작됨 · 보내기 직전에 조건을 다시 확인해 발송"입니다. ~~실행 진행률과 취소 화면은 PR ③입니다.~~ 2026-10-29 PR ③이 [실행 현황 화면](#실행-현황-화면)으로 구현했습니다.
+- 승인 화면은 "실행 시점이 되면 서비스 전체 발송이 켜져 있을 때만 실행이 시작되고, 보내기 직전마다 모든 조건을 다시 확인한다"고 안내합니다. 실행된 승인의 상태 문구는 "실행 시작됨 · 보내기 직전에 조건을 다시 확인해 발송"입니다. 2026-11-09부터 `run_limited`가 참인 승인은 "실행을 시작하지 않음 · 이번 달 캠페인 발송 한도 초과"입니다([실행 현황 화면의 표시와 문구](#표시와-문구)). ~~실행 진행률과 취소 화면은 PR ③입니다.~~ 2026-10-29 PR ③이 [실행 현황 화면](#실행-현황-화면)으로 구현했습니다.
 - 운영 상태(`src/app/operations-health.ts`)는 연결별 대기 지표(가져오기와 같은 조건, 캠페인 예산 포함, 시작 시각은 [운영 상태 문서](2026-10-01-operations-health.md#지표와-api)), `sending` 체류, 최근 24시간 `unknown`·`failed`·`blocked` 수와 `unknown` 경보의 전체 수에 캠페인 발송 행을 넣습니다.
 
 ### 배포 순서
@@ -279,7 +281,8 @@ PR ② 이전에 기록된 데이터에는 같은 버전에 실행된 승인과 
 
 ### 표시와 문구
 
-- 상태는 `running` 진행 중, `cancelled` 취소됨, `completed` 완료입니다. 취소된 실행은 취소 시각을 함께 보입니다. 승인 상태의 기존 문구는 바꾸지 않습니다.
+- 상태는 `running` 진행 중, `cancelled` 취소됨, `completed` 완료입니다. 취소된 실행은 취소 시각을 함께 보입니다. 승인 상태의 기존 문구는 바꾸지 않습니다. 2026-11-09부터 월 캠페인 발송 한도로 시작하지 않은 실행의 승인만 아래 문구를 씁니다.
+- 2026-11-09부터 `start.broadcast_limit_exceeded`가 있는 실행은 상태를 ‘시작하지 않음 · 이번 달 캠페인 발송 한도 초과’로 보이고, ‘시작하지 않은 이유’에 ‘실행 시작 시점에 이번 달 캠페인 발송 한도 1,000건 중 999건을 이미 사용했고 같은 달 다른 승인에 0건이 예정되어 있어, 조건 통과 2명 모두에게 보내지 않았습니다.’(한도 0이면 현재 요금제에서는 보낼 수 없다는 문구)를 보입니다. 그 위의 승인 영역은 `run_limited`로 상태를 ‘실행을 시작하지 않음 · 이번 달 캠페인 발송 한도 초과’로 보이며 ‘실행 시작됨’이라고 쓰지 않습니다. 조건별 인원 표에는 ‘조건 통과’ 0명 아래에 ‘월 발송 한도 초과’ 행을 더해 표의 합이 남은 인원과 같게 합니다. 형식이 틀린 표시는 응답 전체를 형식 오류로 다룹니다.
 - 시작 시각(`start.as_of`)과 취소 시각은 화면이 일정 표시에 쓰는 작업 공간 시간대로 보입니다.
 - 저장된 시작 수: 원래 인원, 남은 인원, 미리보기와 같은 사유 이름의 조건별 인원 표입니다. `candidate`는 ‘조건 통과’이며 화면 어디에도 ‘발송 가능’이라고 쓰지 않습니다.
 - 발송 행의 일곱 상태를 대기, 보내는 중, 보냄, 실패, 차단, 결과 불명, 취소로 보입니다. 수는 10진 문자열을 `BigInt`로 읽어 2^53을 넘어도 정확합니다.

@@ -374,6 +374,8 @@ const errors = {
     "요금제의 멤버 자리를 모두 쓰고 있습니다. 대기 중인 초대를 취소하거나 멤버를 제거한 뒤 다시 시도해 주세요.",
   connection_limit_reached:
     "요금제에서 연결할 수 있는 Instagram 계정 수를 모두 썼습니다. 새 계정을 연결하려면 다른 계정의 연결을 먼저 해제해 주세요.",
+  broadcast_limit_reached:
+    "요금제의 이번 달 캠페인 발송 한도를 넘어 승인할 수 없습니다. 실행 시점을 다른 달로 옮기거나 다른 승인을 취소해 주세요.",
   invite_not_found: "초대 링크를 확인할 수 없습니다. 링크 전체를 복사했는지 확인하거나 새 초대를 요청해 주세요.",
   invite_used: "이미 사용한 초대 링크입니다. 새 초대를 요청해 주세요.",
   invite_revoked: "취소된 초대 링크입니다. 새 초대를 요청해 주세요.",
@@ -646,6 +648,8 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
     error.draft = result.draft;
     // A refused campaign run cancel carries the current run (409).
     error.run = result.run;
+    // A campaign approval refused by the monthly send limit carries the month's allowance (409).
+    error.broadcast_limit = result.broadcast_limit;
     // A rejected (422) or stale (409) CSV import carries the fresh per-row check result.
     error.checked_at = result.checked_at;
     error.counts = result.counts;
