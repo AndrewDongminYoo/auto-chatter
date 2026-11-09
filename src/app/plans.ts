@@ -66,18 +66,27 @@ export async function workspaceEntitlements(db: Db, workspace: string) {
 }
 
 // The calendar month that holds an approval's due time, in the workspace's current time zone. A due time is never
-// earlier than now: an immediate approval, or one whose scheduled time passed while sending was off, starts in this
-// month or later. `due` is a timestamptz expression that may be NULL (immediate); `zone` is the time zone expression.
-export const campaignDueMonthSql = (due: string, zone: string) =>
-  `date_trunc('month',greatest(coalesce(${due},now()),now()) AT TIME ZONE ${zone})`;
+// earlier than the reference time: an immediate approval, or one whose scheduled time passed while sending was off,
+// starts in that month or later. `due` is a timestamptz expression that may be NULL (immediate); `zone` is the time
+// zone expression. The reference defaults to statement_timestamp(), not now(): every caller runs its statement after
+// taking the workspace lock, and now() is the transaction start, which can fall in the previous month when the lock
+// wait crosses midnight in the workspace time zone.
+export const campaignDueMonthSql = (due: string, zone: string, reference = "statement_timestamp()") =>
+  `date_trunc('month',greatest(coalesce(${due},${reference}),${reference}) AT TIME ZONE ${zone})`;
+
+// The allowance's reference time, read once in the `reference` CTE: the caller's post-lock clock when it passes one (a
+// run start passes its as_of), otherwise the allowance statement's own start, which runs after the workspace lock.
+// One statement_timestamp() per statement, like the other evaluation clocks, so a test can pin it.
+const ALLOWANCE_REFERENCE = "(SELECT at FROM reference)";
 
 // The monthly campaign send count (#52). `used` counts the delivery rows of runs started in the month, except rows
 // cancelled before any provider call; `reserved` adds the stored candidate counts of the approvals in force due in
 // that month, except `excludedApproval`. The month and both counts use the workspace's current time zone.
-const ALLOWANCE_SQL = `WITH bounds AS MATERIALIZED (
+const ALLOWANCE_SQL = `WITH reference AS MATERIALIZED (SELECT coalesce($4::timestamptz,statement_timestamp()) AS at),
+ bounds AS MATERIALIZED (
    SELECT w.plan,w.time_zone,month.start,to_char(month.start,'YYYY-MM') AS month,
      month.start AT TIME ZONE w.time_zone AS starts,(month.start+interval '1 month') AT TIME ZONE w.time_zone AS ends
-   FROM workspaces w CROSS JOIN LATERAL (SELECT ${campaignDueMonthSql("$2::timestamptz", "w.time_zone")} AS start) month
+   FROM workspaces w CROSS JOIN LATERAL (SELECT ${campaignDueMonthSql("$2::timestamptz", "w.time_zone", ALLOWANCE_REFERENCE)} AS start) month
    WHERE w.id=$1)
  SELECT b.plan,b.month,
    (SELECT count(*) FROM campaign_runs r JOIN campaign_deliveries d ON d.workspace_id=r.workspace_id AND d.run_id=r.id
@@ -85,7 +94,7 @@ const ALLOWANCE_SQL = `WITH bounds AS MATERIALIZED (
       AND NOT (d.status='cancelled' AND d.provider_called_at IS NULL))::text AS used,
    (SELECT coalesce(sum((a.preview_counts->>'candidate')::bigint),0) FROM campaign_approvals a
     WHERE a.workspace_id=$1 AND a.status='approved' AND a.id IS DISTINCT FROM $3::uuid
-      AND ${campaignDueMonthSql("a.scheduled_at", "b.time_zone")}=b.start)::text AS reserved
+      AND ${campaignDueMonthSql("a.scheduled_at", "b.time_zone", ALLOWANCE_REFERENCE)}=b.start)::text AS reserved
  FROM bounds b`;
 
 export interface CampaignSendAllowance {
@@ -95,19 +104,23 @@ export interface CampaignSendAllowance {
   reserved: number;
 }
 
-// The allowance of the month that holds `due` (null: now). The approval and run start callers hold the workspace row
-// FOR UPDATE, so two writers never count the same month at once.
+// The allowance of the month that holds `due` (null: the reference time). The approval and run start callers hold the
+// workspace row FOR UPDATE, so two writers never count the same month at once. `reference` is the post-lock clock that
+// places immediate and past-due approvals in a month; a run start passes its as_of so the run, its used rows and the
+// other approvals' reservations fall in one month.
 export async function campaignSendAllowance(
   db: Db,
   workspace: string,
   due: string | null,
   excludedApproval: string | null = null,
+  reference: string | null = null,
 ): Promise<CampaignSendAllowance> {
   const row = (
     await db.query<{ plan: PlanKey; month: string; used: string; reserved: string }>(ALLOWANCE_SQL, [
       workspace,
       due,
       excludedApproval,
+      reference,
     ])
   ).rows[0];
   if (!row) throw new ApiError(403, "workspace_required");

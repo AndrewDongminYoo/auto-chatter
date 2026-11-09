@@ -71,7 +71,8 @@ async function startOne(client: PoolClient, workspace: string, id: string): Prom
   // the approval's own count: the month's used rows + the other approvals in force due in that month + this run's
   // candidates. When they do not fit, the whole run does not start: it is recorded completed with no delivery row, its
   // candidates move from `candidate` to `plan_limit_exceeded`, and the approval is executed.
-  const allowance = await campaignSendAllowance(client, workspace, evaluated.as_of, id);
+  // as_of is also the reference clock, so the other approvals' reservations fall in the run's month.
+  const allowance = await campaignSendAllowance(client, workspace, evaluated.as_of, id, evaluated.as_of);
   const limited = !campaignSendsFit(allowance, candidates.length);
   if (limited)
     Object.assign(counts, {

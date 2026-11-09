@@ -4,7 +4,7 @@ import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { appApi } from "./api.ts";
 import { beginInstagramOAuth, finishInstagramOAuth } from "./instagram-oauth.ts";
-import { PLANS, workspaceEntitlements } from "./plans.ts";
+import { campaignSendAllowance, PLANS, workspaceEntitlements } from "./plans.ts";
 import { disconnectConnection, ensureWorkspace, saveWorkspaceSettings, updateConnection } from "./settings.ts";
 import { acceptInvite, createInvite, removeMember, revokeInvite } from "./workspace-members.ts";
 import { seedCampaignSends } from "./workspace-fixture.ts";
@@ -470,4 +470,51 @@ test("the campaign usage counts this month's delivery rows except those cancelle
   const lowered = await workspaceEntitlements(pool, workspaceId);
   assert.equal(lowered.limits.campaign_sends_per_month, 0);
   assert.equal(lowered.usage.campaign_sends, 5);
+});
+
+// A writer that waits for the workspace lock across midnight counts the month of its post-lock clock, not of its
+// transaction start: the reference clock places the month, this month's rows and the immediate approvals in force.
+test("the campaign allowance places the month and immediate approvals by the post-lock reference clock", async () => {
+  await setPlan("essential");
+  const connection = (
+    await pool.query(
+      "INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES(gen_random_uuid(),$1,'9001') RETURNING id",
+      [workspaceId],
+    )
+  ).rows[0].id as string;
+  await seedCampaignSends(pool, workspaceId, connection, owner.id, 3, "now()");
+  const { draft_id, snapshot_id } = (
+    await pool.query("SELECT draft_id,snapshot_id FROM campaign_approvals WHERE workspace_id=$1", [workspaceId])
+  ).rows[0];
+  const counts = Object.fromEntries(
+    [
+      "original_member_count",
+      "remaining_member_count",
+      "connection_unavailable",
+      "contact_paused",
+      "no_dm_identity",
+      "opted_out",
+      "marketing_consent_required",
+      "reply_window_closed",
+      "candidate",
+    ].map((key) => [key, key === "candidate" ? "7" : "0"]),
+  );
+  await pool.query(
+    `INSERT INTO campaign_approvals(workspace_id,id,draft_id,draft_version,snapshot_id,name,body,schedule_kind,
+       preview_as_of,preview_counts,create_request_hash,approved_by)
+     VALUES($1,gen_random_uuid(),$2,2,$3,'Due','Due','immediate',now(),$4::jsonb,repeat('1',64),$5)`,
+    [workspaceId, draft_id, snapshot_id, JSON.stringify(counts), owner.id],
+  );
+  const current = await campaignSendAllowance(pool, workspaceId, null);
+  assert.deepEqual([current.used, current.reserved], [3, 7]);
+  const next = (
+    await pool.query(
+      `SELECT ((date_trunc('month',now() AT TIME ZONE w.time_zone)+interval '1 month 1 day') AT TIME ZONE w.time_zone)::text
+         AS at,to_char(date_trunc('month',now() AT TIME ZONE w.time_zone)+interval '1 month','YYYY-MM') AS month
+       FROM workspaces w WHERE w.id=$1`,
+      [workspaceId],
+    )
+  ).rows[0];
+  const later = await campaignSendAllowance(pool, workspaceId, null, null, next.at);
+  assert.deepEqual([later.month, later.used, later.reserved], [next.month, 0, 7]);
 });

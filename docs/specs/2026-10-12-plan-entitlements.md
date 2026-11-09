@@ -62,7 +62,8 @@ OAuth 완료는 공급자 호출로 계정 ID를 알게 된 뒤에만 셀 수 �
 
 - **달**은 작업 공간의 현재 시간대(`workspaces.time_zone`)로 본 달력 달입니다. 경계는 그 시간대의 1일 0시이며, 연락처 필터의 달력 기간과 같은 `date_trunc('month', … AT TIME ZONE 시간대)` 계산입니다.
 - **사용한 발송**(`used`) = 그 달 안에 `started_at`이 있는 실행의 `campaign_deliveries` 행 수입니다. 공급자를 한 번도 호출하지 않고 취소된 행(`status='cancelled' AND provider_called_at IS NULL`)은 빼고, 그 밖의 모든 상태(대기, 보내는 중, 보냄, 실패, 차단, 결과 불명, 공급자 호출 뒤 취소)는 셉니다. 다른 것은 세지 않습니다.
-- **예약된 발송**(`reserved`) = 유효한 승인(`status='approved'`)들의 저장된 `preview_counts.candidate` 합입니다. 승인은 기한이 되는 달에 셉니다. 즉시 승인과, 예약 시각이 지났지만 아직 시작하지 않은 승인은 지금 달에 셉니다(`greatest(coalesce(scheduled_at, now()), now())`). 승인은 지난 달에 시작할 수 없기 때문입니다.
+- **예약된 발송**(`reserved`) = 유효한 승인(`status='approved'`)들의 저장된 `preview_counts.candidate` 합입니다. 승인은 기한이 되는 달에 셉니다. 즉시 승인과, 예약 시각이 지났지만 아직 시작하지 않은 승인은 지금 달에 셉니다(`greatest(coalesce(scheduled_at, 기준 시각), 기준 시각)`). 승인은 지난 달에 시작할 수 없기 때문입니다.
+- **기준 시각**은 작업 공간 행 잠금을 얻은 뒤의 시각입니다. 승인과 예약 변경은 잠금 뒤에 실행되는 그 문장의 `statement_timestamp()`를, 실행 시작은 같은 잠금 뒤에 정한 `as_of`를 씁니다. 트랜잭션 시작 시각인 `now()`를 쓰지 않는 이유는, 잠금을 기다리는 동안 작업 공간 시간대의 자정이 지나면 지난 달로 세기 때문입니다(PR #309 리뷰).
 - 한 SQL(`src/app/plans.ts`의 `campaignSendAllowance`)이 승인, 예약 변경, 실행 시작, 미리보기, 설정 화면의 수를 모두 셉니다.
 
 ### 검사 위치
