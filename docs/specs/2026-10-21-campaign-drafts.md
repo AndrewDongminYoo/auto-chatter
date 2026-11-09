@@ -9,7 +9,7 @@ API 검증 결과는 [구현 검증](../notes/2026-10-21-campaign-drafts-verific
 초기 API 설계의 기준 코드는 PR #241 병합 커밋 `325abd3d8748cd14b5e935fdc5f7059029040aa8`입니다.
 주요 근거는 [#35](https://github.com/AndrewDongminYoo/auto-chatter/issues/35), [고정 대상 계약](2026-10-18-segment-target-snapshots.md), [요금제 권한 계약](2026-10-12-plan-entitlements.md)입니다.
 초기 API 설계 시점에는 고정 명단만 저장되었으며, 그 명단에 메시지를 붙여 초안으로 보관하는 기능은 없었습니다.
-요금제 계약은 현재 멤버 자리·연결 한도만 다루므로 캠페인 실행 권한이나 가격을 추정하지 않습니다.
+요금제 계약은 처음에 멤버 자리·연결 한도만 다루었으므로 캠페인 실행 권한이나 가격을 추정하지 않았습니다. 2026-11-09부터 요금제마다 [월 캠페인 발송 한도](2026-10-12-plan-entitlements.md#월-캠페인-발송-한도)가 있으며, 미리보기와 승인은 아래처럼 그 한도를 보이고 적용합니다.
 
 ## 구현 범위
 
@@ -119,7 +119,13 @@ API 검증 결과는 [구현 검증](../notes/2026-10-21-campaign-drafts-verific
   "candidate_meaning": "passed_recorded_conditions_at_as_of",
   "sendability_claimed": false,
   "estimated_provider_calls": "1",
-  "plan_broadcast_limit": null,
+  "plan_broadcast_limit": {
+    "month": "2026-11",
+    "limit": "1000",
+    "used": "120",
+    "reserved": "30",
+    "remaining": "850"
+  },
   "channel_marketing_supported": true,
   "global_send_enabled": false
 }
@@ -136,8 +142,9 @@ API 검증 결과는 [구현 검증](../notes/2026-10-21-campaign-drafts-verific
 ### 비용
 
 `estimated_provider_calls`는 `candidate` 수와 같습니다(후보 한 명당 발송 호출 한 번).
-`plan_broadcast_limit`은 `null`입니다. 어떤 요금제도 방송 한도를 정의하지 않으며 [#52](https://github.com/AndrewDongminYoo/auto-chatter/issues/52)·[#60](https://github.com/AndrewDongminYoo/auto-chatter/issues/60)이 그 정의를 맡습니다.
-이 API는 한도나 일일 상한을 적용하지 않습니다.
+~~`plan_broadcast_limit`은 `null`입니다. 어떤 요금제도 방송 한도를 정의하지 않으며 [#52](https://github.com/AndrewDongminYoo/auto-chatter/issues/52)·[#60](https://github.com/AndrewDongminYoo/auto-chatter/issues/60)이 그 정의를 맡습니다.~~
+2026-11-09부터 `plan_broadcast_limit`은 지금 달(작업 공간 시간대)의 [월 캠페인 발송 한도](2026-10-12-plan-entitlements.md#월-캠페인-발송-한도)입니다: `month`(`YYYY-MM`), `limit`(요금제 한도), `used`(그 달에 시작한 실행의 발송 행), `reserved`(그 달에 기한이 되는 유효한 승인의 후보 수 합), `remaining`(`limit − used − reserved`, 0 미만이면 0). 모두 10진 문자열이며 위 요금제 계약의 SQL로 셉니다.
+이 API는 읽기만 하며 한도를 적용하지 않습니다. 한도는 승인과 실행 시작이 적용합니다.
 Instagram 공급자 메시지 요금은 인용할 Meta 출처를 확인하지 않았으므로 알 수 없음으로 둡니다.
 
 ## 실행 승인
@@ -184,7 +191,7 @@ CHECK 제약으로 예약 종류·시각·시간대의 짝과, 취소 상태일 
 
 버전이 다르면 `409 campaign_approval_conflict`, 취소된 승인에 대한 변경·재취소는 `409 campaign_approval_cancelled`이며 둘 다 응답의 `approval`에 현재 상태를 담습니다.
 응답에는 `preview: {as_of, original_member_count, remaining_member_count, counts}`, 예약 시각을 그 시간대의 벽시계로 보인 `schedule_local`, ~~`delivery_available: false`~~ `delivery_available`(2026-10-29 #36 PR ②부터 `true`)이 포함됩니다.
-065부터는 실행의 `run_id`와 `run_status`(실행 전에는 `null`)도 포함하며, 실행된 승인의 예약 변경·취소는 `409 campaign_approval_executed`와 현재 승인입니다([캠페인 실행](2026-10-27-campaign-runs.md#승인의-실행-상태)).
+065부터는 실행의 `run_id`와 `run_status`(실행 전에는 `null`)도, 2026-11-09부터는 `run_limited`(월 캠페인 발송 한도로 시작하지 않은 실행이면 `true`)도 포함하며, 실행된 승인의 예약 변경·취소는 `409 campaign_approval_executed`와 현재 승인입니다([캠페인 실행](2026-10-27-campaign-runs.md#승인의-실행-상태)).
 
 ### 승인 규칙
 
@@ -193,6 +200,8 @@ CHECK 제약으로 예약 종류·시각·시간대의 짝과, 취소 상태일 
 보관되지 않았고 현재 버전이 `expected_version`과 같은 초안만 승인할 수 있으며, 아니면 `409 campaign_draft_conflict`이고 응답의 `draft`에 `GET /api/campaign-drafts/:id`와 같은 현재 초안을 담습니다.
 유효한 승인이 이미 있으면 `409 approval_exists`이고 응답의 `approval`에 그 승인의 상세를 담습니다.
 두 경우 모두 아무것도 쓰지 않습니다.
+2026-11-09부터 미리보기 평가 뒤, INSERT 전에 [월 캠페인 발송 한도](2026-10-12-plan-entitlements.md#검사-위치)를 셉니다. 넘으면 `409 broadcast_limit_reached`와 `broadcast_limit`(그 달의 한도 객체와 `requested`)을 돌려주고 아무것도 쓰지 않습니다. 기한 달이 바뀌는 예약 변경도 같은 코드와 바뀌지 않은 `approval`을 돌려줍니다.
+승인 화면은 이 거절을 ‘2026년 11월 캠페인 발송 한도 1,000건 중 남은 5건으로는 조건 통과 6명을 승인할 수 없습니다(…). 실행 시점을 다른 달로 옮기거나 다른 승인을 취소해 주세요.’처럼 그 달과 수로 보이며, 한도 0이면 현재 요금제에서는 승인할 수 없다고 보입니다. 거절은 그 요청의 최종 결과이므로 다시 승인하면 새 요청을 보냅니다.
 같은 `id`의 다른 요청(`campaign_approval_id_conflict`)은 버전 충돌이 아니므로 오류 코드만 반환합니다.
 같은 트랜잭션 안에서 [미리보기](#발송-조건비용-미리보기)와 같은 평가(`src/app/campaign-drafts.ts`의 `PREVIEW_SQL`)를 실행해 그 결과를 저장하므로, 저장된 미리보기는 그 순간의 미리보기 API와 같습니다.
 이후 개인·연결 삭제로 명단이 줄어도 저장된 미리보기는 승인 시점 값을 유지합니다.
@@ -253,7 +262,7 @@ CHECK 제약으로 예약 종류·시각·시간대의 짝과, 취소 상태일 
 사람은 현재 로그인한 사용자이면 ‘나’, 아니면 ‘다른 멤버’와 사용자 ID 앞 8자리로 표시합니다. 관리자는 멤버 목록을 읽을 수 없기 때문입니다.
 유효한 승인이 있으면 초안 입력·저장·보관을 잠그고, 수정하려면 먼저 승인을 취소하라고 안내합니다.
 취소된 승인은 조회만 하며 초안 잠금을 풉니다.
-실행된 승인(065)은 상태를 ~~‘실행 시작됨 · 발송 대상만 기록함’~~ ‘실행 시작됨 · 보내기 직전에 조건을 다시 확인해 발송’(2026-10-29 #36 PR ②, [발송 worker의 화면 항목](2026-10-27-campaign-runs.md#응답-화면-운영-상태))으로 보이고 초안 잠금을 풀며, 예약 변경·취소가 `campaign_approval_executed`로 거절되면 전용 안내를 보입니다. ~~실행 화면은 [#36](https://github.com/AndrewDongminYoo/auto-chatter/issues/36)의 PR ③입니다.~~
+실행된 승인(065)은 상태를 ~~‘실행 시작됨 · 발송 대상만 기록함’~~ ‘실행 시작됨 · 보내기 직전에 조건을 다시 확인해 발송’(2026-10-29 #36 PR ②, [발송 worker의 화면 항목](2026-10-27-campaign-runs.md#응답-화면-운영-상태))으로 보이고(2026-11-09부터 월 캠페인 발송 한도로 시작하지 않은 실행의 승인은 ‘실행을 시작하지 않음 · 이번 달 캠페인 발송 한도 초과’, [한도로 시작하지 않은 실행](2026-10-12-plan-entitlements.md#한도로-시작하지-않은-실행)) 초안 잠금을 풀며, 예약 변경·취소가 `campaign_approval_executed`로 거절되면 전용 안내를 보입니다. ~~실행 화면은 [#36](https://github.com/AndrewDongminYoo/auto-chatter/issues/36)의 PR ③입니다.~~
 2026-10-29(#36 PR ③): 실행된 승인 아래의 실행 현황 패널(새로고침만으로 다시 읽기, 확인 단계를 거친 실행 취소)은 [실행 현황 화면](2026-10-27-campaign-runs.md#실행-현황-화면)이 맡습니다.
 
 유효한 승인에는 ‘예약 변경’과 ‘승인 취소’가 있으며, 둘 다 표시한 승인의 `expected_version`을 보냅니다.
@@ -331,7 +340,8 @@ CHECK 제약으로 예약 종류·시각·시간대의 짝과, 취소 상태일 
 결과 위에 두 사실을 사유별 수와 분리한 경고로 표시합니다: `channel_marketing_supported`가 거짓이면 ‘Instagram 마케팅 발송은 아직 지원하지 않습니다.’, `global_send_enabled`가 거짓이면 ‘서비스 전체 발송이 꺼져 있습니다.’입니다.
 2026-10-27부터 `channel_marketing_supported`가 참이므로 첫 경고는 표시되지 않습니다.
 경고 영역은 문서에 미리 둔 `role="status"` 실시간 영역이며, 기존 카드의 상태 줄과 같은 방식으로 안내됩니다.
-요약은 원래 인원, 현재 남은 인원, 예상 공급자 호출 수(`estimated_provider_calls`), 요금제 일괄 발송 한도(`null`이면 ‘정해지지 않음’)와 작업 공간 시간대로 표시한 기준 시각(`as_of`)입니다.
+요약은 원래 인원, 현재 남은 인원, 예상 공급자 호출 수(`estimated_provider_calls`), ~~요금제 일괄 발송 한도(`null`이면 ‘정해지지 않음’)~~ 요금제 월 캠페인 발송 한도(2026-11-09부터: ‘2026년 11월 1,000건 · 사용 120건 · 다른 승인 30건 · 남음 850건’, 한도 0이면 ‘현재 요금제에서는 캠페인을 승인할 수 없음’)와 작업 공간 시간대로 표시한 기준 시각(`as_of`)입니다.
+`candidate`가 `remaining`보다 많으면 즉시 또는 이번 달 실행으로는 승인할 수 없다는 경고를, 한도가 0이면 승인할 수 없다는 경고를 위에 보입니다. 한도 객체가 없거나 형식이 틀리면 응답 전체를 형식 오류로 다룹니다.
 사유별 표는 열 머리글(조건·인원)과 행 머리글이 있는 표이며, API 순서대로 연결 발송 불가·자동화 중지·확인된 DM 대화 없음·수신 거부·마케팅 동의 없음·24시간 응답 창 닫힘·조건 통과의 일곱 행을 보여 줍니다.
 `candidate`는 항상 ‘조건 통과’로 표시하며, 미리보기 화면 어디에도 ‘발송 가능’이라는 표현을 쓰지 않습니다.
 표 아래에는 실제로 보낼 때 모든 조건을 다시 확인한다는 안내를 둡니다.
