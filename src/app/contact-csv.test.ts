@@ -633,6 +633,10 @@ test("same-document login broadcasts do not invalidate the dashboard bootstrap b
           invalidations++;
         },
       },
+      manualReports: { reset: () => {} },
+      flowReports: { reset: () => {} },
+      handoffReports: { reset: () => {} },
+      campaignReports: { reset: () => {} },
       clearContactResults: () => {},
       notice: () => {},
       byId: () => ({ hidden: false }),

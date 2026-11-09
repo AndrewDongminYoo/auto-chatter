@@ -799,7 +799,8 @@ test("a DM starts only the flows of the connection that received it", async () =
     [otherConnection, workspaceId],
   );
   const document = dmDocument({ type: "instagram_dm_default" }, "Other account");
-  document.nodes[0]!.config.connection_id = otherConnection;
+  // The cast only names the mutable shape; `tsc` with parallel checkers reported this assignment as read-only.
+  (document.nodes[0]!.config as { connection_id: string }).connection_id = otherConnection;
   const other = await enabledFlow(document);
   await dm("9800", "hello");
   assert.deepEqual(await started(), []);

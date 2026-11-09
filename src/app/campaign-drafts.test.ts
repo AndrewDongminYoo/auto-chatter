@@ -605,6 +605,7 @@ test("session invalidation prevents a pending workspace bootstrap from reconfigu
       manualReports: controller,
       flowReports: controller,
       handoffReports: controller,
+      campaignReports: controller,
       campaignDrafts: {
         reset: noOp,
         configure: () => {
