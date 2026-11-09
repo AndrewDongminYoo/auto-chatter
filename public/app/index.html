@@ -233,6 +233,14 @@
                   <option value="">모든 플로(보관 포함)</option>
                 </select></label
               >
+              <label
+                >나누어 보기<select name="group_by">
+                  <option value="">없음</option>
+                  <option value="day">날짜별</option>
+                  <option value="connection">계정별</option>
+                  <option value="flow">플로별</option>
+                </select></label
+              >
               <button type="submit">조회</button>
             </form>
             <p id="flow-report-zone" class="hint"></p>
@@ -242,9 +250,17 @@
             <dl id="flow-report-run-counts" class="manual-report-counts"></dl>
             <h3>첫 답장 상태</h3>
             <dl id="flow-report-reply-counts" class="manual-report-counts"></dl>
+            <h3>받는이 답장</h3>
+            <dl id="flow-report-wait-counts" class="manual-report-counts"></dl>
             <p class="hint">
-              ‘경로 종료’와 ‘Meta 접수’는 전달·읽음·전환 성공을 뜻하지 않습니다. 각 영역의 상태별 합계는 실행 합계와
-              같습니다. 삭제된 데이터는 제외됩니다.
+              답장은 받는이가 보낸 DM이며 전달·읽음·전환을 뜻하지 않습니다. ‘답장 없음’에는 아직 기다리는 실행, 만료된
+              대기, 취소된 실행과 첫 답장이 발송되지 않아 대기가 시작되지 않은 실행이 포함됩니다.
+            </p>
+            <div id="flow-report-groups" class="report-breakdown"></div>
+            <p class="hint">
+              ‘경로 종료’와 ‘Meta 접수’는 전달·읽음·전환 성공을 뜻하지 않습니다. 실행 상태와 첫 답장 상태의 합계는 각각
+              실행 합계와 같고, 나누어 본 행을 더하면 위 합계와 같습니다. 실행이 있는 날짜·계정·플로만 행으로
+              표시합니다. 삭제된 데이터는 제외됩니다.
             </p>
           </section>
           <section id="handoff-reports-section" class="card" aria-labelledby="handoff-reports-title" hidden>

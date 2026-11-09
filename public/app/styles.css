@@ -2002,6 +2002,37 @@ section {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
+/* A breakdown table scrolls inside its own box so the page never overflows at phone width. */
+.report-breakdown {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.report-breakdown:not(:empty) {
+  margin: 16px 0;
+}
+.report-breakdown table {
+  border-collapse: collapse;
+}
+.report-breakdown caption {
+  text-align: left;
+  font-size: 0.875rem;
+  padding-bottom: 6px;
+}
+.report-breakdown th,
+.report-breakdown td {
+  padding: 8px;
+  border-top: 1px solid var(--color-border);
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.report-breakdown th[scope="row"],
+.report-breakdown th[rowspan] {
+  text-align: left;
+}
+.report-breakdown th[scope="colgroup"] {
+  text-align: center;
+}
 
 .campaign-draft-card {
   display: flex;

@@ -130,6 +130,33 @@ async function report(query = params) {
   return body;
 }
 
+type Counts = Record<string, string>;
+type Group = { key: string; run_counts: Counts; reply_counts: Counts; reply_wait_counts: Counts };
+const partitions = ["run_counts", "reply_counts", "reply_wait_counts"] as const;
+
+// Each partition sums to its total, inside every group and at the top, and the groups add up to the top level.
+function assertPartitions(counts: Group | Record<(typeof partitions)[number], Counts>) {
+  const { total, ...states } = counts.run_counts;
+  const sum = (values: string[]) => values.reduce((a, b) => a + BigInt(b), 0n);
+  assert.equal(sum(Object.values(states)), BigInt(total!));
+  assert.equal(sum(Object.values(counts.reply_counts)), BigInt(total!));
+  const wait = counts.reply_wait_counts;
+  assert.equal(BigInt(wait.replied!) + BigInt(wait.not_replied!), BigInt(wait.reached!));
+  assert.ok(BigInt(wait.reached!) <= BigInt(total!));
+}
+function assertGroupSums(body: Record<string, unknown>) {
+  const groups = body.groups as Group[];
+  assertPartitions(body as unknown as Group);
+  for (const group of groups) assertPartitions(group);
+  for (const partition of partitions)
+    for (const [metric, value] of Object.entries(body[partition] as Counts))
+      assert.equal(
+        groups.reduce((total, group) => total + BigInt(group[partition][metric]!), 0n),
+        BigInt(value),
+        `${partition}/${metric}`,
+      );
+}
+
 test("flow report keeps run and first-reply states separate, including absent replies and repeated steps", async () => {
   const first = await seed("delivering", "unknown");
   await seed("ended", "sent");
@@ -165,6 +192,11 @@ test("flow report keeps run and first-reply states separate, including absent re
     failed: "1",
     unknown: "1",
   });
+  // Runs that queued a reply and left delivering count as having reached a wait; the writers that produce
+  // reached and replied runs are exercised in flow-reply-wait.db.test.ts.
+  assert.deepEqual(body.reply_wait_counts, { reached: "3", replied: "0", not_replied: "3" });
+  assert.equal(body.group_by, null);
+  assert.equal("groups" in body, false);
   assert.equal(body.time_zone, "Asia/Seoul");
   assert.equal(body.period_from, "2026-09-30T15:00:00.000Z");
   assert.equal(body.period_before, "2026-10-01T15:00:00.000Z");
@@ -214,6 +246,124 @@ test("flow report uses exact run creation boundaries independently of reply crea
   assert.ok(Object.values(empty.reply_counts).every((value) => value === "0"));
 });
 
+test("flow report breaks runs down by day, account or flow and the groups add up to the cohort", async () => {
+  await seed("ended", "sent", "2026-09-29T15:00:00Z");
+  await seed("awaiting_reply", "pending", "2026-09-30T15:00:00Z");
+  await seed("delivering", "sent", "2026-09-30T16:00:00Z", flow, secondConnection);
+  await seed("failed", undefined, "2026-10-01T14:59:59.999999Z", archivedFlow);
+  await seed("cancelled", "sent", "2026-10-01T15:00:00Z", archivedFlow);
+  await seed("waiting", undefined, "2026-10-02T03:00:00Z", flow, secondConnection);
+  await pool.query("UPDATE flow_runs SET reply_message_id='mid-1' WHERE status='cancelled'");
+  // Another workspace's run in the same period never forms a group.
+  await seed("delivering", "sent", "2026-09-30T15:00:00Z", otherFlow, otherConnection);
+  const period = "from=2026-09-30&before=2026-10-03&expected_time_zone=Asia%2FSeoul";
+  const keys = (body: { groups: Group[] }) => body.groups.map((group) => [group.key, group.run_counts.total]);
+
+  const days = await report(`${period}&group_by=day`);
+  assert.equal(days.group_by, "day");
+  assert.equal(days.run_counts.total, "6");
+  assert.deepEqual(keys(days), [
+    ["2026-09-30", "1"],
+    ["2026-10-01", "3"],
+    ["2026-10-02", "2"],
+  ]);
+  assertGroupSums(days);
+  assert.deepEqual(days.reply_wait_counts, { reached: "3", replied: "1", not_replied: "2" });
+  const second = days.groups[2] as Group;
+  assert.deepEqual(second.reply_wait_counts, { reached: "1", replied: "1", not_replied: "0" });
+  assert.equal(second.run_counts.cancelled, "1");
+
+  const accounts = await report(`${period}&group_by=connection`);
+  assert.deepEqual(keys(accounts), [
+    [connection, "4"],
+    [secondConnection, "2"],
+  ]);
+  assertGroupSums(accounts);
+  const flows = await report(`${period}&group_by=flow`);
+  assert.deepEqual(keys(flows), [
+    [flow, "4"],
+    [archivedFlow, "2"],
+  ]);
+  assertGroupSums(flows);
+  assert.equal(JSON.stringify([days, accounts, flows]).includes(otherConnection), false);
+  assert.equal(JSON.stringify([days, accounts, flows]).includes(otherFlow), false);
+  assert.equal(JSON.stringify([days, accounts, flows]).includes("SECRET"), false);
+
+  // Filters narrow the cohort before grouping.
+  const filtered = await report(`${period}&connection_id=${connection}&group_by=flow`);
+  assert.deepEqual(keys(filtered), [
+    [flow, "2"],
+    [archivedFlow, "2"],
+  ]);
+  assertGroupSums(filtered);
+  const both = await report(`${period}&connection_id=${secondConnection}&flow_id=${flow}&group_by=day`);
+  assert.deepEqual(keys(both), [
+    ["2026-10-01", "1"],
+    ["2026-10-02", "1"],
+  ]);
+  assertGroupSums(both);
+  const none = await report(`${period}&connection_id=${secondConnection}&flow_id=${archivedFlow}&group_by=connection`);
+  assert.deepEqual(none.groups, []);
+
+  for (const dimension of ["day", "connection", "flow"]) {
+    const empty = await report(
+      `from=2025-01-01&before=2025-01-02&expected_time_zone=Asia%2FSeoul&group_by=${dimension}`,
+    );
+    assert.deepEqual(empty.groups, []);
+    assert.deepEqual(empty.reply_wait_counts, { reached: "0", replied: "0", not_replied: "0" });
+  }
+});
+
+test("flow report day groups follow workspace-local midnight, including DST days", async () => {
+  await seed("ended", undefined, "2026-09-30T14:59:59.999999Z");
+  await seed("ended", undefined, "2026-09-30T15:00:00Z");
+  await seed("ended", undefined, "2026-10-01T14:59:59.999999Z");
+  await seed("ended", undefined, "2026-10-01T15:00:00Z");
+  const seoul = await report("from=2026-09-30&before=2026-10-03&expected_time_zone=Asia%2FSeoul&group_by=day");
+  assert.deepEqual(
+    seoul.groups.map((group: Group) => [group.key, group.run_counts.total]),
+    [
+      ["2026-09-30", "1"],
+      ["2026-10-01", "2"],
+      ["2026-10-02", "1"],
+    ],
+  );
+  assertGroupSums(seoul);
+
+  await pool.query("TRUNCATE flow_step_runs, private_reply_outbox, flow_runs CASCADE");
+  await pool.query("UPDATE workspaces SET time_zone='America/New_York' WHERE id=$1", [workspace]);
+  // 2026-03-08 is 23 hours long in New York and 2026-11-01 is 25 hours long.
+  for (const at of [
+    "2026-03-08T04:59:59Z",
+    "2026-03-08T05:00:00Z",
+    "2026-03-09T03:59:59Z",
+    "2026-03-09T04:00:00Z",
+    "2026-11-01T04:00:00Z",
+    "2026-11-02T04:59:59Z",
+    "2026-11-02T05:00:00Z",
+  ])
+    await seed("ended", undefined, at);
+  const spring = await report("from=2026-03-07&before=2026-03-10&expected_time_zone=America%2FNew_York&group_by=day");
+  assert.deepEqual(
+    spring.groups.map((group: Group) => [group.key, group.run_counts.total]),
+    [
+      ["2026-03-07", "1"],
+      ["2026-03-08", "2"],
+      ["2026-03-09", "1"],
+    ],
+  );
+  assertGroupSums(spring);
+  const fall = await report("from=2026-11-01&before=2026-11-03&expected_time_zone=America%2FNew_York&group_by=day");
+  assert.deepEqual(
+    fall.groups.map((group: Group) => [group.key, group.run_counts.total]),
+    [
+      ["2026-11-01", "2"],
+      ["2026-11-02", "1"],
+    ],
+  );
+  assertGroupSums(fall);
+});
+
 test("flow report enforces active admins, current time zone, DST and unambiguous bounded input", async () => {
   assert.equal((await request(params, agent)).status, 403);
   await pool.query("UPDATE workspace_members SET role='admin' WHERE user_id=$1", [owner]);
@@ -237,6 +387,11 @@ test("flow report enforces active admins, current time zone, DST and unambiguous
     params.replace("2026-10-02", "2026-10-01"),
     params.replace("2026-10-02", "2028-10-02"),
     params.replace("Asia%2FSeoul", ""),
+    params + "&group_by=",
+    params + "&group_by=week",
+    params + "&group_by=DAY",
+    params + "&group_by=day&group_by=day",
+    params + "&group_by=day&group_by=flow",
   ]) {
     const response = await request(query);
     assert.equal(response.status, 400, query);
@@ -255,21 +410,34 @@ test("flow report bounds real aggregate index reads in all optional filter combi
        SELECT $1,$2,$3,$3,id,'ended','2020-01-01' FROM events`,
     [workspace, connection, flow],
   );
+  // Out-of-period step history: the report must not read step rows at all.
+  await pool.query(
+    `INSERT INTO flow_step_runs(run_id,workspace_id,connection_id,seq,node_id,node_type,outcome)
+     SELECT id,workspace_id,connection_id,0,'wait','wait_for_reply','timeout' FROM flow_runs`,
+  );
   await seed("delivering", "sent");
   await pool.query("ANALYZE flow_runs");
-  for (const suffix of [
+  await pool.query("ANALYZE flow_step_runs");
+  // Every filter set with every dimension, including none: 16 combinations.
+  const filters = [
     "",
     `&connection_id=${connection}`,
     `&flow_id=${flow}`,
     `&connection_id=${connection}&flow_id=${flow}`,
-  ]) {
+  ];
+  const dimensions = ["", "&group_by=day", "&group_by=connection", "&group_by=flow"];
+  for (const suffix of filters.flatMap((filter) => dimensions.map((dimension) => filter + dimension))) {
     const plans: Record<string, unknown>[] = [];
     const response = await request(params + suffix, owner, plans);
     assert.equal(response.status, 200);
-    assert.equal((await response.json()).run_counts.total, "1");
+    const body = await response.json();
+    assert.equal(body.run_counts.total, "1");
+    if (suffix.includes("group_by")) assert.equal(body.groups.length, 1);
     assert.equal(plans.length, 1);
     const scans: Record<string, unknown>[] = [];
+    const relations: string[] = [];
     function walk(node: Record<string, unknown>) {
+      if (node["Relation Name"]) relations.push(String(node["Relation Name"]));
       const condition = String(node["Index Cond"]);
       if (
         String(node["Index Name"]).startsWith("flow_runs_") &&
@@ -281,6 +449,7 @@ test("flow report bounds real aggregate index reads in all optional filter combi
     }
     walk(plans[0]!);
     assert.equal(scans.length, 1, "report must bound index reads by the creation period");
+    assert.equal(relations.includes("flow_step_runs"), false, "report must not read step history");
     // The existing flow history index is also valid when an owned flow is selected.
     assert.match(
       String(scans[0]["Index Cond"]),
