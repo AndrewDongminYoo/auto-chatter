@@ -339,3 +339,33 @@ test("campaign report clears results on edits and ignores late report and picker
   await late.controller.configure("agent", "Asia/Seoul");
   assert.equal(late.get("campaign-reports-section").hidden, true);
 });
+
+test("the app's other-tab session signal and BFCache restoration reset every report controller", () => {
+  // The controllers' reset() behavior is exercised above; this runs the app's invalidation path with spies.
+  const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("const invalidateContactSession = () => {");
+  const end = source.indexOf("\n};", start);
+  assert.ok(start >= 0 && end > start);
+  const resets: string[] = [];
+  const spy = (name: string) => ({
+    reset: () => {
+      resets.push(name);
+    },
+  });
+  const context = vm.createContext({
+    workspaceGeneration: 0,
+    contactsSaving: false,
+    campaignDrafts: spy("campaignDrafts"),
+    manualReports: spy("manualReports"),
+    flowReports: spy("flowReports"),
+    handoffReports: spy("handoffReports"),
+    campaignReports: spy("campaignReports"),
+    clearContactResults: () => {},
+    notice: () => {},
+    byId: () => ({ hidden: true }),
+  });
+  vm.runInContext(`${source.slice(start, end + 3)}\nglobalThis.invalidate = invalidateContactSession;`, context);
+  context.invalidate();
+  for (const name of ["manualReports", "flowReports", "handoffReports", "campaignReports"])
+    assert.ok(resets.includes(name), `${name}.reset() must run on session invalidation`);
+});

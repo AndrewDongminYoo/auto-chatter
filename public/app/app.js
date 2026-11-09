@@ -35,6 +35,10 @@ let workspaceGeneration = 0;
 const invalidateContactSession = () => {
   workspaceGeneration++;
   campaignDrafts.reset();
+  manualReports.reset();
+  flowReports.reset();
+  handoffReports.reset();
+  campaignReports.reset();
   contactsSaving = false;
   clearContactResults();
   if (!byId("workspace").hidden) {
