@@ -2559,6 +2559,13 @@ const replays: [string, Approval, string, string][] = [
     "실행 승인이 이미 기록되어 실행이 시작되었습니다. 보내기 직전마다 모든 조건을 다시 확인합니다.",
   ],
   [
+    // The cron can start the run while the create is unknown, and the monthly limit can keep that run from starting.
+    "its executed approval whose run the monthly limit kept from starting",
+    { ...executedApproval, id: input.id, run_status: "completed", run_limited: true },
+    "최근 승인 · 실행을 시작하지 않음",
+    "실행 승인이 이미 기록되었지만, 이번 달 캠페인 발송 한도를 넘어 실행을 시작하지 않았고 아무에게도 보내지 않았습니다.",
+  ],
+  [
     "its cancelled approval",
     { ...cancelledApproval, id: input.id },
     "최근 승인 · 취소됨",

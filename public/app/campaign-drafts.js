@@ -925,11 +925,13 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
         "실행 시점이 되면 서비스 전체 발송이 켜져 있을 때만 실행되며, 보내기 직전마다 모든 조건을 다시 확인합니다.";
       byId("campaign-approval-status").textContent =
         kind === "create"
-          ? result.status === "executed"
-            ? "실행 승인이 이미 기록되어 실행이 시작되었습니다. 보내기 직전마다 모든 조건을 다시 확인합니다."
-            : result.status === "cancelled"
-              ? "실행 승인이 이미 기록된 뒤 취소되었습니다. 응답받은 상태를 표시합니다."
-              : `실행 승인을 기록했습니다. ${due}`
+          ? result.status === "executed" && result.run_limited === true
+            ? "실행 승인이 이미 기록되었지만, 이번 달 캠페인 발송 한도를 넘어 실행을 시작하지 않았고 아무에게도 보내지 않았습니다."
+            : result.status === "executed"
+              ? "실행 승인이 이미 기록되어 실행이 시작되었습니다. 보내기 직전마다 모든 조건을 다시 확인합니다."
+              : result.status === "cancelled"
+                ? "실행 승인이 이미 기록된 뒤 취소되었습니다. 응답받은 상태를 표시합니다."
+                : `실행 승인을 기록했습니다. ${due}`
           : kind === "schedule"
             ? `예약을 변경했습니다. ${due}`
             : "승인을 취소했습니다. 이제 초안을 수정할 수 있습니다.";
