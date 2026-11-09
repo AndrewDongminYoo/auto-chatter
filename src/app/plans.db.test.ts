@@ -4,9 +4,10 @@ import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { appApi } from "./api.ts";
 import { beginInstagramOAuth, finishInstagramOAuth } from "./instagram-oauth.ts";
-import { PLANS } from "./plans.ts";
+import { PLANS, workspaceEntitlements } from "./plans.ts";
 import { disconnectConnection, ensureWorkspace, saveWorkspaceSettings, updateConnection } from "./settings.ts";
 import { acceptInvite, createInvite, removeMember, revokeInvite } from "./workspace-members.ts";
+import { seedCampaignSends } from "./workspace-fixture.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
@@ -415,7 +416,11 @@ test("every role reads the plan, its limits and the usage; the owner's member li
   await connect("1002");
   const id = (await pool.query("SELECT id FROM instagram_connections WHERE account_id='1002'")).rows[0].id;
   await disconnectConnection(pool, owner, id);
-  const expected = { plan: "business", limits: { seats: 5, connections: 5 }, usage: { seats: 3, connections: 1 } };
+  const expected = {
+    plan: "business",
+    limits: { seats: 5, connections: 5, campaign_sends_per_month: 20000 },
+    usage: { seats: 3, connections: 1, campaign_sends: 0 },
+  };
   const agent = await apiRequest(first, "POST", "/api/workspace");
   assert.equal(agent.status, 200);
   const workspace = (await agent.json()) as Record<string, unknown>;
@@ -438,4 +443,31 @@ test("the callback sends a refused connection back to the dashboard with the lim
   assert.equal(response.headers.get("location"), "https://app.test/app/?instagram=connection_limit_reached");
   assert.match(response.headers.get("set-cookie") ?? "", /__Host-ac-oauth=; .*Max-Age=0/);
   assert.deepEqual(await connectedAccounts(), ["1001"]);
+});
+
+test("the campaign usage counts this month's delivery rows except those cancelled before a provider call", async () => {
+  await setPlan("essential");
+  const connection = (
+    await pool.query(
+      "INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES(gen_random_uuid(),$1,'9001') RETURNING id",
+      [workspaceId],
+    )
+  ).rows[0].id as string;
+  await seedCampaignSends(pool, workspaceId, connection, owner.id, 4, "now()");
+  await seedCampaignSends(pool, workspaceId, connection, owner.id, 2, "now()", { status: "cancelled" });
+  await seedCampaignSends(pool, workspaceId, connection, owner.id, 1, "now()", {
+    status: "cancelled",
+    providerCalled: true,
+  });
+  await seedCampaignSends(pool, workspaceId, connection, owner.id, 6, "now()-interval '40 days'");
+  const entitlements = await workspaceEntitlements(pool, workspaceId);
+  assert.deepEqual(entitlements.limits, { seats: 2, connections: 2, campaign_sends_per_month: 1000 });
+  assert.deepEqual(entitlements.usage, { seats: 1, connections: 0, campaign_sends: 5 });
+  // Another workspace's rows never count.
+  assert.equal((await workspaceEntitlements(pool, otherWorkspaceId)).usage.campaign_sends, 0);
+  // A plan change changes the limit, never the count.
+  await setPlan("free");
+  const lowered = await workspaceEntitlements(pool, workspaceId);
+  assert.equal(lowered.limits.campaign_sends_per_month, 0);
+  assert.equal(lowered.usage.campaign_sends, 5);
 });

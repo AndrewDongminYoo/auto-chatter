@@ -5,6 +5,7 @@ import { after, before, beforeEach, mock, test } from "node:test";
 import { Pool, type PoolClient, type QueryConfig } from "pg";
 import { appApi } from "./api.ts";
 import { startDueCampaignRuns } from "./campaign-runs.ts";
+import { seedCampaignSends } from "./workspace-fixture.ts";
 import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -1026,4 +1027,147 @@ test("migration 066 replays over stored rows and keeps the delivery checks", asy
     runner.indexOf("066_campaign_delivery.sql") > runner.indexOf("065_campaign_runs.sql") &&
       runner.indexOf("066_campaign_delivery.sql") < runner.indexOf("supabase-access.sql"),
   );
+});
+
+test("a start that the month's remaining campaign sends cannot hold records a completed run with no row", async () => {
+  await pool.query("UPDATE workspaces SET plan='essential' WHERE id=$1", [workspace]);
+  await qualifying("1001", "2001");
+  await seedCampaignSends(pool, workspace, C, owner, 999, "now()");
+  // Approved with one candidate, which fits (999 + 1); a second member qualifies before the start.
+  const grown = await approve(
+    await draftFor([
+      [C, "1001"],
+      [C, "1002"],
+    ]),
+  );
+  assert.equal(grown.preview.counts.candidate, "1");
+  await qualifying("1002", "2002");
+  // Rows of a run started last month do not count.
+  await seedCampaignSends(pool, workspace, C, owner, 500, "now()-interval '40 days'");
+  const baseline = await untouched();
+  assert.deepEqual(await startDueCampaignRuns(pool), { started: 1, skipped: 0, failed: 0 });
+  const run = await runOf(grown.id);
+  assert.equal(run.status, "completed");
+  assert.equal(run.version, 1);
+  assert.deepEqual(run.start_counts, {
+    original_member_count: "2",
+    remaining_member_count: "2",
+    connection_unavailable: "0",
+    contact_paused: "0",
+    no_dm_identity: "0",
+    opted_out: "0",
+    marketing_consent_required: "0",
+    reply_window_closed: "0",
+    candidate: "0",
+    plan_limit_exceeded: "2",
+    plan_limit: "1000",
+    plan_limit_used: "999",
+    plan_limit_reserved: "0",
+  });
+  assert.deepEqual(await deliveries(run.id), []);
+  assert.equal(await approvalStatus(grown.id), "executed");
+  assert.deepEqual(await untouched(), baseline);
+  const read = await expect(await request("GET", `/api/campaign-runs/${run.id}`));
+  assert.equal(read.status, "completed");
+  assert.equal(read.start.counts.candidate, "0");
+  assert.deepEqual(read.start.broadcast_limit_exceeded, { candidate: "2", limit: "1000", used: "999", reserved: "0" });
+  assert.ok(Object.values(read.delivery_counts).every((count) => count === "0"));
+  const approval = await expect(await request("GET", `/api/campaign-approvals/${grown.id}`));
+  assert.equal(approval.run_status, "completed");
+  assert.equal(approval.run_limited, true, "the approval read tells a limited run from a completed one");
+  // A completed run cannot be cancelled, and the step never starts the approval again.
+  const refused = await expect(
+    await request("POST", `/api/campaign-runs/${run.id}/cancel`, { expected_version: 1 }),
+    409,
+  );
+  assert.equal(refused.error, "campaign_run_completed");
+  assert.deepEqual(await startDueCampaignRuns(pool), { started: 0, skipped: 0, failed: 0 });
+  // An ordinary run reads no marker.
+  const fits = await approve(await draftFor([[FC, "3001"]], foreignWorkspace), false, outsider);
+  await startDueCampaignRuns(pool);
+  const ordinary = await expect(
+    await request("GET", `/api/campaign-runs/${(await runOf(fits.id)).id}`, undefined, outsider),
+  );
+  assert.equal(ordinary.start.broadcast_limit_exceeded, null);
+  const ordinaryApproval = await expect(
+    await request("GET", `/api/campaign-approvals/${fits.id}`, undefined, outsider),
+  );
+  assert.equal(ordinaryApproval.run_limited, false);
+});
+
+test("the start counts the other approvals in force due in the same month, as the approval does", async () => {
+  await pool.query("UPDATE workspaces SET plan='essential' WHERE id=$1", [workspace]);
+  // Approval A reserves 600 for the last second of this month (UTC workspace), so it is not due at this start.
+  await qualifying("1001", "2001");
+  const reserved = await approve(await draftFor([[C, "1003"]]), true);
+  await pool.query(
+    `UPDATE campaign_approvals SET scheduled_at=date_trunc('month',now())+interval '1 month'-interval '1 second',
+       preview_counts=jsonb_set(preview_counts,'{candidate}','"600"') WHERE id=$1`,
+    [reserved.id],
+  );
+  await seedCampaignSends(pool, workspace, C, owner, 399, "now()");
+  // Approval B fits when approved (399 + 600 + 1 = 1,000), then grows to two candidates before its start.
+  const grown = await approve(
+    await draftFor([
+      [C, "1001"],
+      [C, "1002"],
+    ]),
+  );
+  assert.equal(grown.preview.counts.candidate, "1");
+  await qualifying("1002", "2002");
+  assert.deepEqual(await startDueCampaignRuns(pool), { started: 1, skipped: 0, failed: 0 });
+  // 399 + 600 + 2 > 1,000: B does not start, although 399 + 2 alone would fit; A keeps its reservation.
+  const run = await runOf(grown.id);
+  assert.equal(run.status, "completed");
+  assert.deepEqual(
+    [run.start_counts.plan_limit_exceeded, run.start_counts.plan_limit_used, run.start_counts.plan_limit_reserved],
+    ["2", "399", "600"],
+  );
+  assert.deepEqual(await deliveries(run.id), []);
+  assert.equal(await approvalStatus(reserved.id), "approved");
+  const read = await expect(await request("GET", `/api/campaign-runs/${run.id}`));
+  assert.deepEqual(read.start.broadcast_limit_exceeded, {
+    candidate: "2",
+    limit: "1000",
+    used: "399",
+    reserved: "600",
+  });
+});
+
+test("after a downgrade the start check governs: an approval in force does not start on free", async () => {
+  await qualifying("1001", "2001");
+  const draft = await draftFor([[C, "1001"]]);
+  const approval = await approve(draft);
+  await pool.query("UPDATE workspaces SET plan='free' WHERE id=$1", [workspace]);
+  assert.equal(await approvalStatus(approval.id), "approved", "a downgrade keeps the approval in force");
+  assert.deepEqual(await startDueCampaignRuns(pool), { started: 1, skipped: 0, failed: 0 });
+  const run = await runOf(approval.id);
+  assert.equal(run.status, "completed");
+  assert.equal(run.start_counts.candidate, "0");
+  assert.equal(run.start_counts.plan_limit_exceeded, "1");
+  assert.equal(run.start_counts.plan_limit, "0");
+  assert.deepEqual(await deliveries(run.id), []);
+  // Back on a paid plan with room, the next approval's run starts with its rows.
+  await pool.query("UPDATE workspaces SET plan='essential' WHERE id=$1", [workspace]);
+  // The limited run used up its draft version, as any executed approval does; the refusal carries the marker the
+  // screen uses to say that nothing was sent.
+  const again = await expect(
+    await request("POST", `/api/campaign-drafts/${draft}/approvals`, {
+      id: randomUUID(),
+      expected_version: 1,
+      schedule_local: null,
+      expected_time_zone: "UTC",
+    }),
+    409,
+  );
+  assert.equal(again.error, "campaign_version_executed");
+  assert.equal(again.approval.id, approval.id);
+  assert.equal(again.approval.run_limited, true);
+  await seedCampaignSends(pool, workspace, C, owner, 999, "now()");
+  const next = await approve(await draftFor([[C, "1001"]]));
+  await startDueCampaignRuns(pool);
+  const started = await runOf(next.id);
+  assert.equal(started.status, "running");
+  assert.equal(started.start_counts.plan_limit_exceeded, undefined);
+  assert.equal((await deliveries(started.id)).length, 1);
 });

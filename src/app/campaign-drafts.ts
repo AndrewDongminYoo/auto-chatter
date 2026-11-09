@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { verifiedDmRecipientsSql } from "./inbox-identity.ts";
+import { campaignAllowanceBody, campaignSendAllowance } from "./plans.ts";
 import { lockWorkspaceForMember, membershipFor } from "./settings.ts";
 import { instagramCapabilities } from "../instagram/channel-adapter.ts";
 
@@ -228,12 +229,14 @@ export async function previewCampaignDraft(pool: Pool, user: User, id: string, g
     const preview = await evaluateCampaignPreview(client, workspace, id.toLowerCase());
     if (!preview) throw new ApiError(404, "campaign_draft_not_found");
     const { counts } = preview;
+    // This month's campaign send limit (#52) in the workspace time zone, with the approvals in force due this month.
+    const allowance = await campaignSendAllowance(client, workspace, null);
     return {
       ...preview,
       candidate_meaning: "passed_recorded_conditions_at_as_of",
       sendability_claimed: false,
       estimated_provider_calls: counts.candidate,
-      plan_broadcast_limit: null,
+      plan_broadcast_limit: campaignAllowanceBody(allowance),
       channel_marketing_supported: instagramCapabilities("cloudflare_oauth").operations.marketing.supported,
       global_send_enabled: globalSendEnabled,
     };

@@ -20,7 +20,19 @@ function planConnectionsFull(entitlements) {
   return Boolean(entitlements) && entitlements.usage.connections >= entitlements.limits.connections;
 }
 
-// One line for the settings screen: the plan, then seats and connected accounts against their limits.
+// Campaign delivery rows of this calendar month in the workspace time zone against the monthly limit (#52). A plan
+// without campaigns says so, with the month's rows when a downgrade left some.
+function planCampaignUsage(entitlements) {
+  const count = (value) => Number(value).toLocaleString("ko-KR");
+  const { usage, limits } = entitlements;
+  if (!limits.campaign_sends_per_month)
+    return usage.campaign_sends
+      ? `캠페인 발송 불가(이번 달 ${count(usage.campaign_sends)}건 발송)`
+      : "캠페인 발송 불가";
+  return `이번 달 캠페인 발송 ${count(usage.campaign_sends)}/${count(limits.campaign_sends_per_month)}건`;
+}
+
+// One line for the settings screen: the plan, then seats, connected accounts and campaign sends against their limits.
 function planSummary(entitlements) {
   if (!entitlements) return "";
   const { usage, limits } = entitlements;
@@ -28,6 +40,7 @@ function planSummary(entitlements) {
     `요금제: ${planName(entitlements.plan)}`,
     `멤버 ${usage.seats}/${limits.seats}명(대기 중인 초대 포함)`,
     `Instagram 계정 ${usage.connections}/${limits.connections}개`,
+    planCampaignUsage(entitlements),
   ].join(" · ");
 }
 

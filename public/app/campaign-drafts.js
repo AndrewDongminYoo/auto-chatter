@@ -83,7 +83,13 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     campaign_approval_not_found: "승인을 찾을 수 없습니다. 승인 상태를 새로고침해 주세요.",
     campaign_approval_id_conflict: "승인 요청을 확인하지 못했습니다. 승인 상태를 새로고침한 뒤 다시 시도해 주세요.",
   };
-  const approvalMessage = (error) => approvalMessages[error.code] || message(error);
+  // A version whose run the monthly campaign send limit kept from starting (#52) sent nothing; say so.
+  const approvalMessage = (error) =>
+    error.code === "broadcast_limit_reached"
+      ? limitRefusal(error.broadcast_limit)
+      : error.code === "campaign_version_executed" && error.approval?.run_limited === true
+        ? "이 초안 버전의 실행은 월 캠페인 발송 한도를 넘어 시작하지 않았고 아무에게도 보내지 않았습니다. 다시 보내려면 초안을 수정해 저장한 뒤 승인해 주세요. 그 승인을 표시합니다."
+        : approvalMessages[error.code] || message(error);
   const runMessages = {
     campaign_run_conflict:
       "다른 곳에서 실행 상태가 바뀌었습니다. 현재 실행 현황을 표시합니다. 확인한 뒤 다시 시도해 주세요.",
@@ -264,9 +270,36 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     byId("campaign-draft-preview-result").hidden = true;
   }
   // Counts arrive as decimal strings; BigInt keeps values beyond 2^53 exact.
-  function decimal(value) {
+  function whole(value) {
     if (typeof value !== "string" || !/^\d+$/.test(value)) throw new Error("invalid preview count");
-    return BigInt(value).toLocaleString("ko-KR");
+    return BigInt(value);
+  }
+  function decimal(value) {
+    return whole(value).toLocaleString("ko-KR");
+  }
+  // The monthly campaign send limit (#52) counts calendar months in the workspace time zone ("2026-11").
+  function monthText(value) {
+    const match = typeof value === "string" ? /^(\d{4})-(\d{2})$/.exec(value) : null;
+    if (!match) throw new Error("invalid month");
+    return `${match[1]}년 ${Number(match[2])}월`;
+  }
+  // The preview's limit, the month's rows already used, the approvals in force due in it and what remains.
+  function limitText(value) {
+    const month = monthText(value?.month);
+    const counts = [value.limit, value.used, value.reserved, value.remaining].map(decimal);
+    if (value.limit === "0") return `현재 요금제에서는 캠페인을 승인할 수 없음 (${month})`;
+    return `${month} ${counts[0]}건 · 사용 ${counts[1]}건 · 다른 승인 ${counts[2]}건 · 남음 ${counts[3]}건`;
+  }
+  // A broadcast_limit_reached refusal names the month it counted; a malformed allowance keeps the general text.
+  function limitRefusal(value) {
+    try {
+      const month = monthText(value?.month);
+      if (value.limit === "0")
+        return "현재 요금제에서는 캠페인을 승인할 수 없습니다. 작업 공간 소유자에게 요금제를 확인해 주세요.";
+      return `${month} 캠페인 발송 한도 ${decimal(value.limit)}건 중 남은 ${decimal(value.remaining)}건으로는 조건 통과 ${decimal(value.requested)}명을 승인할 수 없습니다(이번 달 사용 ${decimal(value.used)}건, 같은 달 다른 승인 ${decimal(value.reserved)}건). 실행 시점을 다른 달로 옮기거나 다른 승인을 취소해 주세요.`;
+    } catch {
+      return "요금제의 이번 달 캠페인 발송 한도를 넘어 승인할 수 없습니다. 실행 시점을 다른 달로 옮기거나 다른 승인을 취소해 주세요.";
+    }
   }
   // One table row per reason, in the API order, with a row header; the preview and the stored approval share it.
   const reasonRows = (counts) =>
@@ -303,21 +336,26 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     if (
       !["approved", "cancelled", "executed"].includes(value?.status) ||
       !Number.isInteger(value.version) ||
-      (value.run_id != null && typeof value.run_id !== "string")
+      (value.run_id != null && typeof value.run_id !== "string") ||
+      (value.run_limited != null && typeof value.run_limited !== "boolean")
     )
       throw new Error("invalid approval");
     const active = value.status === "approved";
     // An executed approval started its run (#36), which the delivery worker sends; the run panel below the approval
     // shows it.
     const executed = value.status === "executed";
+    // A run the monthly campaign send limit kept from starting (#52) is completed with no delivery row.
+    const limited = executed && value.run_limited === true;
     const entries = [
       [
         "상태",
         active
           ? "승인됨 · 실행 시점에 서비스 발송이 켜져 있으면 시작"
-          : executed
-            ? "실행 시작됨 · 보내기 직전에 조건을 다시 확인해 발송"
-            : "취소됨",
+          : limited
+            ? "실행을 시작하지 않음 · 이번 달 캠페인 발송 한도 초과"
+            : executed
+              ? "실행 시작됨 · 보내기 직전에 조건을 다시 확인해 발송"
+              : "취소됨",
       ],
       ["승인한 초안", `${value.name} · 버전 ${value.draft_version}`],
       ["실행 시점", scheduleText(value)],
@@ -346,9 +384,11 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     approvalLoaded = true;
     byId("campaign-approval-current-title").textContent = active
       ? "유효한 승인"
-      : executed
-        ? "최근 승인 · 실행 시작됨"
-        : "최근 승인 · 취소됨";
+      : limited
+        ? "최근 승인 · 실행을 시작하지 않음"
+        : executed
+          ? "최근 승인 · 실행 시작됨"
+          : "최근 승인 · 취소됨";
     byId("campaign-approval-warnings").replaceChildren(...warnings);
     byId("campaign-approval-summary").replaceChildren(...summary);
     byId("campaign-approval-rows").replaceChildren(...rows);
@@ -378,7 +418,16 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     // Build every node first so a malformed response changes nothing on screen.
     const status = runStatuses.find(([key]) => key === value?.status);
     if (!status || typeof value.id !== "string" || !Number.isInteger(value.version)) throw new Error("invalid run");
-    const entries = [["상태", status[1]]];
+    // A run the monthly campaign send limit kept from starting (#52) has no delivery row; say why instead of "완료".
+    const limited = value.start?.broadcast_limit_exceeded ?? null;
+    const entries = [["상태", limited ? "시작하지 않음 · 이번 달 캠페인 발송 한도 초과" : status[1]]];
+    if (limited)
+      entries.push([
+        "시작하지 않은 이유",
+        limited.limit === "0"
+          ? `현재 요금제에서는 캠페인을 보낼 수 없어 조건 통과 ${decimal(limited.candidate)}명 모두에게 보내지 않았습니다.`
+          : `실행 시작 시점에 이번 달 캠페인 발송 한도 ${decimal(limited.limit)}건 중 ${decimal(limited.used)}건을 이미 사용했고 같은 달 다른 승인에 ${decimal(limited.reserved)}건이 예정되어 있어, 조건 통과 ${decimal(limited.candidate)}명 모두에게 보내지 않았습니다.`,
+      ]);
     if (value.status === "cancelled") entries.push(["취소 시각", instant(value.cancelled_at, timeZone)]);
     entries.push(
       ["시작 시각", instant(value.start?.as_of, timeZone)],
@@ -387,6 +436,14 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     );
     const summary = definitions(entries);
     const rows = reasonRows(value.start?.counts);
+    // The limited run's candidates moved out of "조건 통과", so the table still adds up to the remaining members.
+    if (limited) {
+      const row = node("tr", "");
+      const header = node("th", "월 발송 한도 초과");
+      header.setAttribute("scope", "row");
+      row.append(header, node("td", `${decimal(limited.candidate)}명`));
+      rows.push(row);
+    }
     const deliveries = definitions(
       deliveryStatuses.map(([key, label]) => [label, `${decimal(value.delivery_counts?.[key])}건`]),
     );
@@ -559,6 +616,17 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   function renderPreview(preview) {
     // Build every node first so a malformed response changes nothing on screen.
     const warnings = [];
+    // limitText rejects a malformed allowance; reasonRows below rejects a malformed candidate count.
+    const allowance = preview.plan_broadcast_limit;
+    const limit = limitText(allowance);
+    if (allowance.limit === "0") warnings.push(node("p", "현재 요금제에서는 캠페인을 승인할 수 없습니다."));
+    else if (whole(preview.counts?.candidate) > whole(allowance.remaining))
+      warnings.push(
+        node(
+          "p",
+          "조건 통과 인원이 이번 달 남은 캠페인 발송 한도보다 많아 즉시 또는 이번 달 실행으로는 승인할 수 없습니다. 다음 달 실행으로 예약하거나 다른 승인을 취소해 주세요.",
+        ),
+      );
     if (preview.channel_marketing_supported !== true)
       warnings.push(node("p", "Instagram 마케팅 발송은 아직 지원하지 않습니다."));
     if (preview.global_send_enabled !== true) warnings.push(node("p", "서비스 전체 발송이 꺼져 있습니다."));
@@ -568,10 +636,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       ["원래 인원", `${decimal(preview.original_member_count)}명`],
       ["현재 남은 인원", `${decimal(preview.remaining_member_count)}명`],
       ["예상 공급자 호출 수", `${decimal(preview.estimated_provider_calls)}회`],
-      [
-        "요금제 일괄 발송 한도",
-        preview.plan_broadcast_limit === null ? "정해지지 않음" : `${decimal(preview.plan_broadcast_limit)}명`,
-      ],
+      ["요금제 월 캠페인 발송 한도", limit],
       ["기준 시각", `${asOf.toLocaleString("ko-KR", { timeZone })} (${timeZone})`],
     ]);
     const rows = reasonRows(preview.counts);

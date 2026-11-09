@@ -709,6 +709,8 @@ export async function appApi(
         if (result.error === "campaign_draft_conflict") return json({ error: result.error, draft: result.draft }, 409);
         if (result.error === "approval_exists" || result.error === "campaign_version_executed")
           return json({ error: result.error, approval: result.approval }, 409);
+        if (result.error === "broadcast_limit_reached")
+          return json({ error: result.error, broadcast_limit: result.broadcast_limit }, 409);
         return json(result.approval, result.created ? 201 : 200);
       }
       const campaignApproval = /^\/api\/campaign-approvals(?:\/([^/]+)(?:\/(schedule|cancel))?)?$/.exec(url.pathname);
@@ -723,6 +725,8 @@ export async function appApi(
         ) {
           const change = action === "schedule" ? rescheduleCampaignApproval : cancelCampaignApproval;
           const saved = await change(pool, user, id, await readJson(request, 8192));
+          if (saved.error === "broadcast_limit_reached")
+            return json({ error: saved.error, approval: saved.approval, broadcast_limit: saved.broadcast_limit }, 409);
           return saved.error ? json({ error: saved.error, approval: saved.approval }, 409) : json(saved.approval);
         }
       }

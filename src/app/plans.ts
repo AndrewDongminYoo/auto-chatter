@@ -3,14 +3,15 @@ import { ApiError } from "./auth.ts";
 
 // The plan catalog (#52, docs/specs/2026-10-12-plan-entitlements.md). The workspaces_plan CHECK in
 // db/schema.sql and migration 045 lists the same keys; plans.db.test.ts compares them.
-// Seats follow ManyChat's 2026 user seats; connections count connected Instagram accounts.
+// Seats follow ManyChat's 2026 user seats; connections count connected Instagram accounts. campaign_sends_per_month
+// counts campaign delivery rows per calendar month in the workspace time zone; free approves no campaign.
 export const PLANS = {
-  free: { seats: 1, connections: 1 },
-  essential: { seats: 2, connections: 2 },
-  pro: { seats: 3, connections: 3 },
-  business: { seats: 5, connections: 5 },
-  advanced: { seats: 10, connections: 10 },
-} as const satisfies Record<string, { seats: number; connections: number }>;
+  free: { seats: 1, connections: 1, campaign_sends_per_month: 0 },
+  essential: { seats: 2, connections: 2, campaign_sends_per_month: 1000 },
+  pro: { seats: 3, connections: 3, campaign_sends_per_month: 5000 },
+  business: { seats: 5, connections: 5, campaign_sends_per_month: 20000 },
+  advanced: { seats: 10, connections: 10, campaign_sends_per_month: 50000 },
+} as const satisfies Record<string, { seats: number; connections: number; campaign_sends_per_month: number }>;
 
 export type PlanKey = keyof typeof PLANS;
 export type PlanLimits = (typeof PLANS)[PlanKey];
@@ -52,10 +53,86 @@ async function usage(db: Db, workspace: string, excludedAccount: string | null =
 // The plan, its limits and the current usage, as the dashboard shows them to every role.
 export async function workspaceEntitlements(db: Db, workspace: string) {
   const current = await usage(db, workspace);
+  const campaign = await campaignSendAllowance(db, workspace, null);
   return {
     plan: current.plan,
     limits: planLimits(current.plan),
-    usage: { seats: current.members + current.open_invites, connections: current.connections },
+    usage: {
+      seats: current.members + current.open_invites,
+      connections: current.connections,
+      campaign_sends: campaign.used,
+    },
+  };
+}
+
+// The calendar month that holds an approval's due time, in the workspace's current time zone. A due time is never
+// earlier than now: an immediate approval, or one whose scheduled time passed while sending was off, starts in this
+// month or later. `due` is a timestamptz expression that may be NULL (immediate); `zone` is the time zone expression.
+export const campaignDueMonthSql = (due: string, zone: string) =>
+  `date_trunc('month',greatest(coalesce(${due},now()),now()) AT TIME ZONE ${zone})`;
+
+// The monthly campaign send count (#52). `used` counts the delivery rows of runs started in the month, except rows
+// cancelled before any provider call; `reserved` adds the stored candidate counts of the approvals in force due in
+// that month, except `excludedApproval`. The month and both counts use the workspace's current time zone.
+const ALLOWANCE_SQL = `WITH bounds AS MATERIALIZED (
+   SELECT w.plan,w.time_zone,month.start,to_char(month.start,'YYYY-MM') AS month,
+     month.start AT TIME ZONE w.time_zone AS starts,(month.start+interval '1 month') AT TIME ZONE w.time_zone AS ends
+   FROM workspaces w CROSS JOIN LATERAL (SELECT ${campaignDueMonthSql("$2::timestamptz", "w.time_zone")} AS start) month
+   WHERE w.id=$1)
+ SELECT b.plan,b.month,
+   (SELECT count(*) FROM campaign_runs r JOIN campaign_deliveries d ON d.workspace_id=r.workspace_id AND d.run_id=r.id
+    WHERE r.workspace_id=$1 AND r.started_at>=b.starts AND r.started_at<b.ends
+      AND NOT (d.status='cancelled' AND d.provider_called_at IS NULL))::text AS used,
+   (SELECT coalesce(sum((a.preview_counts->>'candidate')::bigint),0) FROM campaign_approvals a
+    WHERE a.workspace_id=$1 AND a.status='approved' AND a.id IS DISTINCT FROM $3::uuid
+      AND ${campaignDueMonthSql("a.scheduled_at", "b.time_zone")}=b.start)::text AS reserved
+ FROM bounds b`;
+
+export interface CampaignSendAllowance {
+  month: string;
+  limit: number;
+  used: number;
+  reserved: number;
+}
+
+// The allowance of the month that holds `due` (null: now). The approval and run start callers hold the workspace row
+// FOR UPDATE, so two writers never count the same month at once.
+export async function campaignSendAllowance(
+  db: Db,
+  workspace: string,
+  due: string | null,
+  excludedApproval: string | null = null,
+): Promise<CampaignSendAllowance> {
+  const row = (
+    await db.query<{ plan: PlanKey; month: string; used: string; reserved: string }>(ALLOWANCE_SQL, [
+      workspace,
+      due,
+      excludedApproval,
+    ])
+  ).rows[0];
+  if (!row) throw new ApiError(403, "workspace_required");
+  return {
+    month: row.month,
+    limit: planLimits(row.plan).campaign_sends_per_month,
+    used: Number(row.used),
+    reserved: Number(row.reserved),
+  };
+}
+
+// An approval of `requested` candidates fits when this month's rows, the other approvals due in the month and the
+// request stay within the limit. A limit of 0 refuses every approval, a zero-candidate one included.
+export function campaignSendsFit(allowance: CampaignSendAllowance, requested: number): boolean {
+  return allowance.limit > 0 && allowance.used + allowance.reserved + requested <= allowance.limit;
+}
+
+// The API shape: decimal strings, like the preview counts. remaining is never below zero.
+export function campaignAllowanceBody(allowance: CampaignSendAllowance) {
+  return {
+    month: allowance.month,
+    limit: String(allowance.limit),
+    used: String(allowance.used),
+    reserved: String(allowance.reserved),
+    remaining: String(Math.max(0, allowance.limit - allowance.used - allowance.reserved)),
   };
 }
 

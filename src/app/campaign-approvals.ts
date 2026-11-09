@@ -10,6 +10,13 @@ import {
 } from "./campaign-drafts.ts";
 import { dueLocalSql, localDueSql } from "./inbox-reminders.ts";
 import { SCHEDULE_MIN_AHEAD, scheduleLocal } from "./manual-replies.ts";
+import {
+  campaignAllowanceBody,
+  campaignDueMonthSql,
+  campaignSendAllowance,
+  campaignSendsFit,
+  type CampaignSendAllowance,
+} from "./plans.ts";
 
 // Execution approvals record what an administrator approved and when it should run. Nothing here queues, schedules
 // or sends a message; the campaign_start step (campaign-runs.ts, #36) starts one run per due approval while sending is
@@ -58,7 +65,9 @@ const COLUMNS = `a.id,a.draft_id,a.draft_version,a.snapshot_id,a.name,a.schedule
   ${utc("a.preview_as_of")} AS preview_as_of,a.preview_counts,a.status,a.version,a.approved_by,a.approved_at,
   a.cancelled_by,a.cancelled_at,a.updated_at,
   (SELECT r.id FROM campaign_runs r WHERE r.workspace_id=a.workspace_id AND r.approval_id=a.id) AS run_id,
-  (SELECT r.status FROM campaign_runs r WHERE r.workspace_id=a.workspace_id AND r.approval_id=a.id) AS run_status`;
+  (SELECT r.status FROM campaign_runs r WHERE r.workspace_id=a.workspace_id AND r.approval_id=a.id) AS run_status,
+  (SELECT r.start_counts ? 'plan_limit_exceeded' FROM campaign_runs r WHERE r.workspace_id=a.workspace_id
+    AND r.approval_id=a.id) AS run_limited`;
 function shape(row: Record<string, any>) {
   const { preview_as_of, preview_counts, body, ...rest } = row;
   return {
@@ -211,6 +220,12 @@ export async function approveCampaignDraft(pool: Pool, user: User, draftId: stri
         key === "original_member_count" || key === "remaining_member_count" ? preview[key] : preview.counts[key],
       ]),
     );
+    // The monthly campaign send limit (#52), counted under the workspace lock that transaction() holds FOR UPDATE.
+    // A refusal writes nothing.
+    const requested = Number(preview.counts.candidate);
+    const allowance = await campaignSendAllowance(client, workspace, scheduled.scheduled_at);
+    if (!campaignSendsFit(allowance, requested))
+      return { error: "broadcast_limit_reached" as const, broadcast_limit: limitBody(allowance, requested) };
     await client.query(
       `INSERT INTO campaign_approvals(workspace_id,id,draft_id,draft_version,snapshot_id,name,body,schedule_kind,
          scheduled_at,schedule_time_zone,preview_as_of,preview_counts,create_request_hash,approved_by)
@@ -237,11 +252,21 @@ export async function approveCampaignDraft(pool: Pool, user: User, draftId: stri
   });
 }
 
+// A broadcast_limit_reached refusal names the month it counted, its allowance and the candidates it refused.
+function limitBody(allowance: CampaignSendAllowance, requested: number) {
+  return { ...campaignAllowanceBody(allowance), requested: String(requested) };
+}
+
 export type ApprovalChange =
   | { error: null; approval: Awaited<ReturnType<typeof detail>> }
   | {
       error: "campaign_approval_conflict" | "campaign_approval_cancelled" | "campaign_approval_executed";
       approval: Awaited<ReturnType<typeof detail>>;
+    }
+  | {
+      error: "broadcast_limit_reached";
+      approval: Awaited<ReturnType<typeof detail>>;
+      broadcast_limit: ReturnType<typeof limitBody>;
     };
 
 // Locks an approval for a change; a cancelled or executed approval or a stale version answers with the current state.
@@ -265,7 +290,9 @@ async function lockForChange(client: PoolClient, workspace: string, id: string, 
   return { id, error: null };
 }
 
-// Changes only the schedule of an approval in force; what was approved stays as recorded.
+// Changes only the schedule of an approval in force; what was approved stays as recorded. A change that moves the
+// approval into another calendar month checks that month's campaign send limit (#52) with the stored candidate count;
+// a change inside the same month does not, so a downgrade never blocks a time change of an approval in force.
 export async function rescheduleCampaignApproval(
   pool: Pool,
   user: User,
@@ -277,6 +304,24 @@ export async function rescheduleCampaignApproval(
     const locked = await lockForChange(client, workspace, id, request.expected_version);
     if (locked.error) return { error: locked.error, approval: locked.approval! };
     const scheduled = await readSchedule(client, workspace, request);
+    const months = (
+      await client.query<{ moved: boolean; candidate: string }>(
+        `SELECT ${campaignDueMonthSql("a.scheduled_at", "w.time_zone")}<>${campaignDueMonthSql("$3::timestamptz", "w.time_zone")}
+           AS moved,a.preview_counts->>'candidate' AS candidate
+         FROM campaign_approvals a JOIN workspaces w ON w.id=a.workspace_id WHERE a.workspace_id=$1 AND a.id=$2`,
+        [workspace, locked.id, scheduled.scheduled_at],
+      )
+    ).rows[0]!;
+    if (months.moved) {
+      const requested = Number(months.candidate);
+      const allowance = await campaignSendAllowance(client, workspace, scheduled.scheduled_at, locked.id);
+      if (!campaignSendsFit(allowance, requested))
+        return {
+          error: "broadcast_limit_reached",
+          approval: await detail(client, workspace, locked.id),
+          broadcast_limit: limitBody(allowance, requested),
+        };
+    }
     await client.query(
       `UPDATE campaign_approvals SET schedule_kind=$3,scheduled_at=$4::timestamptz,schedule_time_zone=$5,version=version+1,
          updated_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2`,

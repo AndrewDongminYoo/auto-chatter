@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool, type QueryConfig } from "pg";
 import { appApi } from "./api.ts";
+import { seedCampaignSends } from "./workspace-fixture.ts";
 import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -272,7 +273,13 @@ test("each member gets exactly one reason, and the first applicable reason wins"
   assert.equal(body.remaining_member_count, "13");
   assert.match(body.as_of, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/);
   assert.equal(body.estimated_provider_calls, "1");
-  assert.equal(body.plan_broadcast_limit, null);
+  // A new workspace is on free, which approves no campaign (#52); the month is the workspace's.
+  const month = (
+    await pool.query("SELECT to_char(now() AT TIME ZONE time_zone,'YYYY-MM') AS month FROM workspaces WHERE id=$1", [
+      workspace,
+    ])
+  ).rows[0].month;
+  assert.deepEqual(body.plan_broadcast_limit, { month, limit: "0", used: "0", reserved: "0", remaining: "0" });
   assert.equal(body.channel_marketing_supported, true);
   assert.equal(body.global_send_enabled, false);
   assert.equal(body.candidate_meaning, "passed_recorded_conditions_at_as_of");
@@ -464,4 +471,29 @@ test("counts sum to the remaining members after a person deletion, and the previ
   assert.equal(body.original_member_count, "3");
   assert.equal(body.remaining_member_count, "2");
   assertCounts(body, { candidate: 1, marketing_consent_required: 1 });
+});
+
+test("the monthly campaign limit counts runs started in the workspace's calendar month, not UTC's", async () => {
+  await pool.query("UPDATE workspaces SET plan='pro',time_zone='Asia/Seoul' WHERE id=$1", [workspace]);
+  // The local month starts at 15:00 UTC on the last day of the previous UTC month, so a UTC month would count the
+  // first run below as last month's and the second as this month's.
+  const start = "(date_trunc('month',now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul')";
+  const end = "((date_trunc('month',now() AT TIME ZONE 'Asia/Seoul')+interval '1 month') AT TIME ZONE 'Asia/Seoul')";
+  await seedCampaignSends(pool, workspace, C, owner, 5, `${start}-interval '1 microsecond'`);
+  await seedCampaignSends(pool, workspace, C, owner, 3, start);
+  await seedCampaignSends(pool, workspace, C, owner, 2, `${end}-interval '1 microsecond'`);
+  await seedCampaignSends(pool, workspace, C, owner, 7, end);
+  // Another workspace's rows never count.
+  await pool.query("UPDATE workspaces SET plan='pro' WHERE id=$1", [foreignWorkspace]);
+  await seedCampaignSends(pool, foreignWorkspace, FC, outsider, 11, "now()");
+  const month = (await pool.query("SELECT to_char(now() AT TIME ZONE 'Asia/Seoul','YYYY-MM') AS month")).rows[0].month;
+  const body = await preview(await draftFor([[C, "1001"]]));
+  assert.deepEqual(body.plan_broadcast_limit, {
+    month,
+    limit: "5000",
+    used: "5",
+    reserved: "0",
+    remaining: "4995",
+  });
+  assert.equal(body.estimated_provider_calls, body.counts.candidate);
 });

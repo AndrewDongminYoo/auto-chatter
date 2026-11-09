@@ -4,7 +4,8 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool, type QueryConfig } from "pg";
 import { appApi } from "./api.ts";
-import { seedWorkspace } from "./workspace-fixture.ts";
+import { seedCampaignSends, seedWorkspace } from "./workspace-fixture.ts";
+import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
@@ -30,7 +31,10 @@ beforeEach(async () => {
   scheduleClock = null;
   previewClock = null;
   await pool.query("TRUNCATE workspaces,workspace_deletion_records CASCADE");
-  await pool.query("INSERT INTO workspaces(id,time_zone) VALUES($1,'UTC'),($2,'UTC')", [workspace, foreignWorkspace]);
+  await pool.query("INSERT INTO workspaces(id,time_zone,plan) VALUES($1,'UTC','advanced'),($2,'UTC','advanced')", [
+    workspace,
+    foreignWorkspace,
+  ]);
   await pool.query(
     `INSERT INTO workspace_members(workspace_id,user_id,role)
      VALUES($1,$2,'owner'),($1,$3,'agent'),($1,$5,'admin'),($4,$6,'owner')`,
@@ -621,7 +625,8 @@ test("approval writes leave delivery, consent and snapshot rows unchanged and su
     actor = randomUUID(),
     conn = randomUUID();
   await seedWorkspace(pool, ws, actor, conn, "approval-boundary");
-  await pool.query("UPDATE workspaces SET time_zone='UTC' WHERE id=$1", [ws]);
+  // The seeded workspace starts on free, which approves no campaign (#52).
+  await pool.query("UPDATE workspaces SET time_zone='UTC',plan='advanced' WHERE id=$1", [ws]);
   // The fixture also holds an executed approval with its run; this test changes the one in force.
   const fixture = (
     await pool.query("SELECT id,draft_id FROM campaign_approvals WHERE workspace_id=$1 AND status='approved'", [ws])
@@ -797,5 +802,211 @@ test("migration 064 replays over stored approvals and reproduces the canonical w
   assert.ok(
     runner.indexOf("064_campaign_approvals.sql") > runner.indexOf("063_campaign_drafts.sql") &&
       runner.indexOf("064_campaign_approvals.sql") < runner.indexOf("supabase-access.sql"),
+  );
+});
+
+// A comment sender on C whose DM recipient passes every recipient check: a provider-acknowledged private reply, a text
+// DM an hour ago and an explicit marketing grant. The preview counts the sender as a candidate.
+async function candidate(sender: string, recipient: string) {
+  sequence++;
+  const event = (
+    await pool.query(
+      `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+       VALUES($1,$2,$3,$3,$4,'comment') RETURNING id::text,comment_id,media_id`,
+      [workspace, C, `comment-${sequence}`, sender],
+    )
+  ).rows[0];
+  const rule = (
+    await pool.query(
+      `INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text)
+       VALUES(gen_random_uuid(),$1,$2,$3,'hello','reply') RETURNING id`,
+      [workspace, C, event.media_id],
+    )
+  ).rows[0].id;
+  await pool.query(
+    `INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,
+       private_reply_text,recipient_id,status,provider_message_id,sent_at)
+     VALUES($1,$2,$3,$4,$5,$6,$7,'reply',$8,'sent','acknowledged',now()-interval '1 hour')`,
+    [workspace, C, event.id, rule, event.comment_id, event.media_id, sender, recipient],
+  );
+  await pool.query(
+    `INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at)
+     VALUES($1,$2,$3,$4,'dm','text',now()-interval '1 hour')`,
+    [workspace, C, recipient, `dm-${sequence}`],
+  );
+  await recordChannelConsentEvent(pool, {
+    requestKey: randomUUID(),
+    workspaceId: workspace,
+    connectionId: C,
+    channel: "instagram",
+    identityKind: "dm_recipient",
+    identityValue: recipient,
+    purpose: "marketing",
+    decision: "grant",
+    evidenceKind: "explicit",
+    evidenceReference: "test",
+    occurredAt: new Date(),
+    actorId: owner,
+  });
+}
+const setPlan = (plan: string) => pool.query("UPDATE workspaces SET plan=$2 WHERE id=$1", [workspace, plan]);
+// Delivery rows of an earlier run on C, started at `startedAt` (SQL), for the monthly count (#52).
+const sends = (count: number, startedAt = "now()", rows?: Parameters<typeof seedCampaignSends>[6]) =>
+  seedCampaignSends(pool, workspace, C, owner, count, startedAt, rows);
+async function writes() {
+  return (
+    await pool.query(
+      `SELECT (SELECT count(*)::int FROM campaign_approvals) AS approvals,
+         (SELECT count(*)::int FROM campaign_approval_events) AS events,
+         (SELECT md5(coalesce(string_agg(t::text,',' ORDER BY t::text),'')) FROM campaign_approvals t) AS stored`,
+    )
+  ).rows[0];
+}
+// This month and a workspace-local time in the next month, in UTC (the test workspace's zone).
+async function months() {
+  return (
+    await pool.query(
+      `SELECT to_char(now() AT TIME ZONE 'UTC','YYYY-MM') AS current,
+         to_char(date_trunc('month',now() AT TIME ZONE 'UTC')+interval '1 month','YYYY-MM') AS next,
+         to_char(date_trunc('month',now() AT TIME ZONE 'UTC')+interval '1 month 2 days 10 hours','YYYY-MM-DD"T"HH24:MI') AS later,
+         to_char(date_trunc('month',now() AT TIME ZONE 'UTC')+interval '1 month 5 days 9 hours','YYYY-MM-DD"T"HH24:MI') AS later2`,
+    )
+  ).rows[0] as { current: string; next: string; later: string; later2: string };
+}
+
+test("the monthly campaign send limit refuses an approval that would exceed it and writes nothing", async () => {
+  await setPlan("essential");
+  await candidate("1001", "2001");
+  await candidate("1002", "2002");
+  await sends(998);
+  // Rows cancelled before any provider call do not count; a cancelled row that reached the provider does.
+  await sends(5, "now()", { status: "cancelled" });
+  await sends(1, "now()", { status: "cancelled", providerCalled: true });
+  const { current } = await months();
+  const { id: two } = await draftFor([
+    [C, "1001"],
+    [C, "1002"],
+  ]);
+  const before = await writes();
+  const refused = await expect(await approve(two, approval()), 409);
+  assert.deepEqual(refused, {
+    error: "broadcast_limit_reached",
+    broadcast_limit: { month: current, limit: "1000", used: "999", reserved: "0", remaining: "1", requested: "2" },
+  });
+  assert.deepEqual(await writes(), before, "a refusal writes nothing");
+  // One candidate fills the month exactly.
+  const { id: one } = await draftFor();
+  const saved = await expect(await approve(one, approval()), 201);
+  assert.equal(saved.preview.counts.candidate, "1");
+  const preview = await expect(await request("GET", `/api/campaign-drafts/${two}/preview`));
+  assert.deepEqual(preview.plan_broadcast_limit, {
+    month: current,
+    limit: "1000",
+    used: "999",
+    reserved: "1",
+    remaining: "0",
+  });
+});
+
+test("approvals in force due in the same month count, a later month does not, and a reschedule into a full month is refused", async () => {
+  await setPlan("essential");
+  await candidate("1001", "2001");
+  await sends(998);
+  const { current, next, later, later2 } = await months();
+  const first = await expect(await approve((await draftFor()).id, approval()), 201);
+  await expect(await approve((await draftFor()).id, approval()), 201);
+  const { id: third } = await draftFor();
+  const full = await expect(await approve(third, approval()), 409);
+  assert.deepEqual(full.broadcast_limit, {
+    month: current,
+    limit: "1000",
+    used: "998",
+    reserved: "2",
+    remaining: "0",
+    requested: "1",
+  });
+  // The next month has nothing used or reserved yet.
+  const scheduled = await expect(await approve(third, approval(1, later)), 201);
+  const before = await writes();
+  const moved = await expect(
+    await reschedule(scheduled.id, { expected_version: 1, schedule_local: null, expected_time_zone: "UTC" }),
+    409,
+  );
+  assert.equal(moved.error, "broadcast_limit_reached");
+  assert.equal(moved.broadcast_limit.month, current);
+  assert.equal(moved.broadcast_limit.reserved, "2", "the moved approval does not count itself");
+  assert.equal(moved.broadcast_limit.requested, "1");
+  assert.equal(moved.approval.version, 1);
+  assert.equal(moved.approval.schedule_kind, "scheduled");
+  assert.deepEqual(await writes(), before, "a refused reschedule writes nothing");
+  // A change inside the same month is not counted again.
+  const kept = await expect(
+    await reschedule(scheduled.id, { expected_version: 1, schedule_local: later2, expected_time_zone: "UTC" }),
+  );
+  assert.equal(kept.version, 2);
+  assert.equal(kept.schedule_local, later2);
+  assert.equal(
+    (await expect(await request("GET", `/api/campaign-drafts/${third}/preview`))).plan_broadcast_limit.month,
+    current,
+  );
+  assert.ok(next > current);
+  // Cancelling an approval in force frees its reservation.
+  await expect(await cancel(first.id, 1));
+  const now = await expect(
+    await reschedule(scheduled.id, { expected_version: 2, schedule_local: null, expected_time_zone: "UTC" }),
+  );
+  assert.equal(now.schedule_kind, "immediate");
+  // A downgrade keeps approvals in force and their changes inside the same month; the run start decides.
+  await setPlan("free");
+  const same = await expect(
+    await reschedule(scheduled.id, { expected_version: 3, schedule_local: null, expected_time_zone: "UTC" }),
+  );
+  assert.equal(same.version, 4);
+  assert.equal(same.status, "approved");
+});
+
+test("the free plan approves no campaign, not even one without candidates", async () => {
+  await setPlan("free");
+  const { current, later } = await months();
+  const { id: draft } = await draftFor([[OFF, "1001"]]);
+  const before = await writes();
+  for (const schedule of [null, later]) {
+    const refused = await expect(await approve(draft, approval(1, schedule)), 409);
+    assert.equal(refused.error, "broadcast_limit_reached");
+    assert.equal(refused.broadcast_limit.limit, "0");
+    assert.equal(refused.broadcast_limit.requested, "0");
+    assert.equal(refused.broadcast_limit.remaining, "0");
+    if (schedule === null) assert.equal(refused.broadcast_limit.month, current);
+  }
+  assert.deepEqual(await writes(), before);
+});
+
+test("two approvals that each fit alone wait for the workspace lock and cannot both pass", async () => {
+  await setPlan("essential");
+  await candidate("1001", "2001");
+  await sends(999);
+  const { id: a } = await draftFor();
+  const { id: b } = await draftFor();
+  const blocker = await pool.connect();
+  try {
+    await blocker.query("BEGIN");
+    await blocker.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [workspace]);
+    const first = approve(a, approval());
+    await waitingForLocks(1);
+    const second = approve(b, approval());
+    await waitingForLocks(2);
+    await blocker.query("COMMIT");
+    const results = await Promise.all([first, second]);
+    assert.deepEqual(results.map((response) => response.status).sort(), [201, 409]);
+    const refused = await results.find((response) => response.status === 409)!.json();
+    assert.equal(refused.error, "broadcast_limit_reached");
+    assert.equal(refused.broadcast_limit.reserved, "1");
+  } finally {
+    await blocker.query("ROLLBACK").catch(() => undefined);
+    blocker.release();
+  }
+  assert.equal(
+    (await pool.query("SELECT count(*)::int AS n FROM campaign_approvals WHERE status='approved'")).rows[0].n,
+    1,
   );
 });

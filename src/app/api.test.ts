@@ -2811,8 +2811,13 @@ const memberId = "33333333-3333-4333-8333-333333333333";
 const ownerPool = () => {
   const row = { workspace_id: workspaceId, role: "owner", time_zone: "Asia/Seoul" };
   const usage = { plan: "free", members: 1, open_invites: 0, connections: 0 };
+  // The monthly campaign send count (#52).
+  const campaign = { plan: "free", month: "2026-11", used: "0", reserved: "0" };
   return {
-    query: async (sql: string) => ({ rows: [sql.includes("open_invites") ? usage : row], rowCount: 1 }),
+    query: async (sql: string) => ({
+      rows: [sql.includes("open_invites") ? usage : sql.includes("campaign_deliveries") ? campaign : row],
+      rowCount: 1,
+    }),
     connect: async () => ({
       query: async (sql: string) =>
         sql.includes("SELECT role FROM workspace_members")
@@ -2878,8 +2883,8 @@ test("the dashboard bootstrap spends no write limit for a member and only the us
     role: "owner",
     time_zone: "Asia/Seoul",
     plan: "free",
-    limits: { seats: 1, connections: 1 },
-    usage: { seats: 1, connections: 0 },
+    limits: { seats: 1, connections: 1, campaign_sends_per_month: 0 },
+    usage: { seats: 1, connections: 0, campaign_sends: 0 },
   });
   assert.deepEqual([user.keys, workspace.keys], [[], []]);
   // Without a membership the request creates a workspace, so it spends the user limit after the membership read.
