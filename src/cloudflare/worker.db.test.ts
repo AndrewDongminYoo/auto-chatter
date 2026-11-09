@@ -419,6 +419,76 @@ test("duplicate webhook and queue delivery send one persisted reply", async () =
   assert.deepEqual(await rows(), [{ status: "sent", failure_code: null, rate_limit_retries: 0 }]);
 });
 
+test("a signed messaging_seen event stores one read of a sent reply and wakes nothing (#312)", async () => {
+  assert.equal((await worker.fetch(request(), env)).status, 200);
+  await pool.query("UPDATE private_reply_outbox SET status='sent',recipient_id='456',provider_message_id='sent-mid'");
+  published = [];
+  const body = JSON.stringify({
+    object: "instagram",
+    entry: [
+      {
+        id: "123",
+        time: Date.now(),
+        messaging: [
+          { sender: { id: "456" }, recipient: { id: "123" }, timestamp: 1762736400000, read: { mid: "sent-mid" } },
+        ],
+      },
+    ],
+  });
+  const seen = () =>
+    new Request("https://example.test/webhooks/instagram", {
+      method: "POST",
+      body,
+      headers: { "x-hub-signature-256": "sha256=" + createHmac("sha256", "test-secret").update(body).digest("hex") },
+    });
+  assert.equal((await worker.fetch(seen(), env)).status, 200);
+  assert.equal((await worker.fetch(seen(), env)).status, 200);
+  assert.deepEqual(published, []);
+  assert.deepEqual(
+    (await pool.query("SELECT connection_id,recipient_id,message_id,read_at FROM instagram_message_reads")).rows,
+    [{ connection_id: connectionId, recipient_id: "456", message_id: "sent-mid", read_at: new Date(1762736400000) }],
+  );
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_messages")).rows[0].count, 0);
+  assert.equal(sends, 0);
+});
+
+test("a read of the reply a run waits on neither answers nor ends that run (#312)", async () => {
+  await awaitingReplyRuns();
+  const body = JSON.stringify({
+    object: "instagram",
+    entry: [
+      {
+        id: "123",
+        time: Date.now(),
+        messaging: [
+          { sender: { id: "456" }, recipient: { id: "123" }, timestamp: Date.now(), read: { mid: "m-comment-ask" } },
+        ],
+      },
+    ],
+  });
+  const response = await worker.fetch(
+    new Request("https://example.test/webhooks/instagram", {
+      method: "POST",
+      body,
+      headers: { "x-hub-signature-256": "sha256=" + createHmac("sha256", "test-secret").update(body).digest("hex") },
+    }),
+    env,
+  );
+  assert.equal(response.status, 200);
+  // The same sender's DM would continue the waiting run (see the webhook DM test); its read does not.
+  assert.deepEqual(
+    (await pool.query("SELECT status,(SELECT count(*)::int FROM flow_step_runs) AS steps FROM flow_runs ORDER BY id"))
+      .rows,
+    [
+      { status: "awaiting_reply", steps: 0 },
+      { status: "awaiting_reply", steps: 0 },
+    ],
+  );
+  assert.deepEqual((await pool.query("SELECT recipient_id,message_id FROM instagram_message_reads")).rows, [
+    { recipient_id: "456", message_id: "m-comment-ask" },
+  ]);
+});
+
 // The stored fixture token expires within the alert window; the operations tests use a longer one.
 async function longLivedToken() {
   await pool.query("UPDATE instagram_connections SET token_expires_at=now()+interval '30 days'");

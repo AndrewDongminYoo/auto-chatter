@@ -343,3 +343,55 @@ test("the database rejects an outbox event from another workspace", async () => 
     /foreign key constraint/,
   );
 });
+
+// The DM start trigger, reply wait and follow confirmation paths need flows and rules this fixture does not create;
+// dm-start-trigger.db.test.ts and the Worker tests prove that a read reaches none of them.
+test("a signed messaging_seen event stores one read of a sent message and stores no inbox DM (#312)", async () => {
+  await pool.query("UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now() WHERE id=$1", [
+    connectionId,
+  ]);
+  const comment = await signedPost(commentBody());
+  assert.equal(comment.status, 200);
+  await pool.query("UPDATE private_reply_outbox SET status='sent',recipient_id='900',provider_message_id='sent-mid'");
+  // A DM at this time, after inbox_enabled_at, would be stored in the inbox.
+  const readAt = Date.now() + 1000;
+  const seen = (messageId: string) =>
+    JSON.stringify({
+      object: "instagram",
+      entry: [
+        {
+          id: "account-1",
+          time: Date.now(),
+          messaging: [
+            {
+              sender: { id: "900" },
+              recipient: { id: "account-1" },
+              timestamp: readAt,
+              read: { mid: messageId },
+            },
+          ],
+        },
+      ],
+    });
+  for (let attempt = 0; attempt < 2; attempt++)
+    assert.equal((await signedPost(seen("sent-mid"))).status, comment.status);
+  assert.equal((await signedPost(seen("app-sent-mid"))).status, comment.status);
+  assert.deepEqual(
+    (await pool.query("SELECT workspace_id,connection_id,recipient_id,message_id,read_at FROM instagram_message_reads"))
+      .rows,
+    [
+      {
+        workspace_id: workspaceId,
+        connection_id: connectionId,
+        recipient_id: "900",
+        message_id: "sent-mid",
+        read_at: new Date(readAt),
+      },
+    ],
+  );
+  assert.equal(
+    (await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_messages")).rows[0].count,
+    0,
+    "the inbox must not store a read event",
+  );
+});

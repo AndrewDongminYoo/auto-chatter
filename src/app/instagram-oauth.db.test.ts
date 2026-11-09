@@ -70,7 +70,7 @@ test("OAuth verifies ownership, stores ciphertext, subscribes webhooks, and cons
     assert.equal(init?.method, "POST");
     assert.equal(
       new URLSearchParams(String(init?.body)).get("subscribed_fields"),
-      "comments,messages,messaging_postbacks",
+      "comments,messages,messaging_postbacks,messaging_seen",
     );
     return Response.json({ success: true });
   };

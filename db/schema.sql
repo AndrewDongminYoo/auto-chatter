@@ -1473,6 +1473,32 @@ CREATE TABLE IF NOT EXISTS instagram_dm_automation (
   PRIMARY KEY(workspace_id,connection_id,recipient_id),
   FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id)
 );
+-- Reads of messages the service sent (#312), from the messaging_seen webhook field (Instagram Login only). A row is
+-- stored only for an active connection whose account received the event and only when read.mid is a
+-- provider_message_id that one of the send tables stored for that connection. recipient_id is the reader's messaging
+-- sender ID, the DM recipient of the send tables; read_at is Meta's event time, and the first stored one stays.
+-- Server roles never delete rows; the deletion functions do (person deletion by the dm_recipient identity).
+CREATE TABLE IF NOT EXISTS instagram_message_reads (
+  workspace_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  recipient_id text NOT NULL CHECK(recipient_id ~ '^[0-9]{1,40}$'),
+  message_id text NOT NULL CHECK(length(btrim(message_id))>0 AND length(message_id)<=512),
+  read_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(connection_id,message_id,recipient_id),
+  FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id)
+);
+-- Every read event looks its read.mid up among one connection's sent messages in each send table.
+CREATE INDEX IF NOT EXISTS private_reply_outbox_provider_message_idx
+  ON private_reply_outbox(connection_id,provider_message_id) WHERE provider_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS instagram_follow_conversations_provider_message_idx
+  ON instagram_follow_conversations(connection_id,provider_message_id) WHERE provider_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS instagram_manual_replies_provider_message_idx
+  ON instagram_manual_replies(connection_id,provider_message_id) WHERE provider_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS flow_dm_deliveries_provider_message_idx
+  ON flow_dm_deliveries(connection_id,provider_message_id) WHERE provider_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS campaign_deliveries_provider_message_idx
+  ON campaign_deliveries(connection_id,provider_message_id) WHERE provider_message_id IS NOT NULL;
 -- Outbound webhooks (#47). An endpoint is an HTTPS address that an administrator registered; a flow's
 -- webhook node queues one signed delivery to it. Server roles never delete these rows; the deletion
 -- functions do. The limit of active endpoints per workspace is enforced in code under the workspace lock.
@@ -1720,6 +1746,9 @@ BEGIN
   DELETE FROM public.instagram_dm_automation WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_dm_automation', affected);
+  DELETE FROM public.instagram_message_reads WHERE workspace_id=p_workspace AND connection_id=p_connection;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_message_reads', affected);
   DELETE FROM public.instagram_contact_tags WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_tags', affected);
@@ -2038,6 +2067,11 @@ BEGIN
   WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients);
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_dm_automation', affected);
+  -- The person's reads of messages the service sent, keyed by the reader's messaging sender ID like the inbox.
+  DELETE FROM public.instagram_message_reads
+  WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients);
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_message_reads', affected);
   DELETE FROM public.instagram_contact_tags
   WHERE workspace_id=p_workspace AND connection_id=p_connection AND sender_id=ANY(senders);
   GET DIAGNOSTICS affected = ROW_COUNT;
@@ -2282,6 +2316,9 @@ BEGIN
   DELETE FROM public.instagram_dm_automation WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_dm_automation', affected);
+  DELETE FROM public.instagram_message_reads WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_message_reads', affected);
   DELETE FROM public.instagram_contact_tags WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_tags', affected);

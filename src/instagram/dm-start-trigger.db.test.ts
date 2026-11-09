@@ -10,6 +10,8 @@ import { processNextCampaignDelivery } from "./campaign-delivery-worker.ts";
 import { processNextManualReply } from "./manual-reply-worker.ts";
 import { recordChannelConsentEvent } from "./channel-consent.ts";
 import type { InstagramMessage } from "./message-events.ts";
+import { instagramAdapter, partitionInstagramEvents } from "./channel-adapter.ts";
+import { ingestMessageReads, parseMessageReadEvents } from "./message-reads.ts";
 
 // DM start triggers, PR 1 (#33): a typed DM starts a published DM keyword or default-reply flow, records a start
 // event, the run and its first message in flow_dm_deliveries, and sends nothing.
@@ -326,6 +328,44 @@ test("a follow confirmation takes its DM, and a pending confirmation blocks the 
   await pool.query("UPDATE instagram_follow_conversations SET status='sent'");
   await dm("9300", "hello again");
   assert.equal((await started()).length, 1);
+});
+
+test("a read of a sent reply neither starts a DM flow nor answers a follow confirmation (#312)", async () => {
+  await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  const gated = await sentReply("9300", true);
+  await pool.query(
+    `INSERT INTO instagram_follow_conversations(reply_id,connection_id,recipient_id,confirmation_keyword,follower_reply_text,non_follower_reply_text,status)
+     VALUES($1,$2,'9300','ok','yes','no','waiting')`,
+    [gated, connectionId],
+  );
+  await sentReply("9400");
+  const read = (reader: string) => ({
+    sender: { id: reader },
+    recipient: { id: "owned-account" },
+    timestamp: Date.now() + 1000,
+    read: { mid: `mid-${reader}` },
+  });
+  const body = new TextEncoder().encode(
+    JSON.stringify({
+      object: "instagram",
+      entry: [{ id: "owned-account", time: Date.now(), messaging: [read("9300"), read("9400")] }],
+    }),
+  );
+  // The calls of the webhook ingress, in its order.
+  await ingestMessages(pool, partitionInstagramEvents(instagramAdapter.decodeWebhook(body)).messages);
+  await ingestMessageReads(pool, parseMessageReadEvents(body));
+  assert.deepEqual((await pool.query("SELECT recipient_id FROM instagram_message_reads ORDER BY 1")).rows, [
+    { recipient_id: "9300" },
+    { recipient_id: "9400" },
+  ]);
+  assert.equal((await started()).length, 0);
+  assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "waiting");
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_message_receipts")).rows[0].count, 0);
+  // A DM from the same people reaches both paths, so the fixture can produce the states the read did not.
+  await dm("9400", "hello");
+  assert.equal((await started()).length, 1);
+  await dm("9300", "OK");
+  assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "pending");
 });
 
 // #291: ingestion accepts a DM dated up to 60 seconds ahead, so a DM can start a DM trigger flow before a private
@@ -872,8 +912,11 @@ test("migration 068 replays over stored rows, keeps the canonical deletion funct
   const sql = await readFile(new URL("../../db/migrations/068_dm_start_triggers.sql", import.meta.url), "utf8");
   await pool.query(sql);
   await pool.query(sql);
-  // Migration 069 (#291) holds the latest body of the three deletion functions.
+  // Migrations 069 (#291) and 070 (#312) redefine the three deletion functions; 070 holds the latest body.
   await pool.query(await readFile(new URL("../../db/migrations/069_dm_flow_delivery.sql", import.meta.url), "utf8"));
+  await pool.query(
+    await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8"),
+  );
   assert.deepEqual(await definitions(), canonical);
   assert.equal((await started()).length, 1);
   // The source CHECK holds: a run has exactly one of a comment event and a DM start event.

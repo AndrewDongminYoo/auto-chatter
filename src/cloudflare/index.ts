@@ -4,6 +4,7 @@ import {
   recoverStaleManualReplies,
 } from "../instagram/manual-reply-worker.ts";
 import { instagramAdapter, partitionInstagramEvents } from "../instagram/channel-adapter.ts";
+import { ingestMessageReads, parseMessageReadEvents } from "../instagram/message-reads.ts";
 import {
   clearExpiredUnmatchedReplies,
   ingestMessages,
@@ -206,8 +207,10 @@ async function receive(request: Request, env: Env, correlationId: string): Promi
     return new Response(null, { status: 403 });
   let comments;
   let messages;
+  let reads;
   try {
     ({ comments, messages } = partitionInstagramEvents(instagramAdapter.decodeWebhook(body)));
+    reads = parseMessageReadEvents(body);
   } catch {
     return new Response(null, { status: 400 });
   }
@@ -223,6 +226,10 @@ async function receive(request: Request, env: Env, correlationId: string): Promi
       // The commit is durable. Cron repairs the DB-to-Queue publication gap.
       logOperation({ event: "queue_publish_failed", code: "reply_notification_failed", correlation_id: correlationId });
     }
+    // Reads are stored last, after the comments and DMs are committed and woken, so a failed read write cannot delay
+    // them. It returns 503 and Meta redelivers the body, whose comments and DMs are then deduplicated. A read creates
+    // no due work, so its account is not woken.
+    await ingestMessageReads(pool, reads);
     return new Response(null, { status: 200 });
   } finally {
     await pool.end();
