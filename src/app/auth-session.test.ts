@@ -301,7 +301,8 @@ test("late protected error bodies do not expose another session's structured dat
     const rejected = assert.rejects(pending, (error: unknown) => {
       assert.ok(error && typeof error === "object");
       assert.match((error as Error).message, /로그인 상태가 변경/);
-      for (const key of ["segment", "reminder", "rows", "counts"]) assert.equal(Reflect.get(error, key), undefined);
+      for (const key of ["segment", "reminder", "rows", "counts", "broadcast_limit"])
+        assert.equal(Reflect.get(error, key), undefined);
       return true;
     });
     void rejected.catch(() => {});
@@ -315,6 +316,7 @@ test("late protected error bodies do not expose another session's structured dat
           reminder: { text: "A-private" },
           rows: [{ value: "A-private" }],
           counts: { total: 1 },
+          broadcast_limit: { month: "A-private" },
         }),
       ),
     );
@@ -324,15 +326,27 @@ test("late protected error bodies do not expose another session's structured dat
 });
 
 test("unchanged protected error responses retain their status and structured fields", async () => {
+  const broadcastLimit = {
+    limit: "1000",
+    month: "2026-11",
+    remaining: "1",
+    requested: "2",
+    reserved: "0",
+    used: "999",
+  };
   for (const status of [401, 409, 422]) {
     const h = tabs();
     const tab = h.make(async () =>
-      Response.json({ error: "version_conflict", segment: { name: "current session" } }, { status }),
+      Response.json(
+        { broadcast_limit: broadcastLimit, error: "version_conflict", segment: { name: "current session" } },
+        { status },
+      ),
     );
     await assert.rejects(tab.api("/api/protected-write", "POST", {}, false), (error: unknown) => {
       assert.ok(error && typeof error === "object");
       assert.equal(Reflect.get(error, "status"), status);
       assert.equal(Reflect.get(error, "segment").name, "current session");
+      assert.deepEqual(Reflect.get(error, "broadcast_limit"), broadcastLimit);
       return true;
     });
   }

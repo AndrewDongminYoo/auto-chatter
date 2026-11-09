@@ -1101,7 +1101,7 @@ test("the start counts the other approvals in force due in the same month, as th
   await qualifying("1001", "2001");
   const reserved = await approve(await draftFor([[C, "1003"]]), true);
   await pool.query(
-    `UPDATE campaign_approvals SET scheduled_at=date_trunc('month',now())+interval '1 month'-interval '1 second',
+    `UPDATE campaign_approvals SET scheduled_at=(date_trunc('month',now() AT TIME ZONE 'UTC')+interval '1 month'-interval '1 second') AT TIME ZONE 'UTC',
        preview_counts=jsonb_set(preview_counts,'{candidate}','"600"') WHERE id=$1`,
     [reserved.id],
   );
