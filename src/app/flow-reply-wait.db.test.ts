@@ -801,3 +801,76 @@ test("migration 026 replays after 025 and only an awaiting run carries a wait wi
   await assert.rejects(pool.query("UPDATE flow_runs SET status='delivering'"), { code: "23514" });
   await pool.query("UPDATE flow_runs SET status='delivering',resume_node_id=NULL");
 });
+
+test("the flow report counts runs that reached a wait and the waits a recipient's DM ended", async () => {
+  // Flow A waits on 1789, flow B on 2000 and flow C sends one reply on 3000 without a wait.
+  const a = await enabledFlow();
+  const b = await enabledFlow(waitingDocument({ mediaId: "2000" }));
+  const plain = waitingDocument({ mediaId: "3000" });
+  plain.nodes = plain.nodes.slice(0, 2);
+  plain.edges = plain.edges.slice(0, 1);
+  const c = await enabledFlow(plain);
+  await comment("comment-1", "sender-1");
+  await comment("comment-2", "sender-2");
+  await comment("comment-6", "sender-6", "2000");
+  await comment("comment-7", "sender-7", "2000");
+  await comment("comment-8", "sender-8", "3000");
+  // The same person and media again: skipped as a duplicate, so it never waits.
+  await comment("comment-9", "sender-1");
+  await sendAll();
+  // Its reply is not sent yet, so this run is awaiting a reply whose wait has not started.
+  await comment("comment-4", "sender-4");
+  await dm("9001", "XL");
+  assert.equal((await request("POST", `/api/flows/${b}/disable`)).status, 200);
+  // Flow B is off: the DM cancels run 6 and is still recorded on it, and the timeout cancels run 7.
+  await dm("9006", "M", { id: "in-6" });
+  await sentMinutesAgo(61);
+  assert.equal(await resumeDueFlowRuns(pool), 2);
+  const stored = (
+    await pool.query<{ comment_id: string; status: string; reply_message_id: string | null }>(
+      `SELECT e.comment_id,r.status,r.reply_message_id FROM flow_runs r
+       JOIN instagram_comment_events e ON e.id=r.event_id ORDER BY e.comment_id`,
+    )
+  ).rows.map((row) => [row.comment_id, row.status, row.reply_message_id !== null]);
+  assert.deepEqual(stored, [
+    ["comment-1", "ended", true],
+    ["comment-2", "ended", false],
+    ["comment-4", "awaiting_reply", false],
+    ["comment-6", "cancelled", true],
+    ["comment-7", "cancelled", false],
+    ["comment-8", "delivering", false],
+    ["comment-9", "skipped", false],
+  ]);
+  // A wait leaves a step only when the run resumes past it, so steps alone would find runs 1 and 2 only.
+  const stepped = await pool.query(
+    "SELECT DISTINCT run_id FROM flow_step_runs WHERE node_type='wait_for_reply' AND outcome IN ('replied','timeout')",
+  );
+  assert.equal(stepped.rowCount, 2);
+
+  const period = (
+    await pool.query<{ from: string; before: string; zone: string }>(
+      `SELECT to_char((now() AT TIME ZONE time_zone)::date-1,'YYYY-MM-DD') AS from,
+         to_char((now() AT TIME ZONE time_zone)::date+2,'YYYY-MM-DD') AS before,time_zone AS zone FROM workspaces`,
+    )
+  ).rows[0]!;
+  const query = `from=${period.from}&before=${period.before}&expected_time_zone=${encodeURIComponent(period.zone)}`;
+  const response = await request("GET", `/api/reports/flow-runs?${query}&group_by=flow`);
+  const body = (await response.json()) as {
+    run_counts: Record<string, string>;
+    reply_wait_counts: Record<string, string>;
+    groups: { key: string; run_counts: Record<string, string>; reply_wait_counts: Record<string, string> }[];
+  };
+  assert.equal(response.status, 200, JSON.stringify(body));
+  assert.equal(body.run_counts.total, "7");
+  assert.deepEqual(body.reply_wait_counts, { reached: "5", replied: "2", not_replied: "3" });
+  const byFlow = new Map(body.groups.map((group) => [group.key, group]));
+  assert.deepEqual(byFlow.get(a)!.reply_wait_counts, { reached: "3", replied: "1", not_replied: "2" });
+  assert.equal(byFlow.get(a)!.run_counts.total, "4");
+  assert.deepEqual(byFlow.get(b)!.reply_wait_counts, { reached: "2", replied: "1", not_replied: "1" });
+  assert.deepEqual(byFlow.get(c)!.reply_wait_counts, { reached: "0", replied: "0", not_replied: "0" });
+  assert.deepEqual(
+    body.groups.map((group) => group.key),
+    [a, b, c].sort(),
+  );
+  assert.equal(JSON.stringify(body).includes("in-6"), false);
+});
