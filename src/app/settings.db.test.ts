@@ -1951,6 +1951,17 @@ test("administrator ownership assignment refuses to leave a workspace holding in
     await client.query("TRUNCATE webhook_endpoints CASCADE");
     await client.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'kept','{}')", [own]);
     await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
+    await client.query("TRUNCATE flows CASCADE");
+    // An archived reply template is still workspace data that only a member can read, export or delete.
+    await client.query(
+      "INSERT INTO workspace_reply_templates(workspace_id,name,body,archived,created_by,updated_by) VALUES($1,'kept','text',true,$2,$2)",
+      [own, mover],
+    );
+    await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
+    assert.equal(
+      (await client.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [mover])).rows[0].workspace_id,
+      own,
+    );
   } finally {
     await client.query("RESET session_replication_role");
     await client.query("DROP TABLE IF EXISTS pg_temp.verified_users");
@@ -2206,6 +2217,9 @@ test("segments reject invalid names, duplicate normalized names and mixed filter
     { name: " " },
     { name: "x".repeat(61) },
     { name: "bad\nname" },
+    // Format characters (a right-to-left override, a zero-width space) would make a stored name display as another.
+    { name: "bad\u202Ename" },
+    { name: "bad\u200Bname" },
     { name: "Lead", extra: true },
     { name: "Lead", connection_id: "bad" },
     { name: "Lead", tag: "x".repeat(41) },
