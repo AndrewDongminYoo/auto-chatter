@@ -666,6 +666,23 @@ migration 적용과 Worker 배포 사이에는 이 Mac의 Wrangler 로그인 정
 연락처·필터·필드·자동화 중지·수신 인박스의 실계정 검증은 별도로 수행해야 합니다.
 다른 DB로 이전할 때의 데이터 복사는 자동화되어 있지 않습니다.
 
+앞 기록 이후 migration이 없는 코드 배포는 [GitHub Actions 자동 배포](#github-actions-자동-배포)가 실행했고, 배포한 버전과 스모크 결과는 각 실행의 job summary에 남아 있습니다.
+2026-11-10 00:14Z에는 "조회, 백업, 적용 및 배포 진행해주세요" 요청에 따라 `main` 커밋 `ac1fa7f`를 적용했습니다. 마지막 배포(`8d81ea1`, PR #314) 이후 이 커밋에 들어온 변경은 PR #316(읽음 이벤트 저장, migration 070)과 #317(리포트 테스트)이며, 두 병합의 자동 배포는 migration 검사에서 멈췄습니다.
+적용 전 조회에서 운영 DB는 069까지 적용된 상태였고 `instagram_message_reads`는 없었습니다. 다섯 발송 테이블의 행은 `private_reply_outbox` 4개, `instagram_follow_conversations` 3개, 나머지 0개였고, 실행 중인 다른 세션은 없었습니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-11-10-migration-070/public-pre-070.dump`(377,899바이트, SHA-256 `bf1eb289d7e6fc75f19fcd55135ec0f8c68c2264fb386514be1d3e407b16e173`)에 저장했고, 목록 읽기에서 데이터 테이블 57개를 확인했습니다.
+같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 실행했습니다. 실행은 exit 0으로 끝났고, 로그 225줄에 오류는 없었으며 모두 NOTICE였습니다.
+적용 후 `instagram_message_reads`가 생겼고 RLS가 켜져 있으며, `auto_chatter_server`는 SELECT·INSERT·UPDATE만 가졌습니다. 다섯 발송 테이블에 `*_provider_message_idx` 인덱스가 생겼고, 세 삭제 함수가 새 테이블을 지웁니다.
+이어서 Deploy 워크플로를 `migrations_applied`를 켜고 수동 실행했습니다(실행 42726913928). Worker 버전 `7eb77c2a-6f7c-44aa-8f83-12043e775cba`가 활성이 됐고 공개 스모크 검사 26개가 통과했습니다.
+`scheduled_steps`를 00:18:48Z, 00:19:53Z, 00:20:59Z에 조회했습니다. 발송과 무관한 8개 단계는 배포(00:15:53Z) 뒤 매분 성공 시각이 갱신됐고, 배포 이후의 실패 기록과 켜진 경보는 없었습니다.
+
+같은 날 Instagram 연결을 다시 하면서 운영 연결이 약 2시간 동안 끊겼습니다. 순서대로 다음이 확인됐습니다.
+
+- Meta 앱 대시보드에서 계정을 다시 추가하자 서비스의 연결 행(`token_obtained_at`)은 바뀌지 않았고, 계정의 `subscribed_apps` 응답만 `comments`·`messages`·`messaging_postbacks`에서 `messages` 하나로 바뀌었습니다. 이 상태에서는 댓글과 postback 웹훅이 오지 않습니다. 재연결은 서비스 대시보드의 "계정 연결"로만 합니다.
+- 서비스 대시보드에서 연결을 해제한 뒤 "계정 연결" 버튼이 꺼져 있었습니다. 2026-11-10 이전 활성 버전(`7eb77c2a`)의 바인딩에는 `INSTAGRAM_INTERNAL_EMAILS`가 없었고, 로컬 `.env`의 값은 비어 있었습니다. 빈 값으로 등록을 시도했는데 저장되지 않았는지는 확인하지 않았습니다. 검수용 이메일을 `wrangler secret put`으로 등록한 뒤 연결을 시작할 수 있었습니다.
+- 연결은 `{"error":"instagram_connection_failed"}`로 끝났습니다. PR #318의 진단 로그는 `long_lived_exchange_http_400_igapiexception_100`, 즉 코드 교환은 성공하고 장기 토큰 교환이 Meta의 `IGApiException` 코드 100으로 거절됐다고 남겼습니다. 앱 역할에서 그 계정의 Instagram 테스터 초대가 "대기 중"이었고, Instagram에서 초대를 수락한 뒤 다음 연결이 성공했습니다.
+- 성공한 연결은 새 토큰(`token_obtained_at` 02:48Z)을 저장했고, 계정 구독은 `comments`·`messages`·`messaging_postbacks`·`messaging_seen` 네 필드가 됐습니다.
+- `wrangler secret put`은 커밋 태그가 없는 Worker 버전을 만듭니다. 그 뒤 PR #318 병합의 자동 배포는 "has no workers/tag"로 멈췄고, `migrations_applied`를 켠 수동 실행(실행 42737813206)으로 버전 `59c88580-385f-4e36-84a9-356e4df93240`을 배포했습니다(공개 스모크 검사 26개 통과).
+
 ## 2. Cloudflare 준비
 
 Queue `auto-chatter-replies`를 생성합니다.
@@ -730,6 +747,8 @@ corepack pnpm exec wrangler secret put INSTAGRAM_INTERNAL_EMAILS --env-file /dev
 `INSTAGRAM_INTERNAL_EMAILS`는 #14 일반 사용자 연결 제한 코드를 운영에 배포하기 전에 검수용 사용자 이메일만 쉼표로 구분해 등록합니다.
 등록한 이메일의 Meta 앱 역할은 별도로 확인해야 합니다.
 이 비밀값이 없으면 `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`에서 모든 새 OAuth 연결이 제한됩니다.
+`.env.example`의 `INSTAGRAM_INTERNAL_EMAILS`는 비어 있으므로, 그 파일 값을 그대로 쓰지 말고 이메일을 직접 입력합니다. 등록 뒤 `wrangler secret list`에 이름이 보이는지 확인합니다(2026-11-10까지 운영에는 이 바인딩이 없었습니다).
+`wrangler secret put`은 커밋 태그가 없는 Worker 버전을 만들므로, 다음 자동 배포는 [마이그레이션 정지](#github-actions-자동-배포)에서 멈춥니다. 적용할 migration이 없는지 확인한 뒤 `migrations_applied`를 켜고 수동 실행합니다.
 일반 사용자 공개 스위치는 [연결 공개 조건](../specs/2026-09-29-instagram-public-access.md)의 실계정·승인 확인 전에는 바꾸지 않습니다.
 
 `TOKEN_ENCRYPTION_KEY`는 `openssl rand -base64 32`로 생성하고 안전하게 백업합니다.
@@ -905,6 +924,7 @@ DB 상태와 고정 오류 로그를 확인하고 `unknown`을 일괄 pending으
 - DB 장애(`database_unavailable`·`connection_unavailable`, 오류 코드가 없는 연결 시간 초과는 `unexpected_error`): 매 Cron 실행의 `cron_step_failed`와 `cron_step_record_failed`가 단계마다 남고 Cron이 실패합니다. 이 동안에는 경보 상태를 DB에 쓸 수 없으므로 화면도 열리지 않을 수 있습니다. Hyperdrive와 Supabase 상태를 먼저 확인합니다.
 - 발송 제한: 화면의 연결 행에 일시 중지 끝 시각이 보이며, 그 연결의 답장은 그때까지 큐 지연에서 빠집니다. 끝난 뒤에도 `oldest_pending`이 켜지면 Queue 소비를 확인합니다.
 - 토큰 갱신 실패(`cron_step_failed`, `step = token_refresh`, `code = token_refresh_failed`): 동작은 [운영 상태 명세](../specs/2026-10-01-operations-health.md)의 정기 작업 기록 절을 따릅니다. 같은 연결 시도가 며칠 연속 실패하면 그 작업 공간에 계정 재연결을 안내합니다.
+- Instagram 계정 재연결: 서비스 대시보드(`/app/`)의 "계정 연결"로만 합니다. Meta 앱 대시보드에서 계정을 추가하면 서비스 토큰은 그대로이고 계정의 웹훅 구독 필드만 바뀔 수 있습니다. 연결 전에 `wrangler secret list`에 `INSTAGRAM_INTERNAL_EMAILS`가 있는지, Meta 앱 역할에서 그 계정의 Instagram 테스터 초대가 수락됐는지 확인합니다. 초대가 "대기 중"이면 장기 토큰 교환이 `instagram_oauth_provider_failed`(`long_lived_exchange_http_400_igapiexception_100`)로 실패합니다. 연결 뒤에는 연결 행의 새 `token_obtained_at`·`active`·토큰 저장과, 계정의 `subscribed_apps`에 `comments`·`messages`·`messaging_postbacks`·`messaging_seen`이 모두 있는지 확인합니다.
 - Cron 복구: 다음 성공한 Cron이 `alert_cleared`(`code = alert_cron_stale` 등)를 남기고 화면의 마지막 정기 작업 성공 시각이 갱신됩니다.
 - `unknown_outcome`: 결과 미확인 답장은 자동 재시도하지 않습니다. 위의 5절대로 일괄 pending으로 되돌리지 않습니다.
 
