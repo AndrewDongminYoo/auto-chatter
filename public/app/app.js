@@ -279,6 +279,7 @@ function resetSession() {
   currentUserId = undefined;
   currentRole = undefined;
   currentView = undefined;
+  clearActionErrors();
   workspaceTimeZone = undefined;
   workspacePlan = undefined;
   planControls();
@@ -361,7 +362,39 @@ function notice(message, error = false) {
   byId("notice").textContent = message;
   byId("notice").classList.toggle("error", error);
   byId("notice").setAttribute("aria-live", error ? "assertive" : "polite");
+  byId("notice-close").hidden = !message;
   if (error && message) byId("notice").focus({ preventScroll: false });
+}
+byId("notice-close").addEventListener("click", () => {
+  const focusInNotice = [byId("notice"), byId("notice-close")].includes(document.activeElement);
+  notice("");
+  const target = noticeCloseFocusTarget(focusInNotice, byId("workspace").hidden ? undefined : currentView);
+  if (target) byId(target).focus({ preventScroll: true });
+});
+
+// One inline error element per form or section, created on the first failure there (see actionErrorPlacement).
+const actionErrors = new WeakMap();
+function clearActionError(button) {
+  const placement = actionErrorPlacement(button);
+  if (placement) actionErrors.get(placement.owner)?.replaceChildren();
+}
+// Removes every inline action error, on a menu change and on a session reset, so none outlives its screen.
+function clearActionErrors() {
+  for (const element of document.querySelectorAll(".action-error")) element.remove();
+}
+// Shows the error next to the control without moving focus or scrolling; role="alert" announces it.
+function showActionError(button, message) {
+  const placement = actionErrorPlacement(button);
+  if (!placement) return false;
+  let element = actionErrors.get(placement.owner);
+  if (!element) {
+    element = node("p", "", "action-error");
+    element.setAttribute("role", "alert");
+    actionErrors.set(placement.owner, element);
+  }
+  placement.row.after(element);
+  element.textContent = message;
+  return true;
 }
 
 const errors = {
@@ -675,13 +708,17 @@ async function action(button, task) {
   const original = controls.map((control) => [control, control.disabled]);
   const label = button.textContent;
   const restoreFocus = holdFocus();
+  clearActionError(button);
   for (const control of controls) control.disabled = true;
   button.textContent = button.dataset.loadingLabel ?? "처리 중…";
   button.setAttribute("aria-busy", "true");
   try {
     await task();
   } catch (error) {
-    notice(error.message, true);
+    // An inline error also clears the page notice, which the failure used to replace, so an earlier result is not
+    // shown beside it.
+    if (showActionError(button, error.message)) notice("");
+    else notice(error.message, true);
   } finally {
     for (const [control, disabled] of original) control.disabled = disabled;
     button.textContent = label;
@@ -1302,6 +1339,11 @@ function viewFromHash() {
   return byId(name)?.closest(".view")?.dataset.view ?? null;
 }
 function showView(name, focus) {
+  // A notice the new view's loader writes after this point still appears.
+  if (viewChangeClearsMessages(currentView, name)) {
+    notice("");
+    clearActionErrors();
+  }
   currentView = name;
   for (const view of document.querySelectorAll("#workspace .view")) view.hidden = view.dataset.view !== name;
   for (const link of document.querySelectorAll(".workspace-nav a")) {
