@@ -146,6 +146,128 @@ test("every font size in styles.css uses a declared font-size token", () => {
   assert.deepEqual(failures, [], `font-size failures:\n${failures.join("\n")}`);
 });
 
+const stylesWithoutComments = readFileSync(new URL("../../public/app/styles.css", import.meta.url), "utf8").replace(
+  /\/\*[\s\S]*?\*\//g,
+  "",
+);
+
+interface Declaration {
+  selector: string;
+  property: string;
+  value: string;
+}
+
+// Innermost blocks only, so a rule inside @media reports its own selector, not the media query.
+function declarations(source: string, property: RegExp): Declaration[] {
+  const found: Declaration[] = [];
+  for (const rule of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selector = rule[1].trim().replace(/\s+/g, " ");
+    for (const declaration of rule[2].matchAll(/(?<![-\w])([a-z-]+)\s*:\s*([^;]+)/g)) {
+      if (property.test(declaration[1])) {
+        found.push({ selector, property: declaration[1], value: declaration[2].trim().replace(/\s+/g, " ") });
+      }
+    }
+  }
+  return found;
+}
+
+// Splits a value on spaces outside parentheses, so calc(var(--space-3) * -1) stays one term.
+function terms(value: string): string[] {
+  const result: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const character of value) {
+    if (character === "(") depth++;
+    if (character === ")") depth--;
+    if (character === " " && depth === 0) {
+      if (current) result.push(current);
+      current = "";
+    } else {
+      current += character;
+    }
+  }
+  if (current) result.push(current);
+  return result;
+}
+
+const spacingTerm = /^(?:0|auto|\d+(?:\.\d+)?%|var\(--space-\d+\)|calc\(var\(--space-\d+\) \* -1\))$/;
+const radiusTerm = /^(?:0|var\(--radius(?:-[a-z]+)?\))$/;
+const spacingProperty = /^(?:padding|margin|gap|row-gap|column-gap)(?:-[a-z-]+)?$/;
+// Above the largest token (48px), spacing stays a px literal on the 4px grid.
+const beyondScale = (term: string) =>
+  /^\d+px$/.test(term) && Number.parseInt(term, 10) > 48 && Number.parseInt(term, 10) % 4 === 0;
+// Literals the scales cannot express, each allowed only in the declaration that needs it: the summary chevron's
+// margin is part of the drawn icon, and the 1-3px values are hairline offsets in badges, chips and toggles.
+const spacingExceptions = new Set([
+  ".badge { padding: 2px var(--space-2) }",
+  ".campaign-draft-preview-summary dd { margin: 2px 0 0 }",
+  ".checklist .hint { margin: 2px 0 0 }",
+  ".delivery-banner p { margin: 2px 0 0 }",
+  ".label-chip { padding: 1px var(--space-2) }",
+  ".note-scope { padding: 1px var(--space-2) }",
+  ".onboarding p { margin: 2px 0 0 }",
+  ".reminder-chip { padding: 1px var(--space-2) }",
+  ".reminder-count { padding: 1px var(--space-2) }",
+  ".toggle input { margin: 3px 0 0 }",
+  ".toggle small { margin-top: 3px }",
+  ".unread-badge { padding: 2px var(--space-2) }",
+  "summary::before { margin: 0 10px 2px 2px }",
+]);
+// The 2px corners that shape the message bubble tails.
+const radiusExceptions = new Set([
+  ".bubble.incoming { border-bottom-left-radius: 2px }",
+  ".bubble.outgoing { border-bottom-right-radius: 2px }",
+]);
+
+test("styles.css declares and reads no step-1 alias property", () => {
+  const aliases = [...stylesWithoutComments.matchAll(/--(?:color-[a-z0-9-]+|radius-control)\b/g)].map(
+    (match) => match[0],
+  );
+  assert.deepEqual(aliases, [], `alias properties still in styles.css: ${aliases.join(", ")}`);
+});
+
+test("every spacing declaration in styles.css uses a space token or an allowed literal", () => {
+  const spacing = declarations(stylesWithoutComments, spacingProperty);
+  assert.ok(spacing.length > 0, "styles.css must declare spacing for this check to read");
+  const failures: string[] = [];
+  for (const { selector, property, value } of spacing) {
+    if (spacingExceptions.has(`${selector} { ${property}: ${value} }`)) continue;
+    for (const term of terms(value)) {
+      if (!spacingTerm.test(term) && !beyondScale(term)) {
+        failures.push(`${selector} { ${property}: ${value} }: ${term} is not a var(--space-…) token`);
+      }
+    }
+  }
+  assert.deepEqual(failures, [], `spacing failures:\n${failures.join("\n")}`);
+});
+
+test("every border radius in styles.css uses a radius token or an allowed literal", () => {
+  const radii = declarations(stylesWithoutComments, /^border(?:-[a-z]+)*-radius$/);
+  assert.ok(radii.length > 0, "styles.css must declare border radii for this check to read");
+  const failures: string[] = [];
+  for (const { selector, property, value } of radii) {
+    if (radiusExceptions.has(`${selector} { ${property}: ${value} }`)) continue;
+    for (const term of terms(value)) {
+      if (!radiusTerm.test(term)) {
+        failures.push(`${selector} { ${property}: ${value} }: ${term} is not a var(--radius…) token`);
+      }
+    }
+  }
+  assert.deepEqual(failures, [], `radius failures:\n${failures.join("\n")}`);
+});
+
+test("every space and radius token that styles.css reads is declared in tokens.css", () => {
+  const declared = new Set(
+    [...tokensCss.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/(--(?:space|radius)[a-z0-9-]*)\s*:/g)].map(
+      (match) => match[1],
+    ),
+  );
+  const read = [...stylesWithoutComments.matchAll(/var\((--(?:space|radius)[a-z0-9-]*)\)/g)].map((match) => match[1]);
+  assert.ok(read.length > 0, "styles.css must read space or radius tokens for this check to read");
+  const missing = [...new Set(read.filter((name) => !declared.has(name)))];
+  assert.deepEqual(missing, [], `tokens missing from tokens.css: ${missing.join(", ")}`);
+});
+
 for (const mode of ["light", "dark"] as const) {
   test(`every contrast pair meets its threshold and matches the spec in ${mode} mode`, () => {
     const tokens = modes[mode];
