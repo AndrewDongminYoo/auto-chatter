@@ -135,11 +135,14 @@ type Group = { key: string; run_counts: Counts; reply_counts: Counts; reply_wait
 const partitions = ["run_counts", "reply_counts", "reply_wait_counts"] as const;
 
 // Each partition sums to its total, inside every group and at the top, and the groups add up to the top level.
+// `read` is a subset of `sent`, outside the first-reply partition.
 function assertPartitions(counts: Group | Record<(typeof partitions)[number], Counts>) {
   const { total, ...states } = counts.run_counts;
   const sum = (values: string[]) => values.reduce((a, b) => a + BigInt(b), 0n);
   assert.equal(sum(Object.values(states)), BigInt(total!));
-  assert.equal(sum(Object.values(counts.reply_counts)), BigInt(total!));
+  const { read, ...replies } = counts.reply_counts;
+  assert.equal(sum(Object.values(replies)), BigInt(total!));
+  assert.ok(BigInt(read!) <= BigInt(replies.sent!));
   const wait = counts.reply_wait_counts;
   assert.equal(BigInt(wait.replied!) + BigInt(wait.not_replied!), BigInt(wait.reached!));
   assert.ok(BigInt(wait.reached!) <= BigInt(total!));
@@ -188,6 +191,7 @@ test("flow report keeps run and first-reply states separate, including absent re
     pending: "1",
     sending: "1",
     sent: "1",
+    read: "0",
     blocked: "1",
     failed: "1",
     unknown: "1",
@@ -210,6 +214,107 @@ test("flow report keeps run and first-reply states separate, including absent re
   assert.equal(updated.run_counts.delivering, "3");
   assert.equal(updated.reply_counts.sent, "2");
   assert.equal(updated.reply_counts.unknown, "0");
+});
+
+// Read rows are written directly: the report reads stored reads and never depends on the webhook path.
+async function markRead(conn: string, messageId: string, recipient = "901") {
+  await pool.query(
+    `INSERT INTO instagram_message_reads(workspace_id,connection_id,recipient_id,message_id,read_at)
+     SELECT workspace_id,id,$3,$2,now() FROM instagram_connections WHERE id=$1`,
+    [conn, messageId, recipient],
+  );
+}
+async function replyMessageId(run: string, messageId: string) {
+  await pool.query("UPDATE private_reply_outbox SET provider_message_id=$2,sent_at=now() WHERE flow_run_id=$1", [
+    run,
+    messageId,
+  ]);
+}
+// A run a DM started, with its first message in flow_dm_deliveries as the DM delivery worker leaves it.
+async function seedDmRun(deliveryStatus: "pending" | "sent", messageId?: string, conn = connection) {
+  const key = String(++serial);
+  const version = (
+    await pool.query(
+      "SELECT id FROM flow_versions WHERE flow_id=$1 AND trigger_connection_id=$2 ORDER BY version_no LIMIT 1",
+      [flow, conn],
+    )
+  ).rows[0].id;
+  const start = (
+    await pool.query(
+      `INSERT INTO instagram_dm_start_events(workspace_id,connection_id,message_id,sender_id,flow_id,flow_version_id,trigger_type,message_at)
+       VALUES($1,$2,$3,$4,$5,$6,'instagram_dm_default','2026-09-30T15:00:00Z') RETURNING id`,
+      [workspace, conn, `dm-${key}`, `8${key}`, flow, version],
+    )
+  ).rows[0].id;
+  const run = (
+    await pool.query(
+      `INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,dm_start_event_id,status,created_at)
+       VALUES($1,$2,$3,$4,$5,'ended','2026-09-30T15:00:00Z') RETURNING id`,
+      [workspace, conn, flow, version, start],
+    )
+  ).rows[0].id;
+  await pool.query(
+    `INSERT INTO flow_dm_deliveries(workspace_id,connection_id,flow_run_id,recipient_id,message_text,status,attempt_id,
+       attempt_started_at,provider_message_id,sent_at)
+     VALUES($1,$2,$3,$4,'SECRET-MESSAGE',$5,CASE WHEN $5='sent' THEN gen_random_uuid() END,
+       CASE WHEN $5='sent' THEN now() END,$6::text,CASE WHEN $5='sent' THEN now() END)`,
+    [workspace, conn, run, `8${key}`, deliveryStatus, messageId ?? null],
+  );
+  return run;
+}
+
+test("flow report counts a run as read only when its sent first message has a read of that exact message ID", async () => {
+  // A comment run whose private reply two readers saw: one run.
+  const twice = await seed("ended", "sent");
+  await replyMessageId(twice.id, "mid-twice");
+  const unread = await seed("ended", "sent");
+  await replyMessageId(unread.id, "mid-unread");
+  // A reply whose outcome is unknown still carries no proof of a sent message, whatever read names it.
+  const unknown = await seed("delivering", "unknown");
+  await replyMessageId(unknown.id, "mid-unknown");
+  // The same message ID on another connection: a read on `connection` names no message there.
+  const foreign = await seed("waiting", "sent", undefined, flow, secondConnection);
+  await replyMessageId(foreign.id, "mid-foreign");
+  // A DM-started run's first message is read like a private reply; a pending one has no message ID to match.
+  await seedDmRun("sent", "mid-dm");
+  await seedDmRun("pending");
+  await seed("skipped");
+  await markRead(connection, "mid-twice", "901");
+  await markRead(connection, "mid-twice", "902");
+  await markRead(connection, "mid-unknown");
+  await markRead(connection, "mid-foreign");
+  await markRead(connection, "mid-dm");
+  // A read of a later message never marks an earlier one: no watermark.
+  await markRead(connection, "mid-later");
+
+  const body = await report();
+  assert.deepEqual(body.reply_counts, {
+    absent: "1",
+    pending: "1",
+    sending: "0",
+    sent: "4",
+    read: "2",
+    blocked: "0",
+    failed: "0",
+    unknown: "1",
+  });
+  assert.equal(body.run_counts.total, "7");
+  assertPartitions(body);
+  assert.equal(JSON.stringify(body).includes("mid-"), false);
+  const accounts = await report(`${params}&group_by=connection`);
+  assertGroupSums(accounts);
+  assert.deepEqual(
+    accounts.groups.map((group: Group) => [group.key, group.reply_counts.sent, group.reply_counts.read]),
+    [
+      [connection, "3", "2"],
+      [secondConnection, "1", "0"],
+    ],
+  );
+  await markRead(secondConnection, "mid-foreign");
+  const days = await report(`${params}&group_by=day`);
+  assertGroupSums(days);
+  assert.equal(days.reply_counts.read, "3");
+  assert.equal((await report(`${params}&connection_id=${secondConnection}`)).reply_counts.read, "1");
 });
 
 test("flow report isolates workspace and combines owned account and flow filters across versions and archives", async () => {

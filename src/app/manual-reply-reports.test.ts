@@ -86,6 +86,7 @@ function harness(clock?: string) {
         pending: "0",
         sending: "0",
         sent: "0",
+        read: "0",
         failed: "0",
         unknown_unresolved: "0",
         unknown_resolved: "0",
@@ -105,7 +106,13 @@ test("report remains usable when the browser cannot format a server-valid time z
   from.value = "2026-10-01";
   before.value = "2026-10-02";
   await listeners.get("submit")!({ preventDefault() {} });
-  assert.equal(get("manual-report-counts").children.length, 8);
+  const items = get("manual-report-counts").children as { children: { textContent: string }[] }[];
+  assert.equal(items.length, 9);
+  // The read count sits beside the accepted count it is a subset of.
+  assert.deepEqual(
+    items.slice(3, 5).map((item) => item.children[0]!.textContent),
+    ["Meta 접수", "읽음 확인"],
+  );
   assert.match(get("manual-report-summary").textContent, /2026-10-16T11:00:00.000Z \(UTC\)/);
   assert.equal(get("manual-report-download").disabled, false);
 });

@@ -128,6 +128,7 @@ test("manual report counts current requests once, isolates workspaces and distin
     pending: "3",
     sending: "1",
     sent: "1",
+    read: "0",
     failed: "1",
     unknown_unresolved: "1",
     unknown_resolved: "1",
@@ -162,12 +163,72 @@ test("manual report uses creation cohort with exact half-open boundaries, not se
     pending: "1",
     sending: "0",
     sent: "0",
+    read: "0",
     failed: "1",
     unknown_unresolved: "0",
     unknown_resolved: "0",
     cancelled: "0",
   });
   assert.equal((await report("from=2025-01-01&before=2025-01-02&expected_time_zone=Asia%2FSeoul")).counts.total, "0");
+});
+
+// Read rows are written directly: the report reads stored reads and never depends on the webhook path.
+async function markRead(conn: string, messageId: string, recipient = "901") {
+  await pool.query(
+    `INSERT INTO instagram_message_reads(workspace_id,connection_id,recipient_id,message_id,read_at)
+     SELECT workspace_id,id,$3,$2,now() FROM instagram_connections WHERE id=$1`,
+    [conn, messageId, recipient],
+  );
+}
+async function withMessageId(id: string, messageId: string) {
+  await pool.query("UPDATE instagram_manual_replies SET provider_message_id=$2,sent_at=now() WHERE id=$1", [
+    id,
+    messageId,
+  ]);
+}
+
+test("manual report counts a sent request as read only on an exact message ID match on its own connection", async () => {
+  const twice = await seed("sent");
+  await withMessageId(twice.id, "mid-twice");
+  const unread = await seed("sent");
+  await withMessageId(unread.id, "mid-unread");
+  // A failed request that still carries a message ID and a matching read is not a sent message.
+  const failed = await seed("failed");
+  await withMessageId(failed.id, "mid-failed");
+  // The same message ID on another connection of the workspace: its read on `connection` names no request there.
+  const foreign = await seed("sent", undefined, secondConnection);
+  await withMessageId(foreign.id, "mid-foreign");
+  await markRead(connection, "mid-twice", "901");
+  await markRead(connection, "mid-twice", "902");
+  await markRead(connection, "mid-failed");
+  await markRead(connection, "mid-foreign");
+  // A read of a later message never marks an earlier one: no watermark.
+  await markRead(connection, "mid-later");
+  const body = await report();
+  assert.deepEqual(body.counts, {
+    total: "4",
+    pending: "0",
+    sending: "0",
+    sent: "3",
+    read: "1",
+    failed: "1",
+    unknown_unresolved: "0",
+    unknown_resolved: "0",
+    cancelled: "0",
+  });
+  // `read` is a subset of `sent` and stays outside the status partition.
+  const { total, read, ...statuses } = body.counts as Record<string, string>;
+  assert.equal(
+    Object.values(statuses).reduce((sum, value) => sum + BigInt(value), 0n),
+    BigInt(total!),
+  );
+  assert.ok(BigInt(read!) <= BigInt(body.counts.sent));
+  assert.equal(JSON.stringify(body).includes("mid-"), false);
+  assert.equal((await report(`${params}&connection_id=${secondConnection}`)).counts.read, "0");
+  await markRead(secondConnection, "mid-foreign");
+  assert.equal((await report()).counts.read, "2");
+  assert.equal((await report(`${params}&connection_id=${secondConnection}`)).counts.read, "1");
+  assert.equal((await report(`${params}&connection_id=${connection}`)).counts.read, "1");
 });
 
 test("manual report follows workspace DST boundaries and rejects stale time zone", async () => {

@@ -46,6 +46,7 @@ function createCampaignRunReports({ api, node }) {
         ["pending", "대기"],
         ["sending", "보내는 중"],
         ["sent", "보냄"],
+        ["read", "읽음 확인"],
         ["failed", "실패"],
         ["blocked", "차단"],
         ["unknown", "결과 불명"],

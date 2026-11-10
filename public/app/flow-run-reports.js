@@ -33,6 +33,7 @@ function createFlowRunReports({ api, node }) {
         ["pending", "발송 대기"],
         ["sending", "발송 처리 중"],
         ["sent", "Meta 접수"],
+        ["read", "읽음 확인"],
         ["blocked", "정책 차단"],
         ["failed", "발송 실패"],
         ["unknown", "결과 미확인"],

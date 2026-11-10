@@ -56,7 +56,8 @@ export async function campaignRunReport(pool: Pool, user: User, query: URLSearch
   // Run start time selects the cohort. The run and start counts read the cohort alone. Delivery rows are counted per
   // cohort run in a LATERAL aggregate, so a run's many rows cannot multiply the run counts and each run's rows are read
   // through the run_id-leading unique index (campaign_deliveries_member), never by a scan of every workspace's rows.
-  // One clock (checked_at) is read once, in context.
+  // One clock (checked_at) is read once, in context. `read` is the subset of `sent` rows with a stored read of that exact
+  // message ID on the same connection (#312), counted inside the same LATERAL; EXISTS keeps several readers to one row.
   const row = (
     await pool.query<ReportRow>(
       `WITH context AS MATERIALIZED (
@@ -72,7 +73,9 @@ export async function campaignRunReport(pool: Pool, user: User, query: URLSearch
          AND context.draft_exists AND context.time_zone=$4
      ), deliveries AS (
        SELECT counted.* FROM cohort c CROSS JOIN LATERAL (SELECT count(*) AS total,
-         ${CAMPAIGN_DELIVERY_STATUSES.map((status) => `count(*) FILTER (WHERE d.status='${status}') AS ${status}`).join(",")}
+         ${CAMPAIGN_DELIVERY_STATUSES.map((status) => `count(*) FILTER (WHERE d.status='${status}') AS ${status}`).join(",")},
+         count(*) FILTER (WHERE d.status='sent' AND EXISTS(SELECT 1 FROM instagram_message_reads mr
+           WHERE mr.connection_id=d.connection_id AND mr.message_id=d.provider_message_id)) AS read_confirmed
          FROM campaign_deliveries d WHERE d.run_id=c.id AND d.workspace_id=c.workspace_id) counted
      )
      SELECT context.*,
@@ -84,7 +87,8 @@ export async function campaignRunReport(pool: Pool, user: User, query: URLSearch
          'limit_not_started',count(*) FILTER (WHERE ${LIMITED})::text
        ) FROM cohort c) AS run_counts,
        (SELECT json_build_object(${START_KEYS.map((key) => `'${key}',${startSum(key)}`).join(",")}) FROM cohort c) AS start_counts,
-       (SELECT json_build_object(${["total", ...CAMPAIGN_DELIVERY_STATUSES].map((key) => `'${key}',coalesce(sum(${key}),0)::text`).join(",")})
+       (SELECT json_build_object(${["total", ...CAMPAIGN_DELIVERY_STATUSES].map((key) => `'${key}',coalesce(sum(${key}),0)::text`).join(",")},
+         'read',coalesce(sum(read_confirmed),0)::text)
          FROM deliveries) AS delivery_counts
      FROM context`,
       [workspace, from, before, zone, draft, user.id],

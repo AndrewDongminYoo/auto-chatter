@@ -20,7 +20,9 @@ interface ReportRow {
 }
 
 // Creation-period cohort, not a history of state transitions. No event join: a replay or multiple attempts
-// cannot multiply one stored request. Explicit retry rows remain separate requests.
+// cannot multiply one stored request. Explicit retry rows remain separate requests. `read` is the subset of `sent`
+// with a stored read of that exact message ID (#312); it is outside the status partition, and EXISTS keeps several
+// readers of one message to one count.
 export async function manualReplyReport(pool: Pool, user: User, query: URLSearchParams) {
   const workspace = await workspaceFor(pool, user, "admin");
   const allowed = new Set(["from", "before", "expected_time_zone", "connection_id"]);
@@ -48,6 +50,8 @@ export async function manualReplyReport(pool: Pool, user: User, query: URLSearch
        'pending',count(*) FILTER (WHERE r.status='pending')::text,
        'sending',count(*) FILTER (WHERE r.status='sending')::text,
        'sent',count(*) FILTER (WHERE r.status='sent')::text,
+       'read',count(*) FILTER (WHERE r.status='sent' AND EXISTS(SELECT 1 FROM instagram_message_reads mr
+         WHERE mr.connection_id=r.connection_id AND mr.message_id=r.provider_message_id))::text,
        'failed',count(*) FILTER (WHERE r.status='failed')::text,
        'unknown_unresolved',count(*) FILTER (WHERE r.status='unknown' AND r.resolved_at IS NULL)::text,
        'unknown_resolved',count(*) FILTER (WHERE r.status='unknown' AND r.resolved_at IS NOT NULL)::text,
