@@ -306,7 +306,7 @@ export async function appApi(
         return await beginInstagramOAuth(pool, user, env);
       }
       if (url.pathname === "/api/instagram/callback" && request.method === "GET")
-        return await finishInstagramOAuth(pool, user, request, env, fetchImpl);
+        return await finishInstagramOAuth(pool, user, request, env, fetchImpl, correlationId);
       if (url.pathname === "/api/workspace" && request.method === "POST") {
         await ensureWorkspace(pool, user);
         return json(await currentWorkspace(pool, user));

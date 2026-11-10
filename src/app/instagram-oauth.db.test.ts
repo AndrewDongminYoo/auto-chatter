@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { after, before, beforeEach, test } from "node:test";
+import { after, before, beforeEach, mock, test } from "node:test";
 import { Pool } from "pg";
+import { ApiError } from "./auth.ts";
 import { beginInstagramOAuth, deleteExpiredOAuthStates, finishInstagramOAuth } from "./instagram-oauth.ts";
 import { refreshDueInstagramTokens, refreshDueInstagramTokensWithFailures } from "./instagram-token-refresh.ts";
 import { disconnectConnection, ensureWorkspace } from "./settings.ts";
@@ -652,4 +653,265 @@ test("expired OAuth state cleanup removes at most 1,000 rows per call", async ()
   assert.equal(await deleteExpiredOAuthStates(pool), 5);
   assert.equal(await deleteExpiredOAuthStates(pool), 0);
   assert.deepEqual((await pool.query("SELECT state_hash FROM instagram_oauth_states")).rows, [{ state_hash: "live" }]);
+});
+
+// Provider failures of an OAuth completion (instagram_oauth_provider_failed). Every response body and thrown error
+// carries text that must never reach a log line: provider messages, trace IDs, tokens, the code and the secret.
+type ProviderStep = "code_exchange" | "long_lived_exchange" | "profile" | "subscribe";
+const providerSteps: ProviderStep[] = ["code_exchange", "long_lived_exchange", "profile", "subscribe"];
+const leaked = {
+  message: "SENTINEL message for 98765 account",
+  error_message: "SENTINEL Matching code was not found",
+  error_user_msg: "SENTINEL user message",
+  fbtrace_id: "SENTINEL-trace",
+};
+const forbidden = [
+  "SENTINEL",
+  "Matching",
+  "synthetic-secret",
+  "test-code",
+  "short-token",
+  "long-token",
+  "98765",
+  "account",
+  user.id,
+  user.email,
+];
+
+function stepOf(input: string | URL | Request): ProviderStep {
+  const url = new URL(input instanceof Request ? input.url : String(input));
+  if (url.hostname === "api.instagram.com") return "code_exchange";
+  if (url.pathname === "/access_token") return "long_lived_exchange";
+  if (url.pathname.endsWith("/me")) return "profile";
+  return "subscribe";
+}
+
+function success(step: ProviderStep): Response {
+  if (step === "code_exchange")
+    return Response.json({
+      access_token: "short-token",
+      user_id: 98765,
+      permissions: "instagram_business_basic,instagram_business_manage_comments,instagram_business_manage_messages",
+    });
+  if (step === "long_lived_exchange") return Response.json({ access_token: "long-token", expires_in: 5_184_000 });
+  if (step === "profile") return Response.json({ user_id: "98765", username: "account" });
+  return Response.json({ success: true });
+}
+
+const failureCases: {
+  step: ProviderStep;
+  name: string;
+  answer: () => Response;
+  code: string;
+  error?: string;
+}[] = [
+  {
+    step: "code_exchange",
+    name: "network",
+    answer: () => {
+      throw new TypeError("fetch failed for code test-code with synthetic-secret");
+    },
+    code: "code_exchange_network",
+  },
+  {
+    step: "code_exchange",
+    name: "timeout",
+    answer: () => {
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    },
+    code: "code_exchange_network",
+  },
+  {
+    step: "code_exchange",
+    name: "an Instagram-shape error body",
+    answer: () => Response.json({ error_type: "OAuthException", code: 400, ...leaked }, { status: 400 }),
+    code: "code_exchange_http_400_oauthexception_400",
+  },
+  {
+    step: "code_exchange",
+    name: "a Graph-shape error body",
+    answer: () =>
+      Response.json({ error: { type: "OAuthException", code: 100, error_subcode: 33, ...leaked } }, { status: 400 }),
+    code: "code_exchange_http_400_oauthexception_100_33",
+  },
+  {
+    step: "code_exchange",
+    name: "invalid JSON",
+    answer: () => new Response("short-token SENTINEL {", { status: 200 }),
+    code: "code_exchange_invalid_json",
+  },
+  {
+    step: "code_exchange",
+    name: "an answer without a token",
+    answer: () => Response.json({ data: [{ user_id: 98765 }], ...leaked }),
+    code: "code_exchange_invalid_shape",
+  },
+  {
+    step: "long_lived_exchange",
+    name: "network",
+    answer: () => {
+      throw new TypeError("fetch failed: access_token=short-token&client_secret=synthetic-secret");
+    },
+    code: "long_lived_exchange_network",
+  },
+  {
+    step: "long_lived_exchange",
+    name: "a Graph-shape error body",
+    answer: () =>
+      Response.json({ error: { type: "OAuthException", code: 190, error_subcode: 463, ...leaked } }, { status: 400 }),
+    code: "long_lived_exchange_http_400_oauthexception_190_463",
+  },
+  {
+    step: "long_lived_exchange",
+    name: "an error body over the read limit",
+    answer: () =>
+      Response.json(
+        { error: { type: "OAuthException", code: 190, ...leaked }, padding: "x".repeat(20 * 1024) },
+        { status: 400 },
+      ),
+    code: "long_lived_exchange_http_400",
+  },
+  {
+    step: "long_lived_exchange",
+    name: "invalid JSON",
+    answer: () => new Response("<html>SENTINEL</html>", { status: 200 }),
+    code: "long_lived_exchange_invalid_json",
+  },
+  {
+    step: "long_lived_exchange",
+    name: "an answer without a token",
+    answer: () => Response.json({ expires_in: 5_184_000, ...leaked }),
+    code: "long_lived_exchange_invalid_shape_missing_token",
+  },
+  {
+    step: "long_lived_exchange",
+    name: "a string lifetime",
+    answer: () => Response.json({ access_token: "long-token", expires_in: "5184000" }),
+    code: "long_lived_exchange_invalid_shape_expires_in_type",
+  },
+  {
+    step: "long_lived_exchange",
+    name: "a lifetime too short to refresh",
+    answer: () => Response.json({ access_token: "long-token", expires_in: 3600 }),
+    code: "long_lived_exchange_invalid_shape_expires_in_range",
+  },
+  {
+    step: "profile",
+    name: "network",
+    answer: () => {
+      throw new TypeError("fetch failed with Bearer long-token");
+    },
+    code: "profile_network",
+  },
+  {
+    step: "profile",
+    name: "a non-JSON error body",
+    answer: () => new Response("SENTINEL upstream error for long-token", { status: 500 }),
+    code: "profile_http_500",
+  },
+  {
+    step: "profile",
+    name: "a redirect",
+    answer: () => new Response(null, { status: 302, headers: { Location: "https://example.test/?SENTINEL" } }),
+    code: "profile_http_302",
+  },
+  {
+    step: "profile",
+    name: "invalid JSON",
+    answer: () => new Response("98765 account {", { status: 200 }),
+    code: "profile_invalid_json",
+  },
+  {
+    step: "profile",
+    name: "an unverifiable account",
+    answer: () => Response.json({ user_id: "account-98765", username: "account", ...leaked }),
+    code: "profile_invalid_shape",
+    error: "instagram_account_unverified",
+  },
+  {
+    step: "subscribe",
+    name: "network",
+    answer: () => {
+      throw new TypeError("fetch failed for 98765 with Bearer long-token");
+    },
+    code: "subscribe_network",
+  },
+  {
+    step: "subscribe",
+    name: "a Graph-shape error body",
+    answer: () => Response.json({ error: { type: "OAuthException", code: 10, ...leaked } }, { status: 403 }),
+    code: "subscribe_http_403_oauthexception_10",
+  },
+  {
+    step: "subscribe",
+    name: "invalid JSON",
+    answer: () => new Response("SENTINEL", { status: 200 }),
+    code: "subscribe_invalid_json",
+  },
+  {
+    step: "subscribe",
+    name: "an answer without success",
+    answer: () => Response.json({ success: false, ...leaked }),
+    code: "subscribe_not_success",
+    error: "instagram_subscription_failed",
+  },
+];
+
+async function captureLogs<T>(run: () => Promise<T>): Promise<{ result: PromiseSettledResult<T>; lines: string[][] }> {
+  const lines: string[][] = [];
+  const mocks = (["log", "warn", "error"] as const).map((level) =>
+    mock.method(console, level, (...args: unknown[]) => lines.push([level, ...args.map(String)])),
+  );
+  try {
+    const [result] = await Promise.allSettled([run()]);
+    return { result: result!, lines };
+  } finally {
+    for (const method of mocks) method.mock.restore();
+  }
+}
+
+for (const failure of failureCases)
+  test(`an OAuth ${failure.step} failure from ${failure.name} logs ${failure.code} once and keeps the error`, async () => {
+    const { request } = await authorization();
+    const calls: ProviderStep[] = [];
+    const provider: typeof fetch = async (input, init) => {
+      const step = stepOf(input);
+      calls.push(step);
+      assert.equal(init?.redirect, "manual");
+      assert.ok(init?.signal instanceof AbortSignal);
+      return step === failure.step ? failure.answer() : success(step);
+    };
+    const { result, lines } = await captureLogs(() => finishInstagramOAuth(pool, user, request, env, provider));
+    assert.equal(result.status, "rejected");
+    const error = (result as PromiseRejectedResult).reason;
+    // appApi answers an ApiError with { error: message } and its status, so these two fix the HTTP response.
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.status, 502);
+    assert.equal(error.message, failure.error ?? "instagram_connection_failed");
+    assert.deepEqual(calls, providerSteps.slice(0, providerSteps.indexOf(failure.step) + 1));
+    assert.deepEqual(lines, [
+      ["warn", JSON.stringify({ event: "instagram_oauth_provider_failed", code: failure.code })],
+    ]);
+    for (const line of lines.flat())
+      for (const text of forbidden) assert.ok(!line.includes(text), `${text} appears in ${line}`);
+    assert.equal(
+      (await pool.query("SELECT count(*)::int AS active FROM instagram_connections WHERE active")).rows[0].active,
+      0,
+    );
+  });
+
+test("a successful OAuth completion and an out-of-scope refusal write no provider failure line", async () => {
+  const succeeded = await captureLogs(async () =>
+    finishInstagramOAuth(pool, user, (await authorization()).request, env, async (input) => success(stepOf(input))),
+  );
+  assert.equal(succeeded.result.status, "fulfilled");
+  assert.deepEqual(succeeded.lines, []);
+  const refused = await captureLogs(async () =>
+    finishInstagramOAuth(pool, user, (await authorization()).request, env, async (input) =>
+      stepOf(input) === "code_exchange" ? Response.json({ access_token: "short-token" }) : success(stepOf(input)),
+    ),
+  );
+  assert.equal(refused.result.status, "rejected");
+  assert.equal((refused.result as PromiseRejectedResult).reason.message, "instagram_permissions_required");
+  assert.deepEqual(refused.lines, []);
 });

@@ -30,8 +30,10 @@ donminzzi
 EAAB
 efbbbf
 fbcdn
+fbtrace
 fsize
 gpgsign
+graphmethodexception
 hvpqangvavstdhyqkfww
 hyperdrive
 hyperdrives
@@ -56,6 +58,7 @@ nosniff
 nosuid
 nosystem
 nxdomain
+oauthexception
 Ollama
 Pago
 pids

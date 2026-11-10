@@ -5,6 +5,7 @@ import { lockWorkspaceForMember, workspaceFor } from "./settings.ts";
 import { normalizedUserId } from "./instagram-deauthorization.ts";
 import { sealSecret } from "./secrets.ts";
 import { requireConnectionSlot } from "./plans.ts";
+import { logOperation } from "./operations-log.ts";
 
 export interface InstagramOAuthEnv {
   APP_ORIGIN?: string;
@@ -96,21 +97,127 @@ export async function deleteExpiredOAuthStates(pool: Pool): Promise<number> {
   return result.rows[0]!.deleted;
 }
 
-async function providerJson(fetchImpl: typeof fetch, url: URL | string, init: RequestInit): Promise<unknown> {
+// The provider calls of one OAuth completion, named in the instagram_oauth_provider_failed log line.
+export type OAuthProviderStep = "code_exchange" | "long_lived_exchange" | "profile" | "subscribe";
+
+const errorBodyLimit = 16 * 1024;
+const providerTypeLength = 24;
+
+function providerNumber(value: unknown): string | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? String(value) : undefined;
+}
+
+function providerType(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const type = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .slice(0, providerTypeLength);
+  return type || undefined;
+}
+
+// Reads only the fixed error fields of a provider error body, and only when they have a strict shape: the Graph
+// shape { error: { type, code, error_subcode? } } first, then the documented Instagram code-exchange shape
+// { error_type, code }. Messages, trace IDs and every other field are never read.
+export function providerErrorParts(body: unknown): string[] {
+  if (!isRecord(body)) return [];
+  if (isRecord(body.error)) {
+    const type = providerType(body.error.type);
+    const code = providerNumber(body.error.code);
+    const subcode = body.error.error_subcode === undefined ? null : providerNumber(body.error.error_subcode);
+    if (type && code && subcode !== undefined) return subcode === null ? [type, code] : [type, code, subcode];
+  }
+  const type = providerType(body.error_type);
+  const code = providerNumber(body.code);
+  return type && code ? [type, code] : [];
+}
+
+// Composes the log code `<step>_<failure>[_<type>[_<code>[_<subcode>]]]`, dropping optional parts from the end
+// so the result always fits logOperation's 64-character name rule.
+export function oauthProviderFailureCode(step: OAuthProviderStep, failure: string, parts: readonly string[] = []) {
+  let code = `${step}_${failure}`;
+  for (const part of parts) {
+    if (code.length + 1 + part.length > 64) break;
+    code += `_${part}`;
+  }
+  return code;
+}
+
+function providerFailure(
+  step: OAuthProviderStep,
+  failure: string,
+  correlationId: string | undefined,
+  parts: readonly string[] = [],
+  error = "instagram_connection_failed",
+): ApiError {
+  logOperation(
+    {
+      event: "instagram_oauth_provider_failed",
+      code: oauthProviderFailureCode(step, failure, parts),
+      correlation_id: correlationId,
+    },
+    "warn",
+  );
+  return new ApiError(502, error);
+}
+
+// Reads at most errorBodyLimit bytes of an error body as JSON; a larger, unreadable or non-JSON body gives undefined.
+async function readErrorBody(response: Response): Promise<unknown> {
+  const declared = Number(response.headers.get("content-length"));
+  const reader = response.body?.getReader();
+  if (!reader) return undefined;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    if (declared > errorBodyLimit) throw new Error("too large");
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > errorBodyLimit) throw new Error("too large");
+      chunks.push(value);
+    }
+  } catch {
+    await reader.cancel().catch(() => undefined);
+    return undefined;
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+async function providerJson(
+  fetchImpl: typeof fetch,
+  step: OAuthProviderStep,
+  url: URL | string,
+  init: RequestInit,
+  correlationId: string | undefined,
+): Promise<unknown> {
   let response: Response;
   try {
     response = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(10_000), redirect: "manual" });
   } catch {
-    throw new ApiError(502, "instagram_connection_failed");
+    throw providerFailure(step, "network", correlationId);
   }
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new ApiError(502, "instagram_connection_failed");
-  }
+  if (!response.ok)
+    throw providerFailure(
+      step,
+      `http_${response.status}`,
+      correlationId,
+      providerErrorParts(await readErrorBody(response)),
+    );
   try {
     return await response.json();
   } catch {
-    throw new ApiError(502, "instagram_connection_failed");
+    throw providerFailure(step, "invalid_json", correlationId);
   }
 }
 
@@ -120,6 +227,8 @@ export async function finishInstagramOAuth(
   request: Request,
   env: InstagramOAuthEnv,
   fetchImpl: typeof fetch = fetch,
+  // appApi passes the request's correlation ID so a provider failure line matches the response's cf-ray.
+  correlationId?: string,
 ): Promise<Response> {
   const settings = config(env);
   const url = new URL(request.url);
@@ -143,20 +252,26 @@ export async function finishInstagramOAuth(
   const code = url.searchParams.get("code");
   if (url.searchParams.has("error") || !code || code.length > 4096 || url.searchParams.getAll("code").length !== 1)
     throw new ApiError(400, "instagram_authorization_denied");
-  const short = await providerJson(fetchImpl, "https://api.instagram.com/oauth/access_token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: settings.appId,
-      client_secret: settings.secret,
-      grant_type: "authorization_code",
-      redirect_uri: settings.redirect,
-      code,
-    }).toString(),
-  });
+  const short = await providerJson(
+    fetchImpl,
+    "code_exchange",
+    "https://api.instagram.com/oauth/access_token",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: settings.appId,
+        client_secret: settings.secret,
+        grant_type: "authorization_code",
+        redirect_uri: settings.redirect,
+        code,
+      }).toString(),
+    },
+    correlationId,
+  );
   const entry = isRecord(short) && Array.isArray(short.data) ? short.data[0] : short;
   if (!isRecord(entry) || typeof entry.access_token !== "string" || !entry.access_token)
-    throw new ApiError(502, "instagram_connection_failed");
+    throw providerFailure("code_exchange", "invalid_shape", correlationId);
   const granted = Array.isArray(entry.permissions)
     ? entry.permissions
     : typeof entry.permissions === "string"
@@ -172,21 +287,19 @@ export async function finishInstagramOAuth(
   exchange.searchParams.set("grant_type", "ig_exchange_token");
   exchange.searchParams.set("client_secret", settings.secret);
   exchange.searchParams.set("access_token", entry.access_token);
-  const long = await providerJson(fetchImpl, exchange, { method: "GET" });
-  if (
-    !isRecord(long) ||
-    typeof long.access_token !== "string" ||
-    !long.access_token ||
-    typeof long.expires_in !== "number" ||
-    !Number.isFinite(long.expires_in) ||
-    long.expires_in <= 86400 ||
-    long.expires_in > 90 * 86400
-  )
-    throw new ApiError(502, "instagram_connection_failed");
+  const long = await providerJson(fetchImpl, "long_lived_exchange", exchange, { method: "GET" }, correlationId);
+  if (!isRecord(long) || typeof long.access_token !== "string" || !long.access_token)
+    throw providerFailure("long_lived_exchange", "invalid_shape_missing_token", correlationId);
+  if (typeof long.expires_in !== "number" || !Number.isFinite(long.expires_in))
+    throw providerFailure("long_lived_exchange", "invalid_shape_expires_in_type", correlationId);
+  if (long.expires_in <= 86400 || long.expires_in > 90 * 86400)
+    throw providerFailure("long_lived_exchange", "invalid_shape_expires_in_range", correlationId);
   const profile = await providerJson(
     fetchImpl,
+    "profile",
     `https://graph.instagram.com/${settings.version}/me?fields=user_id,username`,
     { method: "GET", headers: { Authorization: `Bearer ${long.access_token}` } },
+    correlationId,
   );
   const account = isRecord(profile) && Array.isArray(profile.data) ? profile.data[0] : profile;
   if (
@@ -195,7 +308,7 @@ export async function finishInstagramOAuth(
     !/^\d+$/.test(account.user_id) ||
     typeof account.username !== "string"
   )
-    throw new ApiError(502, "instagram_account_unverified");
+    throw providerFailure("profile", "invalid_shape", correlationId, [], "instagram_account_unverified");
   const encrypted = sealSecret(long.access_token, settings.key, `${workspaceId}:${account.user_id}`);
   // The provider calls above take seconds, and accepting an invite can move the user out of this workspace
   // meanwhile. acceptInvite holds the old workspace row FOR UPDATE while it checks that the workspace is empty,
@@ -254,6 +367,7 @@ export async function finishInstagramOAuth(
   if (saved.rowCount !== 1) throw new ApiError(409, "instagram_account_already_connected");
   const subscribed = await providerJson(
     fetchImpl,
+    "subscribe",
     `https://graph.instagram.com/${settings.version}/${account.user_id}/subscribed_apps`,
     {
       method: "POST",
@@ -264,8 +378,10 @@ export async function finishInstagramOAuth(
         subscribed_fields: "comments,messages,messaging_postbacks,messaging_seen",
       }).toString(),
     },
+    correlationId,
   );
-  if (!isRecord(subscribed) || subscribed.success !== true) throw new ApiError(502, "instagram_subscription_failed");
+  if (!isRecord(subscribed) || subscribed.success !== true)
+    throw providerFailure("subscribe", "not_success", correlationId, [], "instagram_subscription_failed");
   const activated = await pool.query(
     `UPDATE instagram_connections SET active=true,
      inbox_enabled_at=CASE WHEN NOT active AND inbox_enabled THEN clock_timestamp() ELSE inbox_enabled_at END
