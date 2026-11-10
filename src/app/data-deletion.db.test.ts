@@ -26,6 +26,7 @@ const connectionTables = [
   "instagram_comment_events",
   "private_reply_outbox",
   "instagram_follow_conversations",
+  "instagram_follow_messages",
   "instagram_message_receipts",
   "instagram_inbox_messages",
   "instagram_unmatched_replies",
@@ -81,6 +82,11 @@ async function seedConnection(connection: string, workspace: string, account: st
     `INSERT INTO instagram_follow_conversations(reply_id,connection_id,recipient_id,confirmation_keyword,follower_reply_text,non_follower_reply_text,status)
      VALUES($1,$2,'900','ok','yes','no','sent')`,
     [reply, connection],
+  );
+  await pool.query(
+    `INSERT INTO instagram_follow_messages(connection_id,reply_id,provider_message_id,follow_status,sent_at)
+     VALUES($1,$2,'follow-mid-1','not_following',now()),($1,$2,'follow-mid-2','following',now())`,
+    [connection, reply],
   );
   await pool.query(
     "INSERT INTO instagram_message_receipts(connection_id,message_id,received_at) VALUES($1,'m-1',now())",
@@ -273,6 +279,7 @@ test("connection deletion removes personal data, keeps revokes and records evide
   assert.equal(body.deleted_counts.instagram_comment_events, 1);
   assert.equal(body.deleted_counts.instagram_manual_replies, 2);
   assert.equal(body.deleted_counts.channel_consent_events, 2);
+  assert.equal(body.deleted_counts.instagram_follow_messages, 2);
   assert.deepEqual(body.retained_counts, {
     carried_comment_sender_revokes: 0,
     channel_consent_events: 1,
@@ -383,6 +390,11 @@ test("deletion migration replays and the function stays owned outside server rol
     await pool.query(migration);
     await pool.query(migration);
   }
+  // Migration 071 (#321) holds the latest body; the 023 body would leave instagram_follow_messages rows that block
+  // the follow rows' DELETE.
+  await pool.query(
+    await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"),
+  );
   const body = await pool.query(
     "SELECT pg_get_functiondef('public.delete_connection_data(uuid,uuid,uuid,text)'::regprocedure) AS body",
   );
@@ -450,6 +462,7 @@ test("contact writes wait for an in-progress deletion and then find no contact",
       "instagram_inbox_handoffs",
       "instagram_contact_automation",
       "instagram_contact_field_values",
+      "instagram_follow_messages",
       "instagram_follow_conversations",
       "private_reply_outbox",
       "instagram_comment_events",

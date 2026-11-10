@@ -912,10 +912,13 @@ test("migration 068 replays over stored rows, keeps the canonical deletion funct
   const sql = await readFile(new URL("../../db/migrations/068_dm_start_triggers.sql", import.meta.url), "utf8");
   await pool.query(sql);
   await pool.query(sql);
-  // Migrations 069 (#291) and 070 (#312) redefine the three deletion functions; 070 holds the latest body.
+  // Migrations 069 (#291), 070 (#312) and 071 (#321) redefine the three deletion functions; 071 holds the latest body.
   await pool.query(await readFile(new URL("../../db/migrations/069_dm_flow_delivery.sql", import.meta.url), "utf8"));
   await pool.query(
     await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8"),
+  );
+  await pool.query(
+    await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"),
   );
   assert.deepEqual(await definitions(), canonical);
   assert.equal((await started()).length, 1);

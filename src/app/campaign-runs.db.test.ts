@@ -985,6 +985,9 @@ test("migration 065 replays over stored runs and reproduces the canonical deleti
   await pool.query(
     await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8"),
   );
+  await pool.query(
+    await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"),
+  );
   assert.deepEqual(await definitions(), canonical);
   assert.equal(await approvalStatus(approval.id), "executed");
   assert.equal((await deliveries((await runOf(approval.id)).id)).length, 1);

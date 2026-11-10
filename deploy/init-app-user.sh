@@ -20,6 +20,7 @@ REVOKE UPDATE ON channel_consent_events FROM automations_app;
 REVOKE UPDATE ON instagram_contact_identity_link_events FROM automations_app;
 REVOKE UPDATE ON flow_versions FROM automations_app;
 REVOKE UPDATE ON flow_step_runs FROM automations_app;
+REVOKE UPDATE ON instagram_follow_messages FROM automations_app;
 REVOKE UPDATE ON instagram_segment_snapshots FROM automations_app;
 REVOKE UPDATE ON instagram_segment_snapshot_members FROM automations_app;
 REVOKE UPDATE ON campaign_approval_events FROM automations_app;

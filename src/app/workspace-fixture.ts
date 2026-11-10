@@ -49,6 +49,11 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      VALUES($1,$2,'900','ok','yes','no','sent')`,
     [reply, connection],
   );
+  await pool.query(
+    `INSERT INTO instagram_follow_messages(connection_id,reply_id,provider_message_id,follow_status,sent_at)
+     VALUES($1,$2,$3,'following',now())`,
+    [connection, reply, `follow-mid-${account}`],
+  );
   await pool.query("INSERT INTO instagram_message_receipts(connection_id,message_id,received_at) VALUES($1,$2,now())", [
     connection,
     `m-${account}`,

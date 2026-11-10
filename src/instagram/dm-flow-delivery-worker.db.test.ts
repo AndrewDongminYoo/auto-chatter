@@ -759,9 +759,12 @@ test("migration 069 replays over stored rows, keeps the canonical deletion funct
   // The second replay runs over a sent row and keeps the installed constraints.
   await pool.query(sql);
   assert.deepEqual(await constraints(), named);
-  // Migration 070 (#312) redefines the deletion functions after 069 in the runner.
+  // Migrations 070 (#312) and 071 (#321) redefine the deletion functions after 069 in the runner.
   await pool.query(
     await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8"),
+  );
+  await pool.query(
+    await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"),
   );
   assert.deepEqual(await definitions(), canonical);
   const stored = (

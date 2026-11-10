@@ -270,11 +270,68 @@ test("migration 070 replays over stored reads, keeps the canonical deletion func
   const sql = await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8");
   await pool.query(sql);
   await pool.query(sql);
+  // Migration 071 (#321) redefines the deletion functions after 070 in the runner.
+  await pool.query(
+    await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"),
+  );
   assert.deepEqual(await definitions(), canonical);
   assert.equal((await storedReads()).length, 3);
   const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
   assert.ok(
     runner.indexOf("070_instagram_message_reads.sql") > runner.indexOf("069_dm_flow_delivery.sql") &&
       runner.indexOf("070_instagram_message_reads.sql") < runner.indexOf("supabase-access.sql"),
+  );
+});
+
+test("migration 071 copies each follow row's current message ID, replays and runs in the runner", async () => {
+  const definitions = async () =>
+    (
+      await pool.query(
+        "SELECT proname,pg_get_functiondef(oid) AS definition FROM pg_proc WHERE proname IN ('delete_person_data','delete_connection_data','delete_workspace_data') ORDER BY proname",
+      )
+    ).rows;
+  const canonical = await definitions();
+  for (const { definition } of canonical) assert.match(definition, /instagram_follow_messages/);
+  // A database before 071: no history rows, and one follow row without a sent message.
+  await pool.query("TRUNCATE instagram_follow_messages");
+  await pool.query("UPDATE instagram_follow_conversations SET provider_message_id=NULL WHERE connection_id=$1", [
+    otherConnectionId,
+  ]);
+  const copied = async () =>
+    (
+      await pool.query(
+        `SELECT m.connection_id,m.provider_message_id,m.follow_status,m.sent_at,m.reply_id=f.reply_id AS same_reply
+         FROM instagram_follow_messages m JOIN instagram_follow_conversations f USING(reply_id) ORDER BY m.provider_message_id`,
+      )
+    ).rows;
+  const sql = await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8");
+  await pool.query(sql);
+  const expected = [
+    {
+      connection_id: connectionId,
+      provider_message_id: mid("instagram_follow_conversations", account),
+      follow_status: "unknown",
+      sent_at: null,
+      same_reply: true,
+    },
+  ];
+  assert.deepEqual(await copied(), expected);
+  // A replay copies nothing twice and keeps the canonical deletion functions.
+  await pool.query(sql);
+  assert.deepEqual(await copied(), expected);
+  assert.deepEqual(await definitions(), canonical);
+  // A read of the copied ID is stored once the follow row's own ID has moved on.
+  await pool.query("UPDATE instagram_follow_conversations SET provider_message_id='later-mid' WHERE connection_id=$1", [
+    connectionId,
+  ]);
+  await ingestMessageReads(pool, [read(mid("instagram_follow_conversations", account))]);
+  assert.deepEqual(
+    (await storedReads()).map((row) => row.message_id),
+    [mid("instagram_follow_conversations", account)],
+  );
+  const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
+  assert.ok(
+    runner.indexOf("071_instagram_follow_messages.sql") > runner.indexOf("070_instagram_message_reads.sql") &&
+      runner.indexOf("071_instagram_follow_messages.sql") < runner.indexOf("supabase-access.sql"),
   );
 });

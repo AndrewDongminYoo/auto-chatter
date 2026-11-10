@@ -73,6 +73,8 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("DELETE FROM flow_versions"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM flows"), { code: "42501" });
     await assert.rejects(client.query("UPDATE flow_step_runs SET outcome=outcome"), { code: "42501" });
+    await assert.rejects(client.query("UPDATE instagram_follow_messages SET sent_at=sent_at"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM instagram_follow_messages"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM flow_runs"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_unmatched_replies"), { code: "42501" });
     await assert.rejects(client.query("UPDATE webhook_redelivery_events SET actor_id=actor_id"), { code: "42501" });
@@ -154,6 +156,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
         "instagram_comment_events",
         "private_reply_outbox",
         "instagram_follow_conversations",
+        "instagram_follow_messages",
         "instagram_message_receipts",
       ])
         await assert.rejects(client.query(`SELECT * FROM ${table}`), { code: "42501" });
@@ -331,6 +334,8 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("DELETE FROM flow_versions"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM flows"), { code: "42501" });
     await assert.rejects(client.query("UPDATE flow_step_runs SET outcome=outcome"), { code: "42501" });
+    await assert.rejects(client.query("UPDATE instagram_follow_messages SET sent_at=sent_at"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM instagram_follow_messages"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM flow_runs"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_unmatched_replies"), { code: "42501" });
     await assert.rejects(client.query("UPDATE webhook_redelivery_events SET actor_id=actor_id"), { code: "42501" });
@@ -489,6 +494,8 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("DELETE FROM flow_versions"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM flows"), { code: "42501" });
     await assert.rejects(client.query("UPDATE flow_step_runs SET outcome=outcome"), { code: "42501" });
+    await assert.rejects(client.query("UPDATE instagram_follow_messages SET sent_at=sent_at"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM instagram_follow_messages"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM flow_runs"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_unmatched_replies"), { code: "42501" });
     await assert.rejects(client.query("UPDATE webhook_redelivery_events SET actor_id=actor_id"), { code: "42501" });
@@ -564,6 +571,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
       "workspace_members",
       "instagram_oauth_states",
       "instagram_follow_conversations",
+      "instagram_follow_messages",
       "instagram_message_receipts",
     ])
       await client.query(`SELECT * FROM ${table}`);

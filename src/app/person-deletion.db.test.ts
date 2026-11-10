@@ -78,6 +78,11 @@ async function seedCommenter(sender: string, recipient: string, rule: string, fu
     [reply, connectionId, recipient],
   );
   await pool.query(
+    `INSERT INTO instagram_follow_messages(connection_id,reply_id,provider_message_id,follow_status,sent_at)
+     VALUES($1,$2,$3,'not_following',now()),($1,$2,$4,'following',now())`,
+    [connectionId, reply, `follow-mid-${recipient}-1`, `follow-mid-${recipient}-2`],
+  );
+  await pool.query(
     "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused,handoff_paused) VALUES($1,$2,$3,false,true)",
     [workspaceId, connectionId, sender],
   );
@@ -165,6 +170,7 @@ async function personRows(sender: string, recipient: string) {
       +(SELECT count(*) FROM instagram_contact_automation WHERE connection_id=$1 AND sender_id=$2)::int
       +(SELECT count(*) FROM instagram_contact_field_values WHERE connection_id=$1 AND sender_id=$2)::int
       +(SELECT count(*) FROM instagram_follow_conversations WHERE connection_id=$1 AND recipient_id=$3)::int
+      +(SELECT count(*) FROM instagram_follow_messages WHERE connection_id=$1 AND provider_message_id LIKE 'follow-mid-'||$3||'-%')::int
       +(SELECT count(*) FROM instagram_inbox_messages WHERE connection_id=$1 AND recipient_id=$3)::int
       +(SELECT count(*) FROM instagram_unmatched_replies WHERE connection_id=$1 AND sender_id=$3)::int
       +(SELECT count(*) FROM instagram_inbox_handoffs WHERE connection_id=$1 AND recipient_id=$3)::int
@@ -197,6 +203,7 @@ for (const [kind, identity] of [
     assert.equal(result.deleted_counts.instagram_comment_events, 1);
     assert.equal(result.deleted_counts.instagram_unmatched_replies, 1);
     assert.equal(result.deleted_counts.channel_consent_state, 1);
+    assert.equal(result.deleted_counts.instagram_follow_messages, 2);
     assert.equal(result.retained_counts.carried_comment_sender_revokes, 1);
 
     const states = await pool.query(

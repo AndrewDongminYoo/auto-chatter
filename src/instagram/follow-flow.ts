@@ -299,11 +299,22 @@ export async function processNextFollowReply(
     followStatus = "unknown",
     messageId: string | null = null,
   ) => {
+    // A sent reply's message ID is also appended to instagram_follow_messages in the same statement (#321): the
+    // column keeps only the latest ID, and a read of an earlier reply must still match its own ID. The result has
+    // one row only when the claim held; a history conflict must not undo the update of a sent reply. An ID that the
+    // history CHECK would reject (blank or over 512 characters) skips the insert instead of failing the statement.
     const result = await pool.query(
-      `UPDATE instagram_follow_conversations SET status=$3,failure_code=$4,next_attempt_at=now()+make_interval(secs=>$5),
-    follow_status=$6,provider_message_id=COALESCE($7,provider_message_id),attempt_id=NULL,
+      `WITH updated AS (
+    UPDATE instagram_follow_conversations SET status=$3,failure_code=$4,next_attempt_at=now()+make_interval(secs=>$5),
+    follow_status=$6,provider_message_id=COALESCE($7::text,provider_message_id),attempt_id=NULL,
     attempt_started_at=CASE WHEN $3='pending' THEN NULL ELSE attempt_started_at END
-    WHERE reply_id=$1 AND status='sending' AND attempt_id=$2`,
+    WHERE reply_id=$1 AND status='sending' AND attempt_id=$2 RETURNING reply_id,connection_id,follow_status
+   ), history AS (
+    INSERT INTO instagram_follow_messages(connection_id,reply_id,provider_message_id,follow_status,sent_at)
+    SELECT connection_id,reply_id,$7::text,follow_status,now() FROM updated
+    WHERE $7::text IS NOT NULL AND length(btrim($7::text))>0 AND length($7::text)<=512
+    ON CONFLICT(connection_id,provider_message_id) DO NOTHING
+   ) SELECT 1 FROM updated`,
       [row.reply_id, attempt, status, code, delay, followStatus, messageId],
     );
     if (result.rowCount !== 1) throw new Error("Follow reply claim was lost");

@@ -53,7 +53,9 @@ export function parseMessageReadEvents(body: Uint8Array): InstagramMessageRead[]
 // Stores the reads of messages the service sent: the account must be an active connection and `read.mid` must be a
 // provider_message_id stored for that connection by one of the send tables. Any other read (a message a person sent
 // from the Instagram app, another connection's message) leaves no row. The first stored read_at of a
-// (connection, message, reader) stays: a redelivered or repeated event inserts nothing.
+// (connection, message, reader) stays: a redelivered or repeated event inserts nothing. Follow replies match through
+// instagram_follow_messages (every reply's ID, #321) and through the follow row's latest ID, which also covers a
+// reply sent by a worker that ran before migration 071.
 export async function ingestMessageReads(pool: Pool, reads: readonly InstagramMessageRead[]): Promise<void> {
   if (!reads.length) return;
   const client = await pool.connect();
@@ -74,6 +76,8 @@ export async function ingestMessageReads(pool: Pool, reads: readonly InstagramMe
            AS r(account_id,reader_id,message_id,read_at,position)
          JOIN instagram_connections c ON c.account_id=r.account_id AND c.id=ANY($5::uuid[])
          WHERE EXISTS(SELECT 1 FROM private_reply_outbox s WHERE s.connection_id=c.id AND s.provider_message_id=r.message_id)
+           OR EXISTS(SELECT 1 FROM instagram_follow_messages s
+             WHERE s.connection_id=c.id AND s.provider_message_id=r.message_id)
            OR EXISTS(SELECT 1 FROM instagram_follow_conversations s
              WHERE s.connection_id=c.id AND s.provider_message_id=r.message_id)
            OR EXISTS(SELECT 1 FROM instagram_manual_replies s
