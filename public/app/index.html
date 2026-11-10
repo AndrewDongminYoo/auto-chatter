@@ -7,6 +7,7 @@
     <link rel="icon" href="../icons/auto-chatter.png" type="image/png" />
     <link rel="stylesheet" href="./styles.css" />
     <script src="./focus-keeper.js" defer></script>
+    <script src="./notice-placement.js" defer></script>
     <script src="./reply-templates.js" defer></script>
     <script src="./send-status-labels.js" defer></script>
     <script src="./manual-reply-reports.js" defer></script>
@@ -41,7 +42,10 @@
         <h1>자동화 작업실</h1>
         <p class="intro">댓글 조건부터 마지막 답장까지, 한곳에서 설정하세요.</p>
       </div>
-      <div id="notice" role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></div>
+      <div class="notice-bar">
+        <div id="notice" role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></div>
+        <button id="notice-close" type="button" class="secondary" hidden>닫기</button>
+      </div>
       <section id="startup" class="card loading-state" aria-label="로그인 상태 확인">
         <p>로그인 상태를 확인하고 있습니다…</p>
       </section>
