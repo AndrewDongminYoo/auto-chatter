@@ -47,6 +47,7 @@ function createCampaignRunReports({ api, node }) {
         ["sending", "보내는 중"],
         ["sent", "보냄"],
         ["read", "읽음 확인"],
+        ["read_unavailable", "읽음 확인 불가"],
         ["failed", "실패"],
         ["blocked", "차단"],
         ["unknown", "결과 불명"],

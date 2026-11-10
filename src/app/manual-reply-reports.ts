@@ -22,7 +22,9 @@ interface ReportRow {
 // Creation-period cohort, not a history of state transitions. No event join: a replay or multiple attempts
 // cannot multiply one stored request. Explicit retry rows remain separate requests. `read` is the subset of `sent`
 // with a stored read of that exact message ID (#312); it is outside the status partition, and EXISTS keeps several
-// readers of one message to one count.
+// readers of one message to one count. `read_unavailable` is the rest of `sent` on connections without an Instagram
+// Login user ID (Facebook Login or environment-managed), which cannot report reads; a confirmed read stays in `read`,
+// so the two are disjoint.
 export async function manualReplyReport(pool: Pool, user: User, query: URLSearchParams) {
   const workspace = await workspaceFor(pool, user, "admin");
   const allowed = new Set(["from", "before", "expected_time_zone", "connection_id"]);
@@ -51,6 +53,10 @@ export async function manualReplyReport(pool: Pool, user: User, query: URLSearch
        'sending',count(*) FILTER (WHERE r.status='sending')::text,
        'sent',count(*) FILTER (WHERE r.status='sent')::text,
        'read',count(*) FILTER (WHERE r.status='sent' AND EXISTS(SELECT 1 FROM instagram_message_reads mr
+         WHERE mr.connection_id=r.connection_id AND mr.message_id=r.provider_message_id))::text,
+       'read_unavailable',count(*) FILTER (WHERE r.status='sent' AND EXISTS(SELECT 1 FROM instagram_connections c
+         WHERE c.id=r.connection_id AND c.workspace_id=r.workspace_id AND c.instagram_user_id IS NULL)
+         AND NOT EXISTS(SELECT 1 FROM instagram_message_reads mr
          WHERE mr.connection_id=r.connection_id AND mr.message_id=r.provider_message_id))::text,
        'failed',count(*) FILTER (WHERE r.status='failed')::text,
        'unknown_unresolved',count(*) FILTER (WHERE r.status='unknown' AND r.resolved_at IS NULL)::text,

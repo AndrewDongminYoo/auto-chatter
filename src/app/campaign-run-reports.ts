@@ -58,6 +58,8 @@ export async function campaignRunReport(pool: Pool, user: User, query: URLSearch
   // through the run_id-leading unique index (campaign_deliveries_member), never by a scan of every workspace's rows.
   // One clock (checked_at) is read once, in context. `read` is the subset of `sent` rows with a stored read of that exact
   // message ID on the same connection (#312), counted inside the same LATERAL; EXISTS keeps several readers to one row.
+  // `read_unavailable` is the rest of `sent` on connections without an Instagram Login user ID (Facebook Login or
+  // environment-managed), which cannot report reads; a confirmed read stays in `read`, so the two are disjoint.
   const row = (
     await pool.query<ReportRow>(
       `WITH context AS MATERIALIZED (
@@ -75,7 +77,11 @@ export async function campaignRunReport(pool: Pool, user: User, query: URLSearch
        SELECT counted.* FROM cohort c CROSS JOIN LATERAL (SELECT count(*) AS total,
          ${CAMPAIGN_DELIVERY_STATUSES.map((status) => `count(*) FILTER (WHERE d.status='${status}') AS ${status}`).join(",")},
          count(*) FILTER (WHERE d.status='sent' AND EXISTS(SELECT 1 FROM instagram_message_reads mr
-           WHERE mr.connection_id=d.connection_id AND mr.message_id=d.provider_message_id)) AS read_confirmed
+           WHERE mr.connection_id=d.connection_id AND mr.message_id=d.provider_message_id)) AS read_confirmed,
+         count(*) FILTER (WHERE d.status='sent' AND EXISTS(SELECT 1 FROM instagram_connections ic
+           WHERE ic.id=d.connection_id AND ic.workspace_id=d.workspace_id AND ic.instagram_user_id IS NULL)
+           AND NOT EXISTS(SELECT 1 FROM instagram_message_reads mr
+           WHERE mr.connection_id=d.connection_id AND mr.message_id=d.provider_message_id)) AS read_unavailable_count
          FROM campaign_deliveries d WHERE d.run_id=c.id AND d.workspace_id=c.workspace_id) counted
      )
      SELECT context.*,
@@ -88,7 +94,7 @@ export async function campaignRunReport(pool: Pool, user: User, query: URLSearch
        ) FROM cohort c) AS run_counts,
        (SELECT json_build_object(${START_KEYS.map((key) => `'${key}',${startSum(key)}`).join(",")}) FROM cohort c) AS start_counts,
        (SELECT json_build_object(${["total", ...CAMPAIGN_DELIVERY_STATUSES].map((key) => `'${key}',coalesce(sum(${key}),0)::text`).join(",")},
-         'read',coalesce(sum(read_confirmed),0)::text)
+         'read',coalesce(sum(read_confirmed),0)::text,'read_unavailable',coalesce(sum(read_unavailable_count),0)::text)
          FROM deliveries) AS delivery_counts
      FROM context`,
       [workspace, from, before, zone, draft, user.id],

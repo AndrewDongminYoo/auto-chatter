@@ -32,6 +32,7 @@ const snapshot = {
     sending: "1",
     sent: "1",
     read: "1",
+    read_unavailable: "0",
     blocked: "1",
     failed: "1",
     unknown: "1",
@@ -255,14 +256,14 @@ test("flow report renders separate partitions and exports only the displayed sna
   h.inputs.before.value = "2026-10-02";
   await h.form.dispatch("submit");
   assert.equal(h.get("flow-report-run-counts").children.length, 8);
-  assert.equal(h.get("flow-report-reply-counts").children.length, 8);
-  // The read count sits beside the accepted count it is a subset of.
+  assert.equal(h.get("flow-report-reply-counts").children.length, 9);
+  // The read counts sit beside the accepted count they are subsets of.
   assert.deepEqual(
     h
       .get("flow-report-reply-counts")
-      .children.slice(3, 5)
+      .children.slice(3, 6)
       .map((item) => item.children[0]!.textContent),
-    ["Meta 접수", "읽음 확인"],
+    ["Meta 접수", "읽음 확인", "읽음 확인 불가"],
   );
   assert.deepEqual(
     h.get("flow-report-wait-counts").children.map((item) => item.children.map((part) => part.textContent)),
@@ -284,7 +285,7 @@ test("flow report renders separate partitions and exports only the displayed sna
     .trim()
     .split("\r\n")
     .map((line) => line.replace(/^"|"$/g, "").split('\",\"'));
-  assert.equal(rows.length, 20);
+  assert.equal(rows.length, 21);
   assert.ok(rows.slice(1).every((row) => row[11] === "" && row[12] === ""));
   for (const [group, values] of [
     ["run", snapshot.run_counts],
@@ -365,12 +366,12 @@ test("flow report renders a breakdown table with loaded labels and exports group
     [
       ["계정", 2],
       ["실행 상태", 8],
-      ["첫 답장 상태", 8],
+      ["첫 답장 상태", 9],
       ["받는이 답장", 3],
     ],
   );
   const header = metricRow!.children.map((cell) => cell.textContent);
-  assert.equal(header.length, 19);
+  assert.equal(header.length, 20);
   assert.equal(header[0], "실행 합계");
   assert.equal(header[6], "응답 대기");
   assert.deepEqual(header.slice(-3), ["답장 대기 도달", "답장 받음", "답장 없음"]);
@@ -392,10 +393,10 @@ test("flow report renders a breakdown table with loaded labels and exports group
     .split("\r\n")
     .map((line) => line.replace(/^"|"$/g, "").split('","'));
   assert.deepEqual(lines[0]!.slice(-2), ["group_by", "group_key"]);
-  assert.equal(lines.length, 1 + 19 * 3);
+  assert.equal(lines.length, 1 + 20 * 3);
   for (const group of grouped.groups) {
     const own = lines.filter((line) => line[12] === group.key);
-    assert.equal(own.length, 19);
+    assert.equal(own.length, 20);
     assert.ok(own.every((line) => line[11] === "connection"));
     assert.equal(own.find((line) => line[0] === "run" && line[1] === "total")![2], group.run_counts.total);
     assert.equal(
@@ -403,7 +404,7 @@ test("flow report renders a breakdown table with loaded labels and exports group
       group.reply_wait_counts.replied,
     );
   }
-  assert.equal(lines.filter((line) => line[12] === "" && line[11] === "").length, 19);
+  assert.equal(lines.filter((line) => line[12] === "" && line[11] === "").length, 20);
 
   // Changing the breakdown clears the table and the CSV like any other input.
   h.inputs.group_by.value = "day";

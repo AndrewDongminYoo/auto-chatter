@@ -35,7 +35,7 @@ beforeEach(async () => {
     [workspace, secondConnection],
   ]) {
     await pool.query(
-      "INSERT INTO instagram_connections(id,workspace_id,account_id,username) VALUES($1::uuid,$2,$1::text,'SECRET-USERNAME')",
+      "INSERT INTO instagram_connections(id,workspace_id,account_id,username,instagram_user_id) VALUES($1::uuid,$2,$1::text,'SECRET-USERNAME',$1::text)",
       [id, ws],
     );
     const rule = (
@@ -129,6 +129,7 @@ test("manual report counts current requests once, isolates workspaces and distin
     sending: "1",
     sent: "1",
     read: "0",
+    read_unavailable: "0",
     failed: "1",
     unknown_unresolved: "1",
     unknown_resolved: "1",
@@ -164,6 +165,7 @@ test("manual report uses creation cohort with exact half-open boundaries, not se
     sending: "0",
     sent: "0",
     read: "0",
+    read_unavailable: "0",
     failed: "1",
     unknown_unresolved: "0",
     unknown_resolved: "0",
@@ -185,6 +187,15 @@ async function withMessageId(id: string, messageId: string) {
     id,
     messageId,
   ]);
+}
+// `read` and `read_unavailable` are disjoint subsets of `sent` and stay outside the status partition.
+function assertReadSubsets(counts: Record<string, string>) {
+  const { total, read, read_unavailable, ...statuses } = counts;
+  assert.equal(
+    Object.values(statuses).reduce((sum, value) => sum + BigInt(value), 0n),
+    BigInt(total!),
+  );
+  assert.ok(BigInt(read!) + BigInt(read_unavailable!) <= BigInt(counts.sent!));
 }
 
 test("manual report counts a sent request as read only on an exact message ID match on its own connection", async () => {
@@ -211,24 +222,55 @@ test("manual report counts a sent request as read only on an exact message ID ma
     sending: "0",
     sent: "3",
     read: "1",
+    read_unavailable: "0",
     failed: "1",
     unknown_unresolved: "0",
     unknown_resolved: "0",
     cancelled: "0",
   });
-  // `read` is a subset of `sent` and stays outside the status partition.
-  const { total, read, ...statuses } = body.counts as Record<string, string>;
-  assert.equal(
-    Object.values(statuses).reduce((sum, value) => sum + BigInt(value), 0n),
-    BigInt(total!),
-  );
-  assert.ok(BigInt(read!) <= BigInt(body.counts.sent));
+  assertReadSubsets(body.counts);
   assert.equal(JSON.stringify(body).includes("mid-"), false);
   assert.equal((await report(`${params}&connection_id=${secondConnection}`)).counts.read, "0");
   await markRead(secondConnection, "mid-foreign");
   assert.equal((await report()).counts.read, "2");
   assert.equal((await report(`${params}&connection_id=${secondConnection}`)).counts.read, "1");
   assert.equal((await report(`${params}&connection_id=${connection}`)).counts.read, "1");
+});
+
+test("manual report counts a sent request on a connection that cannot report reads as read_unavailable, not unread", async () => {
+  // No Instagram Login user ID: a Facebook Login or environment-managed connection.
+  await pool.query("UPDATE instagram_connections SET instagram_user_id=NULL WHERE id=$1", [secondConnection]);
+  // A sent request on a connection that reports reads is in neither count without a read.
+  await seed("sent");
+  const unavailable = await seed("sent", undefined, secondConnection);
+  await withMessageId(unavailable.id, "mid-unavailable");
+  // A read stored for such a connection is still a confirmed read, never also unavailable.
+  const confirmed = await seed("sent", undefined, secondConnection);
+  await withMessageId(confirmed.id, "mid-confirmed");
+  // A request that was not sent counts in neither, whatever its connection or reads.
+  const failed = await seed("failed", undefined, secondConnection);
+  await withMessageId(failed.id, "mid-failed");
+  await markRead(secondConnection, "mid-confirmed");
+  await markRead(secondConnection, "mid-failed");
+  const body = await report();
+  assert.deepEqual(body.counts, {
+    total: "4",
+    pending: "0",
+    sending: "0",
+    sent: "3",
+    read: "1",
+    read_unavailable: "1",
+    failed: "1",
+    unknown_unresolved: "0",
+    unknown_resolved: "0",
+    cancelled: "0",
+  });
+  assertReadSubsets(body.counts);
+  assert.equal((await report(`${params}&connection_id=${connection}`)).counts.read_unavailable, "0");
+  assert.equal((await report(`${params}&connection_id=${secondConnection}`)).counts.read_unavailable, "1");
+  // Reconnecting through Instagram Login records the user ID, and the count follows the connection's current state.
+  await pool.query("UPDATE instagram_connections SET instagram_user_id='4242' WHERE id=$1", [secondConnection]);
+  assert.equal((await report()).counts.read_unavailable, "0");
 });
 
 test("manual report follows workspace DST boundaries and rejects stale time zone", async () => {

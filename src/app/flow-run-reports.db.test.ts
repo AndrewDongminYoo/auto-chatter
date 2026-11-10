@@ -39,7 +39,7 @@ beforeEach(async () => {
     [otherWorkspace, otherConnection],
   ])
     await pool.query(
-      "INSERT INTO instagram_connections(id,workspace_id,account_id,username) VALUES($1::uuid,$2,$1::text,'SECRET-ACCOUNT')",
+      "INSERT INTO instagram_connections(id,workspace_id,account_id,username,instagram_user_id) VALUES($1::uuid,$2,$1::text,'SECRET-ACCOUNT',$1::text)",
       [id, ws],
     );
   for (const [ws, id, conn] of [
@@ -135,14 +135,14 @@ type Group = { key: string; run_counts: Counts; reply_counts: Counts; reply_wait
 const partitions = ["run_counts", "reply_counts", "reply_wait_counts"] as const;
 
 // Each partition sums to its total, inside every group and at the top, and the groups add up to the top level.
-// `read` is a subset of `sent`, outside the first-reply partition.
+// `read` and `read_unavailable` are disjoint subsets of `sent`, outside the first-reply partition.
 function assertPartitions(counts: Group | Record<(typeof partitions)[number], Counts>) {
   const { total, ...states } = counts.run_counts;
   const sum = (values: string[]) => values.reduce((a, b) => a + BigInt(b), 0n);
   assert.equal(sum(Object.values(states)), BigInt(total!));
-  const { read, ...replies } = counts.reply_counts;
+  const { read, read_unavailable, ...replies } = counts.reply_counts;
   assert.equal(sum(Object.values(replies)), BigInt(total!));
-  assert.ok(BigInt(read!) <= BigInt(replies.sent!));
+  assert.ok(BigInt(read!) + BigInt(read_unavailable!) <= BigInt(replies.sent!));
   const wait = counts.reply_wait_counts;
   assert.equal(BigInt(wait.replied!) + BigInt(wait.not_replied!), BigInt(wait.reached!));
   assert.ok(BigInt(wait.reached!) <= BigInt(total!));
@@ -192,6 +192,7 @@ test("flow report keeps run and first-reply states separate, including absent re
     sending: "1",
     sent: "1",
     read: "0",
+    read_unavailable: "0",
     blocked: "1",
     failed: "1",
     unknown: "1",
@@ -294,6 +295,7 @@ test("flow report counts a run as read only when its sent first message has a re
     sending: "0",
     sent: "4",
     read: "2",
+    read_unavailable: "0",
     blocked: "0",
     failed: "0",
     unknown: "1",
@@ -315,6 +317,56 @@ test("flow report counts a run as read only when its sent first message has a re
   assertGroupSums(days);
   assert.equal(days.reply_counts.read, "3");
   assert.equal((await report(`${params}&connection_id=${secondConnection}`)).reply_counts.read, "1");
+});
+
+test("flow report counts a sent first message on a connection that cannot report reads as read_unavailable, not unread", async () => {
+  // No Instagram Login user ID: a Facebook Login or environment-managed connection.
+  await pool.query("UPDATE instagram_connections SET instagram_user_id=NULL WHERE id=$1", [secondConnection]);
+  // A sent reply on a connection that reports reads is in neither count without a read.
+  await seed("ended", "sent");
+  const unavailable = await seed("waiting", "sent", undefined, flow, secondConnection);
+  await replyMessageId(unavailable.id, "mid-unavailable");
+  // A read stored for such a connection is still a confirmed read, never also unavailable.
+  const confirmed = await seed("ended", "sent", undefined, flow, secondConnection);
+  await replyMessageId(confirmed.id, "mid-confirmed");
+  // A first message that was not sent counts in neither, whatever its connection or reads.
+  const unknown = await seed("delivering", "unknown", undefined, flow, secondConnection);
+  await replyMessageId(unknown.id, "mid-unknown");
+  // A DM-started run's first message follows the same rule.
+  await seedDmRun("sent", "mid-dm", secondConnection);
+  await seedDmRun("pending", undefined, secondConnection);
+  await markRead(secondConnection, "mid-confirmed");
+  await markRead(secondConnection, "mid-unknown");
+
+  const body = await report();
+  assert.deepEqual(body.reply_counts, {
+    absent: "0",
+    pending: "1",
+    sending: "0",
+    sent: "4",
+    read: "1",
+    read_unavailable: "2",
+    blocked: "0",
+    failed: "0",
+    unknown: "1",
+  });
+  assert.equal(body.run_counts.total, "6");
+  assertPartitions(body);
+  for (const groupBy of ["connection", "flow", "day"]) assertGroupSums(await report(`${params}&group_by=${groupBy}`));
+  const accounts = await report(`${params}&group_by=connection`);
+  assert.deepEqual(
+    accounts.groups.map((group: Group) => [
+      group.key,
+      group.reply_counts.sent,
+      group.reply_counts.read,
+      group.reply_counts.read_unavailable,
+    ]),
+    [
+      [connection, "1", "0", "0"],
+      [secondConnection, "3", "1", "2"],
+    ],
+  );
+  assert.equal((await report(`${params}&connection_id=${connection}`)).reply_counts.read_unavailable, "0");
 });
 
 test("flow report isolates workspace and combines owned account and flow filters across versions and archives", async () => {
