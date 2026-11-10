@@ -37,20 +37,6 @@ export interface ReplyBatch {
   messages: readonly { body: unknown; ack(): void; retry(options: { delaySeconds: number }): void }[];
 }
 
-function openPool(env: Env, correlationId?: string): Pool {
-  // Connections belong to one invocation; Hyperdrive owns the upstream pool.
-  const pool = new Pool({
-    connectionString: env.HYPERDRIVE.connectionString,
-    max: 1,
-    connectionTimeoutMillis: 10_000,
-    query_timeout: 10_000,
-  });
-  pool.on("error", () =>
-    logOperation({ event: "database_connection_error", code: "database_unavailable", correlation_id: correlationId }),
-  );
-  return pool;
-}
-
 async function tokenRotated(pool: Pool, connectionId: string, encryptedToken: string): Promise<boolean> {
   const current = await pool.query<{ rotated: boolean }>(
     `SELECT access_token_encrypted IS DISTINCT FROM $2 AS rotated FROM instagram_connections
@@ -740,6 +726,7 @@ import {
 } from "../instagram/dm-flow-delivery-worker.ts";
 import { InstagramLoginPrivateReplyTransport } from "../instagram/instagram-login-private-reply.ts";
 import { publicPage } from "./public-pages.ts";
+import { openPool } from "./pool.ts";
 import { appApi } from "../app/api.ts";
 import type { AuthEnv } from "../app/auth.ts";
 import { deleteExpiredOAuthStates, type InstagramOAuthEnv } from "../app/instagram-oauth.ts";

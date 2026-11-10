@@ -2395,3 +2395,70 @@ test("workerd segment snapshots use restricted server privileges and refuse an a
     await pool.end();
   }
 });
+
+test("workerd logs no database_connection_error when a successful API request closes its pool (#319)", async () => {
+  const databaseUrl = process.env.TEST_DATABASE_URL;
+  const url = new URL(databaseUrl);
+  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
+    throw new Error("Database tests require a local automations_test database");
+  const pool = new Pool({ connectionString: databaseUrl });
+  const workspace = "11111111-1111-4111-8111-111111111111",
+    user = "66666666-6666-4666-8666-666666666666";
+  const serverUrl = new URL(databaseUrl);
+  serverUrl.username = "auto_chatter_server";
+  serverUrl.password = "runtime-test-only";
+  const config = JSON.parse(await readFile(new URL("../../wrangler.json", import.meta.url), "utf8"));
+  let output = "";
+  const runtime = new Miniflare({
+    modules: true,
+    scriptPath: ".wrangler/build/index.js",
+    compatibilityDate: config.compatibility_date,
+    compatibilityFlags: config.compatibility_flags,
+    hyperdrives: { HYPERDRIVE: serverUrl.href },
+    durableObjects: Object.fromEntries(
+      config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }]),
+    ),
+    bindings: {
+      SUPABASE_URL: "https://auth-test.supabase.co",
+      SUPABASE_SECRET_KEY: "sb_secret_test",
+      SEND_ENABLED: "false",
+    },
+    // The Worker's console lines, which logOperation writes, arrive on the runtime's stdout and stderr.
+    handleRuntimeStdio: (stdout, stderr) => {
+      for (const stream of [stdout, stderr]) stream.on("data", (chunk) => (output += chunk));
+    },
+    outboundService: async (request) => {
+      assert.equal(new URL(request.url).origin, "https://auth-test.supabase.co");
+      return Response.json({ id: user, email: "owner@example.test", email_confirmed_at: "2026-09-27" });
+    },
+  });
+  try {
+    await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
+    await pool.query("TRUNCATE workspaces CASCADE");
+    await pool.query("INSERT INTO workspaces VALUES($1)", [workspace]);
+    await pool.query("INSERT INTO workspace_members VALUES($1,$2)", [user, workspace]);
+    await pool.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8"));
+    await pool.query("ALTER ROLE auto_chatter_server LOGIN PASSWORD 'runtime-test-only'");
+    const headers = { cookie: "__Host-ac-access=owned" };
+    for (let request = 0; request < 3; request++) {
+      const response = await runtime.dispatchFetch("https://app.test/api/workspace/members", { headers });
+      assert.equal(response.status, 200, await response.clone().text());
+      await response.arrayBuffer();
+    }
+    // Closing the workerd socket rejects its pending read after end() resolved, so that error reaches the pool
+    // listener after the response; give it time to arrive before reading the output.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.doesNotMatch(output, /database_connection_error/);
+    // Positive control: a refused database connection is logged through the same capture.
+    await pool.query("ALTER ROLE auto_chatter_server NOLOGIN");
+    const failed = await runtime.dispatchFetch("https://app.test/api/workspace/members", { headers });
+    assert.equal(failed.status, 503);
+    await failed.arrayBuffer();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.match(output, /"event":"request_failed"/);
+  } finally {
+    await runtime.dispose();
+    await pool.query("ALTER ROLE auto_chatter_server LOGIN").catch(() => {});
+    await pool.end();
+  }
+});

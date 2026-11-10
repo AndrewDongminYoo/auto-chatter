@@ -17,6 +17,10 @@
 그래서 요청 본문, 토큰, 이메일, 댓글·DM 본문, Meta·SQL 오류 원문은 호출자가 실수로 넘겨도 기록되지 않습니다.
 실패 코드는 `failureCode`가 오류 클래스와 오류 코드만 보고 정합니다(`not_configured`, `token_refresh_failed`, `subscription_check_failed`, `database_unavailable`, `database_error`, `connection_unavailable`, `unexpected_error`). 오류 메시지는 읽지 않습니다.
 상관 ID는 웹훅·API 요청이면 Cloudflare의 `cf-ray` 헤더(없으면 새 UUID), Queue 메시지 묶음과 Cron 실행마다 새 UUID입니다. Worker는 요청마다 한 번 정한 ID를 `appApi`와 그 요청의 DB 연결 풀에도 넘기므로 풀 오류 줄도 같은 ID를 가집니다.
+`database_connection_error`는 웹훅·API 요청, Queue 메시지, Cron 실행이 풀을 쓰는 동안의 오류만 남기며, 풀의 `end()`가 시작된 뒤 풀에 오는 오류는 남기지 않습니다([#319](https://github.com/AndrewDongminYoo/auto-chatter/issues/319)).
+pg-pool은 연결이 닫히기 전에 `end()`를 끝내고, workerd 소켓을 닫으면 대기 중인 읽기가 오류로 끝나 그 오류가 `end()` 도중이나 뒤에 풀로 오기 때문입니다.
+그래서 DB에 연결한 API 요청은 성공해도 이 줄을 남겼습니다.
+쿼리 오류는 그 쿼리가 받으므로 이 처리로 가려지지 않습니다.
 Node 워커의 `worker-main.ts`·`main.ts`가 터미널에 쓰는 사용법·설정 안내는 운영 로그가 아니므로 바꾸지 않았습니다.
 
 | `event`                           | `code`                                                         | 남기는 곳                                                     |
@@ -24,7 +28,7 @@ Node 워커의 `worker-main.ts`·`main.ts`가 터미널에 쓰는 사용법·설
 | `request_failed`                  | 실패 코드                                                      | 웹훅·API 요청이 503으로 끝날 때                               |
 | `queue_publish_failed`            | `reply_notification_failed`·`manual_reply_notification_failed` | DB 커밋 뒤 Queue 발행 실패                                    |
 | `queue_message_failed`            | 실패 코드                                                      | Queue 소비 실패(재시도)                                       |
-| `database_connection_error`       | `database_unavailable`                                         | 연결 풀 오류                                                  |
+| `database_connection_error`       | `database_unavailable`                                         | 처리 중의 연결 풀 오류(풀 닫기 시작 뒤는 제외, #319)          |
 | `early_reply_reconcile_failed`    | 실패 코드                                                      | 발송 직후의 이른 DM 연결 실패                                 |
 | `reauth_record_failed`            | 실패 코드                                                      | 재연결 표시 기록·해제 실패                                    |
 | `instagram_deauthorized`          | `connection_disconnected` 등(토큰 갱신 명세)                   | 검증된 권한 해제 콜백                                         |
