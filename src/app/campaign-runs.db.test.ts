@@ -565,17 +565,18 @@ test("the candidate count equals the rows, and a candidate gets its qualifying r
 });
 
 test("cancelling a run cancels its pending rows only, and the read returns counts without identifiers", async () => {
-  await qualifying("1001", "2001");
-  await qualifying("1002", "2002");
+  // 17-digit identifiers shaped like Instagram-scoped IDs: a UUID has at most 12 consecutive digits and a timestamp 6, so the absence check below cannot match by chance.
+  await qualifying("17841400000001001", "17841400000002001");
+  await qualifying("17841400000001002", "17841400000002002");
   const approval = await approve(
     await draftFor([
-      [C, "1001"],
-      [C, "1002"],
+      [C, "17841400000001001"],
+      [C, "17841400000001002"],
     ]),
   );
   await startDueCampaignRuns(pool);
   const { id } = await runOf(approval.id);
-  await insertSending(id, "1003", "2003");
+  await insertSending(id, "17841400000001003", "17841400000002003");
   const baseline = await untouched();
   assert.equal(
     (await expect(await request("GET", `/api/campaign-runs/${id}`, undefined, agent), 403)).error,
@@ -598,7 +599,14 @@ test("cancelling a run cancels its pending rows only, and the read returns count
     unknown: "0",
     cancelled: "0",
   });
-  for (const identifier of ["1001", "1002", "1003", "2001", "2002", "2003"])
+  for (const identifier of [
+    "17841400000001001",
+    "17841400000001002",
+    "17841400000001003",
+    "17841400000002001",
+    "17841400000002002",
+    "17841400000002003",
+  ])
     assert.ok(!JSON.stringify(read).includes(identifier), identifier);
   const approvalRead = await expect(await request("GET", `/api/campaign-approvals/${approval.id}`));
   assert.deepEqual([approvalRead.run_id, approvalRead.run_status], [id, "running"]);
@@ -631,9 +639,9 @@ test("cancelling a run cancels its pending rows only, and the read returns count
     (await pool.query("SELECT sender_id,status FROM campaign_deliveries WHERE run_id=$1 ORDER BY sender_id", [id]))
       .rows,
     [
-      { sender_id: "1001", status: "cancelled" },
-      { sender_id: "1002", status: "cancelled" },
-      { sender_id: "1003", status: "sending" },
+      { sender_id: "17841400000001001", status: "cancelled" },
+      { sender_id: "17841400000001002", status: "cancelled" },
+      { sender_id: "17841400000001003", status: "sending" },
     ],
   );
   const again = await expect(await request("POST", `${path}/cancel`, { expected_version: 2 }), 409);
