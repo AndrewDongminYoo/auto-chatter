@@ -186,6 +186,7 @@ function harness(api: (url: string) => Promise<unknown>, clock?: string) {
     },
     setTimeout() {},
   });
+  vm.runInContext(readFileSync(new URL("../../public/app/send-status-labels.js", import.meta.url), "utf8"), context);
   vm.runInContext(readFileSync(new URL("../../public/app/campaign-run-reports.js", import.meta.url), "utf8"), context);
   const controller = context.createCampaignRunReports({ api, node: (_tag: string, text = "") => element(text) });
   return { controller, form, inputs, get, blob: () => blob };
@@ -233,7 +234,7 @@ test("campaign report renders three partitions with run-screen labels and export
   assert.equal(label(runs, 4), "시작하지 않음(월 발송 한도 초과)");
   assert.equal(label(starts, 8), "조건 통과");
   assert.equal(label(starts, 9), "월 발송 한도 초과");
-  assert.equal(label(deliveries, 3), "보냄");
+  assert.equal(label(deliveries, 3), "Meta 접수");
   assert.equal(label(deliveries, 4), "읽음 확인");
   assert.equal(label(deliveries, 5), "읽음 확인 불가");
   assert.equal(starts[1]!.children[1]!.textContent, "18");

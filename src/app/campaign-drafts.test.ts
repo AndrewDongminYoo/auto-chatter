@@ -317,6 +317,7 @@ function draftHarness(override?: DraftApi, initialApprovals: Approval[] = []) {
     crypto: { randomUUID: () => (uuidCount++ === 0 ? input.id : "dddddddd-dddd-4ddd-8ddd-dddddddddddd") },
   });
   const script = new URL("../../public/app/campaign-drafts.js", import.meta.url);
+  vm.runInContext(readFileSync(new URL("../../public/app/send-status-labels.js", import.meta.url), "utf8"), context);
   vm.runInContext(existsSync(script) ? readFileSync(script, "utf8") : "", context);
   assert.equal(typeof context.createCampaignDrafts, "function", "campaign draft controller is missing");
   const requests: string[] = [];
@@ -2014,12 +2015,12 @@ test("an executed approval shows its run's status, start counts and every delive
     ],
   );
   assert.deepEqual(pairs(h.get("campaign-run-deliveries")), [
-    ["대기", "11건"],
-    ["보내는 중", "12건"],
-    ["보냄", "13건"],
-    ["실패", "14건"],
-    ["차단", "15건"],
-    ["결과 불명", "16건"],
+    ["발송 대기", "11건"],
+    ["발송 처리 중", "12건"],
+    ["Meta 접수", "13건"],
+    ["발송 실패", "14건"],
+    ["정책 차단", "15건"],
+    ["결과 확인 필요", "16건"],
     ["취소", "9,007,199,254,740,993건"],
   ]);
   assert.equal(h.get("campaign-run-cancel").hidden, false);
@@ -2069,7 +2070,7 @@ test("the run is read again only by its refresh button, once per click, with no 
   h.runs.set(runId, { ...storedRun, delivery_counts: { ...storedRun.delivery_counts, sent: "20" } });
   await click(h, "campaign-run-refresh");
   assert.equal(runReads(h), 2);
-  assert.deepEqual(pairs(h.get("campaign-run-deliveries"))[2], ["보냄", "20건"]);
+  assert.deepEqual(pairs(h.get("campaign-run-deliveries"))[2], ["Meta 접수", "20건"]);
   await click(h, "campaign-run-refresh");
   assert.equal(runReads(h), 3);
   assert.equal(runWrites(h).length, 0);
@@ -2084,7 +2085,7 @@ test("cancel goes through a confirmation that freezes the displayed version and 
   assert.equal(h.get("campaign-run-confirm-title").focused, true);
   assert.deepEqual(pairs(h.get("campaign-run-confirm-summary")).slice(1), [
     ["표시된 대기 행", "11건"],
-    ["표시된 보내는 중 행", "12건"],
+    ["표시된 발송 처리 중 행", "12건"],
   ]);
   // Going back sends nothing and closes the confirmation.
   await click(h, "campaign-run-cancel-back");
@@ -2106,10 +2107,10 @@ test("a successful cancel shows the cancelled count, notes unrecallable sending 
   assert.equal(runReads(h), 1, "the cancel response is rendered without another read");
   assert.equal(
     h.get("campaign-run-status").textContent,
-    "실행을 취소했습니다. 대기 중이던 11건을 취소했습니다. 이미 보내는 중이던 12건은 되돌릴 수 없습니다.",
+    "실행을 취소했습니다. 대기 중이던 11건을 취소했습니다. 이미 발송 처리 중이던 12건은 되돌릴 수 없습니다.",
   );
   assert.deepEqual(pairs(h.get("campaign-run-summary"))[0], ["상태", "취소됨"]);
-  assert.deepEqual(pairs(h.get("campaign-run-deliveries"))[0], ["대기", "0건"]);
+  assert.deepEqual(pairs(h.get("campaign-run-deliveries"))[0], ["발송 대기", "0건"]);
   assert.equal(h.get("campaign-run-cancel").hidden, true);
   assert.equal(h.get("campaign-run-confirm").hidden, true);
   assert.equal(h.get("campaign-run-title").focused, true);
@@ -2139,7 +2140,7 @@ for (const [code, status, pattern] of [
     await cancelThroughConfirmation(h);
     assert.equal(runReads(h), 1, "the carried run is rendered without another read");
     assert.match(h.get("campaign-run-status").textContent, pattern);
-    assert.deepEqual(pairs(h.get("campaign-run-deliveries"))[3], ["실패", "40건"]);
+    assert.deepEqual(pairs(h.get("campaign-run-deliveries"))[3], ["발송 실패", "40건"]);
     assert.equal(h.get("campaign-run-confirm").hidden, true);
     assert.equal(h.get("campaign-run-title").focused, true, "focus leaves the hidden confirmation");
     assert.equal(h.get("campaign-run-cancel").hidden, status !== "running");
@@ -2290,7 +2291,7 @@ test("a late run read is discarded after a new draft, a draft switch, an approva
     await draftSettle();
     assert.doesNotMatch(runText(h), /1,234건/, leave);
     if (leave === "newer read" || leave === "draft switch") assert.equal(runShown(h), true, leave);
-    if (leave === "newer read") assert.deepEqual(pairs(h.get("campaign-run-deliveries"))[2], ["보냄", "99건"]);
+    if (leave === "newer read") assert.deepEqual(pairs(h.get("campaign-run-deliveries"))[2], ["Meta 접수", "99건"]);
     if (leave === "new draft" || leave === "reset" || leave === "workspace change") {
       assert.equal(h.get("campaign-run").hidden, true, leave);
       assert.equal(runShown(h), false, leave);
@@ -2389,10 +2390,10 @@ test("the run panel markup sits inside the approval area, keeps its status live 
   // The formatter may break these sentences at any space.
   assert.match(panel, /모든\s+행은\s+보내기\s+직전에\s+조건을\s+다시\s+확인하며/);
   assert.match(panel, /서비스\s+전체\s+발송이\s+켜져\s+있을\s+때만/);
-  assert.match(panel, /보냄은\s+Meta가\s+요청을\s+받았다는\s+뜻일\s+뿐\s+상대가\s+읽었다는\s+뜻은\s+아닙니다/);
-  assert.match(panel, /결과\s+불명은[^.]*자동으로\s+다시\s+보내지\s+않습니다/);
+  assert.match(panel, /‘Meta\s+접수’는\s+Meta가\s+요청을\s+받았다는\s+뜻일\s+뿐\s+상대가\s+읽었다는\s+뜻은\s+아닙니다/);
+  assert.match(panel, /‘결과\s+확인\s+필요’는[^.]*자동으로\s+다시\s+보내지\s+않습니다/);
   assert.match(panel, /대기\s+중인\s+행은\s+모두\s+취소/);
-  assert.match(panel, /이미\s+보내는\s+중인\s+행은\s+되돌릴\s+수\s+없/);
+  assert.match(panel, /이미\s+발송\s+처리\s+중인\s+행은\s+되돌릴\s+수\s+없/);
   assert.doesNotMatch(panel, /발송\s*가능/);
   const script = readFileSync(new URL("../../public/app/campaign-drafts.js", import.meta.url), "utf8");
   assert.doesNotMatch(script, /setInterval|setTimeout/, "the run is never polled");

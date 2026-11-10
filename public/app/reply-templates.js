@@ -238,7 +238,7 @@ function createReplyTemplates({ api, node, getRole, getComposer, appendToDraft }
       return;
     }
     invalidate();
-    byId("inbox-template-status").textContent = "작성 내용에 추가했습니다. 답장을 예약하기 전에 확인해 주세요.";
+    byId("inbox-template-status").textContent = "작성 내용에 추가했습니다. 답장을 보내기 전에 확인해 주세요.";
     byId("inbox-reply-text").focus();
   });
   form.addEventListener("submit", (event) => {

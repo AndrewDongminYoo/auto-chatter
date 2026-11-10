@@ -104,16 +104,17 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     ["cancelled", "취소됨"],
     ["completed", "완료"],
   ];
-  // The run API's seven delivery statuses. "보냄" is Meta's acceptance only; "결과 불명" is never retried automatically.
-  const deliveryStatuses = [
-    ["pending", "대기"],
-    ["sending", "보내는 중"],
-    ["sent", "보냄"],
-    ["failed", "실패"],
-    ["blocked", "차단"],
-    ["unknown", "결과 불명"],
-    ["cancelled", "취소"],
-  ];
+  // The run API's seven delivery statuses (send-status-labels.js). "Meta 접수" is Meta's acceptance only; "결과 확인 필요"
+  // is never retried automatically.
+  const deliveryStatuses = sendStatusEntries([
+    "pending",
+    "sending",
+    "sent",
+    "failed",
+    "blocked",
+    "unknown",
+    "cancelled",
+  ]);
   function draftChanged() {
     return editing
       ? fields.name.value !== editing.name ||
@@ -504,7 +505,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       ...definitions([
         ["실행 시작 시각", instant(run.start.as_of, timeZone)],
         ["표시된 대기 행", `${decimal(run.delivery_counts.pending)}건`],
-        ["표시된 보내는 중 행", `${decimal(run.delivery_counts.sending)}건`],
+        ["표시된 발송 처리 중 행", `${decimal(run.delivery_counts.sending)}건`],
       ]),
     );
     byId("campaign-run-status").textContent = "";
@@ -546,7 +547,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       done = true;
       byId("campaign-run-status").textContent =
         `실행을 취소했습니다. 대기 중이던 ${cancelled}건을 취소했습니다.` +
-        (result.delivery_counts.sending !== "0" ? ` 이미 보내는 중이던 ${sending}건은 되돌릴 수 없습니다.` : "");
+        (result.delivery_counts.sending !== "0" ? ` 이미 발송 처리 중이던 ${sending}건은 되돌릴 수 없습니다.` : "");
     } catch (error) {
       if (!current() || authorizationLost(error)) return;
       if (!error.status || error.status >= 500) {

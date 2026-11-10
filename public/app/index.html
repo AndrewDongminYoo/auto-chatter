@@ -7,6 +7,7 @@
     <link rel="icon" href="../icons/auto-chatter.png" type="image/png" />
     <link rel="stylesheet" href="./styles.css" />
     <script src="./reply-templates.js" defer></script>
+    <script src="./send-status-labels.js" defer></script>
     <script src="./manual-reply-reports.js" defer></script>
     <script src="./flow-run-reports.js" defer></script>
     <script src="./handoff-reports.js" defer></script>
@@ -331,16 +332,16 @@
             <h3>발송 행 상태</h3>
             <dl id="campaign-report-delivery-counts" class="manual-report-counts"></dl>
             <p class="hint">
-              발송 행은 선택 기간에 시작한 실행의 행이며, 그 기간에 보낸 건수가 아닙니다. ‘보냄’은 Meta가 요청을
+              발송 행은 선택 기간에 시작한 실행의 행이며, 그 기간에 보낸 건수가 아닙니다. ‘Meta 접수’는 Meta가 요청을
               접수했다는 뜻이며 전달·읽음·전환을 뜻하지 않습니다. 계정·이용자 데이터를 삭제하면 발송 행이 사라지므로
               발송 행 합계는 ‘조건 통과’보다 작을 수 있습니다. 월 발송 한도로 시작하지 않은 실행은 발송 행이 없고, 그
               인원은 ‘조건 통과’가 아닌 ‘월 발송 한도 초과’로 셉니다.
             </p>
             <p class="hint">
-              ‘읽음 확인’은 ‘보냄’ 중 Instagram이 바로 그 메시지를 읽었다고 알려 온 행만 셉니다. ‘읽음 확인 불가’는
-              읽음을 알려 줄 수 없는 계정(Facebook 로그인이나 서버 설정으로 연결한 계정)에서 ‘보냄’인 나머지 행입니다.
-              둘 다 발송 행 합계에 따로 더하지 않습니다. 읽음 확인이 없다고 읽지 않은 것은 아닙니다. 읽음 수집 전에
-              연결한 계정은 다시 연결해야 읽음을 확인할 수 있습니다.
+              ‘읽음 확인’은 ‘Meta 접수’ 중 Instagram이 바로 그 메시지를 읽었다고 알려 온 행만 셉니다. ‘읽음 확인 불가’는
+              읽음을 알려 줄 수 없는 계정(Facebook 로그인이나 서버 설정으로 연결한 계정)에서 ‘Meta 접수’인 나머지
+              행입니다. 둘 다 발송 행 합계에 따로 더하지 않습니다. 읽음 확인이 없다고 읽지 않은 것은 아닙니다. 읽음 수집
+              전에 연결한 계정은 다시 연결해야 읽음을 확인할 수 있습니다.
             </p>
           </section>
         </div>
@@ -871,7 +872,7 @@
                     텍스트 답장만 지원합니다. 첨부 파일과 승인 템플릿은 아직 지원하지 않습니다.
                   </p>
                   <div class="composer-footer">
-                    <p id="inbox-reply-help" class="hint">Enter로 줄바꿈 · Ctrl/⌘ + Enter로 접수</p>
+                    <p id="inbox-reply-help" class="hint">Enter로 줄바꿈 · Ctrl/⌘ + Enter로 보내기</p>
                     <span id="inbox-reply-count" class="hint">0 / 1,000</span>
                   </div>
                   <div class="reply-schedule-picker">
@@ -1525,8 +1526,8 @@
                   <dl id="campaign-run-deliveries" class="campaign-draft-preview-summary"></dl>
                   <p class="hint">
                     모든 행은 보내기 직전에 조건을 다시 확인하며, 서비스 전체 발송이 켜져 있을 때만 발송이 진행됩니다.
-                    보냄은 Meta가 요청을 받았다는 뜻일 뿐 상대가 읽었다는 뜻은 아닙니다. 결과 불명은 결과를 확인하지
-                    못한 행이며 자동으로 다시 보내지 않습니다.
+                    ‘Meta 접수’는 Meta가 요청을 받았다는 뜻일 뿐 상대가 읽었다는 뜻은 아닙니다. ‘결과 확인 필요’는
+                    결과를 확인하지 못한 행이며 자동으로 다시 보내지 않습니다.
                   </p>
                 </div>
                 <div class="form-actions">
@@ -1543,7 +1544,7 @@
                   <h6 id="campaign-run-confirm-title" tabindex="-1">실행 취소 확인</h6>
                   <dl id="campaign-run-confirm-summary" class="campaign-draft-preview-summary"></dl>
                   <p class="flow-alert warning">
-                    취소하면 이 실행의 대기 중인 행은 모두 취소되어 보내지 않습니다. 이미 보내는 중인 행은 되돌릴 수
+                    취소하면 이 실행의 대기 중인 행은 모두 취소되어 보내지 않습니다. 이미 발송 처리 중인 행은 되돌릴 수
                     없고, 이미 보낸 메시지도 취소되지 않습니다. 취소한 실행은 다시 시작할 수 없습니다.
                   </p>
                   <div class="form-actions">

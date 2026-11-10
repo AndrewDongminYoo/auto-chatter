@@ -233,6 +233,7 @@ function harness(api: (url: string) => Promise<unknown>, clock?: string) {
     },
     setTimeout() {},
   });
+  vm.runInContext(readFileSync(new URL("../../public/app/send-status-labels.js", import.meta.url), "utf8"), context);
   vm.runInContext(readFileSync(new URL("../../public/app/flow-run-reports.js", import.meta.url), "utf8"), context);
   const controller = context.createFlowRunReports({ api, node: (_tag: string, text = "") => element(text) });
   return { controller, form, inputs, get, blob: () => blob };
