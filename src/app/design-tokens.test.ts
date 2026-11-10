@@ -135,7 +135,10 @@ test("every font size in styles.css uses a declared font-size token", () => {
   const shorthands = [...styles.matchAll(/(?<![-\w])font\s*:\s*([^;}]+)/g)].map((match) => match[1].trim());
   assert.ok(shorthands.length > 0, "styles.css must contain the :root font shorthand for this check to read");
   for (const value of shorthands) {
-    if (/\d(?:px|r?em)\b/.test(value)) failures.push(`font: ${value} carries a literal size`);
+    // A font shorthand always sets a size, so it must be inherit or start with a token (rejects 14px, 120% and medium).
+    if (value !== "inherit" && !/^var\(--font-size-[a-z0-9-]+\)\s*\//.test(value)) {
+      failures.push(`font: ${value} does not take its size from a var(--font-size-…) token`);
+    }
   }
   for (const match of styles.matchAll(/var\((--font-size-[a-z0-9-]+)\)/g)) {
     if (!declared.has(match[1])) failures.push(`${match[1]} is not declared in tokens.css`);
