@@ -283,7 +283,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   async function saveLabels() {
     const state = selected;
     if (!state || state.labelBusy || !state.labelDraft) return;
-    const session = epoch;
+    const session = epoch,
+      restoreFocus = holdFocus();
     state.labelBusy = true;
     state.labelNotice = "라벨을 저장하고 있습니다…";
     labelControls();
@@ -314,7 +315,10 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     } finally {
       if (epoch === session) {
         state.labelBusy = false;
-        if (selected === state) labelControls();
+        if (selected === state) {
+          labelControls();
+          restoreFocus();
+        }
       }
     }
   }
@@ -452,6 +456,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     const session = epoch,
       zone = zoneChanges,
       reminder = state.reminderDraft ? state.reminderBase : state.reminder;
+    const restoreFocus = holdFocus();
     state.reminderBusy = true;
     state.reminderNotice = "리마인더를 저장하고 있습니다…";
     reminderControls();
@@ -500,6 +505,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         if (selected === state) {
           reminderControls();
           conversationControls();
+          restoreFocus();
         }
       }
     }
@@ -510,7 +516,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       reminder = state?.reminder;
     if (!reminder || state.reminderBusy || state.stateBusy) return;
     const session = epoch,
-      zone = zoneChanges;
+      zone = zoneChanges,
+      restoreFocus = holdFocus();
     state.reminderBusy = true;
     state.reminderNotice = action === "complete" ? "완료로 표시하고 있습니다…" : "리마인더를 취소하고 있습니다…";
     reminderControls();
@@ -539,6 +546,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         if (selected === state) {
           reminderControls();
           conversationControls();
+          restoreFocus();
         }
       }
     }
@@ -615,7 +623,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   async function addMemo() {
     const state = selected;
     if (!state || state.memoBusy || !state.memoDraft.trim()) return;
-    const session = epoch;
+    const session = epoch,
+      restoreFocus = holdFocus();
     state.memoBusy = true;
     state.memoNotice = "메모를 남기고 있습니다…";
     memoControls();
@@ -647,7 +656,10 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     } finally {
       if (epoch === session) {
         state.memoBusy = false;
-        if (selected === state) memoControls();
+        if (selected === state) {
+          memoControls();
+          restoreFocus();
+        }
       }
     }
   }
@@ -714,7 +726,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   async function manageLabels(task) {
     if (labelsBusy) return;
     const session = epoch,
-      section = byId("inbox-labels-section");
+      section = byId("inbox-labels-section"),
+      restoreFocus = holdFocus();
     labelsBusy = true;
     for (const button of section.querySelectorAll("button")) button.disabled = true;
     byId("inbox-labels-status").textContent = "처리하고 있습니다…";
@@ -732,6 +745,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       if (epoch === session) {
         labelsBusy = false;
         for (const button of section.querySelectorAll("button")) button.disabled = false;
+        restoreFocus();
       }
     }
   }
@@ -884,7 +898,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   async function manageRules(task, done) {
     if (rulesBusy) return;
     const session = epoch,
-      section = byId("inbox-label-rules-section");
+      section = byId("inbox-label-rules-section"),
+      restoreFocus = holdFocus();
     rulesBusy = true;
     for (const button of section.querySelectorAll("button")) button.disabled = true;
     ruleForm();
@@ -912,6 +927,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         rulesBusy = false;
         for (const button of section.querySelectorAll("button")) button.disabled = false;
         ruleForm();
+        restoreFocus();
       }
     }
   }
@@ -1014,7 +1030,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   async function changeConversation(change) {
     const state = selected;
     if (!state?.convo || state.stateBusy || state.loading || state.reminderBusy) return;
-    const session = epoch;
+    const session = epoch,
+      restoreFocus = holdFocus();
     state.stateBusy = true;
     state.stateNotice = "대화 상태를 바꾸고 있습니다…";
     conversationControls();
@@ -1053,6 +1070,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
           conversationControls();
           // The reminder editor depends on the status: a closed conversation holds no reminder.
           reminderControls();
+          restoreFocus();
         }
       }
     }
@@ -1502,7 +1520,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
 
   async function submitOperation(state, operation) {
     if (state.busy || selected !== state) return;
-    const session = epoch;
+    const session = epoch,
+      restoreFocus = holdFocus();
     state.operation = operation;
     state.busy = true;
     state.notice = "요청을 접수하고 있습니다…";
@@ -1547,7 +1566,9 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         }
         if (selected === state) {
           controls();
+          // After the reload, which re-renders the history: a history card's button is then replaced and stays unfocused.
           if (!state.operation) await loadConversation();
+          restoreFocus();
         }
       }
     }
@@ -1612,6 +1633,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     selected = states.get(key);
     byId("inbox-conversation-title").textContent = `@${row.username || "연결 계정"} · DM 사용자 ${row.recipient_id}`;
     byId("inbox-thread-refresh").hidden = false;
+    byId("inbox-back-to-list").hidden = false;
     for (const button of byId("inbox-conversations").children)
       button.setAttribute("aria-pressed", String(button.dataset.key === key));
     timeline(selected);
@@ -1619,6 +1641,12 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     controls();
     void loadConversation();
     void loadMemos();
+  }
+
+  // The one-column layout stacks the conversation below the list, so only there does focusing its heading scroll.
+  const oneColumn = () => matchMedia("(max-width: 700px)").matches;
+  function focusConversation() {
+    byId("inbox-conversation-title").focus({ preventScroll: !oneColumn() });
   }
 
   async function loadList(more = false) {
@@ -1666,7 +1694,10 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
           "aria-pressed",
           String(selected?.row.connection_id === row.connection_id && selected?.row.recipient_id === row.recipient_id),
         );
-        button.addEventListener("click", () => choose(row));
+        button.addEventListener("click", () => {
+          choose(row);
+          focusConversation();
+        });
         byId("inbox-conversations").append(button);
       }
       after = page.after;
@@ -1753,7 +1784,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     byId("inbox-reminder-editor").reset();
     byId("inbox-reminder-status").textContent = "";
     byId("inbox-conversation-title").textContent = "대화를 선택하세요";
-    for (const id of ["inbox-more", "inbox-older", "inbox-thread-refresh"]) byId(id).hidden = true;
+    for (const id of ["inbox-more", "inbox-older", "inbox-thread-refresh", "inbox-back-to-list"])
+      byId(id).hidden = true;
     controls();
   }
   // Admins can also pick a member; agents filter by themselves or unassigned only.
@@ -1815,6 +1847,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     byId("inbox-messages").replaceChildren();
     byId("inbox-conversation-title").textContent = "대화를 선택하세요";
     byId("inbox-thread-refresh").hidden = true;
+    byId("inbox-back-to-list").hidden = true;
     clearTimeout(expiryTimer);
     controls();
     void loadList();
@@ -1830,6 +1863,11 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   });
   byId("inbox-more").addEventListener("click", () => void loadList(true));
   byId("inbox-older").addEventListener("click", () => void loadConversation(true));
+  // A filter or reload can leave the chosen conversation out of the list; then the first listed one takes focus.
+  byId("inbox-back-to-list").addEventListener("click", () => {
+    const list = byId("inbox-conversations");
+    (list.querySelector('[aria-pressed="true"]') ?? list.querySelector("button") ?? byId("inbox-search")).focus();
+  });
   byId("inbox-thread-refresh").addEventListener("click", () => {
     void loadConversation();
     void loadMemos();
@@ -1976,6 +2014,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         byId("inbox-messages").replaceChildren();
         byId("inbox-conversation-title").textContent = "대화를 선택하세요";
         byId("inbox-thread-refresh").hidden = true;
+        byId("inbox-back-to-list").hidden = true;
         clearTimeout(expiryTimer);
       }
       controls();

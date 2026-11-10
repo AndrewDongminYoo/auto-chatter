@@ -6,6 +6,7 @@
     <title>자동화 설정 | auto-chatter</title>
     <link rel="icon" href="../icons/auto-chatter.png" type="image/png" />
     <link rel="stylesheet" href="./styles.css" />
+    <script src="./focus-keeper.js" defer></script>
     <script src="./reply-templates.js" defer></script>
     <script src="./send-status-labels.js" defer></script>
     <script src="./manual-reply-reports.js" defer></script>
@@ -763,8 +764,11 @@
               </div>
               <section class="inbox-thread" aria-labelledby="inbox-conversation-title">
                 <div class="section-heading">
-                  <h3 id="inbox-conversation-title">대화를 선택하세요</h3>
-                  <button id="inbox-thread-refresh" class="secondary" hidden>대화 새로고침</button>
+                  <h3 id="inbox-conversation-title" tabindex="-1">대화를 선택하세요</h3>
+                  <div class="inbox-thread-actions">
+                    <button id="inbox-back-to-list" type="button" class="secondary" hidden>목록으로</button>
+                    <button id="inbox-thread-refresh" class="secondary" hidden>대화 새로고침</button>
+                  </div>
                 </div>
                 <div id="inbox-conversation-controls" class="inbox-conversation-controls" hidden>
                   <p id="inbox-conversation-state" class="hint"></p>
