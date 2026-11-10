@@ -1,0 +1,115 @@
+/*
+ * Dashboard design tokens. docs/specs/2026-11-11-dashboard-design-tokens.md owns every value and the contrast table.
+ * The slate, red, amber, green, blue and jade color values are copied from @radix-ui/colors 3.0.0 (the sRGB blocks).
+ * --primary, --primary-foreground (dark), --ring and --primary-hover-overlay are brand values, not Radix values.
+ *
+ * MIT License
+ *
+ * Copyright (c) 2021 Radix
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+:root {
+  --background: #f0f0f3;
+  --card: #fcfcfd;
+  --muted: #e8e8ec;
+  --foreground: #1c2024;
+  --muted-foreground: #60646c;
+  --border: #d9d9e0;
+  --input: #80838d;
+  --primary: #122d50;
+  --primary-foreground: #fcfcfd;
+  --primary-hover-overlay: #7d97b51a;
+  --ring: #122d50;
+  --accent: #d6f1e3;
+  --accent-foreground: #1d3b31;
+
+  --destructive: #641723;
+  --destructive-background: #feebec;
+  --destructive-border: #f4a9aa;
+  --warning: #4f3422;
+  --warning-background: #fff7c2;
+  --warning-border: #e9c162;
+  --success: #193b2d;
+  --success-background: #e6f6eb;
+  --success-border: #8eceaa;
+  --info: #113264;
+  --info-background: #e6f4fe;
+  --info-border: #8ec8f6;
+
+  /* Text, spacing and radius tokens; only --radius is consumed until the text and spacing steps. */
+  --font-size-h1: 28px;
+  --line-height-h1: 1.3;
+  --font-size-h2: 20px;
+  --line-height-h2: 1.3;
+  --font-size-h3: 17px;
+  --line-height-h3: 1.3;
+  --font-size-body: 15px;
+  --line-height-body: 1.6;
+  --font-size-help: 13px;
+  --line-height-help: 1.5;
+  --font-size-caption: 12px;
+  --line-height-caption: 1.5;
+  --font-size-input-mobile: 16px;
+  --line-height-input-mobile: 1.6;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --radius-full: 9999px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #111113;
+    --card: #18191b;
+    --muted: #272a2d;
+    --foreground: #edeef0;
+    --muted-foreground: #b0b4ba;
+    --border: #363a3f;
+    --input: #777b84;
+    --primary: #b3cceb;
+    --primary-foreground: #122d50;
+    --ring: #b3cceb;
+    --accent: #0b3b2c;
+    --accent-foreground: #1fd8a4;
+
+    --destructive: #ff9592;
+    --destructive-background: #3b1219;
+    --destructive-border: #8c333a;
+    --warning: #ffca16;
+    --warning-background: #302008;
+    --warning-border: #714f19;
+    --success: #3dd68c;
+    --success-background: #132d21;
+    --success-border: #28684a;
+    --info: #70b8ff;
+    --info-background: #0d2847;
+    --info-border: #205d9e;
+  }
+}
