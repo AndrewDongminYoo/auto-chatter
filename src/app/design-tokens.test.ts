@@ -190,16 +190,34 @@ function terms(value: string): string[] {
   return result;
 }
 
-// 1-3px literals are hairline offsets in badges, chips and bubble tails that the 4px scale cannot express.
-const hairline = /^[123]px$/;
 const spacingTerm = /^(?:0|auto|\d+(?:\.\d+)?%|var\(--space-\d+\)|calc\(var\(--space-\d+\) \* -1\))$/;
 const radiusTerm = /^(?:0|var\(--radius(?:-[a-z]+)?\))$/;
 const spacingProperty = /^(?:padding|margin|gap|row-gap|column-gap)(?:-[a-z-]+)?$/;
 // Above the largest token (48px), spacing stays a px literal on the 4px grid.
 const beyondScale = (term: string) =>
   /^\d+px$/.test(term) && Number.parseInt(term, 10) > 48 && Number.parseInt(term, 10) % 4 === 0;
-// The summary chevron's margin is part of the drawn icon, not layout spacing.
-const spacingExceptions = new Set(["summary::before { margin: 0 10px 2px 2px }"]);
+// Literals the scales cannot express, each allowed only in the declaration that needs it: the summary chevron's
+// margin is part of the drawn icon, and the 1-3px values are hairline offsets in badges, chips and toggles.
+const spacingExceptions = new Set([
+  ".badge { padding: 2px var(--space-2) }",
+  ".campaign-draft-preview-summary dd { margin: 2px 0 0 }",
+  ".checklist .hint { margin: 2px 0 0 }",
+  ".delivery-banner p { margin: 2px 0 0 }",
+  ".label-chip { padding: 1px var(--space-2) }",
+  ".note-scope { padding: 1px var(--space-2) }",
+  ".onboarding p { margin: 2px 0 0 }",
+  ".reminder-chip { padding: 1px var(--space-2) }",
+  ".reminder-count { padding: 1px var(--space-2) }",
+  ".toggle input { margin: 3px 0 0 }",
+  ".toggle small { margin-top: 3px }",
+  ".unread-badge { padding: 2px var(--space-2) }",
+  "summary::before { margin: 0 10px 2px 2px }",
+]);
+// The 2px corners that shape the message bubble tails.
+const radiusExceptions = new Set([
+  ".bubble.incoming { border-bottom-left-radius: 2px }",
+  ".bubble.outgoing { border-bottom-right-radius: 2px }",
+]);
 
 test("styles.css declares and reads no step-1 alias property", () => {
   const aliases = [...stylesWithoutComments.matchAll(/--(?:color-[a-z0-9-]+|radius-control)\b/g)].map(
@@ -215,7 +233,7 @@ test("every spacing declaration in styles.css uses a space token or an allowed l
   for (const { selector, property, value } of spacing) {
     if (spacingExceptions.has(`${selector} { ${property}: ${value} }`)) continue;
     for (const term of terms(value)) {
-      if (!spacingTerm.test(term) && !hairline.test(term) && !beyondScale(term)) {
+      if (!spacingTerm.test(term) && !beyondScale(term)) {
         failures.push(`${selector} { ${property}: ${value} }: ${term} is not a var(--space-…) token`);
       }
     }
@@ -228,8 +246,9 @@ test("every border radius in styles.css uses a radius token or an allowed litera
   assert.ok(radii.length > 0, "styles.css must declare border radii for this check to read");
   const failures: string[] = [];
   for (const { selector, property, value } of radii) {
+    if (radiusExceptions.has(`${selector} { ${property}: ${value} }`)) continue;
     for (const term of terms(value)) {
-      if (!radiusTerm.test(term) && !hairline.test(term)) {
+      if (!radiusTerm.test(term)) {
         failures.push(`${selector} { ${property}: ${value} }: ${term} is not a var(--radius…) token`);
       }
     }
