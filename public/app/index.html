@@ -630,9 +630,11 @@
               </div>
               <p id="flow-status" class="hint" role="status"></p>
               <div id="flow-conflict" class="flow-alert warning" hidden>
-                <p>
-                  다른 사람이나 다른 탭에서 이 플로를 먼저 저장해 지금 변경 사항을 저장하지 못했습니다. 이 화면의 변경
-                  사항은 그대로 남아 있습니다. 최신 초안을 불러오면 이 화면의 변경 사항은 사라집니다.
+                <p class="alert-detail">
+                  <strong class="alert-lead"
+                    >다른 사람이나 다른 탭에서 이 플로를 먼저 저장해 지금 변경 사항을 저장하지 못했습니다.</strong
+                  >
+                  이 화면의 변경 사항은 그대로 남아 있습니다. 최신 초안을 불러오면 이 화면의 변경 사항은 사라집니다.
                 </p>
                 <button id="flow-reload" type="button" class="secondary" data-loading-label="불러오는 중…">
                   최신 초안 불러오기
@@ -1401,9 +1403,9 @@
               </p>
               <p id="campaign-draft-count" class="hint">0 / 1,000</p>
               <p id="campaign-draft-summary" class="hint"></p>
-              <p id="campaign-draft-approval-lock" class="flow-alert warning" hidden>
-                실행 승인이 유효한 초안이라 수정하거나 보관할 수 없습니다. 수정하려면 아래 실행 승인에서 먼저 승인을
-                취소해 주세요.
+              <p id="campaign-draft-approval-lock" class="flow-alert warning alert-detail" hidden>
+                <strong class="alert-lead">실행 승인이 유효한 초안이라 수정하거나 보관할 수 없습니다.</strong>
+                수정하려면 아래 실행 승인에서 먼저 승인을 취소해 주세요.
               </p>
               <div class="form-actions">
                 <button id="campaign-draft-save" type="submit">초안 저장</button>
@@ -1552,9 +1554,10 @@
                 >
                   <h6 id="campaign-run-confirm-title" tabindex="-1">실행 취소 확인</h6>
                   <dl id="campaign-run-confirm-summary" class="campaign-draft-preview-summary"></dl>
-                  <p class="flow-alert warning">
-                    취소하면 이 실행의 대기 중인 행은 모두 취소되어 보내지 않습니다. 이미 발송 처리 중인 행은 되돌릴 수
-                    없고, 이미 보낸 메시지도 취소되지 않습니다. 취소한 실행은 다시 시작할 수 없습니다.
+                  <p class="flow-alert warning alert-detail">
+                    <strong class="alert-lead">취소하면 이 실행의 대기 중인 행은 모두 취소되어 보내지 않습니다.</strong>
+                    이미 발송 처리 중인 행은 되돌릴 수 없고, 이미 보낸 메시지도 취소되지 않습니다. 취소한 실행은 다시
+                    시작할 수 없습니다.
                   </p>
                   <div class="form-actions">
                     <button id="campaign-run-cancel-submit" type="button">실행 취소 확정</button>
@@ -1594,9 +1597,11 @@
               >
                 <h5 id="campaign-approval-confirm-title" tabindex="-1">승인 내용 확인</h5>
                 <dl id="campaign-approval-confirm-summary" class="campaign-draft-preview-summary"></dl>
-                <p class="flow-alert warning">
-                  승인하면 실행 시점에 서비스 전체 발송이 켜져 있을 때 이 내용으로 실행이 시작됩니다. 보내기 직전마다
-                  모든 조건을 다시 확인하며, 조건을 통과하지 못한 사람에게는 보내지 않습니다.
+                <p class="flow-alert warning alert-detail">
+                  <strong class="alert-lead"
+                    >승인하면 실행 시점에 서비스 전체 발송이 켜져 있을 때 이 내용으로 실행이 시작됩니다.</strong
+                  >
+                  보내기 직전마다 모든 조건을 다시 확인하며, 조건을 통과하지 못한 사람에게는 보내지 않습니다.
                 </p>
                 <div class="form-actions">
                   <button id="campaign-approval-submit" type="button">승인 기록</button>

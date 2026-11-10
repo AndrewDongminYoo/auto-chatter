@@ -115,6 +115,37 @@ test("helper values match the spec's worked examples", () => {
   assert.equal(contrast("#5a6169", "#111113"), 3.0);
 });
 
+// Every text size in the dashboard stylesheet comes from a font-size token, so a literal size cannot drift back in.
+test("every font size in styles.css uses a declared font-size token", () => {
+  const styles = readFileSync(new URL("../../public/app/styles.css", import.meta.url), "utf8").replace(
+    /\/\*[\s\S]*?\*\//g,
+    "",
+  );
+  const declared = new Set(
+    [...tokensCss.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/(--font-size-[a-z0-9-]+)\s*:/g)].map((match) => match[1]),
+  );
+  const failures: string[] = [];
+  const sizes = [...styles.matchAll(/(?<![-\w])font-size\s*:\s*([^;}]+)/g)].map((match) => match[1].trim());
+  assert.ok(sizes.length > 0, "styles.css must declare font sizes for this check to read");
+  for (const value of sizes) {
+    if (value !== "inherit" && !/^var\(--font-size-[a-z0-9-]+\)$/.test(value)) {
+      failures.push(`font-size: ${value} is not a var(--font-size-…) token`);
+    }
+  }
+  const shorthands = [...styles.matchAll(/(?<![-\w])font\s*:\s*([^;}]+)/g)].map((match) => match[1].trim());
+  assert.ok(shorthands.length > 0, "styles.css must contain the :root font shorthand for this check to read");
+  for (const value of shorthands) {
+    // A font shorthand always sets a size, so it must be inherit or start with a token (rejects 14px, 120% and medium).
+    if (value !== "inherit" && !/^var\(--font-size-[a-z0-9-]+\)\s*\//.test(value)) {
+      failures.push(`font: ${value} does not take its size from a var(--font-size-…) token`);
+    }
+  }
+  for (const match of styles.matchAll(/var\((--font-size-[a-z0-9-]+)\)/g)) {
+    if (!declared.has(match[1])) failures.push(`${match[1]} is not declared in tokens.css`);
+  }
+  assert.deepEqual(failures, [], `font-size failures:\n${failures.join("\n")}`);
+});
+
 for (const mode of ["light", "dark"] as const) {
   test(`every contrast pair meets its threshold and matches the spec in ${mode} mode`, () => {
     const tokens = modes[mode];
