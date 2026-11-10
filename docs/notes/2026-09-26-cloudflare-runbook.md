@@ -891,6 +891,7 @@ DB 상태와 고정 오류 로그를 확인하고 `unknown`을 일괄 pending으
 - Queue 발행 실패: `event = queue_publish_failed`. 이후 Cron의 `wake` 단계가 복구합니다.
 - 한 요청이나 한 Cron 실행의 줄 모음: 같은 `correlation_id`. 웹훅·API는 응답의 `cf-ray` 값과 같습니다.
 - 한 연결의 줄: `connection_id`.
+- Instagram 계정 연결 실패(`{"error":"instagram_connection_failed"}` 등): 실패 응답의 `cf-ray`와 같은 `correlation_id`나 실패한 시각 전후의 `event = instagram_oauth_provider_failed` 줄을 찾으면 `code`가 실패한 단계와 Meta 응답 분류를 알려 줍니다(형식은 [운영 지표·경보 명세](../specs/2026-10-01-operations-health.md#로그)).
 
 ### 알림 연결
 

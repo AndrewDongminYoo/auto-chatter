@@ -19,28 +19,38 @@
 상관 ID는 웹훅·API 요청이면 Cloudflare의 `cf-ray` 헤더(없으면 새 UUID), Queue 메시지 묶음과 Cron 실행마다 새 UUID입니다. Worker는 요청마다 한 번 정한 ID를 `appApi`와 그 요청의 DB 연결 풀에도 넘기므로 풀 오류 줄도 같은 ID를 가집니다.
 Node 워커의 `worker-main.ts`·`main.ts`가 터미널에 쓰는 사용법·설정 안내는 운영 로그가 아니므로 바꾸지 않았습니다.
 
-| `event`                         | `code`                                                         | 남기는 곳                                                     |
-| ------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------- |
-| `request_failed`                | 실패 코드                                                      | 웹훅·API 요청이 503으로 끝날 때                               |
-| `queue_publish_failed`          | `reply_notification_failed`·`manual_reply_notification_failed` | DB 커밋 뒤 Queue 발행 실패                                    |
-| `queue_message_failed`          | 실패 코드                                                      | Queue 소비 실패(재시도)                                       |
-| `database_connection_error`     | `database_unavailable`                                         | 연결 풀 오류                                                  |
-| `early_reply_reconcile_failed`  | 실패 코드                                                      | 발송 직후의 이른 DM 연결 실패                                 |
-| `reauth_record_failed`          | 실패 코드                                                      | 재연결 표시 기록·해제 실패                                    |
-| `instagram_deauthorized`        | `connection_disconnected` 등(토큰 갱신 명세)                   | 검증된 권한 해제 콜백                                         |
-| `instagram_subscription_check`  | `subscription_lost`·`subscription_restored`                    | 웹훅 구독 유실의 새 기록·해제                                 |
-| `subscription_record_failed`    | 실패 코드                                                      | 웹훅 구독 확인 결과 기록 실패                                 |
-| `cron_step_failed`              | 실패 코드                                                      | Cron 단계 실패, `step`에 단계 이름                            |
-| `cron_step_part_failed`         | 실패 코드                                                      | `campaign_start`의 두 번째 이후 부분 실패, `part`에 부분 이름 |
-| `cron_run_failed`               | 실패 코드                                                      | Cron의 DB 연결 풀 열기·닫기 실패                              |
-| `cron_step_record_failed`       | 실패 코드                                                      | 단계 결과 기록 실패, `step`에 단계 이름                       |
-| `cron_record_failed`            | 실패 코드                                                      | `cron` 행 기록 실패                                           |
-| `alert_started`·`alert_cleared` | `alert_<경보 이름>`                                            | 경보 상태가 바뀐 Cron 실행                                    |
-| `alert_new_occurrence`          | `alert_unknown_outcome`                                        | 경보가 켜진 동안 새 `unknown` 발생                            |
-| `webhook_delivery_failed`       | [전달](2026-10-01-flow-webhook-delivery.md#전달)의 실패 코드   | 외부 전송 실패, 다시 시도할 때                                |
-| `webhook_delivery_dead`         | 같은 실패 코드                                                 | 외부 전송이 `dead`로 끝날 때                                  |
-| `rate_limit_unavailable`        | `api_limit_unavailable`                                        | API 기본 요청 한도를 셀 수 없을 때                            |
-| `webhook_delivery_claim_lost`   | `claim_lost`                                                   | 외부 전송 시도가 claim을 잃었을 때                            |
+| `event`                           | `code`                                                         | 남기는 곳                                                     |
+| --------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------- |
+| `request_failed`                  | 실패 코드                                                      | 웹훅·API 요청이 503으로 끝날 때                               |
+| `queue_publish_failed`            | `reply_notification_failed`·`manual_reply_notification_failed` | DB 커밋 뒤 Queue 발행 실패                                    |
+| `queue_message_failed`            | 실패 코드                                                      | Queue 소비 실패(재시도)                                       |
+| `database_connection_error`       | `database_unavailable`                                         | 연결 풀 오류                                                  |
+| `early_reply_reconcile_failed`    | 실패 코드                                                      | 발송 직후의 이른 DM 연결 실패                                 |
+| `reauth_record_failed`            | 실패 코드                                                      | 재연결 표시 기록·해제 실패                                    |
+| `instagram_deauthorized`          | `connection_disconnected` 등(토큰 갱신 명세)                   | 검증된 권한 해제 콜백                                         |
+| `instagram_subscription_check`    | `subscription_lost`·`subscription_restored`                    | 웹훅 구독 유실의 새 기록·해제                                 |
+| `subscription_record_failed`      | 실패 코드                                                      | 웹훅 구독 확인 결과 기록 실패                                 |
+| `cron_step_failed`                | 실패 코드                                                      | Cron 단계 실패, `step`에 단계 이름                            |
+| `cron_step_part_failed`           | 실패 코드                                                      | `campaign_start`의 두 번째 이후 부분 실패, `part`에 부분 이름 |
+| `cron_run_failed`                 | 실패 코드                                                      | Cron의 DB 연결 풀 열기·닫기 실패                              |
+| `cron_step_record_failed`         | 실패 코드                                                      | 단계 결과 기록 실패, `step`에 단계 이름                       |
+| `cron_record_failed`              | 실패 코드                                                      | `cron` 행 기록 실패                                           |
+| `alert_started`·`alert_cleared`   | `alert_<경보 이름>`                                            | 경보 상태가 바뀐 Cron 실행                                    |
+| `alert_new_occurrence`            | `alert_unknown_outcome`                                        | 경보가 켜진 동안 새 `unknown` 발생                            |
+| `webhook_delivery_failed`         | [전달](2026-10-01-flow-webhook-delivery.md#전달)의 실패 코드   | 외부 전송 실패, 다시 시도할 때                                |
+| `webhook_delivery_dead`           | 같은 실패 코드                                                 | 외부 전송이 `dead`로 끝날 때                                  |
+| `rate_limit_unavailable`          | `api_limit_unavailable`                                        | API 기본 요청 한도를 셀 수 없을 때                            |
+| `webhook_delivery_claim_lost`     | `claim_lost`                                                   | 외부 전송 시도가 claim을 잃었을 때                            |
+| `instagram_oauth_provider_failed` | 아래 OAuth 실패 코드                                           | Instagram 계정 연결 완료 중 Meta 호출이 실패할 때(`warn`)     |
+
+`instagram_oauth_provider_failed`(2026-11-10)는 `src/app/instagram-oauth.ts`가 `instagram_connection_failed`, `instagram_account_unverified`, `instagram_subscription_failed`를 던지기 직전에 한 줄 남기며, 응답 코드·상태·본문은 바꾸지 않습니다.
+`code`는 `<단계>_<실패>[_<유형>[_<코드>[_<하위 코드>]]]`입니다. 단계는 `code_exchange`(인증 코드 교환), `long_lived_exchange`(장기 토큰 교환), `profile`(`/me`), `subscribe`(`subscribed_apps`)입니다.
+실패는 `network`(호출 예외·시간 초과), `http_<상태>`, `invalid_json`, `invalid_shape`(`long_lived_exchange`는 `invalid_shape_missing_token`·`invalid_shape_expires_in_type`·`invalid_shape_expires_in_range`), `not_success`(`subscribe`가 `success: true`를 주지 않음)입니다.
+유형·코드·하위 코드는 2xx가 아닌 응답 본문 16 KiB 안에서 Graph 형태(`error.type`, `error.code`, `error.error_subcode`)나 Instagram 코드 교환 형태(최상위 `error_type`, `code`)가 정확히 맞을 때만 붙입니다.
+유형은 소문자 영문·숫자만 24자까지 남깁니다.
+`code` 전체가 64자를 넘으면 선택 부분(유형·코드·하위 코드)을 뒤에서부터 뺍니다(예: `code_exchange_http_400_oauthexception_400`).
+Meta 오류 메시지, `fbtrace_id`, 토큰, 인증 코드, 앱 비밀 값, 계정 ID와 사용자 이름은 남기지 않습니다.
+`correlation_id`는 그 콜백 요청의 상관 ID이므로, 실패 응답의 `cf-ray` 값으로 이 줄을 찾을 수 있습니다.
 
 ## 정기 작업 기록
 
