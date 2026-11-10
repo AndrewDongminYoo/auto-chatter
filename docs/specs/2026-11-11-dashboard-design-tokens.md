@@ -198,6 +198,7 @@ SC 1.4.11은 컨트롤을 식별하는 데 필요한 시각 정보에 3 : 1을 �
 | `--font-size-help`         | 13px | 1.5     | 도움말, 라벨 아래 설명, 경고 부연               |
 | `--font-size-caption`      | 12px | 1.5     | 배지, 개수, 시각                                |
 | `--font-size-input-mobile` | 16px | 1.6     | 767px 이하 화면의 `input`, `select`, `textarea` |
+| `--font-size-h1-mobile`    | 24px | 1.3     | 767px 이하 화면의 페이지 제목                   |
 
 767px 이하 화면에서 `input`, `select`, `textarea`는 지금의 `styles.css` `@media (max-width: 767px)` 규칙처럼 16px을 유지하며 `--font-size-body`(15px)를 쓰지 않습니다.
 iOS Safari는 글자 크기가 16px보다 작은 입력란에 포커스가 가면 화면을 확대하므로, 이 규칙을 없애거나 15px로 바꾸지 않습니다.

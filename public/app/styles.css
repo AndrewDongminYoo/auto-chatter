@@ -16,7 +16,7 @@
   --radius-control: var(--radius);
   color-scheme: light;
   font:
-    14px/1.6 "Apple SD Gothic Neo",
+    var(--font-size-body) / var(--line-height-body) "Apple SD Gothic Neo",
     "Malgun Gothic",
     sans-serif;
   color: var(--color-ink);
@@ -142,7 +142,7 @@ header {
   gap: 10px;
   color: var(--color-ink);
   text-decoration: none;
-  font-size: 17px;
+  font-size: var(--font-size-h3);
   font-weight: 800;
   letter-spacing: -0.5px;
 }
@@ -156,7 +156,7 @@ header {
 }
 .product-label {
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
 }
 main {
   padding: 32px;
@@ -167,19 +167,21 @@ h1,
 h2,
 h3 {
   letter-spacing: -0.035em;
-  line-height: 1.3;
   text-wrap: balance;
 }
 h1 {
-  font-size: 28px;
+  font-size: var(--font-size-h1);
+  line-height: var(--line-height-h1);
   margin: 0;
 }
 h2 {
-  font-size: 19px;
+  font-size: var(--font-size-h2);
+  line-height: var(--line-height-h2);
   margin: 0;
 }
 h3 {
-  font-size: 16px;
+  font-size: var(--font-size-h3);
+  line-height: var(--line-height-h3);
   margin: 0;
 }
 p {
@@ -195,7 +197,7 @@ p {
 }
 .hint {
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-help);
   line-height: 1.65;
   margin: 6px 0 0;
 }
@@ -271,7 +273,7 @@ body:has(#auth:not([hidden])) .page-heading {
   margin-bottom: 44px;
 }
 .auth-copy h1 {
-  font-size: 32px;
+  font-size: var(--font-size-h1);
 }
 .auth-copy > p {
   color: var(--color-muted);
@@ -289,11 +291,11 @@ body:has(#auth:not([hidden])) .page-heading {
 }
 .onboarding li > span {
   color: var(--color-success);
-  font-size: 22px;
+  font-size: var(--font-size-h2);
 }
 .onboarding p {
   margin: 2px 0 0;
-  font-size: 12px;
+  font-size: var(--font-size-help);
   color: var(--color-muted);
 }
 #login-form,
@@ -357,11 +359,11 @@ body:has(#workspace:not([hidden]))::before {
   margin-bottom: 28px;
 }
 .delivery-banner strong {
-  font-size: 13px;
+  font-size: var(--font-size-body);
 }
 .delivery-banner p {
   margin: 2px 0 0;
-  font-size: 12px;
+  font-size: var(--font-size-help);
 }
 .delivery-banner.enabled {
   border-color: var(--color-success);
@@ -403,7 +405,7 @@ body:has(#workspace:not([hidden]))::before {
   border-radius: 50%;
   background: var(--color-soft);
   color: var(--color-brand);
-  font-size: 13px;
+  font-size: var(--font-size-caption);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -468,7 +470,7 @@ body:has(#workspace:not([hidden]))::before {
 }
 .account-list .item > strong {
   min-width: 150px;
-  font-size: 15px;
+  font-size: var(--font-size-body);
 }
 .account-list .item > .badges {
   flex: 1;
@@ -479,7 +481,7 @@ body:has(#workspace:not([hidden]))::before {
   margin: 0;
 }
 .account-list button {
-  font-size: 12px;
+  font-size: var(--font-size-body);
   padding: 7px 12px;
 }
 .data-export {
@@ -519,7 +521,7 @@ body:has(#workspace:not([hidden]))::before {
 #invites-title,
 #webhook-deliveries-title {
   margin: 20px 0 8px;
-  font-size: 15px;
+  font-size: var(--font-size-body);
 }
 .account-list .item > select {
   width: auto;
@@ -557,10 +559,10 @@ body:has(#workspace:not([hidden]))::before {
   border-top: 1px solid var(--color-border);
 }
 .deletion-records strong {
-  font-size: 13px;
+  font-size: var(--font-size-help);
 }
 .count {
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--color-muted);
   font-variant-numeric: tabular-nums;
   margin-left: 5px;
@@ -574,7 +576,7 @@ body:has(#workspace:not([hidden]))::before {
 }
 .badge {
   display: inline-block;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   padding: 2px 6px;
   border-radius: 3px;
   background: var(--color-soft);
@@ -605,7 +607,7 @@ body:has(#workspace:not([hidden]))::before {
   flex-wrap: wrap;
 }
 #new-rule {
-  font-size: 12px;
+  font-size: var(--font-size-body);
   padding: 6px 10px;
 }
 .item {
@@ -627,7 +629,7 @@ body:has(#workspace:not([hidden]))::before {
   border-left-color: var(--color-brand);
 }
 #rules .item > strong {
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   font-variant-numeric: tabular-nums;
 }
 #rules .item .badges {
@@ -635,12 +637,12 @@ body:has(#workspace:not([hidden]))::before {
 }
 #rules .item button {
   margin-top: 8px;
-  font-size: 12px;
+  font-size: var(--font-size-body);
   padding: 6px 12px;
 }
 .rule-summary {
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-help);
 }
 .editor {
   padding: 24px;
@@ -652,7 +654,7 @@ body:has(#workspace:not([hidden]))::before {
 }
 .media-picker h4 {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--font-size-help);
 }
 .media-list {
   display: grid;
@@ -686,7 +688,7 @@ body:has(#workspace:not([hidden]))::before {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   line-height: 1.5;
 }
 .media-copy span,
@@ -694,7 +696,7 @@ body:has(#workspace:not([hidden]))::before {
   display: block;
   margin-top: 4px;
   color: var(--color-muted);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .media-option img,
 .media-placeholder,
@@ -711,7 +713,7 @@ body:has(#workspace:not([hidden]))::before {
   place-items: center;
   background: var(--color-canvas);
   color: var(--color-muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .selected-media,
 .rule-target {
@@ -727,7 +729,7 @@ body:has(#workspace:not([hidden]))::before {
   border-radius: var(--radius-control);
 }
 .selected-media a {
-  font-size: 12px;
+  font-size: var(--font-size-caption);
 }
 #media-more {
   width: 100%;
@@ -757,12 +759,12 @@ fieldset {
 }
 legend {
   font-weight: 800;
-  font-size: 14px;
+  font-size: var(--font-size-body);
   padding: 0 12px 0 0;
 }
 label {
   display: block;
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-weight: 600;
   margin: 16px 0 6px;
 }
@@ -777,7 +779,7 @@ textarea {
   border: 1px solid var(--input);
   background: var(--color-surface);
   color: var(--color-ink);
-  font-size: 15px;
+  font-size: var(--font-size-body);
   font-weight: 400;
 }
 textarea {
@@ -797,7 +799,7 @@ select:disabled {
 }
 .optional {
   color: var(--color-muted);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 400;
 }
 .field-meta {
@@ -829,7 +831,7 @@ select:disabled {
 .toggle small {
   display: block;
   font-weight: 400;
-  font-size: 12px;
+  font-size: var(--font-size-help);
   color: var(--color-muted);
   margin-top: 3px;
 }
@@ -839,7 +841,7 @@ select:disabled {
   margin-top: 12px;
 }
 .flow-summary {
-  font-size: 12px;
+  font-size: var(--font-size-help);
   color: var(--color-muted);
 }
 .save-bar {
@@ -860,7 +862,7 @@ select:disabled {
   padding: 12px;
   background: var(--color-canvas);
   color: var(--color-muted);
-  font-size: 13px;
+  font-size: var(--font-size-help);
 }
 .empty-state {
   padding: 24px 0;
@@ -868,12 +870,12 @@ select:disabled {
 }
 .empty-state strong {
   display: block;
-  font-size: 14px;
+  font-size: var(--font-size-body);
   color: var(--color-ink);
 }
 .empty-state p {
   margin: 5px 0 0;
-  font-size: 12px;
+  font-size: var(--font-size-help);
 }
 .conversation-preview {
   padding: 24px 0 24px 20px;
@@ -888,7 +890,7 @@ select:disabled {
   gap: 8px;
 }
 .preview-heading span {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   color: var(--color-muted);
 }
 .conversation {
@@ -908,12 +910,12 @@ select:disabled {
   border-radius: 7px;
 }
 .conversation-account strong {
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   overflow-wrap: anywhere;
   min-width: 0;
 }
 .conversation-label {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   text-align: center;
   color: var(--color-muted);
   margin: 22px 0 10px;
@@ -964,7 +966,7 @@ select:disabled {
   border-radius: 999px;
   background: var(--color-brand);
   color: var(--color-on-brand);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -1053,7 +1055,7 @@ select:disabled {
   border: 1px solid var(--color-border);
   background: var(--accent);
   color: var(--accent-foreground);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   overflow-wrap: anywhere;
 }
 .label-chip.archived {
@@ -1094,7 +1096,7 @@ select:disabled {
   border-radius: 999px;
   background: var(--color-soft);
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
@@ -1112,7 +1114,7 @@ select:disabled {
   border: 1px solid var(--color-border);
   background: var(--color-surface);
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   font-variant-numeric: tabular-nums;
 }
 .reminder-chip.due {
@@ -1132,7 +1134,7 @@ select:disabled {
 }
 .reminder-fields {
   display: grid;
-  grid-template-columns: minmax(0, 15rem) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 210px) minmax(0, 1fr);
   gap: 0 12px;
 }
 .reminder-fields label {
@@ -1162,7 +1164,7 @@ select:disabled {
   border-radius: 3px;
   background: var(--color-surface);
   color: var(--color-warning);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 600;
 }
 .inbox-note-form textarea {
@@ -1283,7 +1285,7 @@ select:disabled {
 .bubble {
   padding: 12px;
   border-radius: 10px;
-  font-size: 13px;
+  font-size: var(--font-size-body);
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1306,7 +1308,7 @@ select:disabled {
 }
 .preview-branch > span {
   display: block;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   color: var(--color-muted);
   margin-bottom: 8px;
 }
@@ -1316,7 +1318,7 @@ select:disabled {
   border-top: 1px solid var(--color-border);
 }
 #activity .item {
-  font-size: 13px;
+  font-size: var(--font-size-help);
 }
 footer {
   display: flex;
@@ -1326,7 +1328,7 @@ footer {
   flex-wrap: wrap;
   padding: 24px 32px;
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
 }
 body:has(#workspace:not([hidden])) footer {
   margin-left: 184px;
@@ -1395,7 +1397,7 @@ section {
     min-height: 68px;
   }
   .brand {
-    font-size: 15px;
+    font-size: var(--font-size-body);
   }
   .brand img {
     width: 30px;
@@ -1416,7 +1418,7 @@ section {
     display: none;
   }
   h1 {
-    font-size: 24px;
+    font-size: var(--font-size-h1-mobile);
   }
   .workspace-nav {
     position: static;
@@ -1430,7 +1432,7 @@ section {
   .workspace-nav a {
     flex-shrink: 0;
     padding: 10px;
-    font-size: 13px;
+    font-size: var(--font-size-help);
   }
   .columns {
     display: block;
@@ -1459,7 +1461,7 @@ section {
   input,
   select,
   textarea {
-    font-size: 16px;
+    font-size: var(--font-size-input-mobile);
   }
   .account-list .item > strong {
     min-width: 0;
@@ -1489,9 +1491,6 @@ section {
     width: 48px;
     height: 48px;
   }
-  .auth-copy h1 {
-    font-size: 28px;
-  }
   .onboarding {
     display: none;
   }
@@ -1516,9 +1515,9 @@ section {
 }
 
 .dm-response-button {
-  margin: -0.35rem 0 1rem auto;
+  margin: -4.9px 0 14px auto;
   width: 86%;
-  padding: 0.75rem 1rem;
+  padding: 10.5px 14px;
   border: 1px solid var(--color-border);
   border-radius: 0 0 8px 8px;
   color: var(--color-brand);
@@ -1610,7 +1609,7 @@ section {
 }
 .contact-detail-content h4,
 .contact-detail-content h5 {
-  font-size: 1rem;
+  font-size: var(--font-size-body);
   margin: 20px 0 8px;
 }
 .contact-detail-content p {
@@ -1693,15 +1692,15 @@ section {
 }
 .flow-editor h4 {
   margin: 24px 0 8px;
-  font-size: 15px;
+  font-size: var(--font-size-body);
 }
 .flow-editor h5 {
   margin: 16px 0 4px;
-  font-size: 14px;
+  font-size: var(--font-size-body);
 }
 .flow-editor h6 {
   margin: 14px 0 4px;
-  font-size: 13px;
+  font-size: var(--font-size-help);
 }
 .flow-name {
   max-width: 520px;
@@ -1727,6 +1726,14 @@ section {
 }
 .flow-alert p {
   margin: 0 0 8px;
+}
+/* A static warning: its lead sentence reads at body size and the explanation after it at help size. */
+.alert-detail {
+  font-size: var(--font-size-help);
+}
+.alert-lead {
+  display: block;
+  font-size: var(--font-size-body);
 }
 .flow-alert ul {
   margin: 6px 0 0;
@@ -1793,19 +1800,19 @@ section {
   overflow: hidden;
   margin: 4px 0 0;
   color: var(--color-muted);
-  font-size: 13px;
+  font-size: var(--font-size-help);
   white-space: pre-wrap;
 }
 .flow-step-errors {
   margin: 6px 0 0;
   padding-left: 18px;
   color: var(--color-danger);
-  font-size: 13px;
+  font-size: var(--font-size-help);
 }
 .flow-slot-text {
   margin: 0;
   color: var(--color-muted);
-  font-size: 13px;
+  font-size: var(--font-size-help);
 }
 .flow-branches {
   display: grid;
@@ -1820,7 +1827,7 @@ section {
 .flow-branch-label {
   margin: 0 0 6px;
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   font-weight: 700;
 }
 .flow-step-menu summary,
@@ -1838,7 +1845,7 @@ section {
 .flow-step-menu button,
 .flow-slot-form button,
 .flow-link button {
-  font-size: 12px;
+  font-size: var(--font-size-body);
   padding: 7px 12px;
 }
 .flow-config label {
@@ -1864,7 +1871,7 @@ section {
   margin-top: 12px;
 }
 .flow-checks legend {
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-weight: 600;
 }
 .flow-checks label,
@@ -1917,12 +1924,12 @@ section {
 }
 .flow-graph-node text {
   fill: var(--color-ink);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   font-weight: 700;
 }
 .flow-graph-node .flow-graph-detail {
   fill: var(--color-muted);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 400;
 }
 .flow-graph-edge {
@@ -1939,7 +1946,7 @@ section {
   fill: var(--color-muted);
 }
 .flow-graph-port {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .flow-test {
   margin-top: 24px;
@@ -1953,7 +1960,7 @@ section {
   margin-top: 16px;
 }
 .flow-test-values legend {
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-weight: 600;
 }
 #flow-test-run {
@@ -1976,7 +1983,7 @@ section {
   padding: 8px;
   overflow-x: auto;
   background: var(--color-canvas);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -2033,24 +2040,24 @@ section {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   align-items: end;
-  gap: 1rem;
+  gap: 14px;
 }
 .manual-report-counts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 1rem;
+  gap: 14px;
 }
 .manual-report-counts > div {
-  padding: 1rem;
+  padding: 14px;
   border: 1px solid var(--color-border);
   border-radius: 12px;
 }
 .manual-report-counts dt {
-  font-size: 0.875rem;
+  font-size: var(--font-size-caption);
 }
 .manual-report-counts dd {
-  margin: 0.5rem 0 0;
-  font-size: 1.5rem;
+  margin: 7px 0 0;
+  font-size: var(--font-size-h2);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -2067,7 +2074,7 @@ section {
 }
 .report-breakdown caption {
   text-align: left;
-  font-size: 0.875rem;
+  font-size: var(--font-size-caption);
   padding-bottom: 6px;
 }
 .report-breakdown th,
@@ -2131,7 +2138,7 @@ section {
   margin: 12px 0;
 }
 .campaign-draft-preview-summary dt {
-  font-size: 0.875rem;
+  font-size: var(--font-size-caption);
 }
 .campaign-draft-preview-summary dd {
   margin: 2px 0 0;
@@ -2149,7 +2156,7 @@ section {
 }
 .campaign-draft-preview-table caption {
   text-align: left;
-  font-size: 0.875rem;
+  font-size: var(--font-size-caption);
   padding-bottom: 6px;
 }
 .campaign-draft-preview-table th,
@@ -2168,7 +2175,7 @@ section {
 }
 .campaign-approval h5 {
   margin: 12px 0 4px;
-  font-size: 1rem;
+  font-size: var(--font-size-body);
 }
 .campaign-approval-schedule {
   display: flex;
@@ -2195,7 +2202,7 @@ section {
 }
 .campaign-approval h6 {
   margin: 12px 0 4px;
-  font-size: 0.875rem;
+  font-size: var(--font-size-help);
 }
 .campaign-approval-confirm h6 {
   margin-top: 0;
