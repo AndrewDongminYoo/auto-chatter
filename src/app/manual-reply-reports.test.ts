@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 
-test("report remains usable when the browser cannot format a server-valid time zone", async () => {
+// With `clock`, `new Date()` reads that instant and the real Intl formats the workspace zone; without it, every zone
+// is unsupported so the manual-date fallback runs.
+function harness(clock?: string) {
   const listeners = new Map<string, (event: { preventDefault(): void }) => Promise<void>>();
   const element = () => ({
     textContent: "",
@@ -44,6 +46,10 @@ test("report remains usable when the browser cannot format a server-valid time z
   };
   // Exercise an Intl engine that cannot format a PostgreSQL-accepted name; Factory is valid in our local PG.
   class UnsupportedDate extends Date {
+    constructor(value?: string | number | Date) {
+      if (value === undefined) super(clock ?? Date.now());
+      else super(value);
+    }
     override toLocaleString(): string {
       throw new RangeError("Invalid time zone");
     }
@@ -53,13 +59,16 @@ test("report remains usable when the browser cannot format a server-valid time z
     Option: class {},
     Date: UnsupportedDate,
     URLSearchParams,
-    Intl: {
-      DateTimeFormat: class {
-        constructor() {
-          throw new RangeError("Invalid time zone");
-        }
-      },
-    },
+    Intl:
+      clock === undefined
+        ? {
+            DateTimeFormat: class {
+              constructor() {
+                throw new RangeError("Invalid time zone");
+              }
+            },
+          }
+        : Intl,
   });
   vm.runInContext(readFileSync(new URL("../../public/app/manual-reply-reports.js", import.meta.url), "utf8"), context);
   const controller = context.createManualReplyReports({
@@ -84,6 +93,11 @@ test("report remains usable when the browser cannot format a server-valid time z
       },
     }),
   });
+  return { controller, listeners, get, from, before };
+}
+
+test("report remains usable when the browser cannot format a server-valid time zone", async () => {
+  const { controller, listeners, get, from, before } = harness();
   assert.doesNotThrow(() => controller.configure("owner", "Factory", []));
   assert.equal(get("manual-reports-section").hidden, false);
   assert.equal(from.value, "");
@@ -94,4 +108,20 @@ test("report remains usable when the browser cannot format a server-valid time z
   assert.equal(get("manual-report-counts").children.length, 8);
   assert.match(get("manual-report-summary").textContent, /2026-10-16T11:00:00.000Z \(UTC\)/);
   assert.equal(get("manual-report-download").disabled, false);
+});
+
+test("manual reply report defaults to the last seven days of the workspace calendar, not the browser's", () => {
+  // The browser (UTC) date is 2026-03-01 in both cases: at 03:00Z Los Angeles is still on 2026-02-28, and at 12:00Z
+  // Kiritimati (UTC+14) is already on 2026-03-02.
+  const cases = [
+    ["2026-03-01T03:00:00Z", "America/Los_Angeles", "2026-02-22", "2026-03-01"],
+    ["2026-03-01T12:00:00Z", "Pacific/Kiritimati", "2026-02-24", "2026-03-03"],
+  ] as const;
+  for (const [clock, zone, from, before] of cases) {
+    const h = harness(clock);
+    h.controller.configure("owner", zone, []);
+    assert.equal(h.from.value, from, zone);
+    assert.equal(h.before.value, before, zone);
+    assert.doesNotMatch(h.get("manual-report-zone").textContent, /직접 입력/);
+  }
 });
