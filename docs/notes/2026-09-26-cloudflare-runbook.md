@@ -683,6 +683,16 @@ migration 적용과 Worker 배포 사이에는 이 Mac의 Wrangler 로그인 정
 - 성공한 연결은 새 토큰(`token_obtained_at` 02:48Z)을 저장했고, 계정 구독은 `comments`·`messages`·`messaging_postbacks`·`messaging_seen` 네 필드가 됐습니다.
 - `wrangler secret put`은 커밋 태그가 없는 Worker 버전을 만듭니다. 그 뒤 PR #318 병합의 자동 배포는 "has no workers/tag"로 멈췄고, `migrations_applied`를 켠 수동 실행(실행 42737813206)으로 버전 `59c88580-385f-4e36-84a9-356e4df93240`을 배포했습니다(공개 스모크 검사 26개 통과).
 
+2026-11-10에는 PR #325 병합(12:21:31Z) 뒤에 "운영 반영부터 하고 배포합시다" 요청에 따라 `main` 커밋 `50b0182`를 적용했습니다. 이 커밋에 새로 들어온 변경은 PR #325(팔로우 응답 메시지 ID 기록, migration 071)이며, 그 병합의 자동 배포는 migration 검사에서 멈췄습니다.
+적용 전 조회에서 `instagram_follow_messages`는 없었고 `instagram_message_reads`는 있었습니다. `instagram_follow_conversations`는 4행이고 그중 3행에 메시지 ID가 있었으며, 3개 모두 복사 조건(공백이 아니고 512자 이하)을 만족했습니다. `sending` 상태의 행은 없었고, 저장된 읽음은 2건이었습니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-11-10-migration-071/public-pre-071.dump`(385,583바이트, SHA-256 `8c6e2f7c32a7adac00b9e5fc9d3aebe1c8b46189c17f4e21d50a38f074abf32a`)에 저장했고, 목록 읽기에서 데이터 테이블 58개를 확인했습니다.
+같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 실행했습니다. 실행은 exit 0과 `COMMIT`으로 끝났고, 로그 662줄에 `ERROR`나 `FATAL`은 없었으며 `NOTICE`를 담은 줄은 231줄이었습니다.
+적용 후 `instagram_follow_messages`에는 기존 메시지 ID 3개가 `sent_at` 없이 복사됐습니다. RLS가 켜져 있고, `auto_chatter_server`는 SELECT·INSERT만 가지며 `anon`·`authenticated`에는 권한이 없습니다. 세 삭제 함수가 새 테이블을 지웁니다.
+이어서 Deploy 워크플로를 `migrations_applied`를 켜고 수동 실행했습니다(실행 42816934155). Worker 버전 `7315a894-5c06-426b-a113-9f995801534c`(태그 `50b0182`)가 12:34:58Z에 활성이 됐고 공개 스모크 검사 26개가 통과했습니다.
+`scheduled_steps`를 12:35:35Z, 12:36:41Z, 12:37:46Z에 조회했습니다. 발송과 무관한 8개 단계는 배포 뒤 매분 성공 시각이 갱신됐고, 가장 최근 실패 기록은 배포 전인 2026-10-28 16:04:47Z의 `cron` `step_failed`이며, 켜진 경보는 없었습니다.
+`stale_recovery`·`wake`·`webhook_delivery`·`campaign_start`의 마지막 성공은 2026-11-10 05:04:13~14Z 그대로였습니다. 이 단계들은 `SEND_ENABLED`가 참일 때만 실행됩니다.
+이번 반영은 팔로우 응답을 실제로 보내거나 새 테이블에 발송 기록이 쌓이는 것을 확인하지 않았습니다.
+
 ## 2. Cloudflare 준비
 
 Queue `auto-chatter-replies`를 생성합니다.
