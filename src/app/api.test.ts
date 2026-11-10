@@ -264,6 +264,54 @@ test("a denied Instagram callback returns to the app with a bounded reason", asy
   assert.deepEqual(await invalidState.json(), { error: "invalid_oauth_state" });
 });
 
+test("an Instagram callback provider failure logs the request's cf-ray as its correlation ID", async (t) => {
+  const lines: string[][] = [];
+  for (const method of ["error", "warn", "log"] as const)
+    t.mock.method(console, method, (...args: unknown[]) => lines.push([method, ...args.map(String)]));
+  const fetchImpl = (async (input: string | URL | Request) =>
+    String(input).includes("api.instagram.com")
+      ? Response.json({ error_type: "OAuthException", code: 400, error_message: "synthetic message" }, { status: 400 })
+      : Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
+  const pool = {
+    query: async (sql: string) => ({
+      rows: sql.includes("workspace_members")
+        ? [{ workspace_id: workspaceId, role: "owner" }]
+        : [{ state_hash: "consumed" }],
+      rowCount: 1,
+    }),
+    end: async () => {},
+  } as unknown as Pool;
+  const state = "a".repeat(64);
+  const response = await appApi(
+    new Request(`https://app.test/api/instagram/callback?state=${state}&code=test-code`, {
+      headers: { cookie: `__Host-ac-access=test-session; __Host-ac-oauth=${state}`, "cf-ray": "8f00aa11bb22cc33-ICN" },
+    }),
+    {
+      ...config,
+      APP_ORIGIN: "https://app.test",
+      INSTAGRAM_OAUTH_APP_ID: "123",
+      INSTAGRAM_OAUTH_APP_SECRET: "synthetic-secret",
+      TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
+      META_GRAPH_VERSION: "v26.0",
+      INSTAGRAM_INTERNAL_EMAILS: "a@example.test",
+    },
+    () => pool,
+    fetchImpl,
+  );
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), { error: "instagram_connection_failed" });
+  assert.deepEqual(lines, [
+    [
+      "warn",
+      JSON.stringify({
+        event: "instagram_oauth_provider_failed",
+        code: "code_exchange_http_400_oauthexception_400",
+        correlation_id: "8f00aa11bb22cc33-ICN",
+      }),
+    ],
+  ]);
+});
+
 test("recovery endpoints require same-origin POST and never open the workspace database", async () => {
   const calls: string[] = [];
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
