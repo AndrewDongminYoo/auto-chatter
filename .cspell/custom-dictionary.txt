@@ -37,6 +37,7 @@ graphmethodexception
 hvpqangvavstdhyqkfww
 hyperdrive
 hyperdrives
+igapiexception
 insertable
 INVITABLE
 isready
