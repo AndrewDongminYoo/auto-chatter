@@ -1167,6 +1167,7 @@ test("migration 031 replays and, with the later migrations, leaves the deletion 
     "068_dm_start_triggers.sql",
     "069_dm_flow_delivery.sql",
     "070_instagram_message_reads.sql",
+    "071_instagram_follow_messages.sql",
   ])
     await pool.query(await readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8"));
   assert.deepEqual(await functions(), current);

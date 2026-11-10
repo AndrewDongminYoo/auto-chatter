@@ -286,6 +286,20 @@ CREATE TABLE IF NOT EXISTS instagram_follow_conversations (
   provider_message_id text,
   rate_limit_retries integer NOT NULL DEFAULT 0
 );
+-- Every follow reply's message ID (#321). instagram_follow_conversations keeps only the latest provider_message_id,
+-- and a non-follower reply goes back to waiting, so the next send overwrites it. The follow worker inserts one row
+-- here in the same statement as the successful-send update, and the read lookup matches read.mid against it.
+-- sent_at is NULL only for rows that migration 071 copied: no column records when those messages were sent.
+-- Server roles insert and read rows and never update or delete them; the deletion functions do.
+CREATE TABLE IF NOT EXISTS instagram_follow_messages (
+  connection_id uuid NOT NULL REFERENCES instagram_connections(id),
+  reply_id bigint NOT NULL REFERENCES instagram_follow_conversations(reply_id),
+  provider_message_id text NOT NULL CHECK(length(btrim(provider_message_id))>0 AND length(provider_message_id)<=512),
+  follow_status text NOT NULL CHECK(follow_status IN ('unknown','following','not_following')),
+  sent_at timestamptz,
+  PRIMARY KEY(connection_id,provider_message_id)
+);
+CREATE INDEX IF NOT EXISTS instagram_follow_messages_reply_idx ON instagram_follow_messages(reply_id);
 CREATE TABLE IF NOT EXISTS instagram_message_receipts (
   connection_id uuid NOT NULL REFERENCES instagram_connections(id),
   message_id text NOT NULL,
@@ -1763,6 +1777,10 @@ BEGIN
   DELETE FROM public.campaign_deliveries WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('campaign_deliveries', affected);
+  -- Follow reply message IDs reference the follow rows, so they go first.
+  DELETE FROM public.instagram_follow_messages WHERE connection_id=p_connection;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_follow_messages', affected);
   -- Follow rows first: confirmation ingestion locks them before writing a receipt.
   DELETE FROM public.instagram_follow_conversations WHERE connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
@@ -2089,6 +2107,12 @@ BEGIN
   DELETE FROM public.campaign_deliveries WHERE workspace_id=p_workspace AND id=ANY(campaign_rows);
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('campaign_deliveries', affected);
+  -- The message IDs of the person's follow replies, which reference the follow rows locked above.
+  DELETE FROM public.instagram_follow_messages
+  WHERE reply_id IN(SELECT reply_id FROM public.instagram_follow_conversations
+    WHERE connection_id=p_connection AND (reply_id=ANY(replies) OR recipient_id=ANY(recipients)));
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_follow_messages', affected);
   DELETE FROM public.instagram_follow_conversations
   WHERE connection_id=p_connection AND (reply_id=ANY(replies) OR recipient_id=ANY(recipients));
   GET DIAGNOSTICS affected = ROW_COUNT;
@@ -2355,6 +2379,9 @@ BEGIN
   DELETE FROM public.instagram_contact_fields WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_fields', affected);
+  DELETE FROM public.instagram_follow_messages WHERE connection_id=ANY(connections);
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_follow_messages', affected);
   DELETE FROM public.instagram_follow_conversations WHERE connection_id=ANY(connections);
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_follow_conversations', affected);

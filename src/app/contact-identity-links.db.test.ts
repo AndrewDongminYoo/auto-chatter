@@ -491,6 +491,9 @@ test("latest migration reproduces canonical deletion functions and can replay", 
   await pool.query(
     await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8"),
   );
+  await pool.query(
+    await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"),
+  );
   assert.deepEqual(await definitions(), canonical);
   await ok(confirm());
   const result = (

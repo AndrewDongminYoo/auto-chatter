@@ -19,6 +19,8 @@ export const EXPORTED_TABLES: Record<string, { scope: "self" | "workspace" | "co
   instagram_comment_events: { scope: "workspace" },
   private_reply_outbox: { scope: "workspace" },
   instagram_follow_conversations: { scope: "connection" },
+  // The message ID of every follow reply (#321); the follow row above keeps only the latest one.
+  instagram_follow_messages: { scope: "connection" },
   instagram_message_receipts: { scope: "connection" },
   instagram_inbox_messages: { scope: "workspace" },
   // Kept DM text is removed after 15 minutes and is not exported in the meantime either.

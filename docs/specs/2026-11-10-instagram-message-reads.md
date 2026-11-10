@@ -50,12 +50,17 @@ Cloudflare Worker는 댓글과 메시지의 계정을 발송 대기열에 깨운
 읽음은 다음을 모두 만족할 때만 저장합니다.
 
 - 이벤트의 계정(`recipient.id`)이 활성 연결의 계정입니다.
-- `read.mid`가 그 연결에서 서비스가 저장한 `provider_message_id`입니다. 대상 발송 테이블은 `private_reply_outbox`, `instagram_follow_conversations`, `instagram_manual_replies`, `flow_dm_deliveries`, `campaign_deliveries`이며, 스키마에서 `provider_message_id`를 가진 Instagram 발송 테이블은 이 다섯 개뿐입니다.
+- `read.mid`가 그 연결에서 서비스가 저장한 `provider_message_id`입니다. 대상 발송 테이블은 `private_reply_outbox`, `instagram_follow_conversations`, `instagram_manual_replies`, `flow_dm_deliveries`, `campaign_deliveries`, `instagram_follow_messages`(migration 071, [#321](https://github.com/AndrewDongminYoo/auto-chatter/issues/321))이며, 스키마에서 `provider_message_id`를 가진 Instagram 발송 테이블은 이 여섯 개뿐입니다. `instagram_follow_messages`는 팔로우 응답마다 메시지 ID를 한 행씩 남기는 기록입니다.
 
 Instagram 앱에서 사람이 직접 보낸 메시지, 다른 연결의 메시지, 비활성 연결의 메시지에 대한 읽음은 버리고 행을 남기지 않습니다.
 읽은 사람이 그 메시지의 저장된 받는이와 같은지는 확인하지 않습니다. 비공개 답장 행은 받는이 ID가 비어 있을 수 있기 때문입니다.
 발송 응답이 저장되기 전에 읽음 이벤트가 먼저 도착하면 그 읽음은 버려집니다.
-`instagram_follow_conversations`는 한 행에 `provider_message_id`를 하나만 두고 새 발송이 성공하면 그 값을 바꾸므로, 같은 대화에서 앞서 보낸 팔로우 응답의 늦은 읽음은 저장되지 않습니다.
+`instagram_follow_conversations`는 한 행에 `provider_message_id`를 하나만 두고 새 발송이 성공하면 그 값을 바꿉니다.
+그래서 팔로우 작업자는 발송이 성공할 때 같은 문장(CTE)에서 `instagram_follow_messages`에 그 응답의 메시지 ID, 보낸 시점의 `follow_status`, `sent_at`을 한 행씩 더합니다([#321](https://github.com/AndrewDongminYoo/auto-chatter/issues/321)).
+따라서 같은 대화에서 앞서 보낸 팔로우 응답의 늦은 읽음도 저장됩니다.
+이 표는 추가만 하며, `(connection_id, provider_message_id)` 기본 키가 읽음 조회를 받칩니다.
+migration 071은 기존 팔로우 행마다 현재 `provider_message_id`를 복사하고 `sent_at`은 비워 둡니다. 보낸 시각을 기록한 열이 없기 때문입니다. 071 전에 이미 덮어쓴 메시지 ID는 되살릴 수 없으므로, 그 응답의 읽음은 계속 저장되지 않습니다.
+071 적용과 Worker 배포 사이에 이전 코드가 보낸 응답은 팔로우 행에만 ID가 남으므로, 읽음 조회는 팔로우 행의 현재 ID도 계속 찾습니다.
 
 저장은 별도 트랜잭션에서 먼저 활성 연결 행을 `FOR SHARE`로 잠근 뒤, 다음 문장에서 발송 테이블을 조회해 넣습니다.
 연결 삭제는 연결 행을 `FOR UPDATE`로 잠그므로, 삭제가 먼저 끝나면 그 연결은 비활성이어서 건너뛰고, 그렇지 않으면 삭제가 이 트랜잭션을 기다립니다.
@@ -69,6 +74,7 @@ Instagram 앱에서 사람이 직접 보낸 메시지, 다른 연결의 메시�
 - 내보내기: `EXPORTED_TABLES`에 `workspace` 범위로 등록했습니다. 식별자와 Meta 읽음 시각만 담깁니다.
 - 작업 공간 이동 검사: 읽음 행은 `instagram_connections` 행을 외래 키로 요구하므로 두 이동 검사에 추가하지 않았습니다.
 - 권한: `deploy/supabase-access.sql`의 테이블 목록에 추가해 RLS를 켜고 서버 역할에 SELECT·INSERT·UPDATE만 줍니다. DELETE는 없습니다. Compose의 `deploy/init-app-user.sh`는 이미 모든 테이블에 같은 권한을 주므로 바꾸지 않았습니다.
+- 팔로우 응답 메시지 ID(`instagram_follow_messages`, migration 071): 세 삭제 함수가 팔로우 행보다 먼저 지우고 `deleted_counts.instagram_follow_messages`에 기록합니다. `public.delete_person_data`는 지우는 팔로우 행에 딸린 행을 지웁니다. `EXPORTED_TABLES`에 `connection` 범위로 등록했고, 행이 `instagram_connections` 행을 외래 키로 요구하므로 작업 공간 이동 검사에는 추가하지 않았습니다. 서버 역할은 SELECT·INSERT만 가지며, `deploy/supabase-access.sql`과 `deploy/init-app-user.sh`가 UPDATE를 회수합니다.
 
 ## 운영 적용
 
@@ -88,6 +94,7 @@ Facebook Login 연결은 읽음을 받지 않습니다.
 - DB 테스트(`src/instagram/message-reads.db.test.ts`): 다섯 발송 테이블 메시지의 읽음 저장, 알 수 없는 ID·다른 연결·비활성 연결·계정이 다른 받는이의 읽음 무시, 중복 이벤트와 첫 `read_at` 유지, 순서가 바뀐 읽음, 세 삭제 함수.
 - 서명된 웹훅 종단 테스트: Node 수신기(`src/instagram/http.db.test.ts`)와 Cloudflare Worker(`src/cloudflare/worker.db.test.ts`)에서 읽음 하나를 저장하고 다른 이벤트와 같은 상태를 반환하는지, 인박스가 켜진 연결에서 인박스 메시지를 쓰지 않는지, 응답을 기다리는 플로 실행을 재개하지 않는지, Worker가 발송 대기열을 깨우지 않는지.
 - 내보내기·작업 공간 삭제·권한: 기존 `workspace-export.db.test.ts`, `workspace-deletion.db.test.ts`, `src/cloudflare/access.db.test.ts`가 새 테이블을 포함하고, `contact-identity-links.db.test.ts`가 070 재실행 뒤 삭제 함수 정의가 `db/schema.sql`과 같은지 확인합니다.
+- 팔로우 응답 메시지 ID(#321): `src/instagram/follow-flow.db.test.ts`는 실제 팔로우 작업자로 한 대화에서 세 번 보낸 뒤 앞선 두 응답의 늦은 읽음이 저장되는지, 실패한 발송이 ID를 더하지 않는지 확인합니다. `message-reads.db.test.ts`는 migration 071의 복사, 재실행과 실행기 순서를 확인합니다.
 
 이 테스트들은 운영 migration, 배포된 Worker, Meta 앱의 필드 구독, 실제 읽음 이벤트의 `read.mid` 값을 증명하지 않습니다.
 
@@ -118,7 +125,7 @@ Facebook Login은 OAuth 교환을 거치지 않는 환경 변수 관리 연결�
 
 - Instagram Login으로 연결했지만 `messaging_seen` 구독 전에 연결한 계정은 `instagram_user_id`가 있어 `read_unavailable`로 세지 않으며, 다시 연결할 때까지 읽음이 오지 않습니다. 이 계정의 보낸 메시지는 어느 읽음 건수에도 들지 않고, 화면 안내로 다시 연결하도록 알립니다.
 - 비공개 답장은 읽음이 적거나 없을 수 있습니다. 2026-11-10 운영 시험에서 비공개 답장의 읽음 이벤트는 오지 않았고, 이를 보정하지 않고 안내만 합니다.
-- 팔로우 대화의 앞선 응답은 다음 응답을 보낼 때 메시지 ID를 잃습니다. 이 문제는 [#321](https://github.com/AndrewDongminYoo/auto-chatter/issues/321)에서 다루며, 팔로우 대화는 세 리포트 어디에도 포함되지 않습니다.
+- 팔로우 대화는 세 리포트 어디에도 포함되지 않습니다. migration 071부터 팔로우 응답마다 메시지 ID가 남아 각 응답의 읽음을 저장할 수 있지만([#321](https://github.com/AndrewDongminYoo/auto-chatter/issues/321)), 팔로우 응답의 읽음을 보여 주는 리포트는 없습니다.
 
 화면은 세 리포트의 `sent` 옆에 ‘읽음 확인’과 ‘읽음 확인 불가’를 차례로 표시하고 CSV에 `read`와 `read_unavailable` 행을 더합니다.
 `sent`를 설명하는 안내 옆에는 그 메시지에 대해 Instagram이 알려 온 읽음만 센다는 점, ‘읽음 확인 불가’는 읽음을 알려 줄 수 없는 계정(Facebook 로그인이나 서버 설정으로 연결한 계정)의 보낸 메시지라는 점, 읽음이 없다고 읽지 않은 것은 아니라는 점, 읽음 수집 전에 연결한 계정은 다시 연결해야 한다는 점을 한 문단으로 설명합니다.

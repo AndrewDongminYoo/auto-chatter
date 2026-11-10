@@ -70,5 +70,6 @@ BEGIN;
 \ir ../db/migrations/068_dm_start_triggers.sql
 \ir ../db/migrations/069_dm_flow_delivery.sql
 \ir ../db/migrations/070_instagram_message_reads.sql
+\ir ../db/migrations/071_instagram_follow_messages.sql
 \ir supabase-access.sql
 COMMIT;

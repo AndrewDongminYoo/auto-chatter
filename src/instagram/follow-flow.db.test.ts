@@ -17,6 +17,7 @@ import {
   processNextPrivateReply,
 } from "./reply-worker.ts";
 import { recordChannelConsentEvent } from "./channel-consent.ts";
+import { ingestMessageReads } from "./message-reads.ts";
 const url = new URL(process.env.TEST_DATABASE_URL ?? "http://invalid");
 if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
   throw new Error("Database tests require a local automations_test database");
@@ -134,6 +135,103 @@ test("nonfollowers can confirm again; followers receive one final response and d
   assert.equal((await state()).status, "sent");
   await ingestMessages(pool, [incoming("mid-3")]);
   assert.equal(await processNextFollowReply(pool, connection, transport), false);
+});
+test("every follow reply keeps its message ID, so a late read of an earlier reply is stored (#321)", async () => {
+  let follows = false;
+  let sends = 0;
+  const transport = {
+    followStatus: async () => follows,
+    send: async () => ({ messageId: `follow-sent-${++sends}` }),
+  };
+  await ingestMessages(pool, [incoming("mid-1", "확인", new Date(Date.now() - 20))]);
+  await processNextFollowReply(pool, connection, transport);
+  await ingestMessages(pool, [incoming("mid-2", "확인", new Date(Date.now() - 10))]);
+  await processNextFollowReply(pool, connection, transport);
+  follows = true;
+  await ingestMessages(pool, [incoming("mid-3")]);
+  await processNextFollowReply(pool, connection, transport);
+  assert.equal(sends, 3);
+  // The follow row keeps the latest ID only; the history keeps all three, each with the status it was sent for.
+  assert.equal((await state()).provider_message_id, "follow-sent-3");
+  const history = (
+    await pool.query(
+      "SELECT connection_id,reply_id::text,provider_message_id,follow_status,sent_at IS NOT NULL AS dated FROM instagram_follow_messages ORDER BY provider_message_id",
+    )
+  ).rows;
+  assert.deepEqual(history, [
+    {
+      connection_id: connection,
+      reply_id: String(replyId),
+      provider_message_id: "follow-sent-1",
+      follow_status: "not_following",
+      dated: true,
+    },
+    {
+      connection_id: connection,
+      reply_id: String(replyId),
+      provider_message_id: "follow-sent-2",
+      follow_status: "not_following",
+      dated: true,
+    },
+    {
+      connection_id: connection,
+      reply_id: String(replyId),
+      provider_message_id: "follow-sent-3",
+      follow_status: "following",
+      dated: true,
+    },
+  ]);
+  // Reads of the first two replies arrive after the third send overwrote the follow row's ID.
+  await ingestMessageReads(
+    pool,
+    ["follow-sent-1", "follow-sent-2", "follow-sent-3", "never-sent"].map((messageId) => ({
+      accountId: "123",
+      readerId: "456",
+      messageId,
+      readAt: new Date("2026-11-10T01:00:00.000Z"),
+    })),
+  );
+  assert.deepEqual(
+    (await pool.query("SELECT message_id FROM instagram_message_reads ORDER BY message_id")).rows.map(
+      (row) => row.message_id,
+    ),
+    ["follow-sent-1", "follow-sent-2", "follow-sent-3"],
+  );
+});
+test("a failed follow send keeps the earlier message IDs and adds none", async () => {
+  await ingestMessages(pool, [incoming("mid-1", "확인", new Date(Date.now() - 10))]);
+  await processNextFollowReply(pool, connection, {
+    followStatus: async () => false,
+    send: async () => ({ messageId: "follow-sent-1" }),
+  });
+  await ingestMessages(pool, [incoming("mid-2")]);
+  await processNextFollowReply(pool, connection, {
+    followStatus: async () => false,
+    send: async () => {
+      throw new ProviderRejectedError(10);
+    },
+  });
+  const row = await state();
+  assert.equal(row.status, "failed");
+  assert.equal(row.provider_message_id, "follow-sent-1");
+  assert.deepEqual(
+    (await pool.query("SELECT provider_message_id FROM instagram_follow_messages")).rows.map(
+      (history) => history.provider_message_id,
+    ),
+    ["follow-sent-1"],
+  );
+});
+test("a sent follow reply whose message ID is over 512 characters is recorded without a history row", async () => {
+  const longId = "m".repeat(600);
+  await ingestMessages(pool, [incoming()]);
+  await processNextFollowReply(pool, connection, {
+    followStatus: async () => true,
+    send: async () => ({ messageId: longId }),
+  });
+  const row = await state();
+  assert.equal(row.status, "sent");
+  assert.equal(row.provider_message_id, longId);
+  assert.equal((await pool.query("SELECT 1 FROM instagram_follow_messages")).rowCount, 0);
 });
 test("unknown profile never selects nonfollower content and expired windows never send", async () => {
   let sends = 0;
