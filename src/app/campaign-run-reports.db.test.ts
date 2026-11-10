@@ -58,8 +58,8 @@ beforeEach(async () => {
   ])
     await pool.query(
       `INSERT INTO instagram_connections(id,workspace_id,account_id,username,inbox_enabled,inbox_enabled_at,active,send_enabled,
-         access_token_encrypted,token_expires_at)
-       VALUES($1,$2,$3,'SECRET-ACCOUNT',true,now()-interval '1 day',true,true,'CIPHERTEXT',now()+interval '30 days')`,
+         access_token_encrypted,token_expires_at,instagram_user_id)
+       VALUES($1,$2,$3,'SECRET-ACCOUNT',true,now()-interval '1 day',true,true,'CIPHERTEXT',now()+interval '30 days',$3)`,
       [id, ws, account],
     );
   draft = await draftFor([]);
@@ -262,6 +262,8 @@ test("campaign report partitions run states, start reasons and delivery rows wit
     pending: "1",
     sending: "1",
     sent: "3",
+    read: "0",
+    read_unavailable: "0",
     failed: "1",
     blocked: "1",
     unknown: "1",
@@ -287,6 +289,105 @@ test("campaign report partitions run states, start reasons and delivery rows wit
   assert.equal(updated.delivery_counts.sending, "0");
   assert.equal(updated.delivery_counts.sent, "4");
   assert.equal(updated.delivery_counts.total, "10");
+});
+
+// Read rows are written directly: the report reads stored reads and never depends on the webhook path.
+async function markRead(conn: string, messageId: string, recipient = "901") {
+  await pool.query(
+    `INSERT INTO instagram_message_reads(workspace_id,connection_id,recipient_id,message_id,read_at)
+     SELECT workspace_id,id,$3,$2,now() FROM instagram_connections WHERE id=$1`,
+    [conn, messageId, recipient],
+  );
+}
+
+// The delivery CHECKs tie a message ID to status 'sent', so a non-sent campaign row cannot carry one to match; the
+// manual-reply and flow-run report tests cover a matching read on a non-sent row.
+test("campaign report counts a sent delivery row as read only on an exact message ID match on its own connection", async () => {
+  const own = await seedRun({ deliveries: { sent: 3, failed: 1, cancelled: 1 } });
+  const other = await seedRun({ status: "completed", deliveries: { sent: 2 }, conn: secondConnection });
+  // seedRun numbers message IDs per run; give each row a distinct ID so a match names exactly one row.
+  for (const run of [own, other])
+    await pool.query(
+      "UPDATE campaign_deliveries SET provider_message_id=run_id::text||'-'||recipient_id WHERE run_id=$1 AND status='sent'",
+      [run],
+    );
+  await markRead(connection, `${own}-91`, "901");
+  await markRead(connection, `${own}-91`, "902");
+  // The other run's message ID read on `connection` names no row there.
+  await markRead(connection, `${other}-91`);
+  // A read of a later message never marks an earlier one: no watermark.
+  await markRead(connection, `${own}-99`);
+  const body = await report();
+  assert.deepEqual(body.delivery_counts, {
+    total: "7",
+    pending: "0",
+    sending: "0",
+    sent: "5",
+    read: "1",
+    read_unavailable: "0",
+    failed: "1",
+    blocked: "0",
+    unknown: "0",
+    cancelled: "1",
+  });
+  assert.deepEqual(body.run_counts, {
+    total: "2",
+    running: "1",
+    cancelled: "0",
+    completed: "1",
+    limit_not_started: "0",
+  });
+  // `read` is a subset of `sent` and stays outside the status partition.
+  assert.equal(sum(body.delivery_counts, STATUSES), BigInt(body.delivery_counts.total));
+  assert.equal(JSON.stringify(body).includes(own), false);
+  await markRead(secondConnection, `${other}-92`);
+  const updated = await report();
+  assert.equal(updated.delivery_counts.read, "2");
+  assert.equal(updated.delivery_counts.sent, "5");
+  assert.equal(updated.run_counts.total, "2");
+});
+
+test("campaign report counts a sent delivery row on a connection that cannot report reads as read_unavailable, not unread", async () => {
+  // No Instagram Login user ID: a Facebook Login or environment-managed connection.
+  await pool.query("UPDATE instagram_connections SET instagram_user_id=NULL WHERE id=$1", [secondConnection]);
+  // A sent row on a connection that reports reads is in neither count without a read.
+  const own = await seedRun({ deliveries: { sent: 1 } });
+  // Rows that were not sent count in neither, whatever their connection.
+  const other = await seedRun({
+    status: "completed",
+    deliveries: { sent: 3, failed: 1, cancelled: 1 },
+    conn: secondConnection,
+  });
+  for (const run of [own, other])
+    await pool.query(
+      "UPDATE campaign_deliveries SET provider_message_id=run_id::text||'-'||recipient_id WHERE run_id=$1 AND status='sent'",
+      [run],
+    );
+  // A read stored for such a connection is still a confirmed read, never also unavailable.
+  await markRead(secondConnection, `${other}-91`);
+  const body = await report();
+  assert.deepEqual(body.delivery_counts, {
+    total: "6",
+    pending: "0",
+    sending: "0",
+    sent: "4",
+    read: "1",
+    read_unavailable: "2",
+    failed: "1",
+    blocked: "0",
+    unknown: "0",
+    cancelled: "1",
+  });
+  assert.equal(body.run_counts.total, "2");
+  // `read` and `read_unavailable` are disjoint subsets of `sent` and stay outside the status partition.
+  assert.equal(sum(body.delivery_counts, STATUSES), BigInt(body.delivery_counts.total));
+  assert.ok(
+    BigInt(body.delivery_counts.read) + BigInt(body.delivery_counts.read_unavailable) <=
+      BigInt(body.delivery_counts.sent),
+  );
+  // Reconnecting through Instagram Login records the user ID, and the count follows the connection's current state.
+  await pool.query("UPDATE instagram_connections SET instagram_user_id='4242' WHERE id=$1", [secondConnection]);
+  assert.equal((await report()).delivery_counts.read_unavailable, "0");
 });
 
 test("real starts: a started run's candidates equal its rows until a deletion, and a limited run counts only as not started", async () => {
@@ -433,7 +534,7 @@ test("campaign report selects runs by start time at local midnight, independent 
       group,
     );
   assert.equal(Object.keys(empty.start_counts).length, 10);
-  assert.equal(Object.keys(empty.delivery_counts).length, 8);
+  assert.equal(Object.keys(empty.delivery_counts).length, 10);
 });
 
 test("campaign report enforces active admins, the current time zone, DST and bounded input", async () => {

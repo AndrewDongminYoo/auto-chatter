@@ -32,6 +32,8 @@ const snapshot = {
     pending: "1",
     sending: "1",
     sent: "2",
+    read: "1",
+    read_unavailable: "0",
     failed: "1",
     blocked: "1",
     unknown: "1",
@@ -226,12 +228,14 @@ test("campaign report renders three partitions with run-screen labels and export
   const deliveries = h.get("campaign-report-delivery-counts").children;
   assert.equal(runs.length, 5);
   assert.equal(starts.length, 10);
-  assert.equal(deliveries.length, 8);
+  assert.equal(deliveries.length, 10);
   const label = (items: typeof runs, index: number) => items[index]!.children[0]!.textContent;
   assert.equal(label(runs, 4), "시작하지 않음(월 발송 한도 초과)");
   assert.equal(label(starts, 8), "조건 통과");
   assert.equal(label(starts, 9), "월 발송 한도 초과");
   assert.equal(label(deliveries, 3), "보냄");
+  assert.equal(label(deliveries, 4), "읽음 확인");
+  assert.equal(label(deliveries, 5), "읽음 확인 불가");
   assert.equal(starts[1]!.children[1]!.textContent, "18");
   assert.equal(
     starts.map((item) => item.children[0]!.textContent).some((text) => text.includes("발송 가능")),
@@ -248,7 +252,7 @@ test("campaign report renders three partitions with run-screen labels and export
     .trim()
     .split("\r\n")
     .map((line) => line.replace(/^"|"$/g, "").split('","'));
-  assert.equal(rows.length, 24);
+  assert.equal(rows.length, 26);
   assert.deepEqual(rows[0], [
     "group",
     "metric",

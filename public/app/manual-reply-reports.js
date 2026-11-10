@@ -11,6 +11,8 @@ function createManualReplyReports({ api, node }) {
     ["pending", "대기 중"],
     ["sending", "발송 처리 중"],
     ["sent", "Meta 접수"],
+    ["read", "읽음 확인"],
+    ["read_unavailable", "읽음 확인 불가"],
     ["failed", "실패·정책 거부"],
     ["unknown_unresolved", "결과 미확인"],
     ["unknown_resolved", "미확인·정리 완료"],

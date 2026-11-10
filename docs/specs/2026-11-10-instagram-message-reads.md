@@ -3,9 +3,8 @@
 ## 범위
 
 [#312](https://github.com/AndrewDongminYoo/auto-chatter/issues/312)의 첫 PR로, 서비스가 보낸 메시지를 받는이가 읽었다는 Meta의 `messaging_seen` 이벤트를 연결별로 저장합니다.
-이 PR은 수집과 저장만 다루며, 리포트·화면·API 응답과 발송 동작은 바꾸지 않습니다.
-리포트 표시는 두 번째 PR에서 다루며, 그 전에 실제 테스트 계정의 이벤트로 `read.mid`가 서비스가 저장한 `provider_message_id`와 같은지 확인해야 합니다.
-이 PR은 #312를 완료 처리하지 않습니다.
+첫 PR은 수집과 저장만 다루며, 리포트·화면·API 응답과 발송 동작은 바꾸지 않았습니다.
+두 번째 PR은 실제 이벤트로 `read.mid`가 저장된 `provider_message_id`와 같은 것을 확인한 뒤, 세 리포트에 읽음 확인 건수를 더해 #312를 완료합니다([리포트의 읽음 확인 건수](#리포트의-읽음-확인-건수)).
 
 ## Meta 근거
 
@@ -14,7 +13,9 @@
 - [Webhook fields](https://developers.facebook.com/documentation/instagram-platform/webhooks/fields): `messaging_seen`은 Instagram Login과 Messaging API에서만 제공되며 Facebook Login에서는 제공되지 않습니다. 전달(delivery)을 알리는 필드는 없습니다.
 - [Webhook examples](https://developers.facebook.com/documentation/instagram-platform/webhooks/examples.md): `messaging_seen` 페이로드는 `entry[].messaging[]`의 `sender.id`(읽은 사람의 Instagram 범위 ID), `recipient.id`(앱 사용자 계정 ID), `timestamp`(밀리초), `read.mid`로 이루어집니다. `watermark`는 없고, 한 이벤트는 메시지 하나를 가리킵니다.
 
-`read.mid`가 서비스가 발송 응답에서 저장한 메시지 ID와 같은 값이라는 점은 문서에서 직접 확인하지 못했고, 실제 이벤트로 확인하기 전까지 미검증입니다.
+`read.mid`가 서비스가 발송 응답에서 저장한 메시지 ID와 같은 값이라는 점은 문서에서 직접 확인하지 못했습니다.
+2026-11-10 운영에서 팔로우 응답 하나의 읽음이 저장된 `provider_message_id`와 정확히 일치했습니다([근거](https://github.com/AndrewDongminYoo/auto-chatter/issues/312#issuecomment-6759964350)).
+같은 시험에서 비공개 답장의 읽음 이벤트는 오지 않았습니다.
 값이 다르면 읽음 행은 저장되지 않을 뿐 다른 동작에는 영향이 없습니다.
 
 ## 수집 계약
@@ -78,7 +79,7 @@ Instagram 앱에서 사람이 직접 보낸 메시지, 다른 연결의 메시�
 
 구독 상태 확인(`REQUIRED_SUBSCRIPTION_FIELDS`)에는 `messaging_seen`을 추가하지 않았습니다. 따라서 기존 연결이 `fields_missing`으로 바뀌지 않으며, 대신 기존 연결이 읽음을 받는지도 이 확인으로는 알 수 없습니다.
 Facebook Login 연결은 읽음을 받지 않습니다.
-이 PR은 운영에 아무것도 적용하거나 배포하지 않았고, 병합 뒤 조회·백업·적용·배포는 별도 승인이 필요합니다.
+첫 PR은 운영에 아무것도 적용하거나 배포하지 않았고, 병합 뒤 조회·백업·적용·배포는 별도 승인이 필요합니다.
 
 ## 검증
 
@@ -89,3 +90,43 @@ Facebook Login 연결은 읽음을 받지 않습니다.
 - 내보내기·작업 공간 삭제·권한: 기존 `workspace-export.db.test.ts`, `workspace-deletion.db.test.ts`, `src/cloudflare/access.db.test.ts`가 새 테이블을 포함하고, `contact-identity-links.db.test.ts`가 070 재실행 뒤 삭제 함수 정의가 `db/schema.sql`과 같은지 확인합니다.
 
 이 테스트들은 운영 migration, 배포된 Worker, Meta 앱의 필드 구독, 실제 읽음 이벤트의 `read.mid` 값을 증명하지 않습니다.
+
+## 리포트의 읽음 확인 건수
+
+#312의 두 번째 PR은 세 리포트의 `sent` 옆에 `read` 건수(화면 이름 ‘읽음 확인’)와 `read_unavailable` 건수(화면 이름 ‘읽음 확인 불가’)를 더합니다.
+
+- [수동 답장 리포트](2026-10-16-manual-reply-reports.md)의 `counts.read`: `status='sent'`이고 읽음이 있는 수동 답장입니다.
+- [플로 실행 리포트](2026-10-16-flow-run-reports.md)의 `reply_counts.read`(전체와 `groups`의 각 행): 연결된 첫 메시지(`private_reply_outbox` 행 또는 `flow_dm_deliveries` 행)가 `status='sent'`이고 읽음이 있는 실행입니다.
+- [캠페인 실행 리포트](2026-11-09-campaign-run-reports.md)의 `delivery_counts.read`: 코호트 실행의 발송 행 중 `status='sent'`이고 읽음이 있는 행입니다. 기존 실행별 LATERAL 집계 안에서 세며, 읽음을 평평하게 조인하지 않습니다.
+
+읽음이 있다는 것은 같은 연결의 `instagram_message_reads`에 발송 행의 `provider_message_id`와 정확히 같은 `message_id`가 있다는 뜻입니다.
+`EXISTS`로 확인하므로 한 메시지를 여러 `recipient_id`가 읽어도 한 번만 세고, 다른 건수를 늘리지 않습니다.
+기본 키 `(connection_id, message_id, recipient_id)`가 이 조회를 받치므로 migration과 새 인덱스는 없습니다.
+
+`read_unavailable`은 `sent`인 행(플로 실행은 연결된 첫 메시지가 `sent`인 실행) 중 읽음이 없고, 연결의 `instagram_user_id`가 `NULL`인 행입니다.
+`instagram_user_id`는 Instagram Login OAuth 교환(`src/app/instagram-oauth.ts`)만 쓰고, 연결을 끊어도 지우지 않습니다(`src/app/settings.ts`).
+Facebook Login은 OAuth 교환을 거치지 않는 환경 변수 관리 연결에서만 쓰이므로 그 값이 `NULL`입니다.
+따라서 `NULL`은 Facebook Login 연결, 로그인 방식과 관계없는 환경 변수 관리 연결, migration 040 전에 연결한 뒤 다시 연결하지 않은 OAuth 연결을 가리키며, 어느 쪽도 `messaging_seen`을 받는다고 알려져 있지 않습니다.
+연결은 발송 행의 `connection_id`(와 작업 공간)로 `EXISTS` 조회하므로 다른 건수를 늘리지 않으며, 리포트 시점의 연결 상태를 읽습니다.
+이 연결에 읽음이 저장되어 있으면 그 행은 `read`로 세고 `read_unavailable`로 세지 않습니다.
+
+`read`와 `read_unavailable`은 서로 겹치지 않는 `sent`의 부분집합이며, 합계가 되는 어느 분할에도 속하지 않습니다.
+기존 분할과 그 합은 바뀌지 않습니다.
+읽음을 추정하지 않습니다. 뒤 메시지의 읽음으로 앞 메시지를 읽음 처리하는 워터마크 계산을 하지 않고, ‘읽지 않음’ 건수나 읽음률도 내지 않습니다.
+
+한계는 다음과 같습니다.
+
+- Instagram Login으로 연결했지만 `messaging_seen` 구독 전에 연결한 계정은 `instagram_user_id`가 있어 `read_unavailable`로 세지 않으며, 다시 연결할 때까지 읽음이 오지 않습니다. 이 계정의 보낸 메시지는 어느 읽음 건수에도 들지 않고, 화면 안내로 다시 연결하도록 알립니다.
+- 비공개 답장은 읽음이 적거나 없을 수 있습니다. 2026-11-10 운영 시험에서 비공개 답장의 읽음 이벤트는 오지 않았고, 이를 보정하지 않고 안내만 합니다.
+- 팔로우 대화의 앞선 응답은 다음 응답을 보낼 때 메시지 ID를 잃습니다. 이 문제는 [#321](https://github.com/AndrewDongminYoo/auto-chatter/issues/321)에서 다루며, 팔로우 대화는 세 리포트 어디에도 포함되지 않습니다.
+
+화면은 세 리포트의 `sent` 옆에 ‘읽음 확인’과 ‘읽음 확인 불가’를 차례로 표시하고 CSV에 `read`와 `read_unavailable` 행을 더합니다.
+`sent`를 설명하는 안내 옆에는 그 메시지에 대해 Instagram이 알려 온 읽음만 센다는 점, ‘읽음 확인 불가’는 읽음을 알려 줄 수 없는 계정(Facebook 로그인이나 서버 설정으로 연결한 계정)의 보낸 메시지라는 점, 읽음이 없다고 읽지 않은 것은 아니라는 점, 읽음 수집 전에 연결한 계정은 다시 연결해야 한다는 점을 한 문단으로 설명합니다.
+
+검증은 다음과 같습니다.
+
+- DB 테스트(`manual-reply-reports.db.test.ts`, `flow-run-reports.db.test.ts`, `campaign-run-reports.db.test.ts`): 읽음 행을 직접 넣어, 정확히 일치하는 읽음이 있는 `sent` 행만 세는지, 한 메시지의 읽음 두 행을 한 번만 세는지, 다른 연결의 메시지 ID와 같은 읽음과 뒤 메시지의 읽음을 세지 않는지, 기존 분할의 합과 플로 실행 `groups`의 합(`read`와 `read_unavailable` 포함)이 유지되는지 확인합니다. `instagram_user_id`가 없는 연결의 `sent` 행은 `read_unavailable`로만 세고, 그 연결에 읽음이 저장된 행은 `read`로만 세고, `sent`가 아닌 행은 어느 쪽에도 세지 않고, `instagram_user_id`가 있는 연결의 행은 `read_unavailable`로 세지 않는지도 확인합니다. `sent`가 아닌 행의 일치하는 읽음은 수동 답장과 비공개 답장 행으로 확인합니다. `campaign_deliveries`와 `flow_dm_deliveries`는 CHECK 제약으로 `sent`가 아닌 행에 메시지 ID를 둘 수 없습니다.
+- 단위 테스트(`*-reports.test.ts`): 세 화면이 ‘읽음 확인’과 ‘읽음 확인 불가’를 `sent` 바로 뒤에 표시하는지 확인하고, 플로 실행과 캠페인 실행 화면은 CSV에 두 행이 들어가는지도 확인합니다.
+
+이 테스트들은 배포된 Worker, 실제 읽음 이벤트의 도착 빈도와 운영 데이터를 증명하지 않습니다.
+이 PR은 운영에 아무것도 적용하거나 배포하지 않습니다.

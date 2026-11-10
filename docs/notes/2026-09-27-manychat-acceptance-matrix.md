@@ -13,6 +13,7 @@
 2026-11-09에 #62 행을 [4차 보안 회귀 점검](2026-11-09-security-regression-audit-4.md)의 1부와 2부에 맞춰 갱신했습니다.
 2026-11-09에 #35, #36, #52 행을 요금제별 월 캠페인 발송 한도의 로컬 구현에 맞춰 갱신했습니다. 운영 배포는 확인하지 않았습니다.
 2026-11-10에 #50에서 분리한 [#312](https://github.com/AndrewDongminYoo/auto-chatter/issues/312)의 첫 PR로 서비스가 보낸 메시지의 읽음 수집·저장을 로컬에서 구현했습니다([명세](../specs/2026-11-10-instagram-message-reads.md), migration 070). 운영 적용, Meta 앱의 `messaging_seen` 구독, 실제 이벤트의 `read.mid` 일치는 확인하지 않았고 리포트 표시는 남아 있습니다.
+2026-11-10에 #312의 두 번째 PR로 수동 답장·플로 실행·캠페인 실행 리포트에 메시지 ID가 정확히 일치하는 읽음만 세는 ‘읽음 확인’(`read`) 건수, 읽음을 알려 줄 수 없는 연결의 ‘읽음 확인 불가’(`read_unavailable`) 건수와 CSV 행을 로컬에서 구현했습니다([명세](../specs/2026-11-10-instagram-message-reads.md#리포트의-읽음-확인-건수)). 운영 배포는 확인하지 않았습니다.
 
 [목표 명세](../specs/2026-09-25-messaging-automation-platform.md)와 [백로그](2026-09-27-manychat-backlog.md)의 알려진 필수 작업을 코드·로컬 검사·실계정·운영 적용으로 구분합니다.
 기준은 `591cc091e5e3cdb55bba20fe65d3c662df800fd4`이며 이 표의 미완료는 구현된 첫 DM·팔로우·연락처 기능을 없다고 판정한 것이 아닙니다.

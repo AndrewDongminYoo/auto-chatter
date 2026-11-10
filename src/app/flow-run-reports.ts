@@ -25,7 +25,8 @@ interface ReportRow {
 
 const GROUP_BY = new Set(["day", "connection", "flow"]);
 
-// The three partitions over the cohort CTE's columns, for the whole cohort and for each group.
+// The three partitions over the cohort CTE's columns, for the whole cohort and for each group. `read` and
+// `read_unavailable` in reply_counts are disjoint subsets of `sent`, not members of the partition.
 const COUNTS = `json_build_object(
        'total',count(*)::text,
        'delivering',count(*) FILTER (WHERE status='delivering')::text,
@@ -40,6 +41,8 @@ const COUNTS = `json_build_object(
        'pending',count(*) FILTER (WHERE delivery='pending')::text,
        'sending',count(*) FILTER (WHERE delivery='sending')::text,
        'sent',count(*) FILTER (WHERE delivery='sent')::text,
+       'read',count(*) FILTER (WHERE read_confirmed)::text,
+       'read_unavailable',count(*) FILTER (WHERE read_unavailable)::text,
        'blocked',count(*) FILTER (WHERE delivery='blocked')::text,
        'failed',count(*) FILTER (WHERE delivery='failed')::text,
        'unknown',count(*) FILTER (WHERE delivery='unknown')::text
@@ -77,6 +80,10 @@ export async function flowRunReport(pool: Pool, user: User, query: URLSearchPara
   // A run reached a reply wait when it is awaiting a reply, a DM ended its wait, or it queued a private reply and
   // is no longer delivering: only a reply wait may follow a message, and a run that queued one without a wait
   // stays delivering. A wait leaves no step until it resumes, and a cancel at reply or timeout records none.
+  // A first message counts as read only when a stored read names its exact message ID on the same connection (#312);
+  // EXISTS keeps several readers of one message to one run, and no later message's read marks it. A sent first message
+  // without a read on a connection with no Instagram Login user ID (Facebook Login or environment-managed) counts as
+  // read_unavailable: that connection cannot report reads. The joins already tie reply and dm to r.connection_id.
   const row = (
     await pool.query<ReportRow>(
       `WITH context AS (
@@ -92,7 +99,11 @@ export async function flowRunReport(pool: Pool, user: User, query: URLSearchPara
            WHEN 'connection' THEN r.connection_id::text WHEN 'flow' THEN r.flow_id::text END AS group_key,
          r.status, coalesce(reply.status,dm.status) AS delivery, reply.id IS NULL AND dm.id IS NULL AS absent,
          r.status='awaiting_reply' OR r.reply_message_id IS NOT NULL OR (reply.id IS NOT NULL AND r.status<>'delivering') AS reached,
-         r.reply_message_id IS NOT NULL AS replied
+         r.reply_message_id IS NOT NULL AS replied,
+         seen.confirmed AS read_confirmed,
+         coalesce(reply.status,dm.status)='sent' AND seen.confirmed IS NOT TRUE
+           AND EXISTS(SELECT 1 FROM instagram_connections c
+             WHERE c.id=r.connection_id AND c.workspace_id=r.workspace_id AND c.instagram_user_id IS NULL) AS read_unavailable
        FROM context JOIN flow_runs r ON r.workspace_id=$1 AND (r.connection_id=$5 OR $5::uuid IS NULL)
          AND (r.flow_id=$7 OR $7::uuid IS NULL)
          AND r.created_at>=context.period_from AND r.created_at<context.period_before
@@ -100,6 +111,10 @@ export async function flowRunReport(pool: Pool, user: User, query: URLSearchPara
          ON reply.flow_run_id=r.id AND reply.workspace_id=r.workspace_id AND reply.connection_id=r.connection_id
        LEFT JOIN flow_dm_deliveries dm
          ON dm.flow_run_id=r.id AND dm.workspace_id=r.workspace_id AND dm.connection_id=r.connection_id
+       CROSS JOIN LATERAL (SELECT (reply.status='sent' AND EXISTS(SELECT 1 FROM instagram_message_reads mr
+             WHERE mr.connection_id=reply.connection_id AND mr.message_id=reply.provider_message_id))
+           OR (dm.status='sent' AND EXISTS(SELECT 1 FROM instagram_message_reads mr
+             WHERE mr.connection_id=dm.connection_id AND mr.message_id=dm.provider_message_id)) AS confirmed) seen
        WHERE context.connection_exists AND context.flow_exists AND context.time_zone=$4
      )
      SELECT context.*,totals.run_counts,totals.reply_counts,totals.reply_wait_counts,
