@@ -70,6 +70,7 @@ function harness(clock?: string) {
           }
         : Intl,
   });
+  vm.runInContext(readFileSync(new URL("../../public/app/send-status-labels.js", import.meta.url), "utf8"), context);
   vm.runInContext(readFileSync(new URL("../../public/app/manual-reply-reports.js", import.meta.url), "utf8"), context);
   const controller = context.createManualReplyReports({
     node: (_tag: string, text = "") => ({ ...element(), textContent: text }),

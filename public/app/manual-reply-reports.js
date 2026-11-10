@@ -8,15 +8,14 @@ function createManualReplyReports({ api, node }) {
   const submit = form.querySelector("button[type=submit]");
   const metrics = [
     ["total", "접수 요청 합계"],
-    ["pending", "대기 중"],
-    ["sending", "발송 처리 중"],
-    ["sent", "Meta 접수"],
+    ...sendStatusEntries(["pending", "sending", "sent"]),
     ["read", "읽음 확인"],
     ["read_unavailable", "읽음 확인 불가"],
-    ["failed", "실패·정책 거부"],
-    ["unknown_unresolved", "결과 미확인"],
-    ["unknown_resolved", "미확인·정리 완료"],
-    ["cancelled", "예약 취소"],
+    // Manual replies have no blocked status: a policy refusal is stored as failed.
+    ["failed", `${sendStatusLabel("failed")}·정책 거부`],
+    ["unknown_unresolved", sendStatusLabel("unknown")],
+    ["unknown_resolved", "검토 완료·재전송 안 함"],
+    ["cancelled", sendStatusLabel("cancelled")],
   ];
   let generation = 0;
   let timeZone;

@@ -1110,13 +1110,22 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       (state.scheduleEnabled && !state.scheduleLocal);
     byId("inbox-send").textContent =
       state.busy && state.operation?.kind === "create"
-        ? "접수 중…"
+        ? state.operation.body.schedule_local
+          ? "예약 접수 중…"
+          : "보내기 요청 중…"
         : state.scheduleEnabled
           ? "시각 지정 예약"
           : "지금 보내기";
     byId("inbox-composer").setAttribute("aria-busy", String(state.busy));
+    byId("inbox-reply-help").textContent =
+      `Enter로 줄바꿈 · Ctrl/⌘ + Enter로 ${state.scheduleEnabled ? "예약" : "보내기"}`;
     byId("inbox-reply-status").textContent =
-      state.notice || (state.draft ? "작성 중 · 초안은 이 대화에 보관됩니다." : "문구를 작성한 뒤 답장을 예약하세요.");
+      state.notice ||
+      (state.draft
+        ? "작성 중 · 초안은 이 대화에 보관됩니다."
+        : state.scheduleEnabled
+          ? "문구를 작성하고 보낼 시각을 정한 뒤 예약하세요."
+          : "문구를 작성한 뒤 지금 보내기를 누르세요.");
     const check = byId("inbox-request-check");
     check.hidden = !state.operation || state.busy;
     check.textContent = "같은 요청의 접수 확인";
@@ -1124,7 +1133,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     byId("inbox-eligibility").textContent = !status
       ? "답장 가능 상태를 확인해 주세요."
       : status.blocked_by_unknown
-        ? "확인 필요 메시지가 있습니다. Instagram에서 결과를 확인하고 해결 기록을 남겨 주세요."
+        ? "‘결과 확인 필요’ 메시지가 있습니다. Instagram에서 결과를 확인하고 해결 기록을 남겨 주세요."
         : support === null
           ? "지원하는 답장 형식을 확인할 수 없습니다. 대화를 새로고침해 주세요."
           : !support
@@ -1162,18 +1171,12 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   function replyCard(state, reply) {
     const item = node("article", "", "inbox-message outgoing-message");
     item.dataset.replyId = reply.id;
-    const labels = {
-      pending: reply.scheduled_at ? "예약 대기" : "발송 대기",
-      sending: "발송 중",
-      sent: "발송 완료",
-      failed: "발송 거부",
-      unknown: "확인 필요",
-      cancelled: "예약 취소",
-    };
     const label =
       reply.status === "unknown" && reply.resolved_at
         ? "검토 완료 · 재전송 안 함"
-        : labels[reply.status] || "상태 확인 필요";
+        : reply.status === "pending" && reply.scheduled_at
+          ? "예약 대기"
+          : sendStatusLabel(reply.status);
     item.append(
       node("p", reply.text, "bubble outgoing"),
       node(
@@ -1261,10 +1264,10 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         queued: "예약 접수",
         retry_requested: "재예약 접수",
         sending: "발송 시작",
-        sent: "발송 완료",
+        sent: sendStatusLabel("sent"),
         failed: "미발송 실패",
         deferred: "검사 지연",
-        unknown: "결과 확인 필요",
+        unknown: sendStatusLabel("unknown"),
         no_retry: "재전송 없이 검토 완료",
         rescheduled: "예약 수정",
         cancelled: "예약 취소",
@@ -1525,7 +1528,9 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
               ? "검토 결과를 기록했습니다. 메시지는 다시 보내지 않습니다."
               : operation.kind === "handoff"
                 ? "상담 상태를 변경했습니다."
-                : "예약을 접수했습니다. 발송 완료는 이력에서 확인해 주세요.";
+                : operation.kind === "create" && !operation.body.schedule_local
+                  ? "보내기를 요청했습니다. Meta 접수 여부는 이력에서 확인해 주세요."
+                  : "예약을 접수했습니다. 처리 결과는 이력에서 확인해 주세요.";
     } catch (error) {
       if (epoch !== session) return;
       if (error.status >= 400 && error.status < 500) {

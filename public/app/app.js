@@ -1056,7 +1056,7 @@ function timeZoneControls() {
 const operationAlertLabels = {
   oldest_pending: (limits) => `발송 대기 ${limits.oldest_pending_minutes}분 초과`,
   sending_dwell: (limits) => `발송 처리 ${limits.sending_dwell_minutes}분 초과`,
-  unknown_outcome: () => "결과 미확인 발송 있음",
+  unknown_outcome: () => "결과 확인이 필요한 발송 있음",
   token_expiring: (limits) => `토큰 만료 ${limits.token_expiry_days}일 이내`,
   cron_stale: (limits) => `정기 작업이 ${limits.cron_stale_minutes}분 넘게 성공하지 않음`,
 };
@@ -1104,7 +1104,7 @@ async function loadOperations() {
               ),
               node(
                 "p",
-                `최근 24시간: 결과 미확인 ${connection.unknown_24h}건 · 실패 ${connection.failed_24h}건 · 차단 ${connection.blocked_24h}건`,
+                `최근 24시간: 결과 확인 필요 ${connection.unknown_24h}건 · 실패 ${connection.failed_24h}건 · 차단 ${connection.blocked_24h}건`,
                 "hint",
               ),
               node(
@@ -2358,13 +2358,8 @@ async function loadActivity() {
   }
   if (generation !== segmentsGeneration || request !== activityRequest) return;
   const labels = {
-    pending: "대기",
+    ...sendStatusLabels,
     waiting: "응답 대기",
-    sending: "발송 중",
-    sent: "발송 완료",
-    blocked: "조건 미충족",
-    failed: "발송 거절",
-    unknown: "결과 불명확",
     following: "팔로우 확인",
     not_following: "미팔로우 확인",
   };
