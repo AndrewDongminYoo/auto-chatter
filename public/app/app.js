@@ -674,6 +674,7 @@ async function action(button, task) {
   const controls = [...new Set([button, ...relatedControls])];
   const original = controls.map((control) => [control, control.disabled]);
   const label = button.textContent;
+  const restoreFocus = holdFocus();
   for (const control of controls) control.disabled = true;
   button.textContent = button.dataset.loadingLabel ?? "처리 중…";
   button.setAttribute("aria-busy", "true");
@@ -686,6 +687,7 @@ async function action(button, task) {
     button.textContent = label;
     button.removeAttribute("aria-busy");
     byId("save-rule").disabled = connections.length === 0;
+    restoreFocus();
   }
 }
 
