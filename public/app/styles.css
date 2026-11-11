@@ -183,7 +183,7 @@ p {
 .hint {
   color: var(--muted-foreground);
   font-size: var(--font-size-help);
-  line-height: 1.65;
+  line-height: var(--line-height-help);
   margin: var(--space-2) 0 0;
 }
 .section-heading {
@@ -516,7 +516,6 @@ body:has(#workspace:not([hidden]))::before {
   width: 100%;
 }
 .connection-data summary {
-  cursor: pointer;
   min-height: 44px;
   padding: var(--space-2) 0;
   color: var(--primary);
@@ -674,7 +673,7 @@ body:has(#workspace:not([hidden]))::before {
   -webkit-box-orient: vertical;
   overflow: hidden;
   font-size: var(--font-size-caption);
-  line-height: 1.5;
+  line-height: var(--line-height-caption);
 }
 .media-copy span,
 .rule-target > span {
@@ -769,7 +768,7 @@ textarea {
 }
 textarea {
   resize: vertical;
-  line-height: 1.6;
+  line-height: var(--line-height-body);
 }
 input::placeholder,
 textarea::placeholder {
@@ -1241,9 +1240,6 @@ select:disabled {
   width: 100%;
   min-width: 0;
 }
-.reply-decision summary {
-  cursor: pointer;
-}
 .reply-decision[open] summary {
   margin-bottom: var(--space-3);
 }
@@ -1271,7 +1267,7 @@ select:disabled {
   padding: var(--space-3);
   border-radius: var(--radius-lg);
   font-size: var(--font-size-body);
-  line-height: 1.6;
+  line-height: var(--line-height-body);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: normal;
@@ -1570,7 +1566,6 @@ section {
   margin-bottom: var(--space-5);
 }
 .segment-save summary {
-  cursor: pointer;
   min-height: 44px;
   padding: var(--space-2) 0;
   color: var(--primary);
@@ -1615,7 +1610,6 @@ section {
   overflow-wrap: anywhere;
 }
 .contact-row summary {
-  cursor: pointer;
   min-height: 44px;
   padding: var(--space-2) 0;
   color: var(--primary);
@@ -1820,7 +1814,6 @@ section {
   color: var(--primary);
 }
 .flow-step-menu summary {
-  cursor: pointer;
   min-height: 44px;
   padding: var(--space-3) 0 0;
 }
@@ -1974,7 +1967,6 @@ section {
 }
 
 #contacts-export-format summary {
-  cursor: pointer;
   min-height: 44px;
   padding: var(--space-2) 0;
   color: var(--primary);
@@ -1987,7 +1979,6 @@ section {
   border-radius: var(--radius);
 }
 .template-panel summary {
-  cursor: pointer;
   font-weight: 600;
 }
 .template-values,
