@@ -1549,6 +1549,14 @@ function resetMedia() {
   byId("selected-media").replaceChildren();
   byId("selected-media").hidden = true;
   byId("media-status").textContent = "";
+  collapseMediaList(false);
+}
+// After a new rule's post is chosen, the post list folds behind "게시물 변경" so the conditions and messages move up.
+function collapseMediaList(collapsed) {
+  byId("media-list").hidden = collapsed;
+  if (collapsed) byId("media-more").hidden = true;
+  else byId("media-more").hidden = !mediaAfter;
+  byId("media-change").hidden = !collapsed;
 }
 async function getMedia(connectionId, mediaId, force = false) {
   const key = mediaKey(connectionId, mediaId);
@@ -1626,13 +1634,16 @@ async function loadMedia(more = false, force = false) {
         form.elements.media_id.value = media.id;
         for (const option of byId("media-list").children) option.setAttribute("aria-pressed", String(option === button));
         showSelected(media);
+        collapseMediaList(true);
+        byId("media-change").focus();
         byId("media-status").textContent = "게시물을 선택했습니다. 댓글 조건과 메시지를 작성하세요.";
         markDirty();
       });
       byId("media-list").append(button);
     }
     mediaAfter = page.after;
-    byId("media-more").hidden = !mediaAfter;
+    // A post picked while this page loaded has already folded the list; keep its "more" button folded with it.
+    byId("media-more").hidden = !mediaAfter || byId("media-list").hidden;
     byId("media-status").textContent = byId("media-list").children.length
       ? "답장할 게시물을 선택하세요. 오래된 게시물은 더 불러올 수 있습니다."
       : mediaAfter
@@ -1666,6 +1677,11 @@ byId("media-reload").addEventListener("click", () => {
   void loadMedia(false, true);
 });
 byId("media-more").addEventListener("click", () => void loadMedia(true));
+byId("media-change").addEventListener("click", () => {
+  collapseMediaList(false);
+  const options = [...byId("media-list").children];
+  (options.find((option) => option.getAttribute("aria-pressed") === "true") ?? options[0])?.focus();
+});
 
 byId("login-form").addEventListener("submit", (event) => {
   event.preventDefault();
