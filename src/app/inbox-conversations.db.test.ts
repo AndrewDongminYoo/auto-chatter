@@ -543,7 +543,7 @@ test("a DM stored while the first close of a conversation is uncommitted reopens
 // took a higher ID and committed before a lower one would let a read mark on it count the lower one as read.
 test("a DM of one conversation waits for an uncommitted earlier DM, so a read mark never skips it", async () => {
   const held = ingestHeld([message("456", "earlier")], (text) => text === "COMMIT");
-  let waited = false;
+  let waited: boolean;
   let later: Promise<void> | undefined;
   try {
     await Promise.race([held.atPause, held.done.then(() => assert.fail("the earlier DM committed without reaching COMMIT"))]);

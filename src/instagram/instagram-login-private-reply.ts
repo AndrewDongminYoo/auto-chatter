@@ -67,6 +67,7 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
       });
     } catch (error) {
       if (error instanceof PreSendVerificationError) throw error;
+      // eslint-disable-next-line preserve-caught-error -- only fixed Meta Graph messages leave the transport, so the fetch error is not attached
       throw new Error("Meta Graph request failed");
     }
     if (response.status >= 500) throw new Error(`Meta Graph HTTP ${response.status}`);

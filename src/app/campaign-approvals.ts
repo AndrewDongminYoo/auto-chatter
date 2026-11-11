@@ -55,6 +55,7 @@ const COLUMNS = `a.id,a.draft_id,a.draft_version,a.snapshot_id,a.name,a.schedule
   (SELECT r.status FROM campaign_runs r WHERE r.workspace_id=a.workspace_id AND r.approval_id=a.id) AS run_status,
   (SELECT r.start_counts ? 'plan_limit_exceeded' FROM campaign_runs r WHERE r.workspace_id=a.workspace_id
     AND r.approval_id=a.id) AS run_limited`;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- pg rows are untyped; this spreads every COLUMNS field into the response
 function shape(row: Record<string, any>) {
   const { preview_as_of, preview_counts, body, ...rest } = row;
   return {

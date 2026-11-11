@@ -501,7 +501,7 @@ test("account text markers cover hidden and full-width formula prefixes while sa
     assert.equal(decodeContactScalar(contactCsvScalar(value)), value);
   }
   assert.equal(contactCsvScalar(null), "");
-  for (const value of ["shop", "한글상점", " normal-name", 'safe,\";=next', "name\nline"]) assert.equal(contactCsvScalar(value), value);
+  for (const value of ["shop", "한글상점", " normal-name", 'safe,";=next', "name\nline"]) assert.equal(contactCsvScalar(value), value);
 });
 
 test("JSON cells retain typed zero false empty strings and quoted injection-like nested values", () => {

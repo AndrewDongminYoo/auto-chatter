@@ -44,6 +44,7 @@ function present(row: TemplateRow) {
 
 function parse(input: unknown, editing = false) {
   const allowed = ["name", "body", ...(editing ? ["expected_version"] : [])];
+  // eslint-disable-next-line no-control-regex -- template names must not contain control characters
   if (!isRecord(input) || Object.keys(input).some((key) => !allowed.includes(key)) || typeof input.name !== "string" || /[\u0000-\u001f\u007f]/.test(input.name)) throw new ApiError(400, "invalid_reply_template");
   const name = input.name.normalize("NFC").trim();
   if (!name || [...name].length > 60) throw new ApiError(400, "invalid_reply_template");

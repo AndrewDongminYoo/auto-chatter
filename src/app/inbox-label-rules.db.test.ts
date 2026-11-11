@@ -524,7 +524,7 @@ test("several matching rules write one version and one audit row naming the firs
   const ruleA = await rule(a, ["환불"]);
   const ruleB = await rule(b, ["환불"]);
   const ruleB2 = await rule(b, ["환불"]);
-  const ruleC = await rule(c, ["환불"]);
+  await rule(c, ["환불"]);
   assert.notEqual(ruleB2.id, ruleB.id);
   await ingestMessages(pool, [dm("456", "환불")]);
   assert.deepEqual(await events("456"), [{ recipient_id: "456", version: 1, added: [a, b, c], removed: [], actor_id: null, rule_id: ruleA.id }]);
