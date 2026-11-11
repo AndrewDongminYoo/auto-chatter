@@ -938,6 +938,16 @@ select:disabled {
 #inbox-conversations .conversation-line {
   display: block;
 }
+#inbox-conversations .conversation-snippet {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+}
+#inbox-conversations .conversation-id {
+  color: var(--muted-foreground);
+  font-size: var(--font-size-caption);
+}
 #inbox-conversations .conversation-head {
   display: flex;
   justify-content: space-between;

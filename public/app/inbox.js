@@ -137,7 +137,14 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     const head = node("span", "", "conversation-head");
     head.append(node("span", `@${row.username || "연결 계정"}`));
     if (row.unread_count > 0) head.append(node("span", `안 읽음 ${row.unread_count}`, "unread-badge"));
-    button.replaceChildren(head, node("span", `DM 사용자 ${row.recipient_id}`, "conversation-line"), node("span", `${row.message_count}개 · ${date(row.last_message_at)}`, "conversation-line"), node("span", summary(row.state), "conversation-line"));
+    // The newest DM leads so the list says what to answer first; the numeric DM user ID stays as a secondary line.
+    button.replaceChildren(
+      head,
+      node("span", row.last_message_preview ?? "", "conversation-line conversation-snippet"),
+      node("span", `DM 사용자 ${row.recipient_id}`, "conversation-line conversation-id"),
+      node("span", `${row.message_count}개 · ${date(row.last_message_at)}`, "conversation-line"),
+      node("span", summary(row.state), "conversation-line"),
+    );
     const chips = node("span", "", "label-chips");
     if (row.reminder) {
       const due = isDue(row.reminder);
