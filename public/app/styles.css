@@ -757,7 +757,7 @@ select,
 textarea {
   width: 100%;
   display: block;
-  padding: var(--space-3) var(--space-3);
+  padding: var(--space-2) var(--space-3);
   margin-top: var(--space-2);
   min-height: 44px;
   border: 1px solid var(--input);
@@ -765,6 +765,12 @@ textarea {
   color: var(--foreground);
   font-size: var(--font-size-body);
   font-weight: 400;
+}
+/* Single-line controls match the 44px buttons beside them, so a row of inputs, selects and buttons lines up at the
+   top as well as the bottom. Date and time inputs otherwise grow with their native picker parts. */
+input:not([type="checkbox"], [type="radio"], [type="file"]),
+select {
+  height: 44px;
 }
 textarea {
   resize: vertical;
