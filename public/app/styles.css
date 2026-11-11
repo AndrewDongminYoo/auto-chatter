@@ -2038,10 +2038,14 @@ section {
   overflow-wrap: anywhere;
 }
 
-#contacts-export-format summary {
+#contacts-export-format summary,
+.contacts-filter-help summary {
   min-height: 44px;
   padding: var(--space-2) 0;
   color: var(--primary);
+}
+.contacts-filter-help {
+  margin-bottom: var(--space-3);
 }
 
 .template-panel {
