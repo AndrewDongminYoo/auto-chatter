@@ -183,7 +183,7 @@ p {
 .hint {
   color: var(--muted-foreground);
   font-size: var(--font-size-help);
-  line-height: 1.65;
+  line-height: var(--line-height-help);
   margin: var(--space-2) 0 0;
 }
 .section-heading {
@@ -674,7 +674,7 @@ body:has(#workspace:not([hidden]))::before {
   -webkit-box-orient: vertical;
   overflow: hidden;
   font-size: var(--font-size-caption);
-  line-height: 1.5;
+  line-height: var(--line-height-caption);
 }
 .media-copy span,
 .rule-target > span {
@@ -769,7 +769,7 @@ textarea {
 }
 textarea {
   resize: vertical;
-  line-height: 1.6;
+  line-height: var(--line-height-body);
 }
 input::placeholder,
 textarea::placeholder {
@@ -1271,7 +1271,7 @@ select:disabled {
   padding: var(--space-3);
   border-radius: var(--radius-lg);
   font-size: var(--font-size-body);
-  line-height: 1.6;
+  line-height: var(--line-height-body);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: normal;

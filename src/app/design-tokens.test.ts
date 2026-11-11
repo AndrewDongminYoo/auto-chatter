@@ -141,6 +141,28 @@ test("every font size in styles.css uses a declared font-size token", () => {
   assert.deepEqual(failures, [], `font-size failures:\n${failures.join("\n")}`);
 });
 
+// Line heights pair with the font-size tokens, so a literal line height cannot drift back in either.
+test("every line height in styles.css uses a declared line-height token", () => {
+  const styles = readFileSync(new URL("../../public/app/styles.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const declared = new Set([...tokensCss.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/(--line-height-[a-z0-9-]+)\s*:/g)].map((match) => match[1]));
+  const failures: string[] = [];
+  const heights = [...styles.matchAll(/(?<![-\w])line-height\s*:\s*([^;}]+)/g)].map((match) => match[1].trim());
+  assert.ok(heights.length > 0, "styles.css must declare line heights for this check to read");
+  for (const value of heights) {
+    if (!["inherit", "normal"].includes(value) && !/^var\(--line-height-[a-z0-9-]+\)$/.test(value)) {
+      failures.push(`line-height: ${value} is not a var(--line-height-…) token`);
+    }
+  }
+  // The font shorthand's line height follows the slash.
+  for (const match of styles.matchAll(/(?<![-\w])font\s*:\s*[^;}/]+\/\s*([^\s;}]+)/g)) {
+    if (!/^var\(--line-height-[a-z0-9-]+\)$/.test(match[1])) failures.push(`font shorthand line height ${match[1]} is not a var(--line-height-…) token`);
+  }
+  for (const match of styles.matchAll(/var\((--line-height-[a-z0-9-]+)\)/g)) {
+    if (!declared.has(match[1])) failures.push(`${match[1]} is not declared in tokens.css`);
+  }
+  assert.deepEqual(failures, [], `line-height failures:\n${failures.join("\n")}`);
+});
+
 const stylesWithoutComments = readFileSync(new URL("../../public/app/styles.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
 interface Declaration {
