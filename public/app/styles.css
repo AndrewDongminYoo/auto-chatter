@@ -781,6 +781,23 @@ select:disabled {
   background: var(--background);
   color: var(--muted-foreground);
 }
+/* The native control drew its own arrow and, in Safari, ignored the padding, so selects did not match the inputs
+   beside them. The chevron is two gradients in the muted token, so it follows the theme. The more specific
+   select:disabled rule above resets the background, so a disabled select shows no chevron. */
+select {
+  appearance: none;
+  padding-right: var(--space-8);
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%), linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) 50%,
+    calc(100% - 13px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+select:disabled {
+  cursor: not-allowed;
+}
 .optional {
   color: var(--muted-foreground);
   font-size: var(--font-size-caption);
@@ -2021,10 +2038,14 @@ section {
   overflow-wrap: anywhere;
 }
 
-#contacts-export-format summary {
+#contacts-export-format summary,
+.contacts-filter-help summary {
   min-height: 44px;
   padding: var(--space-2) 0;
   color: var(--primary);
+}
+.contacts-filter-help {
+  margin-bottom: var(--space-3);
 }
 
 .template-panel {
