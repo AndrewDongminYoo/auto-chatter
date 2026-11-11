@@ -516,7 +516,6 @@ body:has(#workspace:not([hidden]))::before {
   width: 100%;
 }
 .connection-data summary {
-  cursor: pointer;
   min-height: 44px;
   padding: var(--space-2) 0;
   color: var(--primary);
@@ -1241,9 +1240,6 @@ select:disabled {
   width: 100%;
   min-width: 0;
 }
-.reply-decision summary {
-  cursor: pointer;
-}
 .reply-decision[open] summary {
   margin-bottom: var(--space-3);
 }
@@ -1570,7 +1566,6 @@ section {
   margin-bottom: var(--space-5);
 }
 .segment-save summary {
-  cursor: pointer;
   min-height: 44px;
   padding: var(--space-2) 0;
   color: var(--primary);
@@ -1615,7 +1610,6 @@ section {
   overflow-wrap: anywhere;
 }
 .contact-row summary {
-  cursor: pointer;
   min-height: 44px;
   padding: var(--space-2) 0;
   color: var(--primary);
@@ -1820,7 +1814,6 @@ section {
   color: var(--primary);
 }
 .flow-step-menu summary {
-  cursor: pointer;
   min-height: 44px;
   padding: var(--space-3) 0 0;
 }
@@ -1974,7 +1967,6 @@ section {
 }
 
 #contacts-export-format summary {
-  cursor: pointer;
   min-height: 44px;
   padding: var(--space-2) 0;
   color: var(--primary);
@@ -1987,7 +1979,6 @@ section {
   border-radius: var(--radius);
 }
 .template-panel summary {
-  cursor: pointer;
   font-weight: 600;
 }
 .template-values,
