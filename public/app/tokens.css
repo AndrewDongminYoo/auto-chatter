@@ -2,6 +2,8 @@
  * Dashboard design tokens. docs/specs/2026-11-11-dashboard-design-tokens.md owns every value and the contrast table.
  * The slate, red, amber, green, blue and jade color values are copied from @radix-ui/colors 3.0.0 (the sRGB blocks).
  * --primary, --primary-foreground (dark), --ring and --primary-hover-overlay are brand values, not Radix values.
+ * The dark --foreground and --muted-foreground are adjusted values between Radix steps (the spec's dark-mode hierarchy
+ * section says why).
  *
  * MIT License
  *
@@ -88,13 +90,13 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #111113;
-    --card: #18191b;
-    --muted: #272a2d;
-    --foreground: #edeef0;
-    --muted-foreground: #b0b4ba;
-    --border: #363a3f;
+    --card: #212225;
+    --muted: #2e3135;
+    --foreground: #e2e4e7;
+    --muted-foreground: #9399a1;
+    --border: #43484e;
     --input: #777b84;
-    --primary: #b3cceb;
+    --primary: #8ea6c6;
     --primary-foreground: #122d50;
     --ring: #b3cceb;
     --accent: #0b3b2c;
