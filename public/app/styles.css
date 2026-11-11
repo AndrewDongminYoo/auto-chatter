@@ -757,7 +757,7 @@ select,
 textarea {
   width: 100%;
   display: block;
-  padding: var(--space-3) var(--space-3);
+  padding: var(--space-2) var(--space-3);
   margin-top: var(--space-2);
   min-height: 44px;
   border: 1px solid var(--input);
@@ -765,6 +765,12 @@ textarea {
   color: var(--foreground);
   font-size: var(--font-size-body);
   font-weight: 400;
+}
+/* Single-line controls match the 44px buttons beside them, so a row of inputs, selects and buttons lines up at the
+   top as well as the bottom. Date and time inputs otherwise grow with their native picker parts. */
+input:not([type="checkbox"], [type="radio"], [type="file"]),
+select {
+  height: 44px;
 }
 textarea {
   resize: vertical;
@@ -2258,4 +2264,50 @@ section {
 }
 .campaign-approval-confirm h6 {
   margin-top: 0;
+}
+/* Dark mode separates elements with surfaces, not lines: the page is the darkest layer, each section is a raised
+   card, controls sit in a darker inset fill, and decorative borders recede. Light mode is unchanged. */
+@media (prefers-color-scheme: dark) {
+  body:has(#workspace:not([hidden])) {
+    background: var(--background);
+  }
+  body:has(#workspace:not([hidden]))::before {
+    border-right-color: transparent;
+  }
+  #workspace .card {
+    background: var(--card);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
+    margin-bottom: var(--space-4);
+  }
+  #workspace .columns {
+    border-top: 0;
+    gap: var(--space-4);
+  }
+  #workspace .columns .card {
+    padding: var(--space-4);
+  }
+  input,
+  select,
+  textarea {
+    background-color: var(--background);
+    border-color: var(--border);
+  }
+  input:hover:not(:disabled),
+  select:hover:not(:disabled),
+  textarea:hover:not(:disabled) {
+    border-color: var(--input);
+  }
+  button.secondary {
+    background: var(--muted);
+    border-color: transparent;
+  }
+  button.secondary:hover:not(:disabled) {
+    background: var(--muted);
+    box-shadow: inset 0 0 0 100px var(--primary-hover-overlay);
+  }
+  .bubble.incoming {
+    background: var(--muted);
+    border-color: transparent;
+  }
 }

@@ -2,6 +2,9 @@
  * Dashboard design tokens. docs/specs/2026-11-11-dashboard-design-tokens.md owns every value and the contrast table.
  * The slate, red, amber, green, blue and jade color values are copied from @radix-ui/colors 3.0.0 (the sRGB blocks).
  * --primary, --primary-foreground (dark), --ring and --primary-hover-overlay are brand values, not Radix values.
+ * In dark mode, --foreground, --muted-foreground, --border, --accent-foreground and the status text colors are adjusted
+ * values between Radix steps, and --destructive-background is darker than red-3 (the spec's dark-mode hierarchy section
+ * says why).
  *
  * MIT License
  *
@@ -88,28 +91,28 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #111113;
-    --card: #18191b;
-    --muted: #272a2d;
-    --foreground: #edeef0;
-    --muted-foreground: #b0b4ba;
-    --border: #363a3f;
+    --card: #212225;
+    --muted: #2e3135;
+    --foreground: #e2e4e7;
+    --muted-foreground: #9399a1;
+    --border: #2b2d31;
     --input: #777b84;
-    --primary: #b3cceb;
+    --primary: #8ea6c6;
     --primary-foreground: #122d50;
     --ring: #b3cceb;
     --accent: #0b3b2c;
-    --accent-foreground: #1fd8a4;
+    --accent-foreground: #8cc9b2;
 
-    --destructive: #ff9592;
-    --destructive-background: #3b1219;
+    --destructive: #f08a84;
+    --destructive-background: #500f1c;
     --destructive-border: #8c333a;
-    --warning: #ffca16;
+    --warning: #c9a961;
     --warning-background: #302008;
     --warning-border: #714f19;
-    --success: #3dd68c;
+    --success: #76b994;
     --success-background: #132d21;
     --success-border: #28684a;
-    --info: #70b8ff;
+    --info: #84abd4;
     --info-background: #0d2847;
     --info-border: #205d9e;
   }
