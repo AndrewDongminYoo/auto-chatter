@@ -4,13 +4,7 @@ import { appApi } from "./api.ts";
 import type { Pool } from "pg";
 import { sealSecret } from "./secrets.ts";
 import { ApiError } from "./auth.ts";
-import {
-  CONDITION_TREE_LEAF_LIMIT,
-  createContactSegment,
-  parseSegmentDefinition,
-  SEGMENT_REQUEST_BYTES,
-  updateContactSegment,
-} from "./contacts.ts";
+import { CONDITION_TREE_LEAF_LIMIT, createContactSegment, parseSegmentDefinition, SEGMENT_REQUEST_BYTES, updateContactSegment } from "./contacts.ts";
 import { createSegmentSnapshot, parseSnapshotRequest, SEGMENT_SNAPSHOT_LIMITS } from "./segment-snapshots.ts";
 const config = {
   SUPABASE_URL: "https://project.supabase.co",
@@ -52,11 +46,7 @@ const post = {
 function mediaPool(owned = true) {
   return {
     query: async (sql: string) => ({
-      rows: sql.includes("workspace_members")
-        ? [{ workspace_id: workspaceId, role: "owner" }]
-        : owned
-          ? [connection]
-          : [],
+      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : owned ? [connection] : [],
     }),
     end: async () => {},
   } as unknown as Pool;
@@ -69,8 +59,7 @@ function mediaFetch(
 ) {
   return (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input));
-    if (url.hostname === "project.supabase.co")
-      return Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" });
+    if (url.hostname === "project.supabase.co") return Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" });
     assert.equal(url.hostname, "graph.instagram.com");
     assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer server-token");
     assert.equal(url.searchParams.has("access_token"), false);
@@ -84,29 +73,18 @@ const mediaRequest = (suffix = "") =>
   });
 
 test("Instagram review gate blocks public OAuth before database access and reports its reason", async () => {
-  const fetchImpl = (async () =>
-    Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
+  const fetchImpl = (async () => Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
   const noPool = () => {
     throw new Error("review-blocked OAuth must not open the database");
   };
-  const me = await appApi(
-    new Request("https://app.test/api/me", { headers: { cookie: "__Host-ac-access=test-session" } }),
-    config,
-    noPool,
-    fetchImpl,
-  );
+  const me = await appApi(new Request("https://app.test/api/me", { headers: { cookie: "__Host-ac-access=test-session" } }), config, noPool, fetchImpl);
   assert.equal(me.status, 200);
   assert.deepEqual(await me.json(), {
     user: { id: userId, email: "a@example.test" },
     global_send_enabled: false,
     instagram_connect_available: false,
   });
-  const emptyEmail = await appApi(
-    new Request("https://app.test/api/me", { headers: { cookie: "__Host-ac-access=test-session" } }),
-    config,
-    noPool,
-    (async () => Response.json({ id: userId, email: "", email_confirmed_at: "2026-09-25" })) as typeof fetch,
-  );
+  const emptyEmail = await appApi(new Request("https://app.test/api/me", { headers: { cookie: "__Host-ac-access=test-session" } }), config, noPool, (async () => Response.json({ id: userId, email: "", email_confirmed_at: "2026-09-25" })) as typeof fetch);
   assert.equal((await emptyEmail.json()).instagram_connect_available, false);
   for (const [method, path] of [
     ["POST", "/api/instagram/connect"],
@@ -130,8 +108,7 @@ test("Instagram review gate blocks public OAuth before database access and repor
 });
 
 test("Instagram review allowlist and explicit public switch permit OAuth", async () => {
-  const fetchImpl = (async () =>
-    Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
+  const fetchImpl = (async () => Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
   const query = async (sql: string) => ({
     rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : [],
   });
@@ -154,27 +131,18 @@ test("Instagram review allowlist and explicit public switch permit OAuth", async
     TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
     META_GRAPH_VERSION: "v26.0",
   };
-  for (const access of [
-    { INSTAGRAM_INTERNAL_EMAILS: "other@example.test, A@EXAMPLE.TEST " },
-    { INSTAGRAM_PUBLIC_CONNECT_ENABLED: "true" },
-  ]) {
+  for (const access of [{ INSTAGRAM_INTERNAL_EMAILS: "other@example.test, A@EXAMPLE.TEST " }, { INSTAGRAM_PUBLIC_CONNECT_ENABLED: "true" }]) {
     const response = await appApi(request(), { ...oauth, ...access }, () => pool, fetchImpl);
     assert.equal(response.status, 200);
     const result = (await response.json()) as { url: string };
     assert.equal(new URL(result.url).hostname, "www.instagram.com");
   }
-  const disabled = await appApi(
-    request(),
-    { ...oauth, INSTAGRAM_PUBLIC_CONNECT_ENABLED: "TRUE" },
-    () => pool,
-    fetchImpl,
-  );
+  const disabled = await appApi(request(), { ...oauth, INSTAGRAM_PUBLIC_CONNECT_ENABLED: "TRUE" }, () => pool, fetchImpl);
   assert.equal(disabled.status, 403);
 });
 
 test("an agent cannot start an Instagram connection", async () => {
-  const fetchImpl = (async () =>
-    Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
+  const fetchImpl = (async () => Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
   const pool = {
     query: async (sql: string) => ({
       rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "agent" }] : [],
@@ -203,17 +171,10 @@ test("an agent cannot start an Instagram connection", async () => {
 });
 
 test("a denied Instagram callback returns to the app with a bounded reason", async () => {
-  const fetchImpl = (async (input: string | URL | Request) =>
-    Response.json(
-      String(input).includes("api.instagram.com")
-        ? { access_token: "synthetic-token", permissions: [] }
-        : { id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" },
-    )) as typeof fetch;
+  const fetchImpl = (async (input: string | URL | Request) => Response.json(String(input).includes("api.instagram.com") ? { access_token: "synthetic-token", permissions: [] } : { id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
   const pool = {
     query: async (sql: string) => ({
-      rows: sql.includes("workspace_members")
-        ? [{ workspace_id: workspaceId, role: "owner" }]
-        : [{ state_hash: "consumed" }],
+      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : [{ state_hash: "consumed" }],
       rowCount: 1,
     }),
     end: async () => {},
@@ -248,10 +209,7 @@ test("a denied Instagram callback returns to the app with a bounded reason", asy
     fetchImpl,
   );
   assert.equal(missingPermissions.status, 303);
-  assert.equal(
-    missingPermissions.headers.get("Location"),
-    "https://app.test/app/?instagram=instagram_permissions_required",
-  );
+  assert.equal(missingPermissions.headers.get("Location"), "https://app.test/app/?instagram=instagram_permissions_required");
   const invalidState = await appApi(
     new Request("https://app.test/api/instagram/callback?error=access_denied", {
       headers: { cookie: "__Host-ac-access=test-session" },
@@ -266,17 +224,12 @@ test("a denied Instagram callback returns to the app with a bounded reason", asy
 
 test("an Instagram callback provider failure logs the request's cf-ray as its correlation ID", async (t) => {
   const lines: string[][] = [];
-  for (const method of ["error", "warn", "log"] as const)
-    t.mock.method(console, method, (...args: unknown[]) => lines.push([method, ...args.map(String)]));
+  for (const method of ["error", "warn", "log"] as const) t.mock.method(console, method, (...args: unknown[]) => lines.push([method, ...args.map(String)]));
   const fetchImpl = (async (input: string | URL | Request) =>
-    String(input).includes("api.instagram.com")
-      ? Response.json({ error_type: "OAuthException", code: 400, error_message: "synthetic message" }, { status: 400 })
-      : Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
+    String(input).includes("api.instagram.com") ? Response.json({ error_type: "OAuthException", code: 400, error_message: "synthetic message" }, { status: 400 }) : Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
   const pool = {
     query: async (sql: string) => ({
-      rows: sql.includes("workspace_members")
-        ? [{ workspace_id: workspaceId, role: "owner" }]
-        : [{ state_hash: "consumed" }],
+      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : [{ state_hash: "consumed" }],
       rowCount: 1,
     }),
     end: async () => {},
@@ -316,11 +269,7 @@ test("recovery endpoints require same-origin POST and never open the workspace d
   const calls: string[] = [];
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     calls.push(new URL(String(input)).pathname);
-    return new URL(String(input)).pathname.endsWith("/recover")
-      ? Response.json({})
-      : new URL(String(input)).pathname.endsWith("/user")
-        ? Response.json({ id: userId })
-        : new Response(null, { status: 204 });
+    return new URL(String(input)).pathname.endsWith("/recover") ? Response.json({}) : new URL(String(input)).pathname.endsWith("/user") ? Response.json({ id: userId }) : new Response(null, { status: 204 });
   }) as typeof fetch;
   const noPool = () => {
     throw new Error("authentication must not open product database");
@@ -331,22 +280,12 @@ test("recovery endpoints require same-origin POST and never open the workspace d
       headers: { Origin: origin, "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-  const rejected = await appApi(
-    request("/api/auth/recover", { email: "x@example.test" }, "https://other.test"),
-    config,
-    noPool,
-    fetchImpl,
-  );
+  const rejected = await appApi(request("/api/auth/recover", { email: "x@example.test" }, "https://other.test"), config, noPool, fetchImpl);
   assert.equal(rejected.status, 403);
   assert.deepEqual(calls, []);
   const requested = await appApi(request("/api/auth/recover", { email: "x@example.test" }), config, noPool, fetchImpl);
   assert.deepEqual(await requested.json(), { recovery_requested: true });
-  const updated = await appApi(
-    request("/api/auth/reset-password", { access_token: "recovery-token", password: "new-password-123" }),
-    config,
-    noPool,
-    fetchImpl,
-  );
+  const updated = await appApi(request("/api/auth/reset-password", { access_token: "recovery-token", password: "new-password-123" }), config, noPool, fetchImpl);
   assert.deepEqual(await updated.json(), { password_updated: true });
   assert.deepEqual(calls, ["/auth/v1/recover", "/auth/v1/user", "/auth/v1/logout"]);
 });
@@ -446,11 +385,7 @@ test("session checks forward the caller's IP, and refresh and logout spend a per
     assert.equal(response.status, 429, path);
     assert.deepEqual(await response.json(), { error: "auth_rate_limited" }, path);
     // A refused logout still clears the browser session, as a remote logout failure does.
-    assert.equal(
-      response.headers.getSetCookie().filter((value) => value.includes("Max-Age=0")).length,
-      path.endsWith("/logout") ? 2 : 0,
-      path,
-    );
+    assert.equal(response.headers.getSetCookie().filter((value) => value.includes("Max-Age=0")).length, path.endsWith("/logout") ? 2 : 0, path);
   }
   assert.equal(keys.length, 2);
   assert.notEqual(keys[0], keys[1]);
@@ -487,8 +422,7 @@ function healthFetch(me: Response, subscriptions?: Response) {
   const paths: string[] = [];
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input));
-    if (url.hostname === "project.supabase.co")
-      return Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" });
+    if (url.hostname === "project.supabase.co") return Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" });
     assert.equal(url.hostname, "graph.instagram.com");
     assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer server-token");
     assert.equal(url.searchParams.has("access_token"), false);
@@ -500,24 +434,14 @@ function healthFetch(me: Response, subscriptions?: Response) {
 
 test("connection health is workspace scoped and never probes another account", async () => {
   const graph = healthFetch(Response.json({ user_id: "123" }));
-  const response = await appApi(
-    healthRequest(),
-    { ...mediaConfig, INSTAGRAM_OAUTH_APP_ID: "789" },
-    () => mediaPool(false),
-    graph.fetchImpl,
-  );
+  const response = await appApi(healthRequest(), { ...mediaConfig, INSTAGRAM_OAUTH_APP_ID: "789" }, () => mediaPool(false), graph.fetchImpl);
   assert.equal(response.status, 404);
   assert.deepEqual(graph.paths, []);
 });
 
 test("connection health rate limit prevents Meta requests", async () => {
   const graph = healthFetch(Response.json({ user_id: "123" }));
-  const response = await appApi(
-    healthRequest(),
-    { ...mediaConfig, AUTH_IP_LIMIT: { limit: async () => ({ success: false }) } },
-    () => mediaPool(),
-    graph.fetchImpl,
-  );
+  const response = await appApi(healthRequest(), { ...mediaConfig, AUTH_IP_LIMIT: { limit: async () => ({ success: false }) } }, () => mediaPool(), graph.fetchImpl);
   assert.equal(response.status, 429);
   assert.deepEqual(graph.paths, []);
 });
@@ -559,19 +483,9 @@ const membershipOnlyPool = () =>
 
 test("media list and single-post lookups spend separate per-user allowances (#166)", async () => {
   const allowed = recordingLimit(true);
-  const list = await appApi(
-    mediaRequest(),
-    { ...mediaConfig, AUTH_IP_LIMIT: allowed.binding },
-    () => mediaPool(),
-    mediaFetch(),
-  );
+  const list = await appApi(mediaRequest(), { ...mediaConfig, AUTH_IP_LIMIT: allowed.binding }, () => mediaPool(), mediaFetch());
   assert.equal(list.status, 200);
-  const item = await appApi(
-    mediaRequest("/456"),
-    { ...mediaConfig, AUTH_IP_LIMIT: allowed.binding },
-    () => mediaPool(),
-    mediaFetch(post),
-  );
+  const item = await appApi(mediaRequest("/456"), { ...mediaConfig, AUTH_IP_LIMIT: allowed.binding }, () => mediaPool(), mediaFetch(post));
   assert.equal(item.status, 200);
   assert.deepEqual(allowed.keys, [`connection-media:${userId}`, `connection-media-item:${userId}`]);
 });
@@ -589,12 +503,7 @@ test("a refused or unavailable media allowance prevents every Graph and database
   ];
   for (const [binding, status, error] of cases) {
     for (const suffix of ["", "/456"]) {
-      const response = await appApi(
-        mediaRequest(suffix),
-        { ...mediaConfig, AUTH_IP_LIMIT: binding },
-        untouchedPool,
-        fetchImpl,
-      );
+      const response = await appApi(mediaRequest(suffix), { ...mediaConfig, AUTH_IP_LIMIT: binding }, untouchedPool, fetchImpl);
       assert.equal(response.status, status, `${error} ${suffix}`);
       assert.deepEqual(await response.json(), { error }, suffix);
     }
@@ -634,8 +543,7 @@ test("the media check on a new rule save spends no media allowance (#166)", asyn
 });
 
 test("workspace export and Instagram connect spend a per-user allowance before the route reads the database (#166)", async () => {
-  const fetchImpl = (async () =>
-    Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
+  const fetchImpl = (async () => Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
   const oauth = {
     ...config,
     APP_ORIGIN: "https://app.test",
@@ -648,8 +556,7 @@ test("workspace export and Instagram connect spend a per-user allowance before t
   const routes = [
     {
       binding: "WORKSPACE_EXPORT_LIMIT",
-      request: () =>
-        new Request("https://app.test/api/workspace/export", { headers: { cookie: "__Host-ac-access=test-session" } }),
+      request: () => new Request("https://app.test/api/workspace/export", { headers: { cookie: "__Host-ac-access=test-session" } }),
       prefix: "workspace_export",
       pool: untouchedPool,
     },
@@ -723,12 +630,7 @@ test("contact CSV export validates the session and query before spending the use
   assert.equal(invalid.status, 400);
   assert.deepEqual(await invalid.json(), { error: "invalid_contact_export_request" });
   assert.deepEqual(limiter.keys, []);
-  const refused = await appApi(
-    new Request("https://app.test/api/contacts/export.csv", { headers: { cookie: "__Host-ac-access=test-session" } }),
-    env,
-    noPool,
-    mediaFetch(),
-  );
+  const refused = await appApi(new Request("https://app.test/api/contacts/export.csv", { headers: { cookie: "__Host-ac-access=test-session" } }), env, noPool, mediaFetch());
   assert.equal(refused.status, 429);
   assert.deepEqual(limiter.keys, [userId]);
 });
@@ -787,12 +689,7 @@ test("connection health distinguishes token expiry, account access and webhook s
       "fields_present",
       2,
     ],
-    [
-      Response.json({ user_id: "123" }),
-      Response.json({ data: [{ id: "unmapped-subscription", subscribed_fields: ["comments", "messages"] }] }),
-      "fields_missing",
-      2,
-    ],
+    [Response.json({ user_id: "123" }), Response.json({ data: [{ id: "unmapped-subscription", subscribed_fields: ["comments", "messages"] }] }), "fields_missing", 2],
     [Response.json({ user_id: "123" }), Response.json({ data: [{ id: "broken-subscription" }] }), "unverified", 2],
     [
       Response.json({ user_id: "123" }),
@@ -803,22 +700,12 @@ test("connection health distinguishes token expiry, account access and webhook s
       "unverified",
       2,
     ],
-    [
-      Response.json({ user_id: "123" }),
-      new Response(null, { status: 302, headers: { Location: "https://other.test" } }),
-      "unverified",
-      2,
-    ],
+    [Response.json({ user_id: "123" }), new Response(null, { status: 302, headers: { Location: "https://other.test" } }), "unverified", 2],
     [Response.json({ user_id: "999" }), undefined, "reconnect_required", 1],
     [new Response("server-token denied", { status: 401 }), undefined, "reconnect_required", 1],
     [Response.json({ error: { code: 10 } }, { status: 400 }), undefined, "reconnect_required", 1],
     [Response.json({ error: { code: 200 } }, { status: 403 }), undefined, "reconnect_required", 1],
-    [
-      Response.json({ error: { code: 190, message: "server-token expired" } }, { status: 403 }),
-      undefined,
-      "reconnect_required",
-      1,
-    ],
+    [Response.json({ error: { code: 190, message: "server-token expired" } }, { status: 403 }), undefined, "reconnect_required", 1],
     [Response.json({ error: { code: 4 } }, { status: 403 }), undefined, "unverified", 1],
     [new Response("server-token busy", { status: 429 }), undefined, "unverified", 1],
   ];
@@ -838,9 +725,7 @@ test("connection health distinguishes token expiry, account access and webhook s
     const graph = healthFetch(Response.json({ user_id: "123" }));
     const pool = {
       query: async (sql: string) => ({
-        rows: sql.includes("workspace_members")
-          ? [{ workspace_id: workspaceId, role: "owner" }]
-          : [{ ...connection, access_token_encrypted: token, token_expires_at: expiry }],
+        rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : [{ ...connection, access_token_encrypted: token, token_expires_at: expiry }],
       }),
       end: async () => {},
     } as unknown as Pool;
@@ -851,12 +736,7 @@ test("connection health distinguishes token expiry, account access and webhook s
 });
 
 test("media detail rejects a different owner even when numeric IDs are valid", async () => {
-  const response = await appApi(
-    mediaRequest("/456"),
-    mediaConfig,
-    () => mediaPool(),
-    mediaFetch({ ...post, owner: { id: "888" } }),
-  );
+  const response = await appApi(mediaRequest("/456"), mediaConfig, () => mediaPool(), mediaFetch({ ...post, owner: { id: "888" } }));
   assert.equal(response.status, 400);
   assert.deepEqual(await response.json(), { error: "media_not_owned" });
 });
@@ -875,8 +755,7 @@ test("media requests reject malformed cursors and account identity mismatches", 
 
 test("provider failures never return provider body or credentials", async () => {
   const refused = (async (input: string | URL | Request, init?: RequestInit) => {
-    if (new URL(String(input)).pathname.endsWith("/media"))
-      return new Response("server-token provider-error", { status: 429 });
+    if (new URL(String(input)).pathname.endsWith("/media")) return new Response("server-token provider-error", { status: 429 });
     return mediaFetch()(input, init);
   }) as typeof fetch;
   const response = await appApi(mediaRequest(), mediaConfig, () => mediaPool(), refused);
@@ -887,9 +766,7 @@ test("provider failures never return provider body or credentials", async () => 
 test("invalid credential expiry cannot authorize media reads", async () => {
   const pool = {
     query: async (sql: string) => ({
-      rows: sql.includes("workspace_members")
-        ? [{ workspace_id: workspaceId, role: "owner" }]
-        : [{ ...connection, token_expires_at: "invalid" }],
+      rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : [{ ...connection, token_expires_at: "invalid" }],
     }),
     end: async () => {},
   } as unknown as Pool;
@@ -909,40 +786,22 @@ test("pagination stays on Graph and passes the cursor rather than a provider nex
 });
 
 test("unsafe display URLs are removed and unsupported posts cannot be selected", async () => {
-  const unsafe = await appApi(
-    mediaRequest("/456"),
-    mediaConfig,
-    () => mediaPool(),
-    mediaFetch({ ...post, media_url: "https://evil.test/track", permalink: "javascript:alert(1)" }),
-  );
+  const unsafe = await appApi(mediaRequest("/456"), mediaConfig, () => mediaPool(), mediaFetch({ ...post, media_url: "https://evil.test/track", permalink: "javascript:alert(1)" }));
   assert.equal(unsafe.status, 200);
   const display = (await unsafe.json()).media[0];
   assert.equal(display.image_url, null);
   assert.equal(display.permalink, null);
-  const story = await appApi(
-    mediaRequest("/456"),
-    mediaConfig,
-    () => mediaPool(),
-    mediaFetch({ ...post, media_product_type: "STORY" }),
-  );
+  const story = await appApi(mediaRequest("/456"), mediaConfig, () => mediaPool(), mediaFetch({ ...post, media_product_type: "STORY" }));
   assert.equal(story.status, 400);
 });
 
 test("image URL fragments and case-varied credential parameters never reach the browser", async () => {
   for (const [url, expected] of [
-    [
-      "https://scontent.cdninstagram.com/example.jpg#access_token=server-token",
-      "https://scontent.cdninstagram.com/example.jpg",
-    ],
+    ["https://scontent.cdninstagram.com/example.jpg#access_token=server-token", "https://scontent.cdninstagram.com/example.jpg"],
     ["https://scontent.cdninstagram.com/example.jpg?Access_Token=server-token", null],
     ["https://scontent.cdninstagram.com/example.jpg?client_secret=server-token", null],
   ]) {
-    const response = await appApi(
-      mediaRequest("/456"),
-      mediaConfig,
-      () => mediaPool(),
-      mediaFetch({ ...post, media_url: url }),
-    );
+    const response = await appApi(mediaRequest("/456"), mediaConfig, () => mediaPool(), mediaFetch({ ...post, media_url: url }));
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.media[0].image_url, expected);
@@ -1047,8 +906,7 @@ test("rule saves refuse a keyword with a line break, which the editor would spli
         follow_gate_enabled: false,
       }),
     });
-    const fetchImpl = (async () =>
-      Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
+    const fetchImpl = (async () => Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
     const response = await appApi(request, config, () => pool, fetchImpl);
     assert.equal(response.status, 400);
     assert.deepEqual(await response.json(), { error: "invalid_keywords" });
@@ -1061,11 +919,7 @@ test("API rejects unauthenticated and cross-origin requests before opening a dat
   };
   const userResponse = await appApi(new Request("https://app.test/api/rules"), config, open);
   assert.equal(userResponse.status, 401);
-  const contextResponse = await appApi(
-    new Request(`https://app.test/api/connections/${connectionId}/inbox/456/context`),
-    config,
-    open,
-  );
+  const contextResponse = await appApi(new Request(`https://app.test/api/connections/${connectionId}/inbox/456/context`), config, open);
   assert.equal(contextResponse.status, 401);
   for (const method of ["GET", "PUT"]) {
     const response = await appApi(
@@ -1087,11 +941,7 @@ test("API rejects unauthenticated and cross-origin requests before opening a dat
     open,
   );
   assert.equal(handoffOrigin.status, 403);
-  const crossOrigin = await appApi(
-    new Request("https://app.test/api/rules", { method: "PUT", headers: { origin: "https://attacker.test" } }),
-    config,
-    open,
-  );
+  const crossOrigin = await appApi(new Request("https://app.test/api/rules", { method: "PUT", headers: { origin: "https://attacker.test" } }), config, open);
   assert.equal(crossOrigin.status, 403);
 });
 
@@ -1113,12 +963,7 @@ test("state-changing routes refuse a null, missing or foreign Origin before any 
     for (const origin of [null, "null", "https://attacker.test", "https://app.test.attacker.test", "http://app.test"]) {
       const headers: Record<string, string> = { cookie: "__Host-ac-access=test; __Host-ac-refresh=test" };
       if (origin !== null) headers.origin = origin;
-      const response = await appApi(
-        new Request(`https://app.test${path}`, { method, headers }),
-        config,
-        open,
-        provider,
-      );
+      const response = await appApi(new Request(`https://app.test${path}`, { method, headers }), config, open, provider);
       assert.equal(response.status, 403, `${method} ${path} with Origin ${origin}`);
     }
 });
@@ -1130,11 +975,7 @@ test("consent mutation rejects unauthenticated and cross-origin requests before 
     return membershipOnlyPool();
   };
   const path = `https://app.test/api/connections/${connectionId}/channel-consent-events`;
-  const unauthenticated = await appApi(
-    new Request(path, { method: "POST", headers: { origin: "https://app.test" } }),
-    config,
-    open,
-  );
+  const unauthenticated = await appApi(new Request(path, { method: "POST", headers: { origin: "https://app.test" } }), config, open);
   assert.equal(unauthenticated.status, 401);
   const crossOrigin = await appApi(
     new Request(path, {
@@ -1159,8 +1000,7 @@ test("consent mutation rejects unauthenticated and cross-origin requests before 
     }),
     config,
     open,
-    (async () =>
-      Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
   assert.equal(malformed.status, 400);
   assert.equal(openCount, 1);
@@ -1173,12 +1013,7 @@ test("contacts API is authenticated and returns only the workspace list", async 
     }),
     end: async () => {},
   } as unknown as Pool;
-  const response = await appApi(
-    new Request("https://app.test/api/contacts", { headers: { cookie: "__Host-ac-access=test" } }),
-    config,
-    () => pool,
-    mediaFetch(),
-  );
+  const response = await appApi(new Request("https://app.test/api/contacts", { headers: { cookie: "__Host-ac-access=test" } }), config, () => pool, mediaFetch());
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { contacts: [], after: null });
 });
@@ -1194,13 +1029,7 @@ test("contact preview returns an exact total string without changing the ordinar
     },
     end: async () => {},
   } as unknown as Pool;
-  const request = (query = "") =>
-    appApi(
-      new Request(`https://app.test/api/contacts${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
-      config,
-      () => pool,
-      mediaFetch(),
-    );
+  const request = (query = "") => appApi(new Request(`https://app.test/api/contacts${query}`, { headers: { cookie: "__Host-ac-access=test" } }), config, () => pool, mediaFetch());
   const empty = await request("?preview=true");
   assert.equal(empty.status, 200);
   assert.deepEqual(await empty.json(), {
@@ -1262,13 +1091,7 @@ test("contact activity validates canonical UTC bounds and preserves an exact exc
     },
     end: async () => {},
   } as unknown as Pool;
-  const request = (query: URLSearchParams) =>
-    appApi(
-      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
-      config,
-      () => pool,
-      mediaFetch(),
-    );
+  const request = (query: URLSearchParams) => appApi(new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }), config, () => pool, mediaFetch());
   const from = "2026-10-10T00:00:00.000Z",
     before = "2026-10-12T00:00:00.000Z";
   const query = new URLSearchParams({ preview: "true", last_comment_from: from, last_comment_before: before });
@@ -1330,18 +1153,10 @@ test("contact consent filters validate an exact purpose-state pair before databa
     },
     end: async () => {},
   } as unknown as Pool;
-  const request = (query: URLSearchParams) =>
-    appApi(
-      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
-      config,
-      () => pool,
-      mediaFetch(),
-    );
+  const request = (query: URLSearchParams) => appApi(new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }), config, () => pool, mediaFetch());
   for (const purpose of ["service_reply", "marketing"]) {
     for (const state of ["granted", "revoked", "no_record"]) {
-      const response = await request(
-        new URLSearchParams({ preview: "true", consent_purpose: purpose, consent_state: state }),
-      );
+      const response = await request(new URLSearchParams({ preview: "true", consent_purpose: purpose, consent_state: state }));
       assert.equal(response.status, 200);
       assert.deepEqual(await response.json(), {
         contacts: [],
@@ -1404,18 +1219,10 @@ test("contact DM consent filters validate an exact purpose-state pair before dat
     },
     end: async () => {},
   } as unknown as Pool;
-  const request = (query: URLSearchParams) =>
-    appApi(
-      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
-      config,
-      () => pool,
-      mediaFetch(),
-    );
+  const request = (query: URLSearchParams) => appApi(new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }), config, () => pool, mediaFetch());
   for (const purpose of ["service_reply", "marketing"]) {
     for (const state of ["granted", "revoked", "no_record"]) {
-      const response = await request(
-        new URLSearchParams({ preview: "true", dm_consent_purpose: purpose, dm_consent_state: state }),
-      );
+      const response = await request(new URLSearchParams({ preview: "true", dm_consent_purpose: purpose, dm_consent_state: state }));
       assert.equal(response.status, 200);
       const body = await response.json();
       // The comment consent key stays omitted without its own condition; the DM keys keep their order.
@@ -1440,14 +1247,7 @@ test("contact DM consent filters validate an exact purpose-state pair before dat
       dm_consent_state: "revoked",
     }),
   );
-  assert.deepEqual(Object.keys((await both.json()).excluded), [
-    "consent",
-    "dm_identity",
-    "dm_consent",
-    "tag",
-    "field",
-    "both",
-  ]);
+  assert.deepEqual(Object.keys((await both.json()).excluded), ["consent", "dm_identity", "dm_consent", "tag", "field", "both"]);
   assert.deepEqual(values.slice(11, 17), ["marketing", "granted", null, null, "service_reply", "revoked"]);
   await request(new URLSearchParams({ preview: "true" }));
   assert.deepEqual(values.slice(15, 17), [null, null]);
@@ -1467,15 +1267,9 @@ test("contact DM consent filters validate an exact purpose-state pair before dat
     assert.equal((await response.json()).error, "invalid_contact_consent");
     assert.equal(queried, false);
   }
-  for (const mixed of [
-    { dm_consent_purpose: "marketing", dm_consent_state: "granted" },
-    { dm_consent_purpose: "marketing" },
-    { dm_consent_state: "granted" },
-  ] as Record<string, string>[]) {
+  for (const mixed of [{ dm_consent_purpose: "marketing", dm_consent_state: "granted" }, { dm_consent_purpose: "marketing" }, { dm_consent_state: "granted" }] as Record<string, string>[]) {
     queried = false;
-    const response = await request(
-      new URLSearchParams({ ...mixed, segment_id: "44444444-4444-4444-8444-444444444444" }),
-    );
+    const response = await request(new URLSearchParams({ ...mixed, segment_id: "44444444-4444-4444-8444-444444444444" }));
     assert.equal(response.status, 400);
     assert.equal((await response.json()).error, "invalid_contact_request");
     assert.equal(queried, false);
@@ -1522,13 +1316,7 @@ test("contact DM activity takes canonical days 1 to 366 in $18 and refuses other
     },
     end: async () => {},
   } as unknown as Pool;
-  const request = (query: URLSearchParams) =>
-    appApi(
-      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
-      config,
-      () => pool,
-      mediaFetch(),
-    );
+  const request = (query: URLSearchParams) => appApi(new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }), config, () => pool, mediaFetch());
   for (const days of ["1", "30", "366"]) {
     const preview = await request(new URLSearchParams({ preview: "true", last_dm_days: days }));
     assert.equal(preview.status, 200);
@@ -1563,31 +1351,17 @@ test("contact DM activity takes canonical days 1 to 366 in $18 and refuses other
     }),
   );
   const allBody = await all.json();
-  assert.deepEqual(Object.keys(allBody.excluded), [
-    "activity",
-    "consent",
-    "dm_identity",
-    "dm_consent",
-    "dm_activity",
-    "tag",
-    "field",
-    "both",
-  ]);
+  assert.deepEqual(Object.keys(allBody.excluded), ["activity", "consent", "dm_identity", "dm_consent", "dm_activity", "tag", "field", "both"]);
   assert.equal(values[13], 7);
   assert.deepEqual(values.slice(15, 18), ["service_reply", "granted", 3]);
   // Each comment activity form combines with DM activity.
-  for (const activity of [
-    { last_comment_period: "today" },
-    { last_comment_from: "2026-10-01T00:00:00.000Z", last_comment_before: "2026-10-02T00:00:00.000Z" },
-  ] as Record<string, string>[]) {
+  for (const activity of [{ last_comment_period: "today" }, { last_comment_from: "2026-10-01T00:00:00.000Z", last_comment_before: "2026-10-02T00:00:00.000Z" }] as Record<string, string>[]) {
     const response = await request(new URLSearchParams({ ...activity, last_dm_days: "5" }));
     assert.equal(response.status, 200);
     assert.equal(values[17], 5);
   }
   // Without the condition the key, the window and the parameter stay absent.
-  const none = await request(
-    new URLSearchParams({ preview: "true", dm_consent_purpose: "marketing", dm_consent_state: "granted" }),
-  );
+  const none = await request(new URLSearchParams({ preview: "true", dm_consent_purpose: "marketing", dm_consent_state: "granted" }));
   const noneBody = await none.json();
   assert.equal("dm_activity_window" in noneBody, false);
   assert.deepEqual(Object.keys(noneBody.excluded), ["dm_identity", "dm_consent", "tag", "field", "both"]);
@@ -1600,9 +1374,7 @@ test("contact DM activity takes canonical days 1 to 366 in $18 and refuses other
     assert.equal(queried, false);
   }
   queried = false;
-  const mixed = await request(
-    new URLSearchParams({ last_dm_days: "7", segment_id: "44444444-4444-4444-8444-444444444444" }),
-  );
+  const mixed = await request(new URLSearchParams({ last_dm_days: "7", segment_id: "44444444-4444-4444-8444-444444444444" }));
   assert.equal(mixed.status, 400);
   assert.equal((await mixed.json()).error, "invalid_contact_request");
   assert.equal(queried, false);
@@ -1645,13 +1417,7 @@ test("contact calendar periods accept four exact values and refuse mixing before
     },
     end: async () => {},
   } as unknown as Pool;
-  const request = (query: URLSearchParams) =>
-    appApi(
-      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
-      config,
-      () => pool,
-      mediaFetch(),
-    );
+  const request = (query: URLSearchParams) => appApi(new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }), config, () => pool, mediaFetch());
   for (const period of ["today", "yesterday", "this_month", "last_month"]) {
     const preview = await request(new URLSearchParams({ preview: "true", last_comment_period: period }));
     assert.equal(preview.status, 200);
@@ -1709,21 +1475,8 @@ test("contact preview rejects malformed flags and every cursor before querying c
     },
     end: async () => {},
   } as unknown as Pool;
-  for (const query of [
-    "preview=",
-    "preview=false",
-    "preview=TRUE",
-    "preview=1",
-    "preview=true&preview=true",
-    "preview=true&after=",
-    "preview=true&after=cursor",
-  ]) {
-    const response = await appApi(
-      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
-      config,
-      () => pool,
-      mediaFetch(),
-    );
+  for (const query of ["preview=", "preview=false", "preview=TRUE", "preview=1", "preview=true&preview=true", "preview=true&after=", "preview=true&after=cursor"]) {
+    const response = await appApi(new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }), config, () => pool, mediaFetch());
     assert.equal(response.status, 400, query);
     assert.deepEqual(await response.json(), { error: "invalid_contact_request" });
   }
@@ -1746,12 +1499,7 @@ test("saved segment list is authenticated and workspace scoped", async () => {
     }),
     end: async () => {},
   } as unknown as Pool;
-  const response = await appApi(
-    new Request("https://app.test/api/contact-segments", { headers: { cookie: "__Host-ac-access=test" } }),
-    config,
-    () => pool,
-    mediaFetch(),
-  );
+  const response = await appApi(new Request("https://app.test/api/contact-segments", { headers: { cookie: "__Host-ac-access=test" } }), config, () => pool, mediaFetch());
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { segments: [] });
 });
@@ -1801,13 +1549,9 @@ test("segment writes reject cross-origin requests before opening the database", 
     ["/api/contact-segments/123", "DELETE"],
     ["/api/contact-segments/123", "PUT"],
   ]) {
-    const response = await appApi(
-      new Request(`https://app.test${path}`, { method, headers: { origin: "https://evil.test" } }),
-      config,
-      () => {
-        throw new Error("Database must not be reached");
-      },
-    );
+    const response = await appApi(new Request(`https://app.test${path}`, { method, headers: { origin: "https://evil.test" } }), config, () => {
+      throw new Error("Database must not be reached");
+    });
     assert.equal(response.status, 403);
   }
 });
@@ -1824,8 +1568,7 @@ const segmentPool = {
 const segmentUser = { id: userId, email: "a@example.test" };
 const segmentId = "44444444-4444-4444-8444-444444444444";
 const reachedDatabase = (error: unknown) => error instanceof Error && error.message === "database reached";
-const refused = (code: string) => (error: unknown) =>
-  error instanceof ApiError && error.status === 400 && error.message === code;
+const refused = (code: string) => (error: unknown) => error instanceof ApiError && error.status === 400 && error.message === code;
 
 test("segment edits refuse a missing or invalid expected_version, unknown keys and invalid names before the database", async () => {
   for (const [body, code] of [
@@ -1846,30 +1589,15 @@ test("segment edits refuse a missing or invalid expected_version, unknown keys a
     [{ name: "Leads", expected_version: 1, consent_purpose: "marketing" }, "invalid_contact_consent"],
     [{ name: "Leads", expected_version: 1, dm_consent_purpose: "marketing" }, "invalid_contact_consent"],
     [{ name: "Leads", expected_version: 1, dm_consent_state: "granted" }, "invalid_contact_consent"],
-    [
-      { name: "Leads", expected_version: 1, dm_consent_purpose: "all", dm_consent_state: "revoked" },
-      "invalid_contact_consent",
-    ],
-    [
-      { name: "Leads", expected_version: 1, dm_consent_purpose: "marketing", dm_consent_state: "eligible" },
-      "invalid_contact_consent",
-    ],
-    [
-      { name: "Leads", expected_version: 1, dm_consent_purpose: "", dm_consent_state: "granted" },
-      "invalid_contact_consent",
-    ],
+    [{ name: "Leads", expected_version: 1, dm_consent_purpose: "all", dm_consent_state: "revoked" }, "invalid_contact_consent"],
+    [{ name: "Leads", expected_version: 1, dm_consent_purpose: "marketing", dm_consent_state: "eligible" }, "invalid_contact_consent"],
+    [{ name: "Leads", expected_version: 1, dm_consent_purpose: "", dm_consent_state: "granted" }, "invalid_contact_consent"],
     [{ name: "Leads", expected_version: 1, condition_operator: "or" }, "invalid_contact_condition"],
   ] as const)
     await assert.rejects(updateContactSegment(segmentPool, segmentUser, segmentId, body), refused(code));
-  await assert.rejects(
-    updateContactSegment(segmentPool, segmentUser, "not-a-uuid", { name: "Leads", expected_version: 1 }),
-    refused("invalid_segment"),
-  );
+  await assert.rejects(updateContactSegment(segmentPool, segmentUser, "not-a-uuid", { name: "Leads", expected_version: 1 }), refused("invalid_segment"));
   // Create keeps its own key set: expected_version belongs only to an edit.
-  await assert.rejects(
-    createContactSegment(segmentPool, segmentUser, { name: "Leads", expected_version: 1 }),
-    refused("invalid_segment"),
-  );
+  await assert.rejects(createContactSegment(segmentPool, segmentUser, { name: "Leads", expected_version: 1 }), refused("invalid_segment"));
 });
 
 test("segment create and edit share one definition parser", async () => {
@@ -1895,14 +1623,9 @@ test("segment create and edit share one definition parser", async () => {
   ];
   for (const definition of definitions) {
     await assert.rejects(createContactSegment(segmentPool, segmentUser, definition), reachedDatabase);
-    await assert.rejects(
-      updateContactSegment(segmentPool, segmentUser, segmentId, { ...definition, expected_version: 1 }),
-      reachedDatabase,
-    );
+    await assert.rejects(updateContactSegment(segmentPool, segmentUser, segmentId, { ...definition, expected_version: 1 }), reachedDatabase);
     const { input: _created, ...created } = parseSegmentDefinition(definition);
-    const { input: _edited, ...edited } = parseSegmentDefinition({ ...definition, expected_version: 3 }, [
-      "expected_version",
-    ]);
+    const { input: _edited, ...edited } = parseSegmentDefinition({ ...definition, expected_version: 3 }, ["expected_version"]);
     assert.deepEqual(edited, created);
   }
 });
@@ -1926,14 +1649,9 @@ test("segment create and edit share last_dm_days and refuse an invalid one befor
   ];
   for (const definition of definitions) {
     await assert.rejects(createContactSegment(segmentPool, segmentUser, definition), reachedDatabase);
-    await assert.rejects(
-      updateContactSegment(segmentPool, segmentUser, segmentId, { ...definition, expected_version: 1 }),
-      reachedDatabase,
-    );
+    await assert.rejects(updateContactSegment(segmentPool, segmentUser, segmentId, { ...definition, expected_version: 1 }), reachedDatabase);
     const { input: _created, ...created } = parseSegmentDefinition(definition);
-    const { input: _edited, ...edited } = parseSegmentDefinition({ ...definition, expected_version: 3 }, [
-      "expected_version",
-    ]);
+    const { input: _edited, ...edited } = parseSegmentDefinition({ ...definition, expected_version: 3 }, ["expected_version"]);
     assert.deepEqual(edited, created);
   }
 });
@@ -1949,10 +1667,7 @@ test("segment definitions take the DM consent pair beside the comment consent pa
   assert.deepEqual(parsed.consent, { consent_purpose: "marketing", consent_state: "granted" });
   assert.deepEqual(parsed.dmConsent, { dm_consent_purpose: "service_reply", dm_consent_state: "no_record" });
   assert.equal(parseSegmentDefinition({ name: "None" }).dmConsent, null);
-  assert.equal(
-    parseSegmentDefinition({ name: "Null", dm_consent_purpose: null, dm_consent_state: null }).dmConsent,
-    null,
-  );
+  assert.equal(parseSegmentDefinition({ name: "Null", dm_consent_purpose: null, dm_consent_state: null }).dmConsent, null);
   for (const invalid of [
     { dm_consent_purpose: "marketing", dm_consent_state: null },
     { dm_consent_purpose: false, dm_consent_state: "granted" },
@@ -1970,20 +1685,12 @@ test("segment definitions take last_dm_days as an integer beside every comment a
   assert.equal(parseSegmentDefinition({ name: "None" }).dmActivity, null);
   assert.equal(parseSegmentDefinition({ name: "Null", last_dm_days: null }).dmActivity, null);
   // Independent of the comment activity forms: each combination keeps both conditions.
-  for (const activity of [
-    { last_comment_days: 7 },
-    { last_comment_period: "today" },
-    { last_comment_from: "2026-10-01T00:00:00.000Z", last_comment_before: "2026-10-02T00:00:00.000Z" },
-  ]) {
+  for (const activity of [{ last_comment_days: 7 }, { last_comment_period: "today" }, { last_comment_from: "2026-10-01T00:00:00.000Z", last_comment_before: "2026-10-02T00:00:00.000Z" }]) {
     const parsed = parseSegmentDefinition({ name: "Both", last_dm_days: 3, ...activity });
     assert.deepEqual(parsed.dmActivity, { last_dm_days: 3 });
     assert.deepEqual(parsed.activity, activity);
   }
-  for (const invalid of [0, 367, -1, 1.5, "7", true, [7], Number.NaN])
-    assert.throws(
-      () => parseSegmentDefinition({ name: "Invalid", last_dm_days: invalid }),
-      refused("invalid_contact_activity"),
-    );
+  for (const invalid of [0, 367, -1, 1.5, "7", true, [7], Number.NaN]) assert.throws(() => parseSegmentDefinition({ name: "Invalid", last_dm_days: invalid }), refused("invalid_contact_activity"));
 });
 
 test("segment definitions take a calendar period as an exact string and refuse mixing with other activity forms", async () => {
@@ -2007,15 +1714,9 @@ test("segment definitions take a calendar period as an exact string and refuse m
   ]) {
     assert.throws(() => parseSegmentDefinition(body), refused("invalid_contact_activity"));
     await assert.rejects(createContactSegment(segmentPool, segmentUser, body), refused("invalid_contact_activity"));
-    await assert.rejects(
-      updateContactSegment(segmentPool, segmentUser, segmentId, { ...body, expected_version: 1 }),
-      refused("invalid_contact_activity"),
-    );
+    await assert.rejects(updateContactSegment(segmentPool, segmentUser, segmentId, { ...body, expected_version: 1 }), refused("invalid_contact_activity"));
   }
-  await assert.rejects(
-    createContactSegment(segmentPool, segmentUser, { name: "Leads", last_comment_period: "this_month" }),
-    reachedDatabase,
-  );
+  await assert.rejects(createContactSegment(segmentPool, segmentUser, { name: "Leads", last_comment_period: "this_month" }), reachedDatabase);
 });
 
 test("contact tag filters repeat tag up to five times with one mode and refuse other shapes before database access", async () => {
@@ -2032,13 +1733,7 @@ test("contact tag filters repeat tag up to five times with one mode and refuse o
     },
     end: async () => {},
   } as unknown as Pool;
-  const request = (query: string) =>
-    appApi(
-      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
-      config,
-      () => pool,
-      mediaFetch(),
-    );
+  const request = (query: string) => appApi(new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }), config, () => pool, mediaFetch());
   const all = /coalesce\(t\.tags,'\{\}'::text\[\]\) @> \$3::text\[\]/;
   const any = /coalesce\(t\.tags,'\{\}'::text\[\]\) && \$3::text\[\]/;
   // One tag without a mode keeps the response, the parameter positions and the containment predicate.
@@ -2126,24 +1821,13 @@ test("segment definitions take a legacy tag or a set of one to five tags with a 
   ] as const) {
     assert.throws(() => tags(body), refused(code), JSON.stringify(body));
     await assert.rejects(createContactSegment(segmentPool, segmentUser, { name: "Leads", ...body }), refused(code));
-    await assert.rejects(
-      updateContactSegment(segmentPool, segmentUser, segmentId, { name: "Leads", ...body, expected_version: 1 }),
-      refused(code),
-    );
+    await assert.rejects(updateContactSegment(segmentPool, segmentUser, segmentId, { name: "Leads", ...body, expected_version: 1 }), refused(code));
   }
-  await assert.rejects(
-    createContactSegment(segmentPool, segmentUser, { name: "Leads", tags: ["a", "b"], tag_mode: "any" }),
-    reachedDatabase,
-  );
+  await assert.rejects(createContactSegment(segmentPool, segmentUser, { name: "Leads", tags: ["a", "b"], tag_mode: "any" }), reachedDatabase);
 });
 
 // Sorted field IDs for the field-set tests; the mock answers every field lookup with the type below.
-const setFields = [
-  "a1111111-1111-4111-8111-111111111111",
-  "b2222222-2222-4222-8222-222222222222",
-  "c3333333-3333-4333-8333-333333333333",
-  "d4444444-4444-4444-8444-444444444444",
-] as const;
+const setFields = ["a1111111-1111-4111-8111-111111111111", "b2222222-2222-4222-8222-222222222222", "c3333333-3333-4333-8333-333333333333", "d4444444-4444-4444-8444-444444444444"] as const;
 const setFieldTypes: Record<string, string> = {
   [setFields[0]]: "text",
   [setFields[1]]: "number",
@@ -2168,23 +1852,14 @@ test("contact field filters take the legacy keys or a field_conditions set of up
     },
     end: async () => {},
   } as unknown as Pool;
-  const request = (query: URLSearchParams | string) =>
-    appApi(
-      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
-      config,
-      () => pool,
-      mediaFetch(),
-    );
-  const set = (conditions: unknown, extra: Record<string, string> = {}) =>
-    new URLSearchParams({ field_conditions: JSON.stringify(conditions), ...extra });
+  const request = (query: URLSearchParams | string) => appApi(new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }), config, () => pool, mediaFetch());
+  const set = (conditions: unknown, extra: Record<string, string> = {}) => new URLSearchParams({ field_conditions: JSON.stringify(conditions), ...extra });
   const text = { field_id: setFields[0], field_operator: "eq", field_value: "x" };
   const score = { field_id: setFields[1], field_operator: "gt", field_value: 3 };
   const day = { field_id: setFields[2], field_operator: "lte", field_value: "2026-10-18" };
   const flag = { field_id: setFields[3], field_operator: "is_unset" };
   // The legacy keys keep the response and the parameter positions; the condition becomes a set of one.
-  const legacy = await request(
-    new URLSearchParams({ field_id: setFields[0], field_operator: "eq", field_value: JSON.stringify("x") }),
-  );
+  const legacy = await request(new URLSearchParams({ field_id: setFields[0], field_operator: "eq", field_value: JSON.stringify("x") }));
   assert.equal(legacy.status, 200);
   assert.deepEqual(await legacy.json(), { contacts: [], after: null });
   assert.equal(values.length, 19);
@@ -2193,11 +1868,7 @@ test("contact field filters take the legacy keys or a field_conditions set of up
   for (const [query, conditions, mode] of [
     [set([text]), [text], "all"],
     [set([text], { field_mode: "any" }), [text], "all"],
-    [
-      new URLSearchParams({ field_id: setFields[0], field_operator: "eq", field_value: '"x"', field_mode: "any" }),
-      [text],
-      "all",
-    ],
+    [new URLSearchParams({ field_id: setFields[0], field_operator: "eq", field_value: '"x"', field_mode: "any" }), [text], "all"],
     [set([score, text]), [text, score], "all"],
     [set([score, text], { field_mode: "all" }), [text, score], "all"],
     [set([day, score, text], { field_mode: "any" }), [text, score, day], "any"],
@@ -2253,10 +1924,7 @@ test("contact field filters take the legacy keys or a field_conditions set of up
     // A JSON-escaped lone surrogate parses, but PostgreSQL refuses it as jsonb input.
     [set([{ ...text, field_value: "\ud800" }]), "invalid_field_condition"],
     [set([text, { field_id: setFields[2], field_operator: "eq", field_value: "x\udc00" }]), "invalid_field_condition"],
-    [
-      new URLSearchParams({ field_id: setFields[0], field_operator: "eq", field_value: '"\\ud800"' }),
-      "invalid_field_condition",
-    ],
+    [new URLSearchParams({ field_id: setFields[0], field_operator: "eq", field_value: '"\\ud800"' }), "invalid_field_condition"],
     [new URLSearchParams({ field_conditions: "[{" }), "invalid_field_condition"],
     [new URLSearchParams({ field_conditions: "" }), "invalid_field_condition"],
     [new URLSearchParams({ field_conditions: JSON.stringify([text]).padEnd(8193, " ") }), "invalid_field_condition"],
@@ -2288,8 +1956,7 @@ test("contact field filters take the legacy keys or a field_conditions set of up
 });
 
 test("segment definitions take the legacy field keys or a set of one to three field conditions with a mode", async () => {
-  const fields = (definition: Record<string, unknown>) =>
-    parseSegmentDefinition({ name: "Scored", ...definition }).fieldCondition;
+  const fields = (definition: Record<string, unknown>) => parseSegmentDefinition({ name: "Scored", ...definition }).fieldCondition;
   const text = { field_id: setFields[0], field_operator: "eq", field_value: "x" };
   const score = { field_id: setFields[1], field_operator: "gt", field_value: 3 };
   const flag = { field_id: setFields[3], field_operator: "is_set" };
@@ -2301,10 +1968,7 @@ test("segment definitions take the legacy field keys or a set of one to three fi
   assert.deepEqual(fields({ field_conditions: [text], field_mode: "any" }), { conditions: [text], mode: "all" });
   assert.deepEqual(fields({ ...text, field_mode: "any" }), { conditions: [text], mode: "all" });
   assert.deepEqual(fields({ field_conditions: [score, text] }), { conditions: [text, score], mode: "all" });
-  assert.deepEqual(
-    fields({ field_conditions: [flag, score, { ...text, field_id: setFields[0].toUpperCase() }], field_mode: "any" }),
-    { conditions: [text, score, flag], mode: "any" },
-  );
+  assert.deepEqual(fields({ field_conditions: [flag, score, { ...text, field_id: setFields[0].toUpperCase() }], field_mode: "any" }), { conditions: [text, score, flag], mode: "any" });
   // A legacy key that is null counts as absent, so it can go with a set.
   assert.deepEqual(fields({ field_id: null, field_conditions: [text, score] }), {
     conditions: [text, score],
@@ -2317,10 +1981,7 @@ test("segment definitions take the legacy field keys or a set of one to three fi
     [{ field_conditions: [] }, "invalid_field_condition"],
     [{ field_conditions: text }, "invalid_field_condition"],
     [{ field_conditions: JSON.stringify([text, score]) }, "invalid_field_condition"],
-    [
-      { field_conditions: [text, score, flag, { field_id: setFields[2], field_operator: "is_set" }] },
-      "invalid_field_condition",
-    ],
+    [{ field_conditions: [text, score, flag, { field_id: setFields[2], field_operator: "is_set" }] }, "invalid_field_condition"],
     [{ field_conditions: [text, { field_id: setFields[0], field_operator: "is_set" }] }, "invalid_field_condition"],
     [{ field_conditions: [text, null] }, "invalid_field_condition"],
     [{ field_conditions: [text, { ...score, extra: true }] }, "invalid_field_condition"],
@@ -2335,23 +1996,14 @@ test("segment definitions take the legacy field keys or a set of one to three fi
   ] as const) {
     assert.throws(() => fields(body), refused(code), JSON.stringify(body));
     await assert.rejects(createContactSegment(segmentPool, segmentUser, { name: "Scored", ...body }), refused(code));
-    await assert.rejects(
-      updateContactSegment(segmentPool, segmentUser, segmentId, { name: "Scored", ...body, expected_version: 1 }),
-      refused(code),
-    );
+    await assert.rejects(updateContactSegment(segmentPool, segmentUser, segmentId, { name: "Scored", ...body, expected_version: 1 }), refused(code));
   }
   for (const definition of [
     { field_conditions: [score, text], field_mode: "any" },
     { field_conditions: [score, text], field_mode: "any", tags: ["a", "b"], condition_operator: "or" },
   ]) {
-    await assert.rejects(
-      createContactSegment(segmentPool, segmentUser, { name: "Scored", ...definition }),
-      reachedDatabase,
-    );
-    await assert.rejects(
-      updateContactSegment(segmentPool, segmentUser, segmentId, { name: "Scored", ...definition, expected_version: 1 }),
-      reachedDatabase,
-    );
+    await assert.rejects(createContactSegment(segmentPool, segmentUser, { name: "Scored", ...definition }), reachedDatabase);
+    await assert.rejects(updateContactSegment(segmentPool, segmentUser, segmentId, { name: "Scored", ...definition, expected_version: 1 }), reachedDatabase);
   }
 });
 
@@ -2391,15 +2043,8 @@ test("contact condition trees take one bounded JSON tree in $19 and refuse other
     },
     end: async () => {},
   } as unknown as Pool;
-  const request = (query: URLSearchParams | string) =>
-    appApi(
-      new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }),
-      config,
-      () => pool,
-      mediaFetch(),
-    );
-  const withTree = (value: unknown, extra: Record<string, string> = {}) =>
-    new URLSearchParams({ condition_tree: JSON.stringify(value), ...extra });
+  const request = (query: URLSearchParams | string) => appApi(new Request(`https://app.test/api/contacts?${query}`, { headers: { cookie: "__Host-ac-access=test" } }), config, () => pool, mediaFetch());
+  const withTree = (value: unknown, extra: Record<string, string> = {}) => new URLSearchParams({ condition_tree: JSON.stringify(value), ...extra });
   const text = { field_id: setFields[0], field_operator: "eq", field_value: "x" };
   const score = { field_id: setFields[1], field_operator: "gte", field_value: 100000 };
   const day = { field_id: setFields[2], field_operator: "lt", field_value: "2026-10-18" };
@@ -2420,21 +2065,10 @@ test("contact condition trees take one bounded JSON tree in $19 and refuse other
   // order, a tag or a field may repeat, and field leaves are checked in leaf order, repeats included.
   for (const [input, normalized] of [
     [tree("all", group("any", has(" VIP "))), tree("all", group("any", has("vip")))],
+    [tree("all", group("all", { tag: "b", negate: false }, lacks("A"))), tree("all", group("all", has("b"), lacks("a")))],
     [
-      tree("all", group("all", { tag: "b", negate: false }, lacks("A"))),
-      tree("all", group("all", has("b"), lacks("a"))),
-    ],
-    [
-      tree(
-        "any",
-        group("all", { ...day, field_id: setFields[2].toUpperCase() }, has("b"), has("a")),
-        group("any", text, has("b"), { ...score, field_operator: "lt", field_value: 100 }, score),
-      ),
-      tree(
-        "any",
-        group("all", day, has("b"), has("a")),
-        group("any", text, has("b"), { ...score, field_operator: "lt", field_value: 100 }, score),
-      ),
+      tree("any", group("all", { ...day, field_id: setFields[2].toUpperCase() }, has("b"), has("a")), group("any", text, has("b"), { ...score, field_operator: "lt", field_value: 100 }, score)),
+      tree("any", group("all", day, has("b"), has("a")), group("any", text, has("b"), { ...score, field_operator: "lt", field_value: 100 }, score)),
     ],
     [tree("all", group("all", flag), group("all", flag)), tree("all", group("all", flag), group("all", flag))],
   ] as const) {
@@ -2444,36 +2078,21 @@ test("contact condition trees take one bounded JSON tree in $19 and refuse other
     assert.deepEqual(JSON.parse(String(values[18])), normalized, JSON.stringify(input));
     assert.deepEqual(
       lookups,
-      (normalized.groups as { conditions: Record<string, unknown>[] }[]).flatMap((value) =>
-        value.conditions.flatMap((leaf) => ("field_id" in leaf ? [leaf.field_id] : [])),
-      ),
+      (normalized.groups as { conditions: Record<string, unknown>[] }[]).flatMap((value) => value.conditions.flatMap((leaf) => ("field_id" in leaf ? [leaf.field_id] : []))),
     );
   }
   // Counts: 1 to 5 groups, 1 to 5 leaves per group and at most 10 leaves in all.
   const leaves = (count: number) => Array.from({ length: count }, (_, index) => has(`t${index}`));
-  for (const value of [
-    tree("all", group("all", ...leaves(1))),
-    tree("all", group("all", ...leaves(5))),
-    tree("any", ...Array.from({ length: 5 }, () => group("any", ...leaves(2)))),
-    tree("all", group("all", ...leaves(5)), group("all", ...leaves(5))),
-  ])
+  for (const value of [tree("all", group("all", ...leaves(1))), tree("all", group("all", ...leaves(5))), tree("any", ...Array.from({ length: 5 }, () => group("any", ...leaves(2)))), tree("all", group("all", ...leaves(5)), group("all", ...leaves(5)))])
     assert.equal((await request(withTree(value))).status, 200, JSON.stringify(value));
   // Preview with a tree: one reason after the limits, and no tag, field or both keys.
   const preview = await request(withTree(vip, { preview: "true", last_comment_days: "7" }));
   assert.deepEqual((await preview.json()).excluded, { activity: "2", conditions: "9007199254740994" });
   // Ten text leaves of 1000 characters that need no escaping stay under the bound; the bound is on decoded text.
-  const wide = tree(
-    "all",
-    ...Array.from({ length: 5 }, () =>
-      group("all", ...[0, 1].map(() => ({ ...text, field_value: "가".repeat(1000) }))),
-    ),
-  );
+  const wide = tree("all", ...Array.from({ length: 5 }, () => group("all", ...[0, 1].map(() => ({ ...text, field_value: "가".repeat(1000) })))));
   assert.ok(JSON.stringify(wide).length > 10000 && JSON.stringify(wide).length <= 16384);
   assert.equal((await request(withTree(wide))).status, 200);
-  assert.equal(
-    (await request(new URLSearchParams({ condition_tree: JSON.stringify(vip).padEnd(16384, " ") }))).status,
-    200,
-  );
+  assert.equal((await request(new URLSearchParams({ condition_tree: JSON.stringify(vip).padEnd(16384, " ") }))).status, 200);
   const repeated = new URLSearchParams({ condition_tree: JSON.stringify(vip) });
   repeated.append("condition_tree", JSON.stringify(vip));
   for (const [query, error] of [
@@ -2481,10 +2100,7 @@ test("contact condition trees take one bounded JSON tree in $19 and refuse other
     [withTree(tree("all", ...Array.from({ length: 6 }, () => group("all", has("a"))))), "invalid_contact_condition"],
     [withTree(tree("all", group("all"))), "invalid_contact_condition"],
     [withTree(tree("all", group("all", ...leaves(6)))), "invalid_contact_condition"],
-    [
-      withTree(tree("all", group("all", ...leaves(5)), group("all", ...leaves(5)), group("all", ...leaves(1)))),
-      "invalid_contact_condition",
-    ],
+    [withTree(tree("all", group("all", ...leaves(5)), group("all", ...leaves(5)), group("all", ...leaves(1)))), "invalid_contact_condition"],
     [withTree({ groups: [group("all", has("a"))] }), "invalid_contact_condition"],
     [withTree(tree("none", group("all", has("a")))), "invalid_contact_condition"],
     [withTree(tree("ALL", group("all", has("a")))), "invalid_contact_condition"],
@@ -2508,13 +2124,7 @@ test("contact condition trees take one bounded JSON tree in $19 and refuse other
     [new URLSearchParams({ condition_tree: "" }), "invalid_contact_condition"],
     [new URLSearchParams({ condition_tree: JSON.stringify(vip).padEnd(16385, " ") }), "invalid_contact_condition"],
     // negate is true or false only.
-    ...["true", 1, null, "yes"].map(
-      (negate) =>
-        [withTree(tree("all", group("all", { tag: "a", negate }))), "invalid_contact_condition"] as [
-          URLSearchParams,
-          string,
-        ],
-    ),
+    ...["true", 1, null, "yes"].map((negate) => [withTree(tree("all", group("all", { tag: "a", negate }))), "invalid_contact_condition"] as [URLSearchParams, string]),
     // Tag leaves follow the contact tag rules, field leaves the field condition rules.
     [withTree(tree("all", group("all", has("")))), "invalid_contact_tags"],
     [withTree(tree("all", group("all", has("x".repeat(41))))), "invalid_contact_tags"],
@@ -2529,10 +2139,7 @@ test("contact condition trees take one bounded JSON tree in $19 and refuse other
       "invalid_contact_tags",
     ],
     [withTree(tree("all", group("all", { field_id: null, field_operator: "is_set" }))), "invalid_field_condition"],
-    [
-      withTree(tree("all", group("all", { field_id: "not-a-uuid", field_operator: "is_set" }))),
-      "invalid_field_condition",
-    ],
+    [withTree(tree("all", group("all", { field_id: "not-a-uuid", field_operator: "is_set" }))), "invalid_field_condition"],
     [withTree(tree("all", group("all", { ...text, field_operator: "contains" }))), "invalid_field_condition"],
     [withTree(tree("all", group("all", { field_id: setFields[0], field_operator: "eq" }))), "invalid_field_condition"],
     [withTree(tree("all", group("all", { ...text, field_value: null }))), "invalid_field_condition"],
@@ -2577,10 +2184,7 @@ test("contact condition trees take one bounded JSON tree in $19 and refuse other
     }),
   );
   assert.equal(limited.status, 200);
-  assert.deepEqual(
-    [values[1], values[13], values[11], values[15], values[17]],
-    [connectionId, 7, "marketing", "marketing", 3],
-  );
+  assert.deepEqual([values[1], values[13], values[11], values[15], values[17]], [connectionId, 7, "marketing", "marketing", 3]);
   assert.deepEqual(JSON.parse(String(values[18])), vip);
 });
 
@@ -2592,24 +2196,12 @@ test("segment definitions take a condition tree as a third form and lock its fie
   assert.equal(parsed({}).conditionTree, null);
   assert.equal(parsed({ condition_tree: null }).conditionTree, null);
   const definition = parsed({
-    condition_tree: tree(
-      "any",
-      group("all", { tag: " VIP ", negate: false }, { ...score, field_id: setFields[1].toUpperCase() }),
-      group("all", has("event")),
-    ),
+    condition_tree: tree("any", group("all", { tag: " VIP ", negate: false }, { ...score, field_id: setFields[1].toUpperCase() }), group("all", has("event"))),
   });
   assert.deepEqual(definition.conditionTree, vip);
   assert.deepEqual([definition.tagCondition, definition.fieldCondition, definition.operator], [null, null, "and"]);
   // Absent, null and empty legacy keys count as absent, as for the other forms.
-  for (const absent of [
-    { tag: null },
-    { tag: "" },
-    { tags: null },
-    { field_id: null },
-    { field_conditions: null },
-    { field_mode: null },
-  ])
-    assert.deepEqual(parsed({ condition_tree: vip, ...absent }).conditionTree, vip, JSON.stringify(absent));
+  for (const absent of [{ tag: null }, { tag: "" }, { tags: null }, { field_id: null }, { field_conditions: null }, { field_mode: null }]) assert.deepEqual(parsed({ condition_tree: vip, ...absent }).conditionTree, vip, JSON.stringify(absent));
   for (const [body, code] of [
     [{ tag: "lead" }, "invalid_contact_condition"],
     [{ tags: ["a", "b"] }, "invalid_contact_condition"],
@@ -2627,10 +2219,7 @@ test("segment definitions take a condition tree as a third form and lock its fie
     const mixed = { name: "Grouped", condition_tree: vip, ...body };
     assert.throws(() => parseSegmentDefinition(mixed), refused(code), JSON.stringify(body));
     await assert.rejects(createContactSegment(segmentPool, segmentUser, mixed), refused(code));
-    await assert.rejects(
-      updateContactSegment(segmentPool, segmentUser, segmentId, { ...mixed, expected_version: 1 }),
-      refused(code),
-    );
+    await assert.rejects(updateContactSegment(segmentPool, segmentUser, segmentId, { ...mixed, expected_version: 1 }), refused(code));
   }
   for (const [value, code] of [
     [tree("all"), "invalid_contact_condition"],
@@ -2644,10 +2233,7 @@ test("segment definitions take a condition tree as a third form and lock its fie
     [tree("all", group("all", { ...has("a"), extra: 1 })), "invalid_contact_condition"],
   ] as const) {
     assert.throws(() => parsed({ condition_tree: value }), refused(code), JSON.stringify(value));
-    await assert.rejects(
-      createContactSegment(segmentPool, segmentUser, { name: "Grouped", condition_tree: value }),
-      refused(code),
-    );
+    await assert.rejects(createContactSegment(segmentPool, segmentUser, { name: "Grouped", condition_tree: value }), refused(code));
   }
   // A write validates every field leaf, repeats included, in field_id order rather than leaf order, locks each
   // distinct field FOR SHARE once, with its first leaf, and stores the tree as one jsonb value after the other
@@ -2720,12 +2306,7 @@ test("segment create and edit read a body large enough for the largest tree the 
   const largest = {
     name: `${"가".repeat(60)}${" ".repeat(240)}`,
     connection_id: connectionId,
-    condition_tree: tree(
-      "any",
-      ...Array.from({ length: 2 }, () =>
-        group("all", ...Array.from({ length: CONDITION_TREE_LEAF_LIMIT / 2 }, () => leaf)),
-      ),
-    ),
+    condition_tree: tree("any", ...Array.from({ length: 2 }, () => group("all", ...Array.from({ length: CONDITION_TREE_LEAF_LIMIT / 2 }, () => leaf)))),
     last_comment_days: 366,
     consent_purpose: "marketing",
     consent_state: "granted",
@@ -2775,11 +2356,7 @@ test("contact mutations reject cross-origin writes and invalid tags before a wri
   const open = () => {
     throw new Error("DB must not be opened");
   };
-  assert.equal(
-    (await appApi(new Request(path, { method: "PATCH", headers: { origin: "https://evil.test" } }), config, open))
-      .status,
-    403,
-  );
+  assert.equal((await appApi(new Request(path, { method: "PATCH", headers: { origin: "https://evil.test" } }), config, open)).status, 403);
   // Invalid input runs no SQL after the workspace write limit's membership read (#167).
   const pool = membershipOnlyPool();
   const invalid = await appApi(
@@ -2799,25 +2376,18 @@ test("contact mutations reject cross-origin writes and invalid tags before a wri
 test("contact routes accept encoded string sender IDs without changing identity", async () => {
   const sender = "sender/one% test";
   const query = async (sql: string, values: unknown[] = []) => ({
-    rows: sql.includes("workspace_members")
-      ? [{ workspace_id: workspaceId, role: "owner" }]
-      : values[2] === sender
-        ? [{ tags: ["lead"] }]
-        : [],
+    rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : values[2] === sender ? [{ tags: ["lead"] }] : [],
   });
   const pool = {
     query,
     connect: async () => ({ query, release: () => {} }),
     end: async () => {},
   } as unknown as Pool;
-  const request = new Request(
-    `https://app.test/api/connections/${connectionId}/contacts/${encodeURIComponent(sender)}`,
-    {
-      method: "PATCH",
-      headers: { origin: "https://app.test", cookie: "__Host-ac-access=test", "content-type": "application/json" },
-      body: JSON.stringify({ tags: ["lead"] }),
-    },
-  );
+  const request = new Request(`https://app.test/api/connections/${connectionId}/contacts/${encodeURIComponent(sender)}`, {
+    method: "PATCH",
+    headers: { origin: "https://app.test", cookie: "__Host-ac-access=test", "content-type": "application/json" },
+    body: JSON.stringify({ tags: ["lead"] }),
+  });
   const result = await appApi(request, config, () => pool, mediaFetch());
   assert.equal(result.status, 200);
   assert.deepEqual(await result.json(), { tags: ["lead"] });
@@ -2828,19 +2398,12 @@ test("contact automation rejects unauthenticated and cross-origin writes before 
     throw new Error("DB must not be opened");
   };
   const path = `https://app.test/api/connections/${connectionId}/contacts/sender/automation`;
-  assert.equal(
-    (await appApi(new Request(path, { method: "PUT", headers: { origin: "https://evil.test" } }), config, open)).status,
-    403,
-  );
-  assert.equal(
-    (await appApi(new Request(path, { method: "PUT", headers: { origin: "https://app.test" } }), config, open)).status,
-    401,
-  );
+  assert.equal((await appApi(new Request(path, { method: "PUT", headers: { origin: "https://evil.test" } }), config, open)).status, 403);
+  assert.equal((await appApi(new Request(path, { method: "PUT", headers: { origin: "https://app.test" } }), config, open)).status, 401);
 });
 
 // Default API request limits (#167).
-const sessionFetch = (async () =>
-  Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
+const sessionFetch = (async () => Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch;
 const writeRequest = (path: string, method = "POST") =>
   new Request(`https://app.test${path}`, {
     method,
@@ -2851,8 +2414,7 @@ const writeRequest = (path: string, method = "POST") =>
     },
     body: "{}",
   });
-const sessionGet = (path: string) =>
-  new Request(`https://app.test${path}`, { headers: { cookie: "__Host-ac-access=test-session" } });
+const sessionGet = (path: string) => new Request(`https://app.test${path}`, { headers: { cookie: "__Host-ac-access=test-session" } });
 const memberId = "33333333-3333-4333-8333-333333333333";
 // A pool for an owner of the test workspace: every read answers the caller's membership, its time zone and its
 // plan usage, and a transaction finds the target member as an agent.
@@ -2867,10 +2429,7 @@ const ownerPool = () => {
       rowCount: 1,
     }),
     connect: async () => ({
-      query: async (sql: string) =>
-        sql.includes("SELECT role FROM workspace_members")
-          ? { rows: [{ role: "agent" }], rowCount: 1 }
-          : { rows: sql.includes("workspace_members") ? [row] : [], rowCount: 0 },
+      query: async (sql: string) => (sql.includes("SELECT role FROM workspace_members") ? { rows: [{ role: "agent" }], rowCount: 1 } : { rows: sql.includes("workspace_members") ? [row] : [], rowCount: 0 }),
       release: () => {},
     }),
     end: async () => {},
@@ -2907,12 +2466,7 @@ test("a write over the per-user limit returns 429 before any route handler or da
 test("a write over the per-workspace limit returns 429 after only the membership read (#167)", async () => {
   const user = recordingLimit(true),
     workspace = recordingLimit(false);
-  const response = await appApi(
-    writeRequest(`/api/connections/${connectionId}/contacts/888`, "PATCH"),
-    { ...config, API_WRITE_USER_LIMIT: user.binding, API_WRITE_WORKSPACE_LIMIT: workspace.binding },
-    membershipOnlyPool,
-    sessionFetch,
-  );
+  const response = await appApi(writeRequest(`/api/connections/${connectionId}/contacts/888`, "PATCH"), { ...config, API_WRITE_USER_LIMIT: user.binding, API_WRITE_WORKSPACE_LIMIT: workspace.binding }, membershipOnlyPool, sessionFetch);
   assert.equal(response.status, 429);
   assert.deepEqual(await response.json(), { error: "rate_limited" });
   assert.deepEqual(user.keys, [userId]);
@@ -2960,22 +2514,12 @@ test("the dashboard bootstrap spends no write limit for a member and only the us
 test("an owner removes a member after the workspace write limit is spent (#167)", async () => {
   const user = recordingLimit(true),
     workspace = recordingLimit(false);
-  const response = await appApi(
-    writeRequest(`/api/workspace/members/${memberId}`, "DELETE"),
-    { ...config, API_WRITE_USER_LIMIT: user.binding, API_WRITE_WORKSPACE_LIMIT: workspace.binding },
-    ownerPool,
-    sessionFetch,
-  );
+  const response = await appApi(writeRequest(`/api/workspace/members/${memberId}`, "DELETE"), { ...config, API_WRITE_USER_LIMIT: user.binding, API_WRITE_WORKSPACE_LIMIT: workspace.binding }, ownerPool, sessionFetch);
   assert.equal(response.status, 200);
   assert.equal(((await response.json()) as { removed: boolean }).removed, true);
   assert.deepEqual([user.keys, workspace.keys], [[userId], []]);
   // Any other write of the same owner is still refused by the spent workspace limit.
-  const other = await appApi(
-    writeRequest(`/api/workspace/members/${memberId}`, "PATCH"),
-    { ...config, API_WRITE_USER_LIMIT: user.binding, API_WRITE_WORKSPACE_LIMIT: workspace.binding },
-    ownerPool,
-    sessionFetch,
-  );
+  const other = await appApi(writeRequest(`/api/workspace/members/${memberId}`, "PATCH"), { ...config, API_WRITE_USER_LIMIT: user.binding, API_WRITE_WORKSPACE_LIMIT: workspace.binding }, ownerPool, sessionFetch);
   assert.equal(other.status, 429);
   assert.deepEqual(workspace.keys, [workspaceId]);
 });
@@ -2992,12 +2536,7 @@ test("a user without a workspace spends only the per-user write limit (#167)", a
     connect: async () => assert.fail("no write is expected"),
     end: async () => {},
   } as unknown as Pool;
-  const response = await appApi(
-    writeRequest("/api/no-such-route"),
-    { ...config, API_WRITE_USER_LIMIT: user.binding, API_WRITE_WORKSPACE_LIMIT: workspace.binding },
-    () => pool,
-    sessionFetch,
-  );
+  const response = await appApi(writeRequest("/api/no-such-route"), { ...config, API_WRITE_USER_LIMIT: user.binding, API_WRITE_WORKSPACE_LIMIT: workspace.binding }, () => pool, sessionFetch);
   assert.equal(response.status, 404);
   assert.deepEqual(user.keys, [userId]);
   assert.deepEqual(workspace.keys, []);
@@ -3046,12 +2585,7 @@ test("GET routes other than the inbox list and the auth routes spend none of the
 test("the inbox list over its per-user limit returns 429 before any database access (#167)", async () => {
   const inbox = recordingLimit(false),
     user = recordingLimit(true);
-  const response = await appApi(
-    sessionGet("/api/inbox"),
-    { ...config, INBOX_LIST_LIMIT: inbox.binding, API_WRITE_USER_LIMIT: user.binding },
-    untouchedPool,
-    sessionFetch,
-  );
+  const response = await appApi(sessionGet("/api/inbox"), { ...config, INBOX_LIST_LIMIT: inbox.binding, API_WRITE_USER_LIMIT: user.binding }, untouchedPool, sessionFetch);
   assert.equal(response.status, 429);
   assert.deepEqual(await response.json(), { error: "rate_limited" });
   assert.deepEqual(inbox.keys, [userId]);
@@ -3060,30 +2594,15 @@ test("the inbox list over its per-user limit returns 429 before any database acc
 
 test("an unavailable default limiter lets the request through and logs one fixed code (#167)", async (t) => {
   const lines: unknown[] = [];
-  for (const method of ["error", "warn", "log"] as const)
-    t.mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
+  for (const method of ["error", "warn", "log"] as const) t.mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
   const expected = { event: "rate_limit_unavailable", code: "api_limit_unavailable", correlation_id: "corr-167" };
   // Both write limits unavailable: a throwing per-user limiter and a missing workspace binding.
-  const write = await appApi(
-    writeRequest("/api/no-such-route"),
-    { ...config, API_WRITE_USER_LIMIT: recordingLimit("throw").binding, API_WRITE_WORKSPACE_LIMIT: undefined },
-    untouchedPool,
-    sessionFetch,
-    undefined,
-    "corr-167",
-  );
+  const write = await appApi(writeRequest("/api/no-such-route"), { ...config, API_WRITE_USER_LIMIT: recordingLimit("throw").binding, API_WRITE_WORKSPACE_LIMIT: undefined }, untouchedPool, sessionFetch, undefined, "corr-167");
   assert.equal(write.status, 404);
   assert.deepEqual(lines, [expected]);
   // A limiter object that answers with a non-OK status throws from durableLimits; a missing per-user binding too.
   lines.length = 0;
-  const workspaceDown = await appApi(
-    writeRequest("/api/no-such-route"),
-    { ...config, API_WRITE_USER_LIMIT: undefined, API_WRITE_WORKSPACE_LIMIT: recordingLimit("throw").binding },
-    membershipOnlyPool,
-    sessionFetch,
-    undefined,
-    "corr-167",
-  );
+  const workspaceDown = await appApi(writeRequest("/api/no-such-route"), { ...config, API_WRITE_USER_LIMIT: undefined, API_WRITE_WORKSPACE_LIMIT: recordingLimit("throw").binding }, membershipOnlyPool, sessionFetch, undefined, "corr-167");
   assert.equal(workspaceDown.status, 404);
   assert.deepEqual(lines, [expected]);
   lines.length = 0;
@@ -3118,12 +2637,7 @@ test("a write refused by a default limit spends no Instagram connect allowance (
   };
   for (const refused of ["API_WRITE_USER_LIMIT", "API_WRITE_WORKSPACE_LIMIT"] as const) {
     const connect = recordingLimit(true);
-    const response = await appApi(
-      writeRequest("/api/instagram/connect"),
-      { ...oauth, [refused]: recordingLimit(false).binding, INSTAGRAM_CONNECT_LIMIT: connect.binding },
-      membershipOnlyPool,
-      sessionFetch,
-    );
+    const response = await appApi(writeRequest("/api/instagram/connect"), { ...oauth, [refused]: recordingLimit(false).binding, INSTAGRAM_CONNECT_LIMIT: connect.binding }, membershipOnlyPool, sessionFetch);
     assert.equal(response.status, 429, refused);
     assert.deepEqual(await response.json(), { error: "rate_limited" }, refused);
     assert.deepEqual(connect.keys, [], refused);
@@ -3201,8 +2715,7 @@ test("a segment snapshot request with a zero-byte body passes the body check wha
       () =>
         ({
           query: async (sql: string) => {
-            if (/^SELECT workspace_id FROM workspace_members WHERE user_id=\$1 AND removed_at IS NULL$/.test(sql))
-              return { rows: [{ workspace_id: workspaceId }] };
+            if (/^SELECT workspace_id FROM workspace_members WHERE user_id=\$1 AND removed_at IS NULL$/.test(sql)) return { rows: [{ workspace_id: workspaceId }] };
             reached = true;
             throw new Error("database reached");
           },
@@ -3220,12 +2733,7 @@ test("a segment snapshot request with a zero-byte body passes the body check wha
   const streamed = new Request("https://app.test/", { method: "POST", body: "" });
   assert.notEqual(streamed.body, null);
   assert.equal(streamed.headers.get("content-length"), null);
-  for (const init of [
-    {},
-    { body: "" },
-    { body: "", headers: { "content-type": "application/json" } },
-    { body: "{}", headers: { "content-type": "application/json" } },
-  ] as RequestInit[]) {
+  for (const init of [{}, { body: "" }, { body: "", headers: { "content-type": "application/json" } }, { body: "{}", headers: { "content-type": "application/json" } }] as RequestInit[]) {
     const { response, reached } = await send(init);
     assert.equal(response.status, 503, JSON.stringify(init));
     assert.equal(reached, true, JSON.stringify(init));
@@ -3270,16 +2778,9 @@ test("the segment snapshot CSV fails closed on the contact export allowance befo
 test("a snapshot request body is empty or exactly {}, checked before the role read", async () => {
   assert.equal(parseSnapshotRequest(undefined), undefined);
   assert.equal(parseSnapshotRequest({}), undefined);
-  for (const input of [null, [], "", 0, { note: 1 }, { expected_version: 1 }])
-    assert.throws(() => parseSnapshotRequest(input), refused("invalid_snapshot_request"), JSON.stringify(input));
-  await assert.rejects(
-    createSegmentSnapshot(segmentPool, segmentUser, segmentId, { x: 1 }),
-    refused("invalid_snapshot_request"),
-  );
-  await assert.rejects(
-    createSegmentSnapshot(segmentPool, segmentUser, "bad", undefined),
-    refused("invalid_snapshot_request"),
-  );
+  for (const input of [null, [], "", 0, { note: 1 }, { expected_version: 1 }]) assert.throws(() => parseSnapshotRequest(input), refused("invalid_snapshot_request"), JSON.stringify(input));
+  await assert.rejects(createSegmentSnapshot(segmentPool, segmentUser, segmentId, { x: 1 }), refused("invalid_snapshot_request"));
+  await assert.rejects(createSegmentSnapshot(segmentPool, segmentUser, "bad", undefined), refused("invalid_snapshot_request"));
   await assert.rejects(createSegmentSnapshot(segmentPool, segmentUser, segmentId, undefined), reachedDatabase);
   assert.deepEqual(SEGMENT_SNAPSHOT_LIMITS, {
     maxMembers: 5000,

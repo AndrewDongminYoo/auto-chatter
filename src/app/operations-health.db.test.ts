@@ -11,8 +11,7 @@ import { recoverStalePrivateReplies } from "../instagram/reply-worker.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const adminId = "11111111-1111-4111-8111-111111111111";
@@ -48,15 +47,8 @@ async function seedConnection(workspace: string, connection: string, account: st
 }
 
 // One outbox row per sender with the given state; times are minutes before now.
-async function reply(
-  connection: string,
-  sender: string,
-  status: string,
-  options: { dueMinutesAgo?: number; claimedMinutesAgo?: number; hoursAgo?: number } = {},
-) {
-  const { workspace_id: workspace, id: rule } = (
-    await pool.query("SELECT workspace_id,id FROM instagram_comment_rules WHERE connection_id=$1", [connection])
-  ).rows[0];
+async function reply(connection: string, sender: string, status: string, options: { dueMinutesAgo?: number; claimedMinutesAgo?: number; hoursAgo?: number } = {}) {
+  const { workspace_id: workspace, id: rule } = (await pool.query("SELECT workspace_id,id FROM instagram_comment_rules WHERE connection_id=$1", [connection])).rows[0];
   const event = (
     await pool.query(
       `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at)
@@ -69,18 +61,7 @@ async function reply(
        status,created_at,next_attempt_at,attempt_id,attempt_started_at)
      VALUES($1,$2,$3,$4,$5,'1789',$6,'reply text',$7,now()-make_interval(hours=>$8),now()-make_interval(mins=>$9),
        CASE WHEN $10::int IS NULL THEN NULL ELSE gen_random_uuid() END,now()-make_interval(mins=>$10::int))`,
-    [
-      workspace,
-      connection,
-      event,
-      rule,
-      `comment-${sender}`,
-      sender,
-      status,
-      options.hoursAgo ?? 0,
-      options.dueMinutesAgo ?? 0,
-      options.claimedMinutesAgo ?? null,
-    ],
+    [workspace, connection, event, rule, `comment-${sender}`, sender, status, options.hoursAgo ?? 0, options.dueMinutesAgo ?? 0, options.claimedMinutesAgo ?? null],
   );
 }
 
@@ -88,20 +69,14 @@ beforeEach(async () => {
   await pool.query("TRUNCATE workspaces, scheduled_steps CASCADE");
   await seedConnection(workspaceId, connectionId, "account-own");
   await seedConnection(otherWorkspaceId, foreignConnectionId, "account-foreign");
-  await pool.query(
-    "INSERT INTO workspace_members(user_id,workspace_id,role,email) VALUES($1,$3,'owner','owner@example.test'),($2,$3,'agent','agent@example.test')",
-    [adminId, agentId, workspaceId],
-  );
+  await pool.query("INSERT INTO workspace_members(user_id,workspace_id,role,email) VALUES($1,$3,'owner','owner@example.test'),($2,$3,'agent','agent@example.test')", [adminId, agentId, workspaceId]);
 });
 
 after(async () => pool.end());
 
 test("scheduled manual reply latency skips future reservations without hiding due immediate replies", async () => {
   await reply(connectionId, "456", "sent");
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id) VALUES($1,$2,'456')",
-    [workspaceId, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id) VALUES($1,$2,'456')", [workspaceId, connectionId]);
   await pool.query(
     `INSERT INTO instagram_inbox_handoffs(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,updated_by)
      SELECT workspace_id,connection_id,'123',sender_id,id,true,1,$2 FROM private_reply_outbox WHERE connection_id=$1`,
@@ -143,8 +118,7 @@ function health(actorId = adminId, env: Record<string, string> = apiEnv) {
     }),
     env,
     () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: actorId, email: "owner@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actorId, email: "owner@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 
@@ -152,10 +126,7 @@ test("admins see their own connections' delivery metrics and alerts, agents are 
   // Queue latency counts from when a reply became due, and held work is not waiting.
   await reply(connectionId, "100", "pending", { dueMinutesAgo: 20 });
   await reply(connectionId, "101", "pending", { dueMinutesAgo: 90 });
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'101',true)",
-    [workspaceId, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'101',true)", [workspaceId, connectionId]);
   await reply(connectionId, "102", "pending", { dueMinutesAgo: -30 });
   await reply(connectionId, "103", "sending", { claimedMinutesAgo: 12 });
   await reply(connectionId, "104", "unknown", { claimedMinutesAgo: 60 });
@@ -164,23 +135,13 @@ test("admins see their own connections' delivery metrics and alerts, agents are 
   // Outcomes older than 24 hours are not counted.
   await reply(connectionId, "107", "unknown", { claimedMinutesAgo: 25 * 60, hoursAgo: 25 });
   await reply(foreignConnectionId, "200", "unknown", { claimedMinutesAgo: 1 });
-  await pool.query("UPDATE instagram_connections SET token_expires_at=now()+interval '3 days 1 hour' WHERE id=$1", [
-    connectionId,
-  ]);
+  await pool.query("UPDATE instagram_connections SET token_expires_at=now()+interval '3 days 1 hour' WHERE id=$1", [connectionId]);
   await recordStep(pool, "cron", null);
 
   const response = await health();
   assert.equal(response.status, 200);
   const text = await response.text();
-  for (const forbidden of [
-    "secret comment text",
-    "reply text",
-    "SECRET-CIPHERTEXT",
-    "@example.test",
-    "recipient",
-    "sender",
-  ])
-    assert.equal(text.includes(forbidden), false, forbidden);
+  for (const forbidden of ["secret comment text", "reply text", "SECRET-CIPHERTEXT", "@example.test", "recipient", "sender"]) assert.equal(text.includes(forbidden), false, forbidden);
   const body = JSON.parse(text);
   assert.deepEqual(body.alerts, []);
   assert.equal(body.global_send_enabled, true);
@@ -196,10 +157,7 @@ test("admins see their own connections' delivery metrics and alerts, agents are 
   assert.equal(connection.id, connectionId);
   assert.ok(connection.oldest_due_pending_seconds >= 20 * 60 && connection.oldest_due_pending_seconds < 21 * 60);
   assert.ok(connection.longest_sending_seconds >= 12 * 60 && connection.longest_sending_seconds < 13 * 60);
-  assert.deepEqual(
-    [connection.unknown_24h, connection.failed_24h, connection.blocked_24h, connection.token_expires_in_days],
-    [1, 1, 1, 3],
-  );
+  assert.deepEqual([connection.unknown_24h, connection.failed_24h, connection.blocked_24h, connection.token_expires_in_days], [1, 1, 1, 3]);
   assert.equal(connection.send_paused_until, null);
   assert.deepEqual(connection.alerts, ["oldest_pending", "sending_dwell", "unknown_outcome", "token_expiring"]);
 
@@ -229,9 +187,7 @@ test("a follow reply outcome is dated by its last claim, not by the confirmation
 
 test("a paused connection reports the pause and holds its replies out of the queue latency", async () => {
   await reply(connectionId, "100", "pending", { dueMinutesAgo: 30 });
-  await pool.query("UPDATE instagram_connections SET send_paused_until=now()+interval '15 minutes' WHERE id=$1", [
-    connectionId,
-  ]);
+  await pool.query("UPDATE instagram_connections SET send_paused_until=now()+interval '15 minutes' WHERE id=$1", [connectionId]);
   const body = await (await health()).json();
   assert.deepEqual(body.alerts, ["cron_stale"]);
   assert.equal(body.last_cron_success_at, null);
@@ -239,9 +195,7 @@ test("a paused connection reports the pause and holds its replies out of the que
   assert.ok(Date.parse(connection.send_paused_until) > Date.now());
   assert.equal(connection.oldest_due_pending_seconds, null);
   // After the pause the wait counts from the end of the pause, not from the original due time.
-  await pool.query("UPDATE instagram_connections SET send_paused_until=now()-interval '2 minutes' WHERE id=$1", [
-    connectionId,
-  ]);
+  await pool.query("UPDATE instagram_connections SET send_paused_until=now()-interval '2 minutes' WHERE id=$1", [connectionId]);
   const resumed = (await (await health()).json()).connections[0];
   assert.equal(resumed.send_paused_until, null);
   assert.ok(resumed.oldest_due_pending_seconds >= 120 && resumed.oldest_due_pending_seconds < 180);
@@ -249,8 +203,7 @@ test("a paused connection reports the pause and holds its replies out of the que
 
 test("an overlapping cron run with an older unknown count cannot lower the seen count and log the occurrence twice", async () => {
   const lines: unknown[] = [];
-  for (const method of ["log", "warn", "error"] as const)
-    mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
+  for (const method of ["log", "warn", "error"] as const) mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
   try {
     await reply(connectionId, "104", "unknown", { claimedMinutesAgo: 5 });
     await evaluateAlerts(pool, true, "corr-1", true);
@@ -277,11 +230,7 @@ test("an overlapping cron run with an older unknown count cannot lower the seen 
   } finally {
     mock.restoreAll();
   }
-  assert.equal(
-    (await pool.query("SELECT alert_seen_count FROM scheduled_steps WHERE name='alert_unknown_outcome'")).rows[0]
-      .alert_seen_count,
-    "2",
-  );
+  assert.equal((await pool.query("SELECT alert_seen_count FROM scheduled_steps WHERE name='alert_unknown_outcome'")).rows[0].alert_seen_count, "2");
 });
 
 // A pool on which a cron run stalls right after it reads the metrics, while overlap runs another run.
@@ -302,8 +251,7 @@ function stalledAfterMetrics(overlap: () => Promise<void>) {
 
 test("an overlapping cron run that read older metrics cannot undo a newer run's start or clear", async () => {
   const lines: unknown[] = [];
-  for (const method of ["log", "warn", "error"] as const)
-    mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
+  for (const method of ["log", "warn", "error"] as const) mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
   try {
     // Run A reads no unknown and stalls; run B sees a new one and starts the alert; A must not clear it.
     const started = stalledAfterMetrics(async () => {
@@ -327,20 +275,13 @@ test("an overlapping cron run that read older metrics cannot undo a newer run's 
   } finally {
     mock.restoreAll();
   }
-  assert.equal(
-    (await pool.query("SELECT alert_active FROM scheduled_steps WHERE name='alert_unknown_outcome'")).rows[0]
-      .alert_active,
-    false,
-  );
+  assert.equal((await pool.query("SELECT alert_active FROM scheduled_steps WHERE name='alert_unknown_outcome'")).rows[0].alert_active, false);
 });
 
 test("a run that read older state cannot undo a transition made after its read, even when it matches its read", async () => {
   const lines: unknown[] = [];
-  for (const method of ["log", "warn", "error"] as const)
-    mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
-  const active = async () =>
-    (await pool.query("SELECT alert_active FROM scheduled_steps WHERE name='alert_unknown_outcome'")).rows[0]
-      .alert_active;
+  for (const method of ["log", "warn", "error"] as const) mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
+  const active = async () => (await pool.query("SELECT alert_active FROM scheduled_steps WHERE name='alert_unknown_outcome'")).rows[0].alert_active;
   try {
     // The alert is on and its unknown has aged out, so run A reads it on and wants to clear it. While A stalls,
     // run B clears it and run C starts it again for a new unknown; A must not clear C's start.
@@ -385,8 +326,7 @@ test("a run that read older state cannot undo a transition made after its read, 
 
 test("alert starts and clears are each logged once, with only allowed fields", async () => {
   const lines: unknown[] = [];
-  for (const method of ["log", "warn", "error"] as const)
-    mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
+  for (const method of ["log", "warn", "error"] as const) mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
   try {
     await recordStep(pool, "cron", null);
     await reply(connectionId, "104", "unknown", { claimedMinutesAgo: 5 });
@@ -426,19 +366,15 @@ test("alert starts and clears are each logged once, with only allowed fields", a
   } finally {
     mock.restoreAll();
   }
-  assert.deepEqual(
-    (await pool.query("SELECT name,alert_active FROM scheduled_steps WHERE name LIKE 'alert_%' ORDER BY name")).rows,
-    [
-      { name: "alert_cron_stale", alert_active: true },
-      { name: "alert_unknown_outcome", alert_active: false },
-    ],
-  );
+  assert.deepEqual((await pool.query("SELECT name,alert_active FROM scheduled_steps WHERE name LIKE 'alert_%' ORDER BY name")).rows, [
+    { name: "alert_cron_stale", alert_active: true },
+    { name: "alert_unknown_outcome", alert_active: false },
+  ]);
 });
 
 test("an alert evaluation with nothing to change issues only its single read", async () => {
   const lines: unknown[] = [];
-  for (const method of ["log", "warn", "error"] as const)
-    mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
+  for (const method of ["log", "warn", "error"] as const) mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
   const statements: string[] = [];
   const counted = {
     async query(sql: string, values?: unknown[]) {
@@ -475,8 +411,7 @@ test("an alert evaluation with nothing to change issues only its single read", a
 test("a run without connections still evaluates the service alerts", async () => {
   await pool.query("TRUNCATE workspaces, scheduled_steps CASCADE");
   const lines: unknown[] = [];
-  for (const method of ["log", "warn", "error"] as const)
-    mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
+  for (const method of ["log", "warn", "error"] as const) mock.method(console, method, (line: string) => lines.push(JSON.parse(line)));
   try {
     await evaluateAlerts(pool, true, "corr-stale");
     await evaluateAlerts(pool, true, "corr-ok", true);
@@ -576,8 +511,7 @@ test("an older outcome recorded later never moves a stored time back or replaces
 
 test("a database failure behind an API request returns 503 and logs only a fixed code", async () => {
   const lines: unknown[][] = [];
-  for (const method of ["log", "warn", "error"] as const)
-    mock.method(console, method, (...args: string[]) => lines.push(args.map((line) => JSON.parse(line))));
+  for (const method of ["log", "warn", "error"] as const) mock.method(console, method, (...args: string[]) => lines.push(args.map((line) => JSON.parse(line))));
   try {
     const response = await appApi(
       new Request("https://app.test/api/workspace/health", {
@@ -592,23 +526,19 @@ test("a database failure behind an API request returns 503 and logs only a fixed
           },
           end: async () => {},
         }) as unknown as Pool,
-      (async () =>
-        Response.json({ id: adminId, email: "owner@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+      (async () => Response.json({ id: adminId, email: "owner@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
     );
     assert.equal(response.status, 503);
     assert.deepEqual(await response.json(), { error: "service_unavailable" });
   } finally {
     mock.restoreAll();
   }
-  assert.deepEqual(lines, [
-    [{ event: "request_failed", code: "database_unavailable", correlation_id: "8c1f2e3d4b5a6978-ICN" }],
-  ]);
+  assert.deepEqual(lines, [[{ event: "request_failed", code: "database_unavailable", correlation_id: "8c1f2e3d4b5a6978-ICN" }]]);
 });
 
 test("an API request without cf-ray logs a fresh UUID correlation ID, also from its pool", async () => {
   const lines: unknown[][] = [];
-  for (const method of ["log", "warn", "error"] as const)
-    mock.method(console, method, (...args: string[]) => lines.push(args.map((line) => JSON.parse(line))));
+  for (const method of ["log", "warn", "error"] as const) mock.method(console, method, (...args: string[]) => lines.push(args.map((line) => JSON.parse(line))));
   let poolCorrelationId: string | undefined;
   try {
     const response = await appApi(
@@ -626,8 +556,7 @@ test("an API request without cf-ray logs a fresh UUID correlation ID, also from 
           end: async () => {},
         } as unknown as Pool;
       },
-      (async () =>
-        Response.json({ id: adminId, email: "owner@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+      (async () => Response.json({ id: adminId, email: "owner@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
     );
     assert.equal(response.status, 503);
   } finally {
@@ -655,8 +584,7 @@ async function unknownAlertActive() {
   } finally {
     mock.restoreAll();
   }
-  return (await pool.query("SELECT alert_active FROM scheduled_steps WHERE name='alert_unknown_outcome'")).rows[0]
-    ?.alert_active;
+  return (await pool.query("SELECT alert_active FROM scheduled_steps WHERE name='alert_unknown_outcome'")).rows[0]?.alert_active;
 }
 async function assertRecoveredCounts(recover: () => Promise<unknown>) {
   assert.deepEqual(await outcomeCounts(), [0, 0, 0]);
@@ -671,17 +599,10 @@ test("a private reply recovered from a stale sending counts from its recovery, n
   await reply(connectionId, "301", "unknown", { claimedMinutesAgo: 25 * 60, hoursAgo: 25 });
   await pool.query("UPDATE private_reply_outbox SET failure_code='send_outcome_unknown' WHERE sender_id='301'");
   await assertRecoveredCounts(() => recoverStalePrivateReplies(pool, staleCutoff(), connectionId));
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT sender_id,status,failure_code,recovered_at IS NOT NULL AS recovered FROM private_reply_outbox ORDER BY sender_id",
-      )
-    ).rows,
-    [
-      { sender_id: "300", status: "unknown", failure_code: "worker_interrupted", recovered: true },
-      { sender_id: "301", status: "unknown", failure_code: "send_outcome_unknown", recovered: false },
-    ],
-  );
+  assert.deepEqual((await pool.query("SELECT sender_id,status,failure_code,recovered_at IS NOT NULL AS recovered FROM private_reply_outbox ORDER BY sender_id")).rows, [
+    { sender_id: "300", status: "unknown", failure_code: "worker_interrupted", recovered: true },
+    { sender_id: "301", status: "unknown", failure_code: "send_outcome_unknown", recovered: false },
+  ]);
 });
 
 test("a follow reply recovered from a stale sending counts from its recovery, not its attempt start", async () => {
@@ -701,10 +622,7 @@ test("a follow reply recovered from a stale sending counts from its recovery, no
 
 test("a manual reply recovered from a stale sending counts from its recovery, not its attempt start", async () => {
   await reply(connectionId, "456", "sent");
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id) VALUES($1,$2,'456')",
-    [workspaceId, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id) VALUES($1,$2,'456')", [workspaceId, connectionId]);
   await pool.query(
     `INSERT INTO instagram_inbox_handoffs(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,updated_by)
      SELECT workspace_id,connection_id,'123',sender_id,id,true,1,$2 FROM private_reply_outbox WHERE connection_id=$1`,

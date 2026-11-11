@@ -10,8 +10,7 @@ import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: databaseUrl, max: 12 });
 const workspace = "11111111-1111-4111-8111-111111111111";
 const foreignWorkspace = "22222222-2222-4222-8222-222222222222";
@@ -31,10 +30,7 @@ beforeEach(async () => {
   scheduleClock = null;
   previewClock = null;
   await pool.query("TRUNCATE workspaces,workspace_deletion_records CASCADE");
-  await pool.query("INSERT INTO workspaces(id,time_zone,plan) VALUES($1,'UTC','advanced'),($2,'UTC','advanced')", [
-    workspace,
-    foreignWorkspace,
-  ]);
+  await pool.query("INSERT INTO workspaces(id,time_zone,plan) VALUES($1,'UTC','advanced'),($2,'UTC','advanced')", [workspace, foreignWorkspace]);
   await pool.query(
     `INSERT INTO workspace_members(workspace_id,user_id,role)
      VALUES($1,$2,'owner'),($1,$3,'agent'),($1,$5,'admin'),($4,$6,'owner')`,
@@ -62,8 +58,7 @@ function clockedPool(): Pool {
             assert.equal(text.match(/clock_timestamp\(\)/g)?.length, 1, "one schedule clock");
             text = text.replace("clock_timestamp()", `'${scheduleClock}'::timestamptz`);
           }
-          if (previewClock && text.includes("statement_timestamp()"))
-            text = text.replace("statement_timestamp()", `'${previewClock}'::timestamptz`);
+          if (previewClock && text.includes("statement_timestamp()")) text = text.replace("statement_timestamp()", `'${previewClock}'::timestamptz`);
           return client.query({ ...query, text });
         },
         release: (destroy?: boolean | Error) => client.release(destroy),
@@ -87,8 +82,7 @@ async function request(method: string, path: string, body?: unknown, actor = own
       WORKSPACE_EXPORT_LIMIT: { limit: async () => ({ success: true }) },
     },
     clockedPool,
-    (async () =>
-      Response.json({ id: actor, email: "member@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actor, email: "member@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 async function expect(response: Response, status = 200) {
@@ -99,12 +93,7 @@ async function expect(response: Response, status = 200) {
 }
 // A draft over a snapshot of the given members, created through the API so its version is real.
 async function draftFor(members: Array<[string, string]> = [[C, "1001"]], ws = workspace, actor = owner) {
-  const segment = (
-    await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,$2) RETURNING id", [
-      ws,
-      `Audience ${++sequence}`,
-    ])
-  ).rows[0]!.id;
+  const segment = (await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,$2) RETURNING id", [ws, `Audience ${++sequence}`])).rows[0]!.id;
   const snapshot = (
     await pool.query(
       `INSERT INTO instagram_segment_snapshots(workspace_id,segment_id,created_by,as_of,definition,segment_name,counts,member_count)
@@ -112,32 +101,17 @@ async function draftFor(members: Array<[string, string]> = [[C, "1001"]], ws = w
       [ws, segment, actor, members.length],
     )
   ).rows[0]!.id as string;
-  for (const [conn, sender] of members)
-    await pool.query(
-      "INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,$4)",
-      [snapshot, ws, conn, sender],
-    );
+  for (const [conn, sender] of members) await pool.query("INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,$4)", [snapshot, ws, conn, sender]);
   const id = randomUUID();
-  await expect(
-    await request(
-      "POST",
-      "/api/campaign-drafts",
-      { id, snapshot_id: snapshot, name: "Campaign", body: "Hello" },
-      actor,
-    ),
-    201,
-  );
+  await expect(await request("POST", "/api/campaign-drafts", { id, snapshot_id: snapshot, name: "Campaign", body: "Hello" }, actor), 201);
   return { id, snapshot };
 }
 function approval(draftVersion = 1, schedule: string | null = null, zone = "UTC") {
   return { id: randomUUID(), expected_version: draftVersion, schedule_local: schedule, expected_time_zone: zone };
 }
-const approve = (draft: string, body: unknown, actor = owner) =>
-  request("POST", `/api/campaign-drafts/${draft}/approvals`, body, actor);
-const reschedule = (id: string, body: unknown, actor = owner) =>
-  request("PUT", `/api/campaign-approvals/${id}/schedule`, body, actor);
-const cancel = (id: string, expected: number, actor = owner) =>
-  request("POST", `/api/campaign-approvals/${id}/cancel`, { expected_version: expected }, actor);
+const approve = (draft: string, body: unknown, actor = owner) => request("POST", `/api/campaign-drafts/${draft}/approvals`, body, actor);
+const reschedule = (id: string, body: unknown, actor = owner) => request("PUT", `/api/campaign-approvals/${id}/schedule`, body, actor);
+const cancel = (id: string, expected: number, actor = owner) => request("POST", `/api/campaign-approvals/${id}/cancel`, { expected_version: expected }, actor);
 const editDraft = (draft: string, snapshot: string, expected: number, name = "Edited") =>
   request("PUT", `/api/campaign-drafts/${draft}`, {
     snapshot_id: snapshot,
@@ -147,11 +121,7 @@ const editDraft = (draft: string, snapshot: string, expected: number, name = "Ed
   });
 async function waitingForLocks(count: number) {
   for (let attempt = 0; attempt < 200; attempt++) {
-    const waiting = (
-      await pool.query(
-        "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'",
-      )
-    ).rows[0].n;
+    const waiting = (await pool.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'")).rows[0].n;
     if (waiting >= count) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -185,12 +155,7 @@ test("an admin records an immediate approval with copies, the preview and an aud
   assert.equal(created.preview.counts.connection_unavailable, "1");
   assert.equal(created.preview.counts.no_dm_identity, "1");
   assert.deepEqual(
-    created.events.map((event: Record<string, unknown>) => [
-      event.version,
-      event.kind,
-      event.actor_id,
-      event.schedule_kind,
-    ]),
+    created.events.map((event: Record<string, unknown>) => [event.version, event.kind, event.actor_id, event.schedule_kind]),
     [[1, "created", admin, "immediate"]],
   );
   const listed = await expect(await request("GET", "/api/campaign-approvals"));
@@ -198,8 +163,7 @@ test("an admin records an immediate approval with copies, the preview and an aud
   assert.equal("body" in listed.approvals[0], false);
   assert.equal("events" in listed.approvals[0], false);
   assert.equal(listed.approvals[0].delivery_available, true);
-  for (const table of ["private_reply_outbox", "instagram_manual_replies", "webhook_deliveries", "flow_runs"])
-    assert.equal((await pool.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n, 0, table);
+  for (const table of ["private_reply_outbox", "instagram_manual_replies", "webhook_deliveries", "flow_runs"]) assert.equal((await pool.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n, 0, table);
 });
 
 test("only active admins reach every approval route, and an agent is refused before any ID is read", async () => {
@@ -211,11 +175,7 @@ test("only active admins reach every approval route, and an agent is refused bef
     ["GET", "/api/campaign-approvals", undefined],
     ["GET", `/api/campaign-approvals/${saved.id}`, undefined],
     ["GET", "/api/campaign-approvals/not-a-uuid", undefined],
-    [
-      "PUT",
-      `/api/campaign-approvals/${saved.id}/schedule`,
-      { expected_version: 1, schedule_local: null, expected_time_zone: "UTC" },
-    ],
+    ["PUT", `/api/campaign-approvals/${saved.id}/schedule`, { expected_version: 1, schedule_local: null, expected_time_zone: "UTC" }],
     ["POST", `/api/campaign-approvals/${saved.id}/cancel`, { expected_version: 1 }],
   ] as const)
     assert.equal((await expect(await request(method, path, body, agent), 403)).error, "role_forbidden", path);
@@ -227,14 +187,10 @@ test("only active admins reach every approval route, and an agent is refused bef
 test("missing, foreign and malformed IDs answer the same 404, and malformed requests 400", async () => {
   const { id: draft } = await draftFor();
   const { id: foreignDraft } = await draftFor([], foreignWorkspace, outsider);
-  for (const id of [foreignDraft, randomUUID(), "not-a-uuid"])
-    assert.equal((await expect(await approve(id, approval()), 404)).error, "campaign_draft_not_found");
+  for (const id of [foreignDraft, randomUUID(), "not-a-uuid"]) assert.equal((await expect(await approve(id, approval()), 404)).error, "campaign_draft_not_found");
   const foreign = await expect(await approve(foreignDraft, approval(), outsider), 201);
   for (const id of [foreign.id, randomUUID(), "not-a-uuid"]) {
-    assert.equal(
-      (await expect(await request("GET", `/api/campaign-approvals/${id}`), 404)).error,
-      "campaign_approval_not_found",
-    );
+    assert.equal((await expect(await request("GET", `/api/campaign-approvals/${id}`), 404)).error, "campaign_approval_not_found");
     await expect(await reschedule(id, { expected_version: 1, schedule_local: null, expected_time_zone: "UTC" }), 404);
     await expect(await cancel(id, 1), 404);
   }
@@ -258,10 +214,7 @@ test("missing, foreign and malformed IDs answer the same 404, and malformed requ
   await expect(await request("POST", `/api/campaign-approvals/${saved.id}/cancel`, { expected_version: 1, x: 1 }), 400);
   await expect(await request("GET", "/api/campaign-approvals?limit=5"), 400);
   // The foreign workspace's approval is untouched and still visible to its own admin.
-  assert.equal(
-    (await expect(await request("GET", `/api/campaign-approvals/${foreign.id}`, undefined, outsider))).version,
-    1,
-  );
+  assert.equal((await expect(await request("GET", `/api/campaign-approvals/${foreign.id}`, undefined, outsider))).version, 1);
 });
 
 test("the foreign keys keep an approval's draft and snapshot in its own workspace", async () => {
@@ -281,18 +234,9 @@ test("the foreign keys keep an approval's draft and snapshot in its own workspac
   await assert.rejects(insert(draft, foreignSnapshot), { code: "23503" });
   // The schedule and cancellation pairings are enforced by CHECKs, not only by the API.
   await insert(draft, snapshot);
-  await assert.rejects(
-    pool.query("UPDATE campaign_approvals SET scheduled_at=now() WHERE workspace_id=$1", [workspace]),
-    { code: "23514" },
-  );
-  await assert.rejects(
-    pool.query("UPDATE campaign_approvals SET status='cancelled' WHERE workspace_id=$1", [workspace]),
-    { code: "23514" },
-  );
-  await assert.rejects(
-    pool.query("UPDATE campaign_approvals SET cancelled_at=now() WHERE workspace_id=$1", [workspace]),
-    { code: "23514" },
-  );
+  await assert.rejects(pool.query("UPDATE campaign_approvals SET scheduled_at=now() WHERE workspace_id=$1", [workspace]), { code: "23514" });
+  await assert.rejects(pool.query("UPDATE campaign_approvals SET status='cancelled' WHERE workspace_id=$1", [workspace]), { code: "23514" });
+  await assert.rejects(pool.query("UPDATE campaign_approvals SET cancelled_at=now() WHERE workspace_id=$1", [workspace]), { code: "23514" });
   // A second approval in force for one draft violates the partial unique index.
   await assert.rejects(insert(draft, snapshot), { code: "23505" });
 });
@@ -318,10 +262,7 @@ test("a retry of the original request returns the current state and never undoes
   const twice = approval();
   const responses = await Promise.all([approve(other, twice), approve(other, twice)]);
   assert.deepEqual(responses.map((response) => response.status).sort(), [200, 201]);
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS n FROM campaign_approvals WHERE draft_id=$1", [other])).rows[0].n,
-    1,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM campaign_approvals WHERE draft_id=$1", [other])).rows[0].n, 1);
 });
 
 test("approval needs the draft's current version and no approval in force, also under concurrency", async () => {
@@ -348,20 +289,14 @@ test("approval needs the draft's current version and no approval in force, also 
   assert.equal(archivedConflict.error, "campaign_draft_conflict");
   assert.equal(archivedConflict.draft.archived, true);
   assert.equal(archivedConflict.draft.version, 2);
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS n FROM campaign_approvals WHERE draft_id=$1", [archived])).rows[0].n,
-    0,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM campaign_approvals WHERE draft_id=$1", [archived])).rows[0].n, 0);
 });
 
 test("a draft with an approval in force refuses edit and archive; cancel, edit and approve again", async () => {
   const { id: draft, snapshot } = await draftFor();
   const first = await expect(await approve(draft, approval()), 201);
   assert.equal((await expect(await editDraft(draft, snapshot, 1), 409)).error, "approval_active");
-  assert.equal(
-    (await expect(await request("POST", `/api/campaign-drafts/${draft}/archive`, { expected_version: 1 }), 409)).error,
-    "approval_active",
-  );
+  assert.equal((await expect(await request("POST", `/api/campaign-drafts/${draft}/archive`, { expected_version: 1 }), 409)).error, "approval_active");
   const cancelled = await expect(await cancel(first.id, 1));
   assert.equal(cancelled.status, "cancelled");
   assert.equal(cancelled.cancelled_by, owner);
@@ -395,10 +330,7 @@ test("an approval and a draft edit or archive serialize on the workspace lock in
   for (const change of ["edit", "archive"] as const)
     for (const order of ["approval_first", "change_first"] as const) {
       const { id: draft, snapshot } = await draftFor();
-      const modify = () =>
-        change === "edit"
-          ? editDraft(draft, snapshot, 1)
-          : request("POST", `/api/campaign-drafts/${draft}/archive`, { expected_version: 1 });
+      const modify = () => (change === "edit" ? editDraft(draft, snapshot, 1) : request("POST", `/api/campaign-drafts/${draft}/archive`, { expected_version: 1 }));
       const blocker = await pool.connect();
       try {
         await blocker.query("BEGIN");
@@ -421,12 +353,7 @@ test("an approval and a draft edit or archive serialize on the workspace lock in
           assert.equal(changed.version, 2, label);
           assert.equal(changed.archived, change === "archive", label);
           assert.equal((await expect(b, 409)).error, "campaign_draft_conflict", label);
-          assert.equal(
-            (await pool.query("SELECT count(*)::int AS n FROM campaign_approvals WHERE draft_id=$1", [draft])).rows[0]
-              .n,
-            0,
-            label,
-          );
+          assert.equal((await pool.query("SELECT count(*)::int AS n FROM campaign_approvals WHERE draft_id=$1", [draft])).rows[0].n, 0, label);
         }
       } finally {
         await blocker.query("ROLLBACK").catch(() => undefined);
@@ -439,49 +366,33 @@ test("schedule and cancel require the current version; a cancelled approval neve
   const { id: draft } = await draftFor();
   const saved = await expect(await approve(draft, approval()), 201);
   scheduleClock = "2026-11-10T00:00:00Z";
-  const moved = await expect(
-    await reschedule(saved.id, { expected_version: 1, schedule_local: "2026-11-10T09:00", expected_time_zone: "UTC" }),
-  );
+  const moved = await expect(await reschedule(saved.id, { expected_version: 1, schedule_local: "2026-11-10T09:00", expected_time_zone: "UTC" }));
   assert.equal(moved.version, 2);
   assert.equal(moved.schedule_kind, "scheduled");
   assert.equal(moved.scheduled_at, "2026-11-10T09:00:00.000000Z");
   assert.equal(moved.schedule_time_zone, "UTC");
   assert.equal(moved.schedule_local, "2026-11-10T09:00");
   // The approved content, copies and preview stay as recorded.
-  for (const key of ["draft_version", "name", "body", "preview", "approved_at", "approved_by"])
-    assert.deepEqual(moved[key], saved[key], key);
-  const stale = await expect(
-    await reschedule(saved.id, { expected_version: 1, schedule_local: null, expected_time_zone: "UTC" }),
-    409,
-  );
+  for (const key of ["draft_version", "name", "body", "preview", "approved_at", "approved_by"]) assert.deepEqual(moved[key], saved[key], key);
+  const stale = await expect(await reschedule(saved.id, { expected_version: 1, schedule_local: null, expected_time_zone: "UTC" }), 409);
   assert.equal(stale.error, "campaign_approval_conflict");
   assert.equal(stale.approval.version, 2);
   assert.equal(stale.approval.scheduled_at, "2026-11-10T09:00:00.000000Z");
   const staleCancel = await expect(await cancel(saved.id, 1), 409);
   assert.equal(staleCancel.error, "campaign_approval_conflict");
   assert.equal(staleCancel.approval.status, "approved");
-  const back = await expect(
-    await reschedule(saved.id, { expected_version: 2, schedule_local: null, expected_time_zone: "UTC" }),
-  );
+  const back = await expect(await reschedule(saved.id, { expected_version: 2, schedule_local: null, expected_time_zone: "UTC" }));
   assert.equal(back.schedule_kind, "immediate");
   assert.equal(back.scheduled_at, null);
   const done = await expect(await cancel(saved.id, 3));
   assert.equal(done.version, 4);
-  for (const response of [
-    await cancel(saved.id, 4),
-    await reschedule(saved.id, { expected_version: 4, schedule_local: null, expected_time_zone: "UTC" }),
-  ]) {
+  for (const response of [await cancel(saved.id, 4), await reschedule(saved.id, { expected_version: 4, schedule_local: null, expected_time_zone: "UTC" })]) {
     const body = await expect(response, 409);
     assert.equal(body.error, "campaign_approval_cancelled");
     assert.equal(body.approval.version, 4);
   }
   assert.deepEqual(
-    done.events.map((event: Record<string, unknown>) => [
-      event.version,
-      event.kind,
-      event.schedule_kind,
-      event.scheduled_at,
-    ]),
+    done.events.map((event: Record<string, unknown>) => [event.version, event.kind, event.schedule_kind, event.scheduled_at]),
     [
       [1, "created", "immediate", null],
       [2, "schedule_changed", "scheduled", "2026-11-10T09:00:00.000000Z"],
@@ -500,25 +411,18 @@ test("a schedule is accepted from one minute ahead, the scheduled replies' only 
   });
   scheduleClock = "2026-11-10T00:00:00.000001Z";
   // One microsecond short of a minute ahead, at creation and on a change.
-  assert.equal(
-    (await expect(await approve(draft, approval(1, "2026-11-10T00:01")), 400)).error,
-    "campaign_schedule_out_of_range",
-  );
+  assert.equal((await expect(await approve(draft, approval(1, "2026-11-10T00:01")), 400)).error, "campaign_schedule_out_of_range");
   // No fixed upper bound: the reply window belongs to each recipient at delivery (#36).
   const saved = await expect(await approve(draft, approval(1, "2026-12-10T00:00")), 201);
   assert.equal(saved.scheduled_at, "2026-12-10T00:00:00.000000Z");
   scheduleClock = "2026-11-10T00:00:00Z";
   // Exactly one minute ahead is accepted.
   await expect(await reschedule(saved.id, at("2026-11-10T00:01", 1)));
-  for (const local of ["2026-11-09T23:59", "2026-11-10T00:00"])
-    assert.equal((await expect(await reschedule(saved.id, at(local, 2)), 400)).error, "campaign_schedule_out_of_range");
+  for (const local of ["2026-11-09T23:59", "2026-11-10T00:00"]) assert.equal((await expect(await reschedule(saved.id, at(local, 2)), 400)).error, "campaign_schedule_out_of_range");
   const far = await expect(await reschedule(saved.id, at("2027-11-10T00:00", 2)));
   assert.equal(far.scheduled_at, "2027-11-10T00:00:00.000000Z");
   scheduleClock = "2026-11-10T00:00:00.000001Z";
-  assert.equal(
-    (await expect(await reschedule(saved.id, at("2026-11-10T00:01", 3)), 400)).error,
-    "campaign_schedule_out_of_range",
-  );
+  assert.equal((await expect(await reschedule(saved.id, at("2026-11-10T00:01", 3)), 400)).error, "campaign_schedule_out_of_range");
   await expect(await reschedule(saved.id, at("2026-11-10T00:02", 3)));
 });
 
@@ -526,15 +430,9 @@ test("local times use the workspace zone with the shared DST rule, and a later z
   await pool.query("UPDATE workspaces SET time_zone='America/New_York' WHERE id=$1", [workspace]);
   const { id: draft } = await draftFor();
   // The zone the client saw must still be the workspace zone, for a schedule and for an immediate approval.
-  assert.equal(
-    (await expect(await approve(draft, approval(1, null, "UTC")), 409)).error,
-    "campaign_schedule_timezone_changed",
-  );
+  assert.equal((await expect(await approve(draft, approval(1, null, "UTC")), 409)).error, "campaign_schedule_timezone_changed");
   scheduleClock = "2026-03-07T12:00:00Z";
-  assert.equal(
-    (await expect(await approve(draft, approval(1, "2026-03-08T02:30", "UTC")), 409)).error,
-    "campaign_schedule_timezone_changed",
-  );
+  assert.equal((await expect(await approve(draft, approval(1, "2026-03-08T02:30", "UTC")), 409)).error, "campaign_schedule_timezone_changed");
   // A time skipped by the spring-forward gap is read with the offset before the change.
   const gap = await expect(await approve(draft, approval(1, "2026-03-08T02:30", "America/New_York")), 201);
   assert.equal(gap.scheduled_at, "2026-03-08T07:30:00.000000Z");
@@ -581,10 +479,7 @@ test("local times use the workspace zone with the shared DST rule, and a later z
 });
 
 test("the stored preview equals the preview API at the same moment", async () => {
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'1003',true)",
-    [workspace, C],
-  );
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'1003',true)", [workspace, C]);
   const { id: draft } = await draftFor([
     [OFF, "1001"],
     [C, "1002"],
@@ -610,14 +505,8 @@ test("the stored preview equals the preview API at the same moment", async () =>
   );
   // The stored preview is the moment of approval: a later member deletion changes the live preview only.
   await pool.query("DELETE FROM instagram_segment_snapshot_members WHERE sender_id='1003'");
-  assert.equal(
-    (await expect(await request("GET", `/api/campaign-drafts/${draft}/preview`))).remaining_member_count,
-    "2",
-  );
-  assert.equal(
-    (await expect(await request("GET", `/api/campaign-approvals/${saved.id}`))).preview.remaining_member_count,
-    "3",
-  );
+  assert.equal((await expect(await request("GET", `/api/campaign-drafts/${draft}/preview`))).remaining_member_count, "2");
+  assert.equal((await expect(await request("GET", `/api/campaign-approvals/${saved.id}`))).preview.remaining_member_count, "3");
 });
 
 test("approval writes leave delivery, consent and snapshot rows unchanged and survive person and connection deletion", async () => {
@@ -628,18 +517,8 @@ test("approval writes leave delivery, consent and snapshot rows unchanged and su
   // The seeded workspace starts on free, which approves no campaign (#52).
   await pool.query("UPDATE workspaces SET time_zone='UTC',plan='advanced' WHERE id=$1", [ws]);
   // The fixture also holds an executed approval with its run; this test changes the one in force.
-  const fixture = (
-    await pool.query("SELECT id,draft_id FROM campaign_approvals WHERE workspace_id=$1 AND status='approved'", [ws])
-  ).rows[0];
-  const tables = [
-    "private_reply_outbox",
-    "instagram_manual_replies",
-    "channel_consent_events",
-    "channel_consent_state",
-    "instagram_segment_snapshots",
-    "instagram_segment_snapshot_members",
-    "webhook_deliveries",
-  ];
+  const fixture = (await pool.query("SELECT id,draft_id FROM campaign_approvals WHERE workspace_id=$1 AND status='approved'", [ws])).rows[0];
+  const tables = ["private_reply_outbox", "instagram_manual_replies", "channel_consent_events", "channel_consent_state", "instagram_segment_snapshots", "instagram_segment_snapshot_members", "webhook_deliveries"];
   const state = async () => {
     const result: Record<string, unknown> = {};
     for (const table of tables) {
@@ -658,25 +537,11 @@ test("approval writes leave delivery, consent and snapshot rows unchanged and su
   const before = await state();
   await expect(await cancel(fixture.id, 1, actor));
   // The fixture's executed approval ran draft version 1, which is never approved again (#36), so edit the draft first.
-  const { snapshot_id } = (await pool.query("SELECT snapshot_id FROM campaign_drafts WHERE id=$1", [fixture.draft_id]))
-    .rows[0];
-  await expect(
-    await request(
-      "PUT",
-      `/api/campaign-drafts/${fixture.draft_id}`,
-      { snapshot_id, name: "Campaign", body: "Draft message", expected_version: 1 },
-      actor,
-    ),
-  );
+  const { snapshot_id } = (await pool.query("SELECT snapshot_id FROM campaign_drafts WHERE id=$1", [fixture.draft_id])).rows[0];
+  await expect(await request("PUT", `/api/campaign-drafts/${fixture.draft_id}`, { snapshot_id, name: "Campaign", body: "Draft message", expected_version: 1 }, actor));
   const saved = await expect(await approve(fixture.draft_id, approval(2), actor), 201);
   scheduleClock = "2026-11-10T00:00:00Z";
-  await expect(
-    await reschedule(
-      saved.id,
-      { expected_version: 1, schedule_local: "2026-11-10T12:00", expected_time_zone: "UTC" },
-      actor,
-    ),
-  );
+  await expect(await reschedule(saved.id, { expected_version: 1, schedule_local: "2026-11-10T12:00", expected_time_zone: "UTC" }, actor));
   await expect(await cancel(saved.id, 2, actor));
   assert.deepEqual(await state(), before);
   const approvals = async () =>
@@ -691,19 +556,11 @@ test("approval writes leave delivery, consent and snapshot rows unchanged and su
   const kept = await approvals();
   await pool.query("SELECT delete_person_data($1,$2,$3,'comment_sender','123')", [ws, conn, actor]);
   assert.deepEqual(await approvals(), kept);
-  await pool.query(
-    "UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1",
-    [conn],
-  );
-  const deletion = (
-    await pool.query("SELECT delete_connection_data($1,$2,$3,'approval-boundary') AS result", [ws, conn, actor])
-  ).rows[0].result;
+  await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1", [conn]);
+  const deletion = (await pool.query("SELECT delete_connection_data($1,$2,$3,'approval-boundary') AS result", [ws, conn, actor])).rows[0].result;
   assert.equal(deletion.deleted_counts.campaign_approvals, undefined);
   assert.deepEqual(await approvals(), kept);
-  assert.equal(
-    (await expect(await request("GET", `/api/campaign-approvals/${saved.id}`, undefined, actor))).version,
-    3,
-  );
+  assert.equal((await expect(await request("GET", `/api/campaign-approvals/${saved.id}`, undefined, actor))).version, 3);
 });
 
 test("the export carries both tables without the request hash, and workspace deletion removes them", async () => {
@@ -716,8 +573,7 @@ test("the export carries both tables without the request hash, and workspace del
   assert.ok(exported.excluded.includes("campaign_approvals.create_request_hash"));
   assert.equal(exported.tables.campaign_approval_events.length, 1);
   await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL");
-  const result = (await pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [workspace, randomUUID()]))
-    .rows[0].result;
+  const result = (await pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [workspace, randomUUID()])).rows[0].result;
   assert.equal(result.deleted_counts.campaign_approvals, 1);
   assert.equal(result.deleted_counts.campaign_approval_events, 1);
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM campaign_approvals")).rows[0].n, 0);
@@ -733,10 +589,7 @@ test("an approval or its audit alone blocks both workspace move paths", async ()
     const client = await pool.connect();
     try {
       await client.query("INSERT INTO workspaces(id) VALUES($1),($2)", [own, target]);
-      await client.query("INSERT INTO workspace_members(user_id,workspace_id,role) VALUES($1,$2,'owner')", [
-        mover,
-        own,
-      ]);
+      await client.query("INSERT INTO workspace_members(user_id,workspace_id,role) VALUES($1,$2,'owner')", [mover, own]);
       await client.query("SET session_replication_role=replica");
       if (table === "campaign_approvals")
         await client.query(
@@ -755,22 +608,11 @@ test("an approval or its audit alone blocks both workspace move paths", async ()
           [own, mover],
         );
       await client.query("RESET session_replication_role");
-      const invite = await expect(
-        await request("POST", "/api/workspace/invites", { email: "member@example.test", role: "agent" }),
-        201,
-      );
-      await expect(
-        await request("POST", "/api/invites/accept", { token: invite.link.split("#invite=")[1] }, mover),
-        409,
-      );
+      const invite = await expect(await request("POST", "/api/workspace/invites", { email: "member@example.test", role: "agent" }), 201);
+      await expect(await request("POST", "/api/invites/accept", { token: invite.link.split("#invite=")[1] }, mover), 409);
       const script = await readFile(new URL("../../deploy/assign-workspace-owner.sql", import.meta.url), "utf8");
       await client.query("CREATE TEMP TABLE IF NOT EXISTS verified_users(id uuid,email_confirmed_at timestamptz)");
-      await client.query(
-        script
-          .slice(script.indexOf("CREATE FUNCTION"), script.indexOf("SELECT pg_temp.assign_workspace_owner"))
-          .replace("auth.users", "pg_temp.verified_users")
-          .replace("CREATE FUNCTION", "CREATE OR REPLACE FUNCTION"),
-      );
+      await client.query(script.slice(script.indexOf("CREATE FUNCTION"), script.indexOf("SELECT pg_temp.assign_workspace_owner")).replace("auth.users", "pg_temp.verified_users").replace("CREATE FUNCTION", "CREATE OR REPLACE FUNCTION"));
       await client.query("INSERT INTO verified_users VALUES($1,now())", [mover]);
       await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
       await pool.query("UPDATE workspace_invites SET revoked_at=now() WHERE workspace_id=$1", [workspace]);
@@ -785,9 +627,7 @@ test("an approval or its audit alone blocks both workspace move paths", async ()
 test("migration 064 replays over stored approvals and reproduces the canonical workspace deletion function", async () => {
   const { id: draft } = await draftFor();
   const saved = await expect(await approve(draft, approval()), 201);
-  const definition = async () =>
-    (await pool.query("SELECT pg_get_functiondef('delete_workspace_data(uuid,uuid)'::regprocedure) AS body")).rows[0]!
-      .body;
+  const definition = async () => (await pool.query("SELECT pg_get_functiondef('delete_workspace_data(uuid,uuid)'::regprocedure) AS body")).rows[0]!.body;
   const canonical = await definition();
   const sql = await readFile(new URL("../../db/migrations/064_campaign_approvals.sql", import.meta.url), "utf8");
   await pool.query(sql);
@@ -796,19 +636,12 @@ test("migration 064 replays over stored approvals and reproduces the canonical w
   await pool.query(await readFile(new URL("../../db/migrations/065_campaign_runs.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/068_dm_start_triggers.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/069_dm_flow_delivery.sql", import.meta.url), "utf8"));
-  await pool.query(
-    await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8"),
-  );
-  await pool.query(
-    await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"),
-  );
+  await pool.query(await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"));
   assert.equal(await definition(), canonical);
   assert.equal((await expect(await request("GET", `/api/campaign-approvals/${saved.id}`))).version, 1);
   const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
-  assert.ok(
-    runner.indexOf("064_campaign_approvals.sql") > runner.indexOf("063_campaign_drafts.sql") &&
-      runner.indexOf("064_campaign_approvals.sql") < runner.indexOf("supabase-access.sql"),
-  );
+  assert.ok(runner.indexOf("064_campaign_approvals.sql") > runner.indexOf("063_campaign_drafts.sql") && runner.indexOf("064_campaign_approvals.sql") < runner.indexOf("supabase-access.sql"));
 });
 
 // A comment sender on C whose DM recipient passes every recipient check: a provider-acknowledged private reply, a text
@@ -857,8 +690,7 @@ async function candidate(sender: string, recipient: string) {
 }
 const setPlan = (plan: string) => pool.query("UPDATE workspaces SET plan=$2 WHERE id=$1", [workspace, plan]);
 // Delivery rows of an earlier run on C, started at `startedAt` (SQL), for the monthly count (#52).
-const sends = (count: number, startedAt = "now()", rows?: Parameters<typeof seedCampaignSends>[6]) =>
-  seedCampaignSends(pool, workspace, C, owner, count, startedAt, rows);
+const sends = (count: number, startedAt = "now()", rows?: Parameters<typeof seedCampaignSends>[6]) => seedCampaignSends(pool, workspace, C, owner, count, startedAt, rows);
 async function writes() {
   return (
     await pool.query(
@@ -934,10 +766,7 @@ test("approvals in force due in the same month count, a later month does not, an
   // The next month has nothing used or reserved yet.
   const scheduled = await expect(await approve(third, approval(1, later)), 201);
   const before = await writes();
-  const moved = await expect(
-    await reschedule(scheduled.id, { expected_version: 1, schedule_local: null, expected_time_zone: "UTC" }),
-    409,
-  );
+  const moved = await expect(await reschedule(scheduled.id, { expected_version: 1, schedule_local: null, expected_time_zone: "UTC" }), 409);
   assert.equal(moved.error, "broadcast_limit_reached");
   assert.equal(moved.broadcast_limit.month, current);
   assert.equal(moved.broadcast_limit.reserved, "2", "the moved approval does not count itself");
@@ -946,27 +775,18 @@ test("approvals in force due in the same month count, a later month does not, an
   assert.equal(moved.approval.schedule_kind, "scheduled");
   assert.deepEqual(await writes(), before, "a refused reschedule writes nothing");
   // A change inside the same month is not counted again.
-  const kept = await expect(
-    await reschedule(scheduled.id, { expected_version: 1, schedule_local: later2, expected_time_zone: "UTC" }),
-  );
+  const kept = await expect(await reschedule(scheduled.id, { expected_version: 1, schedule_local: later2, expected_time_zone: "UTC" }));
   assert.equal(kept.version, 2);
   assert.equal(kept.schedule_local, later2);
-  assert.equal(
-    (await expect(await request("GET", `/api/campaign-drafts/${third}/preview`))).plan_broadcast_limit.month,
-    current,
-  );
+  assert.equal((await expect(await request("GET", `/api/campaign-drafts/${third}/preview`))).plan_broadcast_limit.month, current);
   assert.ok(next > current);
   // Cancelling an approval in force frees its reservation.
   await expect(await cancel(first.id, 1));
-  const now = await expect(
-    await reschedule(scheduled.id, { expected_version: 2, schedule_local: null, expected_time_zone: "UTC" }),
-  );
+  const now = await expect(await reschedule(scheduled.id, { expected_version: 2, schedule_local: null, expected_time_zone: "UTC" }));
   assert.equal(now.schedule_kind, "immediate");
   // A downgrade keeps approvals in force and their changes inside the same month; the run start decides.
   await setPlan("free");
-  const same = await expect(
-    await reschedule(scheduled.id, { expected_version: 3, schedule_local: null, expected_time_zone: "UTC" }),
-  );
+  const same = await expect(await reschedule(scheduled.id, { expected_version: 3, schedule_local: null, expected_time_zone: "UTC" }));
   assert.equal(same.version, 4);
   assert.equal(same.status, "approved");
 });
@@ -1011,8 +831,5 @@ test("two approvals that each fit alone wait for the workspace lock and cannot b
     await blocker.query("ROLLBACK").catch(() => undefined);
     blocker.release();
   }
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS n FROM campaign_approvals WHERE status='approved'")).rows[0].n,
-    1,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM campaign_approvals WHERE status='approved'")).rows[0].n, 1);
 });

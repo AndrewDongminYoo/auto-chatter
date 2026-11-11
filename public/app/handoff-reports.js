@@ -56,10 +56,7 @@ function createHandoffReports({ api, node }) {
     } catch {
       byId("handoff-report-zone").textContent += " 이 브라우저에서는 시작일과 종료일을 직접 입력해 주세요.";
     }
-    for (const connection of connections)
-      form.elements.connection_id.append(
-        new Option(connection.username ? `@${connection.username}` : connection.id, connection.id),
-      );
+    for (const connection of connections) form.elements.connection_id.append(new Option(connection.username ? `@${connection.username}` : connection.id, connection.id));
     invalidate();
   }
   form.addEventListener("input", () => invalidate());
@@ -115,34 +112,11 @@ function createHandoffReports({ api, node }) {
   download.addEventListener("click", () => {
     if (!result || !permitted) return;
     const rows = [
-      [
-        "metric",
-        "count",
-        "from_date",
-        "before_date_exclusive",
-        "time_zone",
-        "period_from_utc",
-        "period_before_utc",
-        "checked_at_utc",
-        "connection_id",
-      ],
-      ...metrics.map(([key]) => [
-        key,
-        result.counts[key],
-        result.from,
-        result.before,
-        result.time_zone,
-        result.period_from,
-        result.period_before,
-        result.checked_at,
-        result.connection_id ?? "",
-      ]),
+      ["metric", "count", "from_date", "before_date_exclusive", "time_zone", "period_from_utc", "period_before_utc", "checked_at_utc", "connection_id"],
+      ...metrics.map(([key]) => [key, result.counts[key], result.from, result.before, result.time_zone, result.period_from, result.period_before, result.checked_at, result.connection_id ?? ""]),
     ];
     // Only fixed keys and server-validated metadata are exported; no account label or customer text.
-    const csv =
-      "\uFEFF" +
-      rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\r\n") +
-      "\r\n";
+    const csv = "\uFEFF" + rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\r\n") + "\r\n";
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const link = node("a");
     link.href = url;

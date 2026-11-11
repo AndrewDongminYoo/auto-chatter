@@ -88,17 +88,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   const expired = (state) => !state.deadline || performance.now() >= state.deadline;
   const isAdmin = () => ["owner", "admin"].includes(getRole());
   const person = (member) => (member.user_id === getUserId() ? "나" : member.email || "이메일 미기록 멤버");
-  const summary = (convo) =>
-    `${convo.status === "closed" ? "완료" : "진행 중"} · ${convo.assignee ? `담당 ${person(convo.assignee)}` : "미배정"}`;
-  const filtered = () =>
-    Boolean(
-      searchText ||
-      byId("inbox-status-filter").value ||
-      byId("inbox-assignee-filter").value ||
-      byId("inbox-label-filter").value ||
-      byId("inbox-unread").checked ||
-      reminderFilter,
-    );
+  const summary = (convo) => `${convo.status === "closed" ? "완료" : "진행 중"} · ${convo.assignee ? `담당 ${person(convo.assignee)}` : "미배정"}`;
+  const filtered = () => Boolean(searchText || byId("inbox-status-filter").value || byId("inbox-assignee-filter").value || byId("inbox-label-filter").value || byId("inbox-unread").checked || reminderFilter);
   const conversationPath = (state) => `/api/inbox/conversations/${state.row.connection_id}/${state.row.recipient_id}`;
   const labelText = (label) => (label.archived ? `${label.name} (보관됨)` : label.name);
   const serverNow = () => Date.now() + clockOffset;
@@ -146,26 +137,14 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     const head = node("span", "", "conversation-head");
     head.append(node("span", `@${row.username || "연결 계정"}`));
     if (row.unread_count > 0) head.append(node("span", `안 읽음 ${row.unread_count}`, "unread-badge"));
-    button.replaceChildren(
-      head,
-      node("span", `DM 사용자 ${row.recipient_id}`, "conversation-line"),
-      node("span", `${row.message_count}개 · ${date(row.last_message_at)}`, "conversation-line"),
-      node("span", summary(row.state), "conversation-line"),
-    );
+    button.replaceChildren(head, node("span", `DM 사용자 ${row.recipient_id}`, "conversation-line"), node("span", `${row.message_count}개 · ${date(row.last_message_at)}`, "conversation-line"), node("span", summary(row.state), "conversation-line"));
     const chips = node("span", "", "label-chips");
     if (row.reminder) {
       const due = isDue(row.reminder);
       button.dataset.reminderDue = String(due);
-      chips.append(
-        node(
-          "span",
-          `${due ? "리마인더 기한" : "리마인더"} · ${reminderLabel(row.reminder.due_local)}`,
-          `reminder-chip${due ? " due" : ""}`,
-        ),
-      );
+      chips.append(node("span", `${due ? "리마인더 기한" : "리마인더"} · ${reminderLabel(row.reminder.due_local)}`, `reminder-chip${due ? " due" : ""}`));
     } else delete button.dataset.reminderDue;
-    for (const label of row.label_set?.labels ?? [])
-      chips.append(node("span", labelText(label), `label-chip${label.archived ? " archived" : ""}`));
+    for (const label of row.label_set?.labels ?? []) chips.append(node("span", labelText(label), `label-chip${label.archived ? " archived" : ""}`));
     if (chips.children.length) button.append(chips);
   }
 
@@ -230,16 +209,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
           return item;
         }),
       );
-      if (!choices.length)
-        container.append(
-          node(
-            "p",
-            isAdmin()
-              ? "아직 라벨이 없습니다. 인박스 라벨 설정에서 추가해 주세요."
-              : "아직 라벨이 없습니다. 관리자에게 라벨 추가를 요청해 주세요.",
-            "hint",
-          ),
-        );
+      if (!choices.length) container.append(node("p", isAdmin() ? "아직 라벨이 없습니다. 인박스 라벨 설정에서 추가해 주세요." : "아직 라벨이 없습니다. 관리자에게 라벨 추가를 요청해 주세요.", "hint"));
       if (focused) container.querySelector(`[data-label-id="${focused}"]`)?.focus();
     }
     for (const input of container.querySelectorAll("input")) {
@@ -251,8 +221,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     const save = byId("inbox-label-save");
     save.disabled = state.labelBusy || !dirty;
     save.textContent = state.labelBusy ? "저장 중…" : "라벨 저장";
-    byId("inbox-label-status").textContent =
-      state.labelNotice || (dirty ? `저장하지 않은 변경 · ${chosen.size} / 10` : `${chosen.size} / 10`);
+    byId("inbox-label-status").textContent = state.labelNotice || (dirty ? `저장하지 않은 변경 · ${chosen.size} / 10` : `${chosen.size} / 10`);
   }
 
   function toggleLabel(id, checked) {
@@ -271,8 +240,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
 
   function showLabelSet(state, labelSet) {
     state.labelSet = labelSet;
-    if (state.labelDraft && sameIds(state.labelDraft, new Set(labelSet.labels.map((label) => label.id))))
-      state.labelDraft = null;
+    if (state.labelDraft && sameIds(state.labelDraft, new Set(labelSet.labels.map((label) => label.id)))) state.labelDraft = null;
     const entry = listed.get(conversationKey(state));
     if (entry) {
       entry.row.label_set = labelSet;
@@ -305,10 +273,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       if (epoch !== session) return;
       if (error.status >= 400 && error.status < 500) {
         state.labelDraft = null;
-        state.labelNotice =
-          error.code === "label_conflict"
-            ? "다른 멤버가 먼저 라벨을 바꿔 최신 라벨을 다시 불러왔습니다. 확인한 뒤 다시 저장해 주세요."
-            : error.message;
+        state.labelNotice = error.code === "label_conflict" ? "다른 멤버가 먼저 라벨을 바꿔 최신 라벨을 다시 불러왔습니다. 확인한 뒤 다시 저장해 주세요." : error.message;
         if (["label_archived", "label_not_found"].includes(error.code)) void loadLabels();
         if (selected === state) void loadConversation();
       } else state.labelNotice = "저장 여부를 확인하지 못했습니다. 대화를 새로고침해 현재 라벨을 확인해 주세요.";
@@ -327,9 +292,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   // "Since" is the count's own server time, not a row's due flag: rows from an earlier page or a conversation read
   // carry flags taken at other times, so a flag would count a reminder the count already holds or miss one it does not.
   function reminderBadge() {
-    const later = [...listed.values()].filter(
-      ({ row }) => row.reminder && Date.parse(row.reminder.due_at) > dueCheckedAt && isDue(row.reminder),
-    ).length;
+    const later = [...listed.values()].filter(({ row }) => row.reminder && Date.parse(row.reminder.due_at) > dueCheckedAt && isDue(row.reminder)).length;
     const count = dueCount + later,
       button = byId("inbox-reminder-filter");
     byId("inbox-reminder-count").textContent = count.toLocaleString("ko-KR");
@@ -430,8 +393,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       byId(id).hidden = !reminder;
       byId(id).disabled = busy;
     }
-    byId("inbox-reminder-status").textContent =
-      state.reminderNotice || (reminder && dirty ? "저장하지 않은 변경이 있습니다." : "");
+    byId("inbox-reminder-status").textContent = state.reminderNotice || (reminder && dirty ? "저장하지 않은 변경이 있습니다." : "");
   }
 
   function reminderInput() {
@@ -491,10 +453,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
           state.reminderDraft = { due, note };
           showReminder(state, error.reminder);
           state.reminderBase = state.reminder;
-        } else if (
-          error.reminder ||
-          ["reminder_not_found", "reminder_not_pending", "conversation_closed"].includes(error.code)
-        ) {
+        } else if (error.reminder || ["reminder_not_found", "reminder_not_pending", "conversation_closed"].includes(error.code)) {
           state.reminderDraft = null;
           if (selected === state) void loadConversation();
         }
@@ -554,8 +513,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
 
   // Once a minute: re-renders the due state from the loaded due_at values, without a request.
   function tickReminders() {
-    for (const { row, button } of listed.values())
-      if (row.reminder && button.dataset.reminderDue !== String(isDue(row.reminder))) rowContent(button, row);
+    for (const { row, button } of listed.values()) if (row.reminder && button.dataset.reminderDue !== String(isDue(row.reminder))) rowContent(button, row);
     reminderBadge();
     reminderControls();
   }
@@ -584,10 +542,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     list.replaceChildren(
       ...state.memos.map((memo) => {
         const item = node("article", "", "note-item");
-        item.append(
-          node("p", `${person(memo.author)} · ${date(memo.created_at)}`, "hint note-meta"),
-          node("p", memo.body, "note-body"),
-        );
+        item.append(node("p", `${person(memo.author)} · ${date(memo.created_at)}`, "hint note-meta"), node("p", memo.body, "note-body"));
         return item;
       }),
     );
@@ -602,9 +557,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     state.memoLoading = true;
     memoControls();
     try {
-      const page = await api(
-        `${conversationPath(state)}/notes${older ? `?before=${encodeURIComponent(state.memoBefore)}` : ""}`,
-      );
+      const page = await api(`${conversationPath(state)}/notes${older ? `?before=${encodeURIComponent(state.memoBefore)}` : ""}`);
       if (!current(state, session) || request !== state.memoRequest) return;
       state.memos = older ? [...state.memos, ...page.notes] : page.notes;
       state.memoBefore = page.before;
@@ -649,9 +602,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       if (epoch !== session) return;
       const refused = error.status >= 400 && error.status < 500;
       // The draft stays, so a refused or unconfirmed note can be sent again after checking the list.
-      state.memoNotice = refused
-        ? error.message
-        : "메모가 저장됐는지 확인하지 못했습니다. 메모 목록을 확인한 뒤 필요하면 다시 남겨 주세요.";
+      state.memoNotice = refused ? error.message : "메모가 저장됐는지 확인하지 못했습니다. 메모 목록을 확인한 뒤 필요하면 다시 남겨 주세요.";
       if (!refused && selected === state) void loadMemos();
     } finally {
       if (epoch === session) {
@@ -706,12 +657,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         const archive = node("button", "보관", "secondary danger");
         archive.type = "button";
         archive.addEventListener("click", () => {
-          if (
-            !confirm(
-              `"${label.name}" 라벨을 보관할까요? 보관한 라벨은 대화에 새로 붙일 수 없고, 이미 붙은 대화에는 보관됨으로 남습니다. 보관은 되돌릴 수 없습니다.`,
-            )
-          )
-            return;
+          if (!confirm(`"${label.name}" 라벨을 보관할까요? 보관한 라벨은 대화에 새로 붙일 수 없고, 이미 붙은 대화에는 보관됨으로 남습니다. 보관은 되돌릴 수 없습니다.`)) return;
           void manageLabels(async () => {
             await api(`/api/inbox/labels/${label.id}`, "DELETE");
             return "라벨을 보관했습니다.";
@@ -760,15 +706,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   // The server counts code points like PostgreSQL char_length(), after trimming each keyword.
   function checkRuleWords(input) {
     const words = ruleWords(input.value);
-    input.setCustomValidity(
-      input.required && !words.length
-        ? "키워드를 하나 이상 입력해 주세요."
-        : words.length > 20
-          ? "키워드는 최대 20개까지 입력할 수 있습니다."
-          : words.some((word) => [...word].length > 100)
-            ? "키워드는 각각 100자까지 입력할 수 있습니다."
-            : "",
-    );
+    input.setCustomValidity(input.required && !words.length ? "키워드를 하나 이상 입력해 주세요." : words.length > 20 ? "키워드는 최대 20개까지 입력할 수 있습니다." : words.some((word) => [...word].length > 100) ? "키워드는 각각 100자까지 입력할 수 있습니다." : "");
   }
 
   // Only admins read the rules; an agent's request would be refused, so it is never sent.
@@ -791,10 +729,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     const select = byId("inbox-label-rule-form").elements.label_id,
       previous = select.value;
     const active = labels.filter((label) => !label.archived);
-    select.replaceChildren(
-      ...(active.length ? [] : [new Option("먼저 인박스 라벨을 추가해 주세요", "")]),
-      ...active.map((label) => new Option(label.name, label.id)),
-    );
+    select.replaceChildren(...(active.length ? [] : [new Option("먼저 인박스 라벨을 추가해 주세요", "")]), ...active.map((label) => new Option(label.name, label.id)));
     if (active.some((label) => label.id === previous)) select.value = previous;
   }
 
@@ -816,8 +751,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   function stopRuleEdit() {
     ruleEditing = null;
     byId("inbox-label-rule-form").reset();
-    for (const name of ["keywords", "excluded_keywords"])
-      byId("inbox-label-rule-form").elements[name].setCustomValidity("");
+    for (const name of ["keywords", "excluded_keywords"]) byId("inbox-label-rule-form").elements[name].setCustomValidity("");
     ruleLabelOptions();
     ruleForm();
   }
@@ -832,9 +766,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     form.elements.excluded_keywords.value = rule.excluded_keywords.join(", ");
     checkRuleForm();
     ruleForm();
-    byId("inbox-label-rules-status").textContent = rule.label.archived
-      ? "이 규칙의 라벨은 보관되어 있습니다. 붙일 라벨을 다시 선택한 뒤 저장해 주세요."
-      : "규칙을 수정하고 있습니다.";
+    byId("inbox-label-rules-status").textContent = rule.label.archived ? "이 규칙의 라벨은 보관되어 있습니다. 붙일 라벨을 다시 선택한 뒤 저장해 주세요." : "규칙을 수정하고 있습니다.";
     form.elements.label_id.focus();
   }
 
@@ -852,11 +784,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       ...active.map((rule) => {
         const item = node("div", "", "item");
         const badges = node("div", "", "badges");
-        badges.append(
-          node("span", rule.label.name, `label-chip${rule.label.archived ? " archived" : ""}`),
-          ...(rule.label.archived ? [node("span", "보관된 라벨", "badge warning")] : []),
-          node("span", ruleModes[rule.match_mode] ?? rule.match_mode, "badge"),
-        );
+        badges.append(node("span", rule.label.name, `label-chip${rule.label.archived ? " archived" : ""}`), ...(rule.label.archived ? [node("span", "보관된 라벨", "badge warning")] : []), node("span", ruleModes[rule.match_mode] ?? rule.match_mode, "badge"));
         const edit = node("button", "수정", "secondary");
         edit.type = "button";
         edit.setAttribute("aria-label", `${rule.label.name} 라벨 규칙 수정`);
@@ -865,12 +793,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         archive.type = "button";
         archive.setAttribute("aria-label", `${rule.label.name} 라벨 규칙 보관`);
         archive.addEventListener("click", () => {
-          if (
-            !confirm(
-              `"${rule.label.name}" 라벨 규칙을 보관할까요? 다음 DM부터 이 규칙으로 라벨을 붙이지 않고, 이미 붙은 라벨은 그대로 둡니다. 보관은 되돌릴 수 없습니다.`,
-            )
-          )
-            return;
+          if (!confirm(`"${rule.label.name}" 라벨 규칙을 보관할까요? 다음 DM부터 이 규칙으로 라벨을 붙이지 않고, 이미 붙은 라벨은 그대로 둡니다. 보관은 되돌릴 수 없습니다.`)) return;
           void manageRules(
             async () => {
               await api(`/api/inbox/label-rules/${rule.id}`, "DELETE");
@@ -882,12 +805,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
           );
         });
         item.append(badges, edit, archive, node("p", `키워드: ${rule.keywords.join(", ")}`, "label-rule-terms"));
-        if (rule.excluded_keywords.length)
-          item.append(node("p", `제외: ${rule.excluded_keywords.join(", ")}`, "hint label-rule-terms"));
-        if (rule.label.archived)
-          item.append(
-            node("p", "라벨이 보관되어 이 규칙은 라벨을 붙이지 않습니다. 다른 라벨로 바꾸거나 보관해 주세요.", "hint"),
-          );
+        if (rule.excluded_keywords.length) item.append(node("p", `제외: ${rule.excluded_keywords.join(", ")}`, "hint label-rule-terms"));
+        if (rule.label.archived) item.append(node("p", "라벨이 보관되어 이 규칙은 라벨을 붙이지 않습니다. 다른 라벨로 바꾸거나 보관해 주세요.", "hint"));
         return item;
       }),
     );
@@ -970,11 +889,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   async function markRead(state, session, newest) {
     if (state.readMark && BigInt(state.readMark) >= BigInt(newest)) return;
     try {
-      const position = await api(
-        `/api/inbox/conversations/${state.row.connection_id}/${state.row.recipient_id}/read`,
-        "POST",
-        { message_id: newest },
-      );
+      const position = await api(`/api/inbox/conversations/${state.row.connection_id}/${state.row.recipient_id}/read`, "POST", { message_id: newest });
       // No position means a deletion removed the conversation after the mark committed; the next list drops it.
       if (epoch !== session || position.last_read_message_id == null) return;
       if (state.readMark && BigInt(position.last_read_message_id) < BigInt(state.readMark)) return;
@@ -1000,11 +915,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       // A close cancels the pending reminders it finds, so a reminder write and a state change never overlap: a save
       // response arriving after the close would otherwise show a cancelled reminder as pending.
       locked = state.loading || state.stateBusy || state.reminderBusy;
-    const changed = !convo.version
-      ? ""
-      : convo.updated_by
-        ? ` · 마지막 변경 ${person(convo.updated_by)}, ${date(convo.updated_at)}`
-        : ` · 새 DM으로 다시 열림, ${date(convo.updated_at)}`;
+    const changed = !convo.version ? "" : convo.updated_by ? ` · 마지막 변경 ${person(convo.updated_by)}, ${date(convo.updated_at)}` : ` · 새 DM으로 다시 열림, ${date(convo.updated_at)}`;
     byId("inbox-conversation-state").textContent = `${summary(convo)}${changed}`;
     const claim = byId("inbox-claim");
     claim.textContent = mine ? "담당 해제" : "내가 담당";
@@ -1018,8 +929,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     if (isAdmin()) {
       const options = [new Option("미배정", "")];
       for (const member of assignees) options.push(new Option(person(member), member.user_id));
-      if (convo.assignee && !assignees.some((member) => member.user_id === convo.assignee.user_id))
-        options.push(new Option(person(convo.assignee), convo.assignee.user_id));
+      if (convo.assignee && !assignees.some((member) => member.user_id === convo.assignee.user_id)) options.push(new Option(person(convo.assignee), convo.assignee.user_id));
       select.replaceChildren(...options);
       select.value = convo.assignee?.user_id ?? "";
       select.disabled = locked;
@@ -1037,11 +947,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     conversationControls();
     reminderControls();
     try {
-      state.convo = await api(
-        `/api/inbox/conversations/${state.row.connection_id}/${state.row.recipient_id}/state`,
-        "PUT",
-        { expected_version: state.convo.version, ...change },
-      ).finally(() => {
+      state.convo = await api(`/api/inbox/conversations/${state.row.connection_id}/${state.row.recipient_id}/state`, "PUT", { expected_version: state.convo.version, ...change }).finally(() => {
         // A conversation read that overlapped this write may hold the older state, or a pending reminder a close
         // cancelled; loadConversation drops both.
         state.convoWrites++;
@@ -1057,10 +963,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       void loadList();
     } catch (error) {
       if (epoch !== session) return;
-      state.stateNotice =
-        error.status >= 400 && error.status < 500
-          ? failure(error.code)
-          : "변경 여부를 확인하지 못했습니다. 대화를 새로고침해 현재 상태를 확인해 주세요.";
+      state.stateNotice = error.status >= 400 && error.status < 500 ? failure(error.code) : "변경 여부를 확인하지 못했습니다. 대화를 새로고침해 현재 상태를 확인해 주세요.";
       // A conflict or refusal shows the state another member left, including who changed it.
       if (error.status === 409 || error.status === 403) void loadConversation();
     } finally {
@@ -1116,34 +1019,13 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     if (schedule.value !== state.scheduleLocal) schedule.value = state.scheduleLocal;
     schedule.required = state.scheduleEnabled;
     schedule.disabled = !state.scheduleEnabled || state.busy || Boolean(state.operation);
-    byId("inbox-schedule-help").textContent =
-      `${state.scheduleZone || getTimeZone()} 기준 · 1분 이후부터 답장 가능 시간이 끝나기 전까지 선택하세요. 예약 시각에도 발송 조건을 다시 확인합니다.`;
+    byId("inbox-schedule-help").textContent = `${state.scheduleZone || getTimeZone()} 기준 · 1분 이후부터 답장 가능 시간이 끝나기 전까지 선택하세요. 예약 시각에도 발송 조건을 다시 확인합니다.`;
     byId("inbox-reply-count").textContent = `${state.draft.length} / 1,000`;
-    byId("inbox-send").disabled =
-      state.busy ||
-      state.loading ||
-      Boolean(state.operation) ||
-      blocked ||
-      !state.draft.trim() ||
-      (state.scheduleEnabled && !state.scheduleLocal);
-    byId("inbox-send").textContent =
-      state.busy && state.operation?.kind === "create"
-        ? state.operation.body.schedule_local
-          ? "예약 접수 중…"
-          : "보내기 요청 중…"
-        : state.scheduleEnabled
-          ? "시각 지정 예약"
-          : "지금 보내기";
+    byId("inbox-send").disabled = state.busy || state.loading || Boolean(state.operation) || blocked || !state.draft.trim() || (state.scheduleEnabled && !state.scheduleLocal);
+    byId("inbox-send").textContent = state.busy && state.operation?.kind === "create" ? (state.operation.body.schedule_local ? "예약 접수 중…" : "보내기 요청 중…") : state.scheduleEnabled ? "시각 지정 예약" : "지금 보내기";
     byId("inbox-composer").setAttribute("aria-busy", String(state.busy));
-    byId("inbox-reply-help").textContent =
-      `Enter로 줄바꿈 · Ctrl/⌘ + Enter로 ${state.scheduleEnabled ? "예약" : "보내기"}`;
-    byId("inbox-reply-status").textContent =
-      state.notice ||
-      (state.draft
-        ? "작성 중 · 초안은 이 대화에 보관됩니다."
-        : state.scheduleEnabled
-          ? "문구를 작성하고 보낼 시각을 정한 뒤 예약하세요."
-          : "문구를 작성한 뒤 지금 보내기를 누르세요.");
+    byId("inbox-reply-help").textContent = `Enter로 줄바꿈 · Ctrl/⌘ + Enter로 ${state.scheduleEnabled ? "예약" : "보내기"}`;
+    byId("inbox-reply-status").textContent = state.notice || (state.draft ? "작성 중 · 초안은 이 대화에 보관됩니다." : state.scheduleEnabled ? "문구를 작성하고 보낼 시각을 정한 뒤 예약하세요." : "문구를 작성한 뒤 지금 보내기를 누르세요.");
     const check = byId("inbox-request-check");
     check.hidden = !state.operation || state.busy;
     check.textContent = "같은 요청의 접수 확인";
@@ -1163,65 +1045,29 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
                 : `답장 가능 · ${date(status.window_expires_at)}까지 (서버 확인 기준)`;
     const handoff = byId("inbox-handoff");
     handoff.textContent = status?.handoff_active ? "자동화 재개" : "상담 시작";
-    handoff.disabled =
-      state.busy ||
-      state.loading ||
-      Boolean(state.operation) ||
-      !status ||
-      (!status.handoff_active && state.context?.mapping_status !== "verified");
+    handoff.disabled = state.busy || state.loading || Boolean(state.operation) || !status || (!status.handoff_active && state.context?.mapping_status !== "verified");
     byId("inbox-handoff-state").textContent = status?.handoff_active
       ? "상담 중 · 이 사용자의 자동 답장은 중지됩니다. 상담 시작 전에 이미 발송 중이던 자동 답장은 취소되지 않습니다."
       : "자동화 상태 · 직접 답장하려면 상담을 시작하세요. 이미 발송 중인 자동 답장은 상담을 시작해도 취소되지 않습니다.";
     byId("inbox-thread-refresh").disabled = state.loading;
     byId("inbox-older").disabled = state.loading;
     byId("inbox-older").hidden = !state.beforeMessages && !state.beforeReplies;
-    for (const button of byId("inbox-messages").querySelectorAll("button[data-mutation]"))
-      button.disabled =
-        button.dataset.unavailable === "true" ||
-        state.busy ||
-        Boolean(state.operation) ||
-        (["retry", "reschedule"].includes(button.dataset.mutation) && blocked);
-    for (const item of byId("inbox-messages").querySelectorAll("[data-reply-id]"))
-      for (const input of item.querySelectorAll("textarea, input"))
-        input.disabled = state.operation?.replyId === item.dataset.replyId;
+    for (const button of byId("inbox-messages").querySelectorAll("button[data-mutation]")) button.disabled = button.dataset.unavailable === "true" || state.busy || Boolean(state.operation) || (["retry", "reschedule"].includes(button.dataset.mutation) && blocked);
+    for (const item of byId("inbox-messages").querySelectorAll("[data-reply-id]")) for (const input of item.querySelectorAll("textarea, input")) input.disabled = state.operation?.replyId === item.dataset.replyId;
   }
 
   function replyCard(state, reply) {
     const item = node("article", "", "inbox-message outgoing-message");
     item.dataset.replyId = reply.id;
-    const label =
-      reply.status === "unknown" && reply.resolved_at
-        ? "검토 완료 · 재전송 안 함"
-        : reply.status === "pending" && reply.scheduled_at
-          ? "예약 대기"
-          : sendStatusLabel(reply.status);
-    item.append(
-      node("p", reply.text, "bubble outgoing"),
-      node(
-        "p",
-        `${label} · ${date(reply.sent_at || reply.created_at)}`,
-        `hint ${["failed", "unknown"].includes(reply.status) ? "reply-warning" : ""}`,
-      ),
-    );
+    const label = reply.status === "unknown" && reply.resolved_at ? "검토 완료 · 재전송 안 함" : reply.status === "pending" && reply.scheduled_at ? "예약 대기" : sendStatusLabel(reply.status);
+    item.append(node("p", reply.text, "bubble outgoing"), node("p", `${label} · ${date(reply.sent_at || reply.created_at)}`, `hint ${["failed", "unknown"].includes(reply.status) ? "reply-warning" : ""}`));
     if (reply.scheduled_at) {
-      item.append(
-        node(
-          "p",
-          `예정 · ${reminderLabel(wallClock(Date.parse(reply.scheduled_at), reply.schedule_time_zone))} (${reply.schedule_time_zone})`,
-          "hint",
-        ),
-      );
+      item.append(node("p", `예정 · ${reminderLabel(wallClock(Date.parse(reply.scheduled_at), reply.schedule_time_zone))} (${reply.schedule_time_zone})`, "hint"));
       scheduledReplyActions(state, reply, item);
     }
     if (reply.failure_code) item.append(node("p", failure(reply.failure_code), "hint"));
-    if (reply.status === "unknown" && !reply.resolved_at)
-      item.append(
-        node("p", "이미 도착했을 수 있어 다시 보내지 않습니다. Instagram 대화에서 결과를 확인해 주세요.", "hint"),
-      );
-    const retryable =
-      reply.status === "failed" &&
-      reply.safe_to_retry &&
-      ![...state.replies.values()].some((r) => r.retry_of === reply.id);
+    if (reply.status === "unknown" && !reply.resolved_at) item.append(node("p", "이미 도착했을 수 있어 다시 보내지 않습니다. Instagram 대화에서 결과를 확인해 주세요.", "hint"));
+    const retryable = reply.status === "failed" && reply.safe_to_retry && ![...state.replies.values()].some((r) => r.retry_of === reply.id);
     if (retryable || (reply.status === "unknown" && !reply.resolved_at)) {
       const kind = retryable ? "retry" : "resolution",
         action = node("form", "", "reply-decision");
@@ -1250,16 +1096,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       action.append(button);
       action.addEventListener("submit", (event) => {
         event.preventDefault();
-        if (selected !== state || state.busy || state.operation || !action.reportValidity() || !input.value.trim())
-          return;
-        if (
-          retryable &&
-          (textSupport(state.status) !== true ||
-            !state.status?.allowed ||
-            expired(state) ||
-            state.status.blocked_by_unknown)
-        )
-          return;
+        if (selected !== state || state.busy || state.operation || !action.reportValidity() || !input.value.trim()) return;
+        if (retryable && (textSupport(state.status) !== true || !state.status?.allowed || expired(state) || state.status.blocked_by_unknown)) return;
         const body = {
           request_key: crypto.randomUUID(),
           reason: input.value.trim(),
@@ -1290,14 +1128,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         rescheduled: "예약 수정",
         cancelled: "예약 취소",
       };
-      for (const event of reply.events)
-        details.append(
-          node(
-            "p",
-            `${date(event.created_at)} · ${titles[event.kind] || "처리 기록"}${event.scheduled_at ? ` · 예정 ${date(event.scheduled_at)}` : ""}${event.reason ? ` · ${event.reason}` : ""}`,
-            "hint",
-          ),
-        );
+      for (const event of reply.events) details.append(node("p", `${date(event.created_at)} · ${titles[event.kind] || "처리 기록"}${event.scheduled_at ? ` · 예정 ${date(event.scheduled_at)}` : ""}${event.reason ? ` · ${event.reason}` : ""}`, "hint"));
       item.append(details);
     }
     return item;
@@ -1315,14 +1146,12 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       zone,
       version: reply.schedule_version,
     };
-    const unavailable =
-      !allowed || reply.status !== "pending" || draft.version !== reply.schedule_version || draft.zone !== zone;
+    const unavailable = !allowed || reply.status !== "pending" || draft.version !== reply.schedule_version || draft.zone !== zone;
     const details = node("details", "", "reply-decision");
     details.open = Boolean(saved);
     details.append(node("summary", "예약 수정·취소"));
     details.addEventListener("toggle", () => {
-      if (details.isConnected && current(state, session) && details.open && !state.scheduleEdits.has(reply.id))
-        state.scheduleEdits.set(reply.id, draft);
+      if (details.isConnected && current(state, session) && details.open && !state.scheduleEdits.has(reply.id)) state.scheduleEdits.set(reply.id, draft);
     });
     const form = node("form");
     const text = node("textarea"),
@@ -1351,14 +1180,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       if (event.key === "Enter") event.preventDefault();
     });
     form.append(textLabel, text, timeLabel, local);
-    if (unavailable)
-      form.append(
-        node(
-          "p",
-          "예약 상태나 시간대가 바뀌었습니다. 입력은 보존했습니다. 최신 예약을 다시 확인한 뒤 편집해 주세요.",
-          "hint reply-warning",
-        ),
-      );
+    if (unavailable) form.append(node("p", "예약 상태나 시간대가 바뀌었습니다. 입력은 보존했습니다. 최신 예약을 다시 확인한 뒤 편집해 주세요.", "hint reply-warning"));
     const actions = node("div", "", "composer-actions");
     const save = node("button", "예약 수정", "secondary"),
       cancel = node("button", "예약 취소", "secondary"),
@@ -1379,15 +1201,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     });
     form.addEventListener("submit", (event) => {
       event.preventDefault();
-      if (
-        selected !== state ||
-        state.busy ||
-        state.operation ||
-        save.disabled ||
-        !form.reportValidity() ||
-        !text.value.trim()
-      )
-        return;
+      if (selected !== state || state.busy || state.operation || save.disabled || !form.reportValidity() || !text.value.trim()) return;
       remember();
       void submitOperation(state, {
         kind: "reschedule",
@@ -1421,10 +1235,9 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   }
 
   function timeline(state) {
-    const rows = [
-      ...[...state.messages.values()].map((message) => ({ time: message.message_at, id: `m:${message.id}`, message })),
-      ...[...state.replies.values()].map((reply) => ({ time: reply.created_at, id: `r:${reply.id}`, reply })),
-    ].sort((a, b) => Date.parse(a.time) - Date.parse(b.time) || a.id.localeCompare(b.id));
+    const rows = [...[...state.messages.values()].map((message) => ({ time: message.message_at, id: `m:${message.id}`, message })), ...[...state.replies.values()].map((reply) => ({ time: reply.created_at, id: `r:${reply.id}`, reply }))].sort(
+      (a, b) => Date.parse(a.time) - Date.parse(b.time) || a.id.localeCompare(b.id),
+    );
     const fragment = document.createDocumentFragment();
     for (const row of rows) {
       if (row.reply) {
@@ -1432,10 +1245,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         continue;
       }
       const item = node("article", "", "inbox-message incoming-message");
-      item.append(
-        node("p", row.message.text, "bubble incoming"),
-        node("p", `${row.message.kind === "postback" ? "버튼 응답 · " : "수신 · "}${date(row.time)}`, "hint"),
-      );
+      item.append(node("p", row.message.text, "bubble incoming"), node("p", `${row.message.kind === "postback" ? "버튼 응답 · " : "수신 · "}${date(row.time)}`, "hint"));
       fragment.append(item);
     }
     if (!rows.length) fragment.append(node("p", "보관한 메시지가 없습니다.", "hint"));
@@ -1455,12 +1265,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     controls();
     try {
       const [messages, replies, status, context] = await Promise.all([
-        older && !state.beforeMessages
-          ? { messages: [], before: null }
-          : api(`${base(state)}${older ? `?before=${encodeURIComponent(state.beforeMessages)}` : ""}`),
-        older && !state.beforeReplies
-          ? { replies: [], before: null }
-          : api(`${base(state)}/replies${older ? `?before=${encodeURIComponent(state.beforeReplies)}` : ""}`),
+        older && !state.beforeMessages ? { messages: [], before: null } : api(`${base(state)}${older ? `?before=${encodeURIComponent(state.beforeMessages)}` : ""}`),
+        older && !state.beforeReplies ? { replies: [], before: null } : api(`${base(state)}/replies${older ? `?before=${encodeURIComponent(state.beforeReplies)}` : ""}`),
         api(`${base(state)}/reply-status`),
         api(`${base(state)}/context`),
       ]);
@@ -1476,16 +1282,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       for (const row of replies.replies) state.replies.set(row.id, row);
       for (const id of state.notes.keys()) {
         const reply = state.replies.get(id);
-        if (
-          reply &&
-          !(
-            (reply.status === "unknown" && !reply.resolved_at) ||
-            (reply.status === "failed" &&
-              reply.safe_to_retry &&
-              ![...state.replies.values()].some((row) => row.retry_of === id))
-          )
-        )
-          state.notes.delete(id);
+        if (reply && !((reply.status === "unknown" && !reply.resolved_at) || (reply.status === "failed" && reply.safe_to_retry && ![...state.replies.values()].some((row) => row.retry_of === id)))) state.notes.delete(id);
       }
       state.beforeMessages = messages.before;
       state.beforeReplies = replies.before;
@@ -1502,8 +1299,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
           Math.min(remaining + 10, 2147483647),
         );
       timeline(state);
-      byId("inbox-message-status").textContent =
-        "수신과 수동 답장 이력입니다. 새로고침으로 최신 발송 상태를 확인하세요.";
+      byId("inbox-message-status").textContent = "수신과 수동 답장 이력입니다. 새로고침으로 최신 발송 상태를 확인하세요.";
       // Messages arrive newest first, so the first one of a fresh load is the newest stored message.
       if (!older && messages.messages.length) void markRead(state, session, messages.messages[0].id);
     } catch (error) {
@@ -1536,8 +1332,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         state.scheduleLocal = "";
       }
       if (operation.replyId) state.notes.delete(operation.replyId);
-      if (operation.replyId && ["reschedule", "cancel"].includes(operation.kind))
-        state.scheduleEdits.delete(operation.replyId);
+      if (operation.replyId && ["reschedule", "cancel"].includes(operation.kind)) state.scheduleEdits.delete(operation.replyId);
       state.notice =
         operation.kind === "cancel"
           ? "예약을 취소했습니다. 이 메시지는 보내지 않습니다."
@@ -1555,8 +1350,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       if (error.status >= 400 && error.status < 500) {
         state.operation = null;
         state.notice = failure(error.code);
-      } else
-        state.notice = "요청의 접수 여부를 확인하지 못했습니다. 문구를 변경하지 않고 같은 요청의 접수를 확인해 주세요.";
+      } else state.notice = "요청의 접수 여부를 확인하지 못했습니다. 문구를 변경하지 않고 같은 요청의 접수를 확인해 주세요.";
     } finally {
       if (epoch === session) {
         state.busy = false;
@@ -1634,8 +1428,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     byId("inbox-conversation-title").textContent = `@${row.username || "연결 계정"} · DM 사용자 ${row.recipient_id}`;
     byId("inbox-thread-refresh").hidden = false;
     byId("inbox-back-to-list").hidden = false;
-    for (const button of byId("inbox-conversations").children)
-      button.setAttribute("aria-pressed", String(button.dataset.key === key));
+    for (const button of byId("inbox-conversations").children) button.setAttribute("aria-pressed", String(button.dataset.key === key));
     timeline(selected);
     renderMemos(selected);
     controls();
@@ -1683,17 +1476,13 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         // read position shows which came first, so an older count cannot bring the badge back and a newer DM
         // counted after the mark is kept.
         const known = states.get(`${row.connection_id}:${row.recipient_id}`);
-        if (known?.readSeq > reads && known.readMark)
-          reconcile(row, { last_read_message_id: known.readMark, unread_count: known.readUnread });
+        if (known?.readSeq > reads && known.readMark) reconcile(row, { last_read_message_id: known.readMark, unread_count: known.readUnread });
         if (unreadOnly && row.unread_count === 0) continue;
         const button = node("button", "", "secondary");
         rowContent(button, row);
         button.dataset.key = `${row.connection_id}:${row.recipient_id}`;
         listed.set(button.dataset.key, { row, button });
-        button.setAttribute(
-          "aria-pressed",
-          String(selected?.row.connection_id === row.connection_id && selected?.row.recipient_id === row.recipient_id),
-        );
+        button.setAttribute("aria-pressed", String(selected?.row.connection_id === row.connection_id && selected?.row.recipient_id === row.recipient_id));
         button.addEventListener("click", () => {
           choose(row);
           focusConversation();
@@ -1758,24 +1547,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     byId("inbox-label-rule-form").reset();
     byId("inbox-label-rule-form").classList.remove("editing");
     byId("inbox-label-options").dataset.key = "";
-    for (const id of [
-      "inbox-conversations",
-      "inbox-messages",
-      "inbox-label-list",
-      "inbox-label-rule-list",
-      "inbox-label-options",
-      "inbox-note-list",
-    ])
-      byId(id).replaceChildren();
-    for (const id of [
-      "inbox-status",
-      "inbox-message-status",
-      "inbox-reply-status",
-      "inbox-state-status",
-      "inbox-labels-status",
-      "inbox-label-rules-status",
-    ])
-      byId(id).textContent = "";
+    for (const id of ["inbox-conversations", "inbox-messages", "inbox-label-list", "inbox-label-rule-list", "inbox-label-options", "inbox-note-list"]) byId(id).replaceChildren();
+    for (const id of ["inbox-status", "inbox-message-status", "inbox-reply-status", "inbox-state-status", "inbox-labels-status", "inbox-label-rules-status"]) byId(id).textContent = "";
     byId("inbox-reply-text").value = "";
     byId("inbox-send-timing").value = "now";
     byId("inbox-schedule-local").value = "";
@@ -1784,8 +1557,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     byId("inbox-reminder-editor").reset();
     byId("inbox-reminder-status").textContent = "";
     byId("inbox-conversation-title").textContent = "대화를 선택하세요";
-    for (const id of ["inbox-more", "inbox-older", "inbox-thread-refresh", "inbox-back-to-list"])
-      byId(id).hidden = true;
+    for (const id of ["inbox-more", "inbox-older", "inbox-thread-refresh", "inbox-back-to-list"]) byId(id).hidden = true;
     controls();
   }
   // Admins can also pick a member; agents filter by themselves or unassigned only.
@@ -1793,13 +1565,11 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     const select = byId("inbox-assignee-filter"),
       previous = select.value;
     const options = [new Option("전체", ""), new Option("나", "me"), new Option("미배정", "none")];
-    for (const member of assignees)
-      if (member.user_id !== getUserId()) options.push(new Option(person(member), member.user_id));
+    for (const member of assignees) if (member.user_id !== getUserId()) options.push(new Option(person(member), member.user_id));
     select.replaceChildren(...options);
     select.value = options.some((option) => option.value === previous) ? previous : "";
   }
-  for (const id of ["inbox-status-filter", "inbox-assignee-filter", "inbox-label-filter", "inbox-unread"])
-    byId(id).addEventListener("change", () => void loadList());
+  for (const id of ["inbox-status-filter", "inbox-assignee-filter", "inbox-label-filter", "inbox-unread"]) byId(id).addEventListener("change", () => void loadList());
   byId("inbox-reminder-filter").addEventListener("click", () => {
     reminderFilter = !reminderFilter;
     reminderBadge();
@@ -1905,8 +1675,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       return "라벨을 추가했습니다.";
     });
   });
-  for (const name of ["keywords", "excluded_keywords"])
-    byId("inbox-label-rule-form").elements[name].addEventListener("input", (event) => checkRuleWords(event.target));
+  for (const name of ["keywords", "excluded_keywords"]) byId("inbox-label-rule-form").elements[name].addEventListener("input", (event) => checkRuleWords(event.target));
   byId("inbox-label-rule-form").addEventListener("submit", (event) => {
     event.preventDefault();
     saveRule(event.currentTarget);
@@ -1947,15 +1716,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   for (const kind of ["paste", "drop", "dragover"])
     byId("inbox-composer").addEventListener(kind, (event) => {
       const transfer = event.clipboardData || event.dataTransfer;
-      if (
-        !transfer ||
-        !(
-          transfer.files?.length ||
-          Array.from(transfer.items || []).some((item) => item.kind === "file") ||
-          Array.from(transfer.types || []).includes("Files")
-        )
-      )
-        return;
+      if (!transfer || !(transfer.files?.length || Array.from(transfer.items || []).some((item) => item.kind === "file") || Array.from(transfer.types || []).includes("Files"))) return;
       event.preventDefault();
       // Do not replace the uncertain-receipt instructions while that original request is locked.
       if (kind !== "dragover" && selected && !selected.operation && !selected.busy) {
@@ -1967,13 +1728,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     event.preventDefault();
     if (!selected || byId("inbox-send").disabled || !event.currentTarget.reportValidity()) return;
     const state = selected;
-    if (
-      textSupport(state.status) !== true ||
-      !state.status?.allowed ||
-      expired(state) ||
-      state.status.blocked_by_unknown
-    )
-      return;
+    if (textSupport(state.status) !== true || !state.status?.allowed || expired(state) || state.status.blocked_by_unknown) return;
     void submitOperation(state, {
       kind: "create",
       path: `${base(state)}/replies`,
@@ -1983,9 +1738,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         expected_handoff_version: state.status.handoff_version,
         text: state.draft,
         content_type: "text",
-        ...(state.scheduleEnabled
-          ? { schedule_local: state.scheduleLocal, expected_time_zone: state.scheduleZone }
-          : {}),
+        ...(state.scheduleEnabled ? { schedule_local: state.scheduleLocal, expected_time_zone: state.scheduleZone } : {}),
       },
     });
   });
@@ -2029,14 +1782,11 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       zoneChanges++;
       for (const state of states.values()) {
         if (!state.operation) {
-          if (state.scheduleLocal)
-            state.notice = "작업 공간 시간대가 바뀌었습니다. 문구는 보존했으니 예약 시각을 다시 선택해 주세요.";
+          if (state.scheduleLocal) state.notice = "작업 공간 시간대가 바뀌었습니다. 문구는 보존했으니 예약 시각을 다시 선택해 주세요.";
           state.scheduleLocal = "";
           state.scheduleZone = getTimeZone();
         }
-        if (reminderDirty(state))
-          state.reminderNotice =
-            "작업 공간 시간대가 바뀌어 편집하던 리마인더를 지웠습니다. 새 시간대로 다시 정해 주세요.";
+        if (reminderDirty(state)) state.reminderNotice = "작업 공간 시간대가 바뀌어 편집하던 리마인더를 지웠습니다. 새 시간대로 다시 정해 주세요.";
         state.reminderDraft = null;
         state.reminderZoneStale = Boolean(state.reminder);
       }
@@ -2047,25 +1797,13 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       if (listed.size) void loadList();
     },
     hasDrafts: () =>
-      replyTemplates.hasDrafts() ||
-      [...states.values()].some(
-        (state) =>
-          state.draft ||
-          state.scheduleLocal ||
-          state.scheduleEdits.size ||
-          state.operation ||
-          state.memoDraft.trim() ||
-          state.labelDraft ||
-          reminderDirty(state) ||
-          [...state.notes.values()].some(Boolean),
-      ),
+      replyTemplates.hasDrafts() || [...states.values()].some((state) => state.draft || state.scheduleLocal || state.scheduleEdits.size || state.operation || state.memoDraft.trim() || state.labelDraft || reminderDirty(state) || [...state.notes.values()].some(Boolean)),
     initialize() {
       void replyTemplates.load();
       const select = byId("inbox-account"),
         previous = select.value;
       select.replaceChildren(new Option("모든 계정", ""));
-      for (const account of getConnections())
-        select.append(new Option(account.username || account.account_id, account.id));
+      for (const account of getConnections()) select.append(new Option(account.username || account.account_id, account.id));
       if (getConnections().some((account) => account.id === previous)) select.value = previous;
       byId("inbox-labels-section").hidden = !isAdmin();
       byId("inbox-label-rules-section").hidden = !isAdmin();

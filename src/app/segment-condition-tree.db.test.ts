@@ -4,13 +4,7 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool, type QueryConfig } from "pg";
 import { ApiError } from "./auth.ts";
-import {
-  archiveContactSegment,
-  createContactSegment,
-  listContactSegments,
-  listContacts,
-  updateContactSegment,
-} from "./contacts.ts";
+import { archiveContactSegment, createContactSegment, listContactSegments, listContacts, updateContactSegment } from "./contacts.ts";
 import { archiveContactField } from "./contact-fields.ts";
 import { CONTACT_CSV_HEADER, exportContactCsv } from "./contact-csv.ts";
 import { parseContactCsv, decodeContactScalar } from "./contact-csv-test-utils.ts";
@@ -19,8 +13,7 @@ import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: databaseUrl });
 const workspace = "11111111-1111-4111-8111-111111111111";
 const foreignWorkspace = "22222222-2222-4222-8222-222222222222";
@@ -40,12 +33,7 @@ before(async () => pool.query(await readFile(new URL("../../db/schema.sql", impo
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces,workspace_deletion_records CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspace, foreignWorkspace]);
-  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($3,$4,'owner')", [
-    workspace,
-    owner.id,
-    foreignWorkspace,
-    outsider.id,
-  ]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($3,$4,'owner')", [workspace, owner.id, foreignWorkspace, outsider.id]);
   await pool.query(
     `INSERT INTO instagram_connections(id,workspace_id,account_id,username,inbox_enabled,inbox_enabled_at) VALUES
      ($1,$4,'100','shop',true,now()-interval '1 day'),($2,$4,'101','second',true,now()-interval '1 day'),
@@ -60,8 +48,7 @@ after(async () => pool.end());
 function listClock(): Pool {
   return {
     query: async (sql: string, values: unknown[] = []) => {
-      if (sql.includes("statement_timestamp()"))
-        assert.equal(sql.match(/statement_timestamp\(\)/g)?.length, 1, "one evaluation clock per lookup");
+      if (sql.includes("statement_timestamp()")) assert.equal(sql.match(/statement_timestamp\(\)/g)?.length, 1, "one evaluation clock per lookup");
       return pool.query(sql.replace("statement_timestamp()", `'${asOf}'::timestamptz`), values);
     },
   } as unknown as Pool;
@@ -100,25 +87,13 @@ async function comment(sender: string, conn = C, ws = workspace, at = inWindow) 
   ).rows[0];
 }
 async function tags(sender: string, values: string[], conn = C, ws = workspace) {
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,$3,$4)",
-    [ws, conn, sender, values],
-  );
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,$3,$4)", [ws, conn, sender, values]);
 }
 async function field(name: string, type: string, ws = workspace) {
-  return (
-    await pool.query("INSERT INTO instagram_contact_fields(workspace_id,name,type) VALUES($1,$2,$3) RETURNING id", [
-      ws,
-      name,
-      type,
-    ])
-  ).rows[0].id as string;
+  return (await pool.query("INSERT INTO instagram_contact_fields(workspace_id,name,type) VALUES($1,$2,$3) RETURNING id", [ws, name, type])).rows[0].id as string;
 }
 async function value(sender: string, fieldId: string, stored: unknown, conn = C) {
-  await pool.query(
-    "INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,$3,$4,$5::jsonb)",
-    [workspace, conn, sender, fieldId, JSON.stringify(stored)],
-  );
+  await pool.query("INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,$3,$4,$5::jsonb)", [workspace, conn, sender, fieldId, JSON.stringify(stored)]);
 }
 // A sent private reply from sender to recipient an hour ago and a received DM of recipient in the window.
 async function bridge(sender: string, recipient: string) {
@@ -213,67 +188,37 @@ type Group = { mode: string; conditions: Leaf[] };
 const group = (mode: string, ...conditions: Leaf[]): Group => ({ mode, conditions });
 const tree = (mode: string, ...groups: Group[]) => ({ mode, groups });
 // "(VIP and spent at least 100000) or event".
-const vipOrEvent = (fields: Fields) =>
-  tree(
-    "any",
-    group("all", has("vip"), { field_id: fields.score, field_operator: "gte", field_value: 100000 }),
-    group("all", has("event")),
-  );
+const vipOrEvent = (fields: Fields) => tree("any", group("all", has("vip"), { field_id: fields.score, field_operator: "gte", field_value: 100000 }), group("all", has("event")));
 const senders = (page: { contacts: { sender_id: string }[] }) => page.contacts.map((contact) => contact.sender_id);
 const query = (entries: Record<string, string>) => new URLSearchParams(entries);
-const byTree = (value: unknown, extra: Record<string, string> = {}) =>
-  query({ condition_tree: JSON.stringify(value), ...extra });
-const sum = (page: { total?: string; excluded?: Record<string, string> }) =>
-  BigInt(page.total!) + Object.values(page.excluded!).reduce((total, count) => total + BigInt(count), 0n);
-const refused = (status: number, code: string) => (error: unknown) =>
-  error instanceof ApiError && error.status === status && error.message === code;
+const byTree = (value: unknown, extra: Record<string, string> = {}) => query({ condition_tree: JSON.stringify(value), ...extra });
+const sum = (page: { total?: string; excluded?: Record<string, string> }) => BigInt(page.total!) + Object.values(page.excluded!).reduce((total, count) => total + BigInt(count), 0n);
+const refused = (status: number, code: string) => (error: unknown) => error instanceof ApiError && error.status === status && error.message === code;
 
 test("condition trees evaluate all and any at both levels over tag and typed field leaves", async () => {
   const fields = await fixture();
-  const list = async (value: unknown, extra: Record<string, string> = {}) =>
-    senders(await listContacts(listClock(), owner, byTree(value, extra)));
+  const list = async (value: unknown, extra: Record<string, string> = {}) => senders(await listContacts(listClock(), owner, byTree(value, extra)));
   // Every account of the workspace; the foreign f1 never matches.
   assert.deepEqual(await list(vipOrEvent(fields)), ["s1", "s3", "s5", "s7"]);
   assert.deepEqual(await list(vipOrEvent(fields), { connection_id: C }), ["s1", "s3", "s5"]);
   assert.deepEqual(await list(vipOrEvent(fields), { connection_id: C2 }), ["s7"]);
   // Another workspace sees only its own contacts, and a tree naming a field of this workspace is refused there.
-  assert.deepEqual(
-    senders(await listContacts(listClock(), outsider, byTree(tree("any", group("all", has("event")))))),
-    ["f1"],
-  );
+  assert.deepEqual(senders(await listContacts(listClock(), outsider, byTree(tree("any", group("all", has("event")))))), ["f1"]);
   await assert.rejects(listContacts(pool, outsider, byTree(vipOrEvent(fields))), refused(404, "field_not_found"));
   // Root all over two any groups: (not vip or plan unset) and (score < 100 or member false or joined >= Jan 15).
   const both = tree(
     "all",
     group("any", lacks("vip"), { field_id: fields.plan, field_operator: "is_unset" }),
-    group(
-      "any",
-      { field_id: fields.score, field_operator: "lt", field_value: 100 },
-      { field_id: fields.member, field_operator: "eq", field_value: false },
-      { field_id: fields.joined, field_operator: "gte", field_value: "2026-01-15" },
-    ),
+    group("any", { field_id: fields.score, field_operator: "lt", field_value: 100 }, { field_id: fields.member, field_operator: "eq", field_value: false }, { field_id: fields.joined, field_operator: "gte", field_value: "2026-01-15" }),
   );
   assert.deepEqual(await list(both), ["s1", "s2", "s6"]);
   // The same field in two groups: score >= 100000 or score < 100.
-  const range = tree(
-    "any",
-    group("all", { field_id: fields.score, field_operator: "gte", field_value: 100000 }),
-    group("all", { field_id: fields.score, field_operator: "lt", field_value: 100 }),
-  );
+  const range = tree("any", group("all", { field_id: fields.score, field_operator: "gte", field_value: 100000 }), group("all", { field_id: fields.score, field_operator: "lt", field_value: 100 }));
   assert.deepEqual(await list(range), ["s1", "s2", "s4", "s7"]);
   // A group all over a text eq, is_set and a negated tag; is_set alone.
-  assert.deepEqual(
-    await list(tree("all", group("all", { field_id: fields.plan, field_operator: "eq", field_value: "pro" }))),
-    ["s4"],
-  );
-  assert.deepEqual(
-    await list(tree("all", group("all", { field_id: fields.plan, field_operator: "is_set" }, lacks("event")))),
-    ["s4"],
-  );
-  assert.deepEqual(await list(tree("any", group("all", { field_id: fields.member, field_operator: "is_set" }))), [
-    "s5",
-    "s6",
-  ]);
+  assert.deepEqual(await list(tree("all", group("all", { field_id: fields.plan, field_operator: "eq", field_value: "pro" }))), ["s4"]);
+  assert.deepEqual(await list(tree("all", group("all", { field_id: fields.plan, field_operator: "is_set" }, lacks("event")))), ["s4"]);
+  assert.deepEqual(await list(tree("any", group("all", { field_id: fields.member, field_operator: "is_set" }))), ["s5", "s6"]);
   // Tag absent includes a contact without a tag row (s4) and one with an empty row (s6).
   assert.deepEqual(await list(tree("all", group("all", lacks("vip"), lacks("event")))), ["s4", "s6"]);
   assert.deepEqual(await list(tree("all", group("any", has("vip"), has("event")))), ["s1", "s2", "s3", "s5", "s7"]);
@@ -281,14 +226,8 @@ test("condition trees evaluate all and any at both levels over tag and typed fie
   // Tags are normalized, and negate false is a present tag.
   assert.deepEqual(await list(tree("all", group("all", { tag: " EVENT ", negate: false }))), ["s3", "s5"]);
   // A boolean leaf compares only boolean values, and a date leaf only dates.
-  assert.deepEqual(
-    await list(tree("all", group("all", { field_id: fields.member, field_operator: "eq", field_value: true }))),
-    ["s5"],
-  );
-  assert.deepEqual(
-    await list(tree("all", group("all", { field_id: fields.joined, field_operator: "lt", field_value: "2026-01-15" }))),
-    ["s5"],
-  );
+  assert.deepEqual(await list(tree("all", group("all", { field_id: fields.member, field_operator: "eq", field_value: true }))), ["s5"]);
+  assert.deepEqual(await list(tree("all", group("all", { field_id: fields.joined, field_operator: "lt", field_value: "2026-01-15" }))), ["s5"]);
 });
 
 test("tag and text conditions compare stored values exactly, so quotes and LIKE wildcards stay literal", async () => {
@@ -306,9 +245,7 @@ test("tag and text conditions compare stored values exactly, so quotes and LIKE 
   }
   const list = async (options: URLSearchParams) => senders(await listContacts(pool, owner, options));
   assert.deepEqual(await list(query({ tag: exact })), ["w1"]);
-  assert.deepEqual(await list(query({ field_id: plan, field_operator: "eq", field_value: JSON.stringify(exact) })), [
-    "w1",
-  ]);
+  assert.deepEqual(await list(query({ field_id: plan, field_operator: "eq", field_value: JSON.stringify(exact) })), ["w1"]);
   for (const leaf of [has(exact), { field_id: plan, field_operator: "eq", field_value: exact }]) {
     assert.deepEqual(await list(byTree(tree("all", group("all", leaf)))), ["w1"]);
     const preview = await listContacts(pool, owner, byTree(tree("all", group("all", leaf)), { preview: "true" }));
@@ -360,14 +297,7 @@ test("condition trees are an AND with every outer limit, and the preview exclude
     dm_consent_state: "granted",
     last_dm_days: "3",
   });
-  assert.deepEqual(Object.keys(all.excluded!), [
-    "activity",
-    "consent",
-    "dm_identity",
-    "dm_consent",
-    "dm_activity",
-    "conditions",
-  ]);
+  assert.deepEqual(Object.keys(all.excluded!), ["activity", "consent", "dm_identity", "dm_consent", "dm_activity", "conditions"]);
   // s5 activity; s3 consent; s4, s6 no DM conversation; s2 no DM grant; s1 matches.
   assert.deepEqual(all.excluded, {
     activity: "1",
@@ -380,11 +310,7 @@ test("condition trees are an AND with every outer limit, and the preview exclude
   assert.deepEqual(senders(all), ["s1"]);
   assert.equal(sum(all), BigInt(all.evaluated!));
   // Zero matches keep the summary.
-  const none = await listContacts(
-    listClock(),
-    owner,
-    byTree(tree("all", group("all", has("nobody"))), { connection_id: C, preview: "true" }),
-  );
+  const none = await listContacts(listClock(), owner, byTree(tree("all", group("all", has("nobody"))), { connection_id: C, preview: "true" }));
   assert.deepEqual(none.contacts, []);
   assert.equal(none.total, "0");
   assert.equal(none.evaluated, "6");
@@ -395,26 +321,9 @@ test("condition trees are an AND with every outer limit, and the preview exclude
   assert.equal(legacy.total, "3");
   // A tree field leaf must name an active field of the workspace.
   const foreignField = await field("foreign", "number", foreignWorkspace);
-  await assert.rejects(
-    listContacts(pool, owner, byTree(tree("all", group("all", { field_id: foreignField, field_operator: "is_set" })))),
-    refused(404, "field_not_found"),
-  );
-  await assert.rejects(
-    listContacts(
-      pool,
-      owner,
-      byTree(tree("all", group("all", { field_id: fields.member, field_operator: "gt", field_value: 1 }))),
-    ),
-    refused(400, "invalid_field_condition"),
-  );
-  await assert.rejects(
-    listContacts(
-      pool,
-      owner,
-      byTree(tree("all", group("all", { field_id: fields.score, field_operator: "eq", field_value: "x" }))),
-    ),
-    refused(400, "invalid_field_value"),
-  );
+  await assert.rejects(listContacts(pool, owner, byTree(tree("all", group("all", { field_id: foreignField, field_operator: "is_set" })))), refused(404, "field_not_found"));
+  await assert.rejects(listContacts(pool, owner, byTree(tree("all", group("all", { field_id: fields.member, field_operator: "gt", field_value: 1 })))), refused(400, "invalid_field_condition"));
+  await assert.rejects(listContacts(pool, owner, byTree(tree("all", group("all", { field_id: fields.score, field_operator: "eq", field_value: "x" })))), refused(400, "invalid_field_value"));
 });
 
 test("tree segments save, edit with order as part of the definition, select, export at one clock and archive", async () => {
@@ -422,51 +331,32 @@ test("tree segments save, edit with order as part of the definition, select, exp
   const T = vipOrEvent(fields);
   const legacy = await createContactSegment(pool, owner, { name: "Legacy", tag: "vip" });
   assert.deepEqual(legacy, { id: legacy.id, name: "Legacy", connection_id: null, tag: "vip", version: 1 });
-  const upper = tree(
-    "any",
-    group(
-      "all",
-      { tag: " VIP ", negate: false },
-      { ...T.groups[0].conditions[1], field_id: fields.score.toUpperCase() },
-    ),
-    group("all", has("event")),
-  );
+  const upper = tree("any", group("all", { tag: " VIP ", negate: false }, { ...T.groups[0].conditions[1], field_id: fields.score.toUpperCase() }), group("all", has("event")));
   const segment = await createContactSegment(pool, owner, { name: "Grouped", connection_id: C, condition_tree: upper });
   assert.deepEqual(segment, { id: segment.id, name: "Grouped", connection_id: C, condition_tree: T, version: 1 });
   assert.deepEqual(
     (await listContactSegments(pool, owner)).find((value) => value.id === segment.id),
     segment,
   );
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT tag,tags,tag_mode,field_id,field_operator,field_value,field_conditions,field_mode,condition_operator,condition_tree FROM instagram_contact_segments WHERE id=$1",
-        [segment.id],
-      )
-    ).rows[0],
-    {
-      tag: null,
-      tags: null,
-      tag_mode: null,
-      field_id: null,
-      field_operator: null,
-      field_value: null,
-      field_conditions: null,
-      field_mode: null,
-      condition_operator: "and",
-      condition_tree: T,
-    },
-  );
+  assert.deepEqual((await pool.query("SELECT tag,tags,tag_mode,field_id,field_operator,field_value,field_conditions,field_mode,condition_operator,condition_tree FROM instagram_contact_segments WHERE id=$1", [segment.id])).rows[0], {
+    tag: null,
+    tags: null,
+    tag_mode: null,
+    field_id: null,
+    field_operator: null,
+    field_value: null,
+    field_conditions: null,
+    field_mode: null,
+    condition_operator: "and",
+    condition_tree: T,
+  });
   const bySegment = query({ segment_id: segment.id });
   const selected = await listContacts(listClock(), owner, bySegment);
   assert.deepEqual(selected, await listContacts(listClock(), owner, byTree(T, { connection_id: C })));
   assert.deepEqual(senders(selected), ["s1", "s3", "s5"]);
   const preview = await listContacts(listClock(), owner, query({ segment_id: segment.id, preview: "true" }));
   assert.deepEqual(preview.excluded, { conditions: "3" });
-  await assert.rejects(
-    listContacts(pool, owner, query({ segment_id: segment.id, condition_tree: JSON.stringify(T) })),
-    refused(400, "invalid_contact_request"),
-  );
+  await assert.rejects(listContacts(pool, owner, query({ segment_id: segment.id, condition_tree: JSON.stringify(T) })), refused(400, "invalid_contact_request"));
   await assert.rejects(listContacts(pool, outsider, bySegment), refused(404, "segment_not_found"));
   // The export evaluates the tree once, at exported_at, and selects the list's contacts.
   exportClocks.length = 0;
@@ -477,10 +367,7 @@ test("tree segments save, edit with order as part of the definition, select, exp
   const [header, ...rows] = parseContactCsv(exported.body);
   assert.deepEqual(header, [...CONTACT_CSV_HEADER]);
   const at = (name: string) => CONTACT_CSV_HEADER.indexOf(name as (typeof CONTACT_CSV_HEADER)[number]);
-  assert.deepEqual(
-    rows.map((row) => `${row[at("connection_id")]}:${decodeContactScalar(row[at("sender_id")]!)}`).sort(),
-    selected.contacts.map((contact) => `${contact.connection_id}:${contact.sender_id}`).sort(),
-  );
+  assert.deepEqual(rows.map((row) => `${row[at("connection_id")]}:${decodeContactScalar(row[at("sender_id")]!)}`).sort(), selected.contacts.map((contact) => `${contact.connection_id}:${contact.sender_id}`).sort());
   // The same tree in another spelling is unchanged and keeps the version.
   const edit = (condition_tree: unknown, expected_version: number) =>
     updateContactSegment(pool, owner, segment.id, {
@@ -511,21 +398,9 @@ test("tree segments save, edit with order as part of the definition, select, exp
     expected_version: 4,
   });
   assert.deepEqual(back.segment, { id: segment.id, name: "Grouped", connection_id: null, tag: "event", version: 5 });
-  assert.equal(
-    (await pool.query("SELECT condition_tree FROM instagram_contact_segments WHERE id=$1", [segment.id])).rows[0]
-      .condition_tree,
-    null,
-  );
+  assert.equal((await pool.query("SELECT condition_tree FROM instagram_contact_segments WHERE id=$1", [segment.id])).rows[0].condition_tree, null);
   // Mixing forms is refused on create and on edit, and nothing is written.
-  for (const mixed of [
-    { tag: "vip" },
-    { condition_operator: "and" },
-    { field_conditions: [T.groups[0].conditions[1]] },
-  ])
-    await assert.rejects(
-      createContactSegment(pool, owner, { name: "Mixed", condition_tree: T, ...mixed }),
-      refused(400, "invalid_contact_condition"),
-    );
+  for (const mixed of [{ tag: "vip" }, { condition_operator: "and" }, { field_conditions: [T.groups[0].conditions[1]] }]) await assert.rejects(createContactSegment(pool, owner, { name: "Mixed", condition_tree: T, ...mixed }), refused(400, "invalid_contact_condition"));
   assert.equal((await listContactSegments(pool, owner)).length, 2);
   await archiveContactSegment(pool, owner, segment.id);
   await assert.rejects(listContacts(pool, owner, bySegment), refused(404, "segment_not_found"));
@@ -533,11 +408,7 @@ test("tree segments save, edit with order as part of the definition, select, exp
 
 test("a field referenced only inside a condition tree cannot be archived", async () => {
   const fields = await fixture();
-  const T = tree(
-    "all",
-    group("all", has("vip")),
-    group("any", has("event"), { field_id: fields.plan, field_operator: "eq", field_value: "pro" }),
-  );
+  const T = tree("all", group("all", has("vip")), group("any", has("event"), { field_id: fields.plan, field_operator: "eq", field_value: "pro" }));
   const segment = await createContactSegment(pool, owner, { name: "Nested", condition_tree: T });
   await assert.rejects(archiveContactField(pool, owner, fields.plan), refused(409, "field_in_use"));
   // A field the tree does not name archives, and an archived tree segment no longer holds its field.
@@ -557,13 +428,7 @@ test("a field referenced only inside a condition tree cannot be archived", async
 async function lockWaiters(count: number, settled: () => boolean = () => false) {
   const deadline = Date.now() + 5000;
   for (;;) {
-    const waiting = Number(
-      (
-        await pool.query(
-          "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'",
-        )
-      ).rows[0].count,
-    );
+    const waiting = Number((await pool.query("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'")).rows[0].count);
     if (waiting >= count || settled()) return;
     if (Date.now() > deadline) throw new Error(`expected ${count} lock waiters, saw ${waiting}`);
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -574,11 +439,7 @@ test("a tree segment write holds every tree field, so a concurrent archive waits
   const fields = await fixture();
   // The archived field is the one that sorts last, and the tree names it first, in the second group.
   const [first, last] = [fields.plan, fields.score].sort();
-  const T = tree(
-    "any",
-    group("all", { field_id: first, field_operator: "is_set" }),
-    group("all", { field_id: last, field_operator: "is_unset" }, { field_id: first, field_operator: "is_unset" }),
-  );
+  const T = tree("any", group("all", { field_id: first, field_operator: "is_set" }), group("all", { field_id: last, field_operator: "is_unset" }, { field_id: first, field_operator: "is_unset" }));
   // The blocker holds C2, so the create's foreign-key check waits after it locked the fields.
   const blocker = await pool.connect();
   try {
@@ -603,10 +464,7 @@ test("a tree segment write holds every tree field, so a concurrent archive waits
     await blocker.query("ROLLBACK").catch(() => undefined);
     blocker.release();
   }
-  assert.equal(
-    (await pool.query("SELECT archived FROM instagram_contact_fields WHERE id=$1", [last])).rows[0].archived,
-    false,
-  );
+  assert.equal((await pool.query("SELECT archived FROM instagram_contact_fields WHERE id=$1", [last])).rows[0].archived, false);
 });
 
 test("condition tree migration preserves existing rows, replays with the schema and enforces the root shape", async () => {
@@ -614,32 +472,16 @@ test("condition tree migration preserves existing rows, replays with the schema 
   try {
     await client.query("BEGIN");
     await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN condition_tree");
-    await client.query(
-      "INSERT INTO instagram_contact_segments(workspace_id,name,tag,last_dm_days) VALUES($1,'Legacy','vip',7)",
-      [workspace],
-    );
-    const migration = await readFile(
-      new URL("../../db/migrations/060_segment_condition_tree.sql", import.meta.url),
-      "utf8",
-    );
+    await client.query("INSERT INTO instagram_contact_segments(workspace_id,name,tag,last_dm_days) VALUES($1,'Legacy','vip',7)", [workspace]);
+    const migration = await readFile(new URL("../../db/migrations/060_segment_condition_tree.sql", import.meta.url), "utf8");
     const schema = await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8");
     await client.query(migration);
     await client.query(migration);
-    const read = async () =>
-      (
-        await client.query(
-          "SELECT name,tag,last_dm_days,condition_operator,condition_tree FROM instagram_contact_segments",
-        )
-      ).rows;
-    assert.deepEqual(await read(), [
-      { name: "Legacy", tag: "vip", last_dm_days: 7, condition_operator: "and", condition_tree: null },
-    ]);
+    const read = async () => (await client.query("SELECT name,tag,last_dm_days,condition_operator,condition_tree FROM instagram_contact_segments")).rows;
+    assert.deepEqual(await read(), [{ name: "Legacy", tag: "vip", last_dm_days: 7, condition_operator: "and", condition_tree: null }]);
     // A valid root shape is stored; group and leaf detail stays with the parser.
     const valid = { mode: "any", groups: [{ mode: "all", conditions: [{ tag: "vip" }] }] };
-    await client.query(
-      "INSERT INTO instagram_contact_segments(workspace_id,name,condition_tree) VALUES($1,'Tree',$2::jsonb)",
-      [workspace, JSON.stringify(valid)],
-    );
+    await client.query("INSERT INTO instagram_contact_segments(workspace_id,name,condition_tree) VALUES($1,'Tree',$2::jsonb)", [workspace, JSON.stringify(valid)]);
     // The full runner order re-applies 060 and the DB tests re-apply the schema over rows that hold a tree.
     await client.query(migration);
     await client.query(schema);
@@ -653,29 +495,12 @@ test("condition tree migration preserves existing rows, replays with the schema 
       await client.query("ROLLBACK TO SAVEPOINT invalid_tree");
     };
     const set = "UPDATE instagram_contact_segments SET condition_tree=$1::jsonb WHERE name='Tree'";
-    for (const shape of [
-      [],
-      "tree",
-      1,
-      {},
-      { mode: "all" },
-      { groups: [{}] },
-      { mode: "none", groups: [{}] },
-      { mode: "all", groups: [] },
-      { mode: "all", groups: {} },
-      { mode: "all", groups: [{}, {}, {}, {}, {}, {}] },
-      { ...valid, extra: 1 },
-    ])
+    for (const shape of [[], "tree", 1, {}, { mode: "all" }, { groups: [{}] }, { mode: "none", groups: [{}] }, { mode: "all", groups: [] }, { mode: "all", groups: {} }, { mode: "all", groups: [{}, {}, {}, {}, {}, {}] }, { ...valid, extra: 1 }])
       await refusedBy(set, [JSON.stringify(shape)], "contact_segment_condition_tree");
     // A tree row has no other condition form and the operator and.
-    for (const column of ["tag='vip'", "tags='{a,b}',tag_mode='all'", "field_conditions='[]',field_mode='all'"])
-      await refusedBy(`UPDATE instagram_contact_segments SET ${column} WHERE name='Tree'`, []);
+    for (const column of ["tag='vip'", "tags='{a,b}',tag_mode='all'", "field_conditions='[]',field_mode='all'"]) await refusedBy(`UPDATE instagram_contact_segments SET ${column} WHERE name='Tree'`, []);
     await refusedBy("UPDATE instagram_contact_segments SET condition_operator='or' WHERE name='Tree'", []);
-    await refusedBy(
-      "UPDATE instagram_contact_segments SET condition_tree=$1::jsonb WHERE name='Legacy'",
-      [JSON.stringify(valid)],
-      "contact_segment_condition_tree",
-    );
+    await refusedBy("UPDATE instagram_contact_segments SET condition_tree=$1::jsonb WHERE name='Legacy'", [JSON.stringify(valid)], "contact_segment_condition_tree");
     // Five groups is the largest root.
     await client.query(set, [JSON.stringify({ mode: "all", groups: [{}, {}, {}, {}, {}] })]);
   } finally {

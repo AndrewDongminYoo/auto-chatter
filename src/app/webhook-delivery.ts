@@ -50,8 +50,7 @@ export function parseWebhookUrl(value: unknown): URL | null {
   if (url.href.length > 2048) return null;
   const host = url.hostname.toLowerCase().replace(/\.$/, "");
   if (!host || host.startsWith("[") || /^\d+(\.\d+){3}$/.test(host)) return null;
-  if (host === "localhost" || [".localhost", ".local", ".internal"].some((suffix) => host.endsWith(suffix)))
-    return null;
+  if (host === "localhost" || [".localhost", ".local", ".internal"].some((suffix) => host.endsWith(suffix))) return null;
   return url;
 }
 
@@ -99,8 +98,7 @@ function ipv6Groups(address: string): number[] | null {
   }
   const halves = text.split("::");
   if (halves.length > 2) return null;
-  const parse = (part: string) =>
-    part === "" ? [] : part.split(":").map((group) => (/^[0-9a-f]{1,4}$/i.test(group) ? parseInt(group, 16) : NaN));
+  const parse = (part: string) => (part === "" ? [] : part.split(":").map((group) => (/^[0-9a-f]{1,4}$/i.test(group) ? parseInt(group, 16) : NaN)));
   const head = parse(halves[0]!);
   const rest = halves.length === 2 ? parse(halves[1]!) : [];
   if ([...head, ...rest].some(Number.isNaN)) return null;
@@ -113,8 +111,7 @@ function publicIpv6(groups: number[]): boolean {
   const embedded = ((groups[6]! << 16) | groups[7]!) >>> 0;
   // An IPv4-mapped (::ffff:0:0/96) or NAT64 (64:ff9b::/96) address reaches the IPv4 address it carries.
   if (groups.slice(0, 5).every((group) => group === 0) && groups[5] === 0xffff) return publicIpv4(embedded);
-  if (groups[0] === 0x64 && groups[1] === 0xff9b && groups.slice(2, 6).every((group) => group === 0))
-    return publicIpv4(embedded);
+  if (groups[0] === 0x64 && groups[1] === 0xff9b && groups.slice(2, 6).every((group) => group === 0)) return publicIpv4(embedded);
   // Only global unicast (2000::/3) is public. That leaves out unspecified, loopback, unique local, link-local,
   // multicast and every other reserved block; inside it, protocol assignments (2001::/23, which holds Teredo),
   // documentation (2001:db8::/32, 3fff::/20) and 6to4 (2002::/16) are refused.
@@ -151,9 +148,7 @@ export function dohResolver(fetchImpl: typeof fetch): WebhookResolver {
       }
       const answer: unknown = await response.json();
       if (!isRecord(answer) || (answer.Status !== 0 && answer.Status !== 3)) throw new Error("DNS lookup failed");
-      return (Array.isArray(answer.Answer) ? answer.Answer : []).flatMap((record: unknown) =>
-        isRecord(record) && record.type === recordType && typeof record.data === "string" ? [record.data] : [],
-      );
+      return (Array.isArray(answer.Answer) ? answer.Answer : []).flatMap((record: unknown) => (isRecord(record) && record.type === recordType && typeof record.data === "string" ? [record.data] : []));
     };
     return (await Promise.all([lookup("A", 1), lookup("AAAA", 28)])).flat();
   };
@@ -161,17 +156,8 @@ export function dohResolver(fetchImpl: typeof fetch): WebhookResolver {
 
 // The X-AutoChatter-Signature value: one timestamp, then one key ID and HMAC-SHA256 pair per valid key. The
 // signed string is "<t>.<raw request body>" and the HMAC key is the UTF-8 text of the secret.
-export function webhookSignature(
-  body: string,
-  keys: readonly { id: string; secret: string }[],
-  unixSeconds: number,
-): string {
-  return [
-    `t=${unixSeconds}`,
-    ...keys.map(
-      (key) => `k=${key.id},v1=${createHmac("sha256", key.secret).update(`${unixSeconds}.${body}`).digest("hex")}`,
-    ),
-  ].join(",");
+export function webhookSignature(body: string, keys: readonly { id: string; secret: string }[], unixSeconds: number): string {
+  return [`t=${unixSeconds}`, ...keys.map((key) => `k=${key.id},v1=${createHmac("sha256", key.secret).update(`${unixSeconds}.${body}`).digest("hex")}`)].join(",");
 }
 
 type Attempt = { sent: true; status: number } | { sent: false; code: string; status?: number };
@@ -193,13 +179,7 @@ async function discardBody(response: Response): Promise<void> {
 
 // One POST. A redirect is a failure and is never followed; the timeout covers the response body, of which at
 // most WEBHOOK_MAX_RESPONSE_BYTES are read and none is kept.
-async function postWebhook(
-  url: URL,
-  body: string,
-  headers: Record<string, string>,
-  fetchImpl: typeof fetch,
-  timeoutMs: number,
-): Promise<Attempt> {
+async function postWebhook(url: URL, body: string, headers: Record<string, string>, fetchImpl: typeof fetch, timeoutMs: number): Promise<Attempt> {
   const controller = new AbortController();
   const timedOut = Symbol("timed out");
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -210,10 +190,7 @@ async function postWebhook(
     }, timeoutMs);
   });
   try {
-    const response = await Promise.race([
-      fetchImpl(url.href, { method: "POST", redirect: "manual", headers, body, signal: controller.signal }),
-      deadline,
-    ]);
+    const response = await Promise.race([fetchImpl(url.href, { method: "POST", redirect: "manual", headers, body, signal: controller.signal }), deadline]);
     if (response === timedOut) return { sent: false, code: "timeout" };
     const status = response.status;
     if ((await Promise.race([discardBody(response), deadline])) === timedOut) return { sent: false, code: "timeout" };
@@ -257,15 +234,7 @@ export async function recoverStaleWebhookDeliveries(pool: Pool): Promise<number>
   return recovered.rowCount ?? 0;
 }
 
-async function attempt(
-  pool: Pool,
-  claimed: Claimed,
-  encryptionKey: string,
-  fetchImpl: typeof fetch,
-  resolve: WebhookResolver,
-  now: () => number,
-  timeoutMs: number,
-): Promise<Attempt | "endpoint_inactive"> {
+async function attempt(pool: Pool, claimed: Claimed, encryptionKey: string, fetchImpl: typeof fetch, resolve: WebhookResolver, now: () => number, timeoutMs: number): Promise<Attempt | "endpoint_inactive"> {
   // The endpoint and its valid keys are read after the claim, immediately before the checks and the request.
   const destination = (
     await pool.query<Destination>(
@@ -283,11 +252,7 @@ async function attempt(
   try {
     keys = destination.keys.map((key) => ({
       id: key.id,
-      secret: openSecret(
-        key.secret,
-        encryptionKey,
-        signingKeyContext(claimed.workspace_id, claimed.endpoint_id, key.id),
-      ),
+      secret: openSecret(key.secret, encryptionKey, signingKeyContext(claimed.workspace_id, claimed.endpoint_id, key.id)),
     }));
   } catch {
     keys = [];
@@ -316,11 +281,7 @@ async function attempt(
 // Delivers due webhook deliveries one at a time. A row is claimed with FOR UPDATE SKIP LOCKED and a fresh
 // attempt ID, and every later change requires status 'sending' and that attempt ID, so overlapping runs
 // never finish each other's attempts. Delivery is at-least-once.
-export async function deliverDueWebhooks(
-  pool: Pool,
-  encryptionKey: string,
-  options: WebhookDeliveryOptions = {},
-): Promise<{ attempted: number; sent: number }> {
+export async function deliverDueWebhooks(pool: Pool, encryptionKey: string, options: WebhookDeliveryOptions = {}): Promise<{ attempted: number; sent: number }> {
   // Called as plain functions: workerd rejects its native fetch when it is invoked with an object as receiver.
   const injectedFetch = options.fetchImpl ?? fetch;
   const fetchImpl: typeof fetch = (input, init) => injectedFetch(input, init);
@@ -328,8 +289,7 @@ export async function deliverDueWebhooks(
   const now = options.now ?? Date.now;
   const timeoutMs = options.timeoutMs ?? WEBHOOK_TIMEOUT_MS;
   const subrequestsLeft = options.subrequestsLeft ?? (() => Infinity);
-  const log = (event: string, code: string, connectionId: string, level: "warn" | "error") =>
-    logOperation({ event, code, correlation_id: options.correlationId, connection_id: connectionId }, level);
+  const log = (event: string, code: string, connectionId: string, level: "warn" | "error") => logOperation({ event, code, correlation_id: options.correlationId, connection_id: connectionId }, level);
   await recoverStaleWebhookDeliveries(pool);
   const started = now();
   const spent = new Map<string, number>();
@@ -337,11 +297,7 @@ export async function deliverDueWebhooks(
   const served: string[] = [];
   let attempted = 0;
   let sent = 0;
-  while (
-    attempted < WEBHOOK_MAX_DELIVERIES_PER_RUN &&
-    now() - started < WEBHOOK_RUN_BUDGET_MS &&
-    subrequestsLeft() >= WEBHOOK_SUBREQUESTS_PER_ATTEMPT
-  ) {
+  while (attempted < WEBHOOK_MAX_DELIVERIES_PER_RUN && now() - started < WEBHOOK_RUN_BUDGET_MS && subrequestsLeft() >= WEBHOOK_SUBREQUESTS_PER_ATTEMPT) {
     const attemptId = crypto.randomUUID();
     // Workspaces take turns: first one not yet served in this run, then the one whose latest attempt is oldest
     // (never attempted first; attempt_started_at is kept after an attempt ends), then the oldest due delivery.
@@ -369,8 +325,7 @@ export async function deliverDueWebhooks(
     const result = await attempt(pool, claimed, encryptionKey, fetchImpl, resolve, now, timeoutMs);
     const used = (spent.get(claimed.endpoint_id) ?? 0) + (now() - attemptStarted);
     spent.set(claimed.endpoint_id, used);
-    if (used >= WEBHOOK_ENDPOINT_BUDGET_MS && !exhausted.includes(claimed.endpoint_id))
-      exhausted.push(claimed.endpoint_id);
+    if (used >= WEBHOOK_ENDPOINT_BUDGET_MS && !exhausted.includes(claimed.endpoint_id)) exhausted.push(claimed.endpoint_id);
     const mine = "WHERE event_id=$1 AND status='sending' AND attempt_id=$2";
     let finished;
     if (result === "endpoint_inactive") {

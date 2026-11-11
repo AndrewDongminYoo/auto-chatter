@@ -43,9 +43,7 @@ function fakeNamespace(): LimiterNamespace & { names: string[] } {
 }
 
 async function hit(limiter: AuthLimiter, limit: number, period: number): Promise<boolean> {
-  const response = await limiter.fetch(
-    new Request("https://auth-limiter/hit", { method: "POST", body: JSON.stringify({ limit, period }) }),
-  );
+  const response = await limiter.fetch(new Request("https://auth-limiter/hit", { method: "POST", body: JSON.stringify({ limit, period }) }));
   assert.equal(response.status, 200);
   return ((await response.json()) as { success: boolean }).success;
 }

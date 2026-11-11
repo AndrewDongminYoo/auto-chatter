@@ -34,9 +34,7 @@ function segmentTreeNeedsValue(operator) {
 }
 // The operators a field type takes, in the order of the field rows; ordered comparisons need a number or a date.
 function segmentTreeOperators(type) {
-  return type === "number" || type === "date"
-    ? ["eq", "gte", "gt", "lte", "lt", "is_set", "is_unset"]
-    : ["eq", "is_set", "is_unset"];
+  return type === "number" || type === "date" ? ["eq", "gte", "gt", "lte", "lt", "is_set", "is_unset"] : ["eq", "is_set", "is_unset"];
 }
 // A saved tree (the server's response shape) as a draft, read the way the field rows read a saved condition.
 function segmentTreeFromSaved(tree) {
@@ -75,22 +73,17 @@ function segmentTreeHasLeaf(draft, group, leaf) {
 // already holds ten leaves could never fill it.
 function segmentTreeAddGroupBlock(draft) {
   if (draft.groups.length >= segmentTreeLimits.groups) return "그룹은 최대 5개까지 만들 수 있습니다.";
-  if (segmentTreeLeafCount(draft) >= segmentTreeLimits.leaves)
-    return "조건은 모든 그룹을 합쳐 최대 10개이므로 그룹을 더 추가할 수 없습니다.";
+  if (segmentTreeLeafCount(draft) >= segmentTreeLimits.leaves) return "조건은 모든 그룹을 합쳐 최대 10개이므로 그룹을 더 추가할 수 없습니다.";
   return "";
 }
 function segmentTreeAddLeafBlock(draft, group) {
   if (!segmentTreeHasGroup(draft, group)) return "그룹을 찾을 수 없습니다.";
-  if (draft.groups[group].conditions.length >= segmentTreeLimits.groupLeaves)
-    return "그룹 하나에는 조건을 최대 5개까지 넣을 수 있습니다.";
-  if (segmentTreeLeafCount(draft) >= segmentTreeLimits.leaves)
-    return "조건은 모든 그룹을 합쳐 최대 10개까지 넣을 수 있습니다.";
+  if (draft.groups[group].conditions.length >= segmentTreeLimits.groupLeaves) return "그룹 하나에는 조건을 최대 5개까지 넣을 수 있습니다.";
+  if (segmentTreeLeafCount(draft) >= segmentTreeLimits.leaves) return "조건은 모든 그룹을 합쳐 최대 10개까지 넣을 수 있습니다.";
   return "";
 }
 function segmentTreeRemoveGroupBlock(draft) {
-  return draft.groups.length > 1
-    ? ""
-    : "그룹은 하나 이상 있어야 합니다. 그룹 조건을 쓰지 않으려면 그룹 조건 지우기를 눌러 주세요.";
+  return draft.groups.length > 1 ? "" : "그룹은 하나 이상 있어야 합니다. 그룹 조건을 쓰지 않으려면 그룹 조건 지우기를 눌러 주세요.";
 }
 function segmentTreeAddGroup(draft) {
   const block = segmentTreeAddGroupBlock(draft);
@@ -156,11 +149,8 @@ function segmentTreeSetMode(draft, group, mode) {
 function segmentTreeSetLeaf(draft, group, leaf, changes) {
   if (!segmentTreeHasGroup(draft, group)) return segmentTreeResult(draft, "그룹을 찾을 수 없습니다.");
   if (!segmentTreeHasLeaf(draft, group, leaf)) return segmentTreeResult(draft, "조건을 찾을 수 없습니다.");
-  for (const [key, value] of Object.entries(changes))
-    if (!segmentTreeLeafKeys.includes(key) || typeof value !== "string")
-      return segmentTreeResult(draft, "조건 값을 확인할 수 없습니다.");
-  if ("kind" in changes && !segmentTreeKinds.includes(changes.kind))
-    return segmentTreeResult(draft, "조건 종류를 확인할 수 없습니다.");
+  for (const [key, value] of Object.entries(changes)) if (!segmentTreeLeafKeys.includes(key) || typeof value !== "string") return segmentTreeResult(draft, "조건 값을 확인할 수 없습니다.");
+  if ("kind" in changes && !segmentTreeKinds.includes(changes.kind)) return segmentTreeResult(draft, "조건 종류를 확인할 수 없습니다.");
   const next = segmentTreeCopy(draft);
   Object.assign(next.groups[group].conditions[leaf], changes);
   return { draft: next, error: "" };
@@ -176,18 +166,15 @@ function segmentTreeBuildLeaf(leaf, fields, place) {
   if (!leaf.field_id) return { error: `${place}에서 추가 정보 필드를 선택해 주세요.` };
   const field = fields.find((definition) => definition.id === leaf.field_id);
   if (!field) return { error: `${place}의 필드를 사용할 수 없습니다. 다른 필드를 선택하거나 조건을 삭제해 주세요.` };
-  if (!segmentTreeOperators(field.type).includes(leaf.field_operator))
-    return { error: `${place}에서 이 필드에 쓸 수 없는 비교 방식을 골랐습니다.` };
+  if (!segmentTreeOperators(field.type).includes(leaf.field_operator)) return { error: `${place}에서 이 필드에 쓸 수 없는 비교 방식을 골랐습니다.` };
   const condition = { field_id: field.id, field_operator: leaf.field_operator };
   if (!segmentTreeNeedsValue(leaf.field_operator)) return { leaf: condition };
   if (field.type === "number") {
-    if (!leaf.value.trim() || !Number.isFinite(Number(leaf.value)))
-      return { error: `${place}에 숫자 값을 입력해 주세요.` };
+    if (!leaf.value.trim() || !Number.isFinite(Number(leaf.value))) return { error: `${place}에 숫자 값을 입력해 주세요.` };
     return { leaf: { ...condition, field_value: Number(leaf.value) } };
   }
   if (field.type === "boolean") {
-    if (leaf.boolean !== "true" && leaf.boolean !== "false")
-      return { error: `${place}에서 예 또는 아니요를 골라 주세요.` };
+    if (leaf.boolean !== "true" && leaf.boolean !== "false") return { error: `${place}에서 예 또는 아니요를 골라 주세요.` };
     return { leaf: { ...condition, field_value: leaf.boolean === "true" } };
   }
   if (field.type === "date" && !leaf.value) return { error: `${place}에 날짜를 입력해 주세요.` };
@@ -199,19 +186,12 @@ function segmentTreeBuildLeaf(leaf, fields, place) {
 function segmentTreeBuild(draft, fields) {
   if (!draft) return { tree: null, error: "" };
   const modeError = "결합 방식을 확인할 수 없습니다.";
-  if (![draft.mode, ...draft.groups.map((group) => group.mode)].every((mode) => mode === "all" || mode === "any"))
-    return { tree: null, error: modeError };
-  if (
-    !draft.groups.length ||
-    draft.groups.length > segmentTreeLimits.groups ||
-    draft.groups.some((group) => group.conditions.length > segmentTreeLimits.groupLeaves) ||
-    segmentTreeLeafCount(draft) > segmentTreeLimits.leaves
-  )
+  if (![draft.mode, ...draft.groups.map((group) => group.mode)].every((mode) => mode === "all" || mode === "any")) return { tree: null, error: modeError };
+  if (!draft.groups.length || draft.groups.length > segmentTreeLimits.groups || draft.groups.some((group) => group.conditions.length > segmentTreeLimits.groupLeaves) || segmentTreeLeafCount(draft) > segmentTreeLimits.leaves)
     return { tree: null, error: "그룹 조건은 그룹 1~5개, 그룹마다 조건 1~5개, 모두 합쳐 조건 10개까지입니다." };
   const groups = [];
   for (const [groupIndex, group] of draft.groups.entries()) {
-    if (!group.conditions.length)
-      return { tree: null, error: `그룹 ${groupIndex + 1}에 조건을 하나 이상 추가해 주세요.` };
+    if (!group.conditions.length) return { tree: null, error: `그룹 ${groupIndex + 1}에 조건을 하나 이상 추가해 주세요.` };
     const conditions = [];
     for (const [leafIndex, leaf] of group.conditions.entries()) {
       const built = segmentTreeBuildLeaf(leaf, fields, `그룹 ${groupIndex + 1}의 조건 ${leafIndex + 1}`);
@@ -236,19 +216,7 @@ function segmentTreeKey(draft, fields = []) {
   if (!draft) return null;
   return JSON.stringify([
     draft.mode,
-    draft.groups.map((group) => [
-      group.mode,
-      group.conditions.map((leaf) =>
-        leaf.kind === "field"
-          ? [
-              leaf.kind,
-              leaf.field_id,
-              leaf.field_operator,
-              ...(segmentTreeNeedsValue(leaf.field_operator) ? segmentTreeLeafValue(leaf, fields) : []),
-            ]
-          : [leaf.kind, leaf.tag],
-      ),
-    ]),
+    draft.groups.map((group) => [group.mode, group.conditions.map((leaf) => (leaf.kind === "field" ? [leaf.kind, leaf.field_id, leaf.field_operator, ...(segmentTreeNeedsValue(leaf.field_operator) ? segmentTreeLeafValue(leaf, fields) : [])] : [leaf.kind, leaf.tag]))]),
   ]);
 }
 // True when two drafts (or two absent drafts) carry the same conditions. Order matters, as in the server's unchanged
@@ -284,12 +252,5 @@ function segmentTreeRemoveField(draft, fieldId) {
 // mode. fieldText describes one field leaf, since field names and operator labels live with the screen.
 function segmentTreeSummary(tree, fieldText) {
   const join = (mode) => (mode === "any" ? " 또는 " : " 그리고 ");
-  return tree.groups
-    .map(
-      (group) =>
-        `(${group.conditions
-          .map((leaf) => ("tag" in leaf ? `태그 ${leaf.tag} ${leaf.negate ? "없음" : "있음"}` : fieldText(leaf)))
-          .join(join(group.mode))})`,
-    )
-    .join(join(tree.mode));
+  return tree.groups.map((group) => `(${group.conditions.map((leaf) => ("tag" in leaf ? `태그 ${leaf.tag} ${leaf.negate ? "없음" : "있음"}` : fieldText(leaf))).join(join(group.mode))})`).join(join(tree.mode));
 }

@@ -7,13 +7,7 @@ import type { Pool } from "pg";
 export type ReauthReason = "refresh_rejected" | "token_rejected";
 
 // Marks the connection unless it is already marked for the same token, which keeps the first rejection time.
-export async function markReauthRequired(
-  pool: Pick<Pool, "query">,
-  connectionId: string,
-  encryptedToken: string,
-  reason: ReauthReason,
-  at: Date | null = null,
-): Promise<boolean> {
+export async function markReauthRequired(pool: Pick<Pool, "query">, connectionId: string, encryptedToken: string, reason: ReauthReason, at: Date | null = null): Promise<boolean> {
   const marked = await pool.query(
     `UPDATE instagram_connections
      SET reauth_required_at=coalesce($4::timestamptz,clock_timestamp()),reauth_reason=$3,
@@ -26,12 +20,7 @@ export async function markReauthRequired(
 
 // Clears the marker after Meta accepted the same stored token. With onlyReason, a marker with another reason is
 // kept: an accepted me read proves the token works, not that Meta will refresh it (refresh_rejected).
-export async function clearReauthRequired(
-  pool: Pick<Pool, "query">,
-  connectionId: string,
-  encryptedToken: string,
-  onlyReason: ReauthReason | null = null,
-): Promise<boolean> {
+export async function clearReauthRequired(pool: Pick<Pool, "query">, connectionId: string, encryptedToken: string, onlyReason: ReauthReason | null = null): Promise<boolean> {
   const cleared = await pool.query(
     `UPDATE instagram_connections SET reauth_required_at=NULL,reauth_reason=NULL,reauth_token_obtained_at=NULL
      WHERE id=$1 AND access_token_encrypted=$2 AND reauth_required_at IS NOT NULL

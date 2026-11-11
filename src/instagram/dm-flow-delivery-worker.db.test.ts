@@ -7,11 +7,7 @@ import { listFlowRuns } from "../app/flows.ts";
 import { connectionMetrics, evaluateAlerts } from "../app/operations-health.ts";
 import { resetTestSchema } from "../test-schema.ts";
 import { recordChannelConsentEvent } from "./channel-consent.ts";
-import {
-  assertDmFlowDeliveryAllowed,
-  processNextDmFlowDelivery,
-  recoverStaleDmFlowDeliveries,
-} from "./dm-flow-delivery-worker.ts";
+import { assertDmFlowDeliveryAllowed, processNextDmFlowDelivery, recoverStaleDmFlowDeliveries } from "./dm-flow-delivery-worker.ts";
 import { InstagramFollowTransport } from "./follow-transport.ts";
 
 // The DM flow delivery worker (#291) against a real PostgreSQL database. Graph is mocked through fetchImpl and
@@ -19,8 +15,7 @@ import { InstagramFollowTransport } from "./follow-transport.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: databaseUrl, max: 12 });
 const W = "11111111-1111-4111-8111-111111111111";
 const C = "33333333-3333-4333-8333-333333333333";
@@ -53,8 +48,7 @@ after(async () => {
 async function dmRow(recipient: string, options: { messageAt?: string; connection?: string; text?: string } = {}) {
   const connection = options.connection ?? C;
   if (!flow) {
-    const id = (await pool.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'DM','{}') RETURNING id", [W]))
-      .rows[0].id;
+    const id = (await pool.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'DM','{}') RETURNING id", [W])).rows[0].id;
     const version = (
       await pool.query(
         `INSERT INTO flow_versions(flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_type,published_by)
@@ -131,29 +125,19 @@ async function bridge(sender: string, recipient: string): Promise<string> {
     )
   ).rows[0].id;
 }
-const pause = (recipient: string) =>
-  pool.query(
-    "INSERT INTO instagram_dm_automation(workspace_id,connection_id,recipient_id,paused) VALUES($1,$2,$3,true)",
-    [W, C, recipient],
-  );
+const pause = (recipient: string) => pool.query("INSERT INTO instagram_dm_automation(workspace_id,connection_id,recipient_id,paused) VALUES($1,$2,$3,true)", [W, C, recipient]);
 // An active inbox handoff of the messaging ID, on a verified bridge from a comment sender of its own.
 async function handoff(recipient: string) {
   const sender = `7${recipient}`;
   const reply = await bridge(sender, recipient);
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,handoff_paused) VALUES($1,$2,$3,true)",
-    [W, C, sender],
-  );
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,handoff_paused) VALUES($1,$2,$3,true)", [W, C, sender]);
   await pool.query(
     `INSERT INTO instagram_inbox_handoffs(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,updated_by)
      VALUES($1,$2,$3,$4,$5,true,1,$6)`,
     [W, C, recipient, sender, reply, owner],
   );
 }
-const closeWindow = () =>
-  pool.query(
-    "UPDATE instagram_dm_start_events SET message_at=now()-interval '25 hours',created_at=now()-interval '25 hours'",
-  );
+const closeWindow = () => pool.query("UPDATE instagram_dm_start_events SET message_at=now()-interval '25 hours',created_at=now()-interval '25 hours'");
 
 interface Graph {
   posts: { path: string; body: unknown }[];
@@ -236,9 +220,7 @@ test("a claimed row is sent once as plain text to its messaging sender ID, and t
   const id = await dmRow("9001", { text: "Hello from the flow" });
   const seen = graph();
   assert.equal(await deliver(seen), true);
-  assert.deepEqual(seen.posts, [
-    { path: "/v24.0/100/messages", body: { recipient: { id: "9001" }, message: { text: "Hello from the flow" } } },
-  ]);
+  assert.deepEqual(seen.posts, [{ path: "/v24.0/100/messages", body: { recipient: { id: "9001" }, message: { text: "Hello from the flow" } } }]);
   assert.deepEqual(await row(id), {
     status: "sent",
     failure_code: null,
@@ -287,16 +269,10 @@ test("the 24-hour window is anchored on the sender's latest inbound DM and read 
     [W, C, OTHER],
   );
   assert.equal(await deliver(seen), true);
-  assert.deepEqual(
-    [(await row(stale)).status, (await row(stale)).failure_code, (await row(stale)).called],
-    ["blocked", "reply_window_closed", false],
-  );
+  assert.deepEqual([(await row(stale)).status, (await row(stale)).failure_code, (await row(stale)).called], ["blocked", "reply_window_closed", false]);
   // The history reads the blocked DM row's failure code, not only a private reply's.
-  const staleRun = (await pool.query("SELECT flow_run_id FROM flow_dm_deliveries WHERE id=$1", [stale])).rows[0]
-    .flow_run_id;
-  const run = (await listFlowRuns(pool, { id: owner, email: "owner@example.test" }, flow!.id)).find(
-    (entry) => entry.id === staleRun,
-  );
+  const staleRun = (await pool.query("SELECT flow_run_id FROM flow_dm_deliveries WHERE id=$1", [stale])).rows[0].flow_run_id;
+  const run = (await listFlowRuns(pool, { id: owner, email: "owner@example.test" }, flow!.id)).find((entry) => entry.id === staleRun);
   assert.deepEqual([run?.delivery_status, run?.delivery_failure_code], ["blocked", "reply_window_closed"]);
   assert.deepEqual(recipients(seen), ["9001", "9002"]);
 });
@@ -325,10 +301,7 @@ test("the claim takes the oldest due row and skips deferred, paused, handed-off 
   await pause("9002");
   await handoff("9003");
   // A pause row that is off holds nothing.
-  await pool.query(
-    "INSERT INTO instagram_dm_automation(workspace_id,connection_id,recipient_id,paused) VALUES($1,$2,'9005',false)",
-    [W, C],
-  );
+  await pool.query("INSERT INTO instagram_dm_automation(workspace_id,connection_id,recipient_id,paused) VALUES($1,$2,'9005',false)", [W, C]);
   const seen = graph();
   assert.equal(await deliver(seen), true);
   assert.equal(await deliver(seen), true);
@@ -358,10 +331,7 @@ test("a held row is skipped rather than waited on, and two workers claim one row
     await holder.query("SELECT id FROM flow_dm_deliveries WHERE id=$1 FOR UPDATE", [held]);
     const seen = graph();
     claim = deliver(seen);
-    const claimed = await Promise.race([
-      claim,
-      new Promise<string>((resolve) => setTimeout(() => resolve("waited"), 5_000).unref()),
-    ]);
+    const claimed = await Promise.race([claim, new Promise<string>((resolve) => setTimeout(() => resolve("waited"), 5_000).unref())]);
     assert.equal(claimed, true, "the claim must skip the locked row");
     assert.deepEqual(recipients(seen), ["9002"]);
     await holder.query("COMMIT");
@@ -485,8 +455,7 @@ test("a consent read failure defers the row as consent_unavailable", async () =>
   const id = await dmRow("9001");
   const failing = {
     query: async (...args: Parameters<Pool["query"]>) => {
-      if (typeof args[0] === "string" && args[0].includes("FROM channel_consent_state state"))
-        throw new Error("consent database unavailable");
+      if (typeof args[0] === "string" && args[0].includes("FROM channel_consent_state state")) throw new Error("consent database unavailable");
       return (pool.query as (...input: unknown[]) => Promise<unknown>)(...args);
     },
     connect: () => pool.connect(),
@@ -501,23 +470,14 @@ test("the account check: a mismatch blocks the row and a failed read defers it",
   const mismatch = await dmRow("9001");
   const seen = graph();
   assert.equal(await deliver(seen, { me: "999" }), true);
-  assert.deepEqual(
-    [(await row(mismatch)).status, (await row(mismatch)).failure_code],
-    ["blocked", "authorization_unverified"],
-  );
+  assert.deepEqual([(await row(mismatch)).status, (await row(mismatch)).failure_code], ["blocked", "authorization_unverified"]);
   const failed = await dmRow("9002");
   assert.equal(await deliver(seen, { me: new Error("network") }), true);
-  assert.deepEqual(
-    [(await row(failed)).status, (await row(failed)).failure_code],
-    ["pending", "verification_unavailable"],
-  );
+  assert.deepEqual([(await row(failed)).status, (await row(failed)).failure_code], ["pending", "verification_unavailable"]);
   // A 200 body without a usable user_id is a failed read too, not a mismatch.
   const empty = await dmRow("9003");
   assert.equal(await deliver(seen, { me: { body: {} } }), true);
-  assert.deepEqual(
-    [(await row(empty)).status, (await row(empty)).failure_code],
-    ["pending", "verification_unavailable"],
-  );
+  assert.deepEqual([(await row(empty)).status, (await row(empty)).failure_code], ["pending", "verification_unavailable"]);
   assert.deepEqual(seen.posts, []);
 });
 
@@ -534,12 +494,7 @@ test("a definite provider rejection fails the row; an ambiguous outcome is unkno
   );
   assert.equal(await deliver(seen, { post: () => new Response("upstream", { status: 502 }) }), true);
   assert.equal(await deliver(seen, { post: () => Response.json({}) }), true);
-  const states = [await row(rejected), await row(ambiguous), await row(missing)].map((state) => [
-    state.status,
-    state.failure_code,
-    state.called,
-    state.attempted,
-  ]);
+  const states = [await row(rejected), await row(ambiguous), await row(missing)].map((state) => [state.status, state.failure_code, state.called, state.attempted]);
   assert.deepEqual(states, [
     ["failed", "meta_error_100", true, true],
     ["unknown", "send_outcome_unknown", true, true],
@@ -567,10 +522,7 @@ test("a rate limit defers the row to the pause end through the retry tiers, then
     ).rows[0];
   assert.equal(await deliver(seen, throttled({ "retry-after": "1200" })), true);
   let current = await state();
-  assert.deepEqual(
-    [current.status, current.failure_code, current.attempt_id, current.rate_limit_retries, current.at_pause_end],
-    ["pending", "meta_error_4", null, 1, true],
-  );
+  assert.deepEqual([current.status, current.failure_code, current.attempt_id, current.rate_limit_retries, current.at_pause_end], ["pending", "meta_error_4", null, 1, true]);
   assert.ok(Number(current.paused_for) > 1100 && Number(current.paused_for) <= 1200, String(current.paused_for));
   // The pause holds every other row of the connection.
   assert.equal(await deliver(seen), false);
@@ -600,16 +552,11 @@ test("a rate limit defers the row to the pause end through the retry tiers, then
 test("a pause recorded after the guards defers the row as connection_paused without spending a retry", async () => {
   const id = await dmRow("9001");
   const seen = graph();
-  const source = hookedPool(/SET provider_called_at/, () =>
-    pool.query("UPDATE instagram_connections SET send_paused_until=now()+interval '10 minutes'"),
-  );
+  const source = hookedPool(/SET provider_called_at/, () => pool.query("UPDATE instagram_connections SET send_paused_until=now()+interval '10 minutes'"));
   assert.equal(await deliver(seen, {}, source), true);
   assert.deepEqual(seen.posts, []);
   const state = await row(id);
-  assert.deepEqual(
-    [state.status, state.failure_code, state.rate_limit_retries, state.attempted, state.deferred],
-    ["pending", "connection_paused", 0, false, true],
-  );
+  assert.deepEqual([state.status, state.failure_code, state.rate_limit_retries, state.attempted, state.deferred], ["pending", "connection_paused", 0, false, true]);
 });
 
 test("stale sending rows become unknown and are never claimed again", async () => {
@@ -650,11 +597,7 @@ test("operations health counts DM flow rows in the due, sending and outcome metr
   assert.deepEqual([metrics!.unknown_24h, metrics!.failed_24h, metrics!.blocked_24h], [1, 1, 1]);
   mock.method(console, "warn", () => undefined);
   await evaluateAlerts(pool, true, "dm-flow-health-test");
-  const alerts = (
-    await pool.query(
-      "SELECT name,alert_seen_count FROM scheduled_steps WHERE alert_active AND name<>'alert_cron_stale' ORDER BY name",
-    )
-  ).rows;
+  const alerts = (await pool.query("SELECT name,alert_seen_count FROM scheduled_steps WHERE alert_active AND name<>'alert_cron_stale' ORDER BY name")).rows;
   assert.deepEqual(alerts, [
     { name: "alert_sending_dwell", alert_seen_count: null },
     { name: "alert_unknown_outcome", alert_seen_count: "1" },
@@ -666,37 +609,22 @@ test("the deletion functions refuse while a DM flow row is sending or held, and 
   await dmRow("9002");
   await pause("9001");
   await pause("9002");
-  await pool.query(
-    "UPDATE flow_dm_deliveries SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE id=$1",
-    [sending],
-  );
-  await pool.query(
-    "UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1",
-    [C],
-  );
-  const person = (kind: string, value: string) =>
-    pool.query("SELECT public.delete_person_data($1,$2,$3,$4,$5) AS result", [W, C, owner, kind, value]);
+  await pool.query("UPDATE flow_dm_deliveries SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE id=$1", [sending]);
+  await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1", [C]);
+  const person = (kind: string, value: string) => pool.query("SELECT public.delete_person_data($1,$2,$3,$4,$5) AS result", [W, C, owner, kind, value]);
   const refused = { code: "AC003" };
   await assert.rejects(person("dm_recipient", "9001"), refused);
-  await assert.rejects(
-    pool.query("SELECT public.delete_connection_data($1,$2,$3,'100') AS result", [W, C, owner]),
-    refused,
-  );
+  await assert.rejects(pool.query("SELECT public.delete_connection_data($1,$2,$3,'100') AS result", [W, C, owner]), refused);
   await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL");
   await assert.rejects(pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [W, owner]), refused);
   // A row another transaction holds (a finish in progress) refuses instead of waiting.
-  await pool.query("UPDATE flow_dm_deliveries SET status='sent',provider_message_id='m',sent_at=now() WHERE id=$1", [
-    sending,
-  ]);
+  await pool.query("UPDATE flow_dm_deliveries SET status='sent',provider_message_id='m',sent_at=now() WHERE id=$1", [sending]);
   const holder = await pool.connect();
   try {
     await holder.query("BEGIN");
     await holder.query("SELECT 1 FROM flow_dm_deliveries WHERE recipient_id='9002' FOR UPDATE");
     await assert.rejects(person("dm_recipient", "9002"), refused);
-    await assert.rejects(
-      pool.query("SELECT public.delete_connection_data($1,$2,$3,'100') AS result", [W, C, owner]),
-      refused,
-    );
+    await assert.rejects(pool.query("SELECT public.delete_connection_data($1,$2,$3,'100') AS result", [W, C, owner]), refused);
     await holder.query("ROLLBACK");
   } finally {
     holder.release();
@@ -707,41 +635,20 @@ test("the deletion functions refuse while a DM flow row is sending or held, and 
   const deleted = (await person("dm_recipient", "9002")).rows[0].result;
   assert.equal(deleted.deleted_counts.instagram_dm_automation, 1);
   assert.equal(deleted.deleted_counts.flow_dm_deliveries, 1);
-  const connection = (await pool.query("SELECT public.delete_connection_data($1,$2,$3,'100') AS result", [W, C, owner]))
-    .rows[0].result;
+  const connection = (await pool.query("SELECT public.delete_connection_data($1,$2,$3,'100') AS result", [W, C, owner])).rows[0].result;
   assert.equal(connection.deleted_counts.instagram_dm_automation, 1);
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM instagram_dm_automation")).rows[0].n, 0);
-  await pool.query(
-    "INSERT INTO instagram_dm_automation(workspace_id,connection_id,recipient_id,paused) VALUES($1,$2,'9009',true)",
-    [W, OTHER],
-  );
-  const workspace = (await pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [W, owner])).rows[0]
-    .result;
+  await pool.query("INSERT INTO instagram_dm_automation(workspace_id,connection_id,recipient_id,paused) VALUES($1,$2,'9009',true)", [W, OTHER]);
+  const workspace = (await pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [W, owner])).rows[0].result;
   assert.equal(workspace.deleted_counts.instagram_dm_automation, 1);
 });
 
 test("migration 069 replays over stored rows, keeps the canonical deletion functions and runs in the runner", async () => {
   const first = await dmRow("9001");
   const second = await dmRow("9002");
-  const named = [
-    "flow_dm_delivery_attempt",
-    "flow_dm_delivery_failure",
-    "flow_dm_delivery_sent",
-    "flow_dm_delivery_status",
-  ];
-  const constraints = async () =>
-    (
-      await pool.query(
-        "SELECT conname FROM pg_constraint WHERE conrelid='flow_dm_deliveries'::regclass AND conname=ANY($1) ORDER BY conname",
-        [[...named, "flow_dm_deliveries_status_check"]],
-      )
-    ).rows.map(({ conname }) => conname);
-  const definitions = async () =>
-    (
-      await pool.query(
-        "SELECT proname,pg_get_functiondef(oid) AS definition FROM pg_proc WHERE proname IN ('delete_person_data','delete_connection_data','delete_workspace_data') ORDER BY proname",
-      )
-    ).rows;
+  const named = ["flow_dm_delivery_attempt", "flow_dm_delivery_failure", "flow_dm_delivery_sent", "flow_dm_delivery_status"];
+  const constraints = async () => (await pool.query("SELECT conname FROM pg_constraint WHERE conrelid='flow_dm_deliveries'::regclass AND conname=ANY($1) ORDER BY conname", [[...named, "flow_dm_deliveries_status_check"]])).rows.map(({ conname }) => conname);
+  const definitions = async () => (await pool.query("SELECT proname,pg_get_functiondef(oid) AS definition FROM pg_proc WHERE proname IN ('delete_person_data','delete_connection_data','delete_workspace_data') ORDER BY proname")).rows;
   const canonical = await definitions();
   for (const { definition } of canonical) assert.match(definition, /instagram_dm_automation/);
   // db/schema.sql already holds the 069 constraints; return the table to the migration 068 constraint set, so the
@@ -760,36 +667,21 @@ test("migration 069 replays over stored rows, keeps the canonical deletion funct
   await pool.query(sql);
   assert.deepEqual(await constraints(), named);
   // Migrations 070 (#312) and 071 (#321) redefine the deletion functions after 069 in the runner.
-  await pool.query(
-    await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8"),
-  );
-  await pool.query(
-    await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"),
-  );
+  await pool.query(await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"));
   assert.deepEqual(await definitions(), canonical);
-  const stored = (
-    await pool.query("SELECT id,status FROM flow_dm_deliveries WHERE id=ANY($1) ORDER BY status", [[first, second]])
-  ).rows;
+  const stored = (await pool.query("SELECT id,status FROM flow_dm_deliveries WHERE id=ANY($1) ORDER BY status", [[first, second]])).rows;
   assert.deepEqual(
     stored.map(({ status }) => status),
     ["pending", "sent"],
   );
   const pending = stored[0].id;
   // The status set and the attempt rule hold; each update breaks only the named constraint.
-  await assert.rejects(
-    pool.query(
-      "UPDATE flow_dm_deliveries SET status='cancelled',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE id=$1",
-      [pending],
-    ),
-    { code: "23514", constraint: "flow_dm_delivery_status" },
-  );
+  await assert.rejects(pool.query("UPDATE flow_dm_deliveries SET status='cancelled',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE id=$1", [pending]), { code: "23514", constraint: "flow_dm_delivery_status" });
   await assert.rejects(pool.query("UPDATE flow_dm_deliveries SET status='sending' WHERE id=$1", [pending]), {
     code: "23514",
     constraint: "flow_dm_delivery_attempt",
   });
   const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
-  assert.ok(
-    runner.indexOf("069_dm_flow_delivery.sql") > runner.indexOf("068_dm_start_triggers.sql") &&
-      runner.indexOf("069_dm_flow_delivery.sql") < runner.indexOf("supabase-access.sql"),
-  );
+  assert.ok(runner.indexOf("069_dm_flow_delivery.sql") > runner.indexOf("068_dm_start_triggers.sql") && runner.indexOf("069_dm_flow_delivery.sql") < runner.indexOf("supabase-access.sql"));
 });

@@ -4,13 +4,7 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool, type QueryConfig } from "pg";
 import { ApiError } from "./auth.ts";
-import {
-  archiveContactSegment,
-  createContactSegment,
-  listContactSegments,
-  listContacts,
-  updateContactSegment,
-} from "./contacts.ts";
+import { archiveContactSegment, createContactSegment, listContactSegments, listContacts, updateContactSegment } from "./contacts.ts";
 import { CONTACT_CSV_HEADER, exportContactCsv } from "./contact-csv.ts";
 import { parseContactCsv, decodeContactScalar } from "./contact-csv-test-utils.ts";
 import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
@@ -18,8 +12,7 @@ import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: databaseUrl });
 const workspace = "11111111-1111-4111-8111-111111111111";
 const foreignWorkspace = "22222222-2222-4222-8222-222222222222";
@@ -39,12 +32,7 @@ before(async () => pool.query(await readFile(new URL("../../db/schema.sql", impo
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces,workspace_deletion_records CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspace, foreignWorkspace]);
-  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($3,$4,'owner')", [
-    workspace,
-    owner.id,
-    foreignWorkspace,
-    outsider.id,
-  ]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($3,$4,'owner')", [workspace, owner.id, foreignWorkspace, outsider.id]);
   await pool.query(
     `INSERT INTO instagram_connections(id,workspace_id,account_id,username,inbox_enabled,inbox_enabled_at) VALUES
      ($1,$4,'100','shop',true,now()-interval '1 day'),($2,$4,'102','closed',false,NULL),
@@ -59,8 +47,7 @@ after(async () => pool.end());
 function listClock(): Pool {
   return {
     query: async (sql: string, values: unknown[] = []) => {
-      if (sql.includes("statement_timestamp()"))
-        assert.equal(sql.match(/statement_timestamp\(\)/g)?.length, 1, "one evaluation clock per lookup");
+      if (sql.includes("statement_timestamp()")) assert.equal(sql.match(/statement_timestamp\(\)/g)?.length, 1, "one evaluation clock per lookup");
       return pool.query(sql.replace("statement_timestamp()", `'${asOf}'::timestamptz`), values);
     },
   } as unknown as Pool;
@@ -185,8 +172,7 @@ async function fixture() {
 }
 const senders = (page: { contacts: { sender_id: string }[] }) => page.contacts.map((contact) => contact.sender_id);
 const query = (entries: Record<string, string>) => new URLSearchParams(entries);
-const sum = (page: { total?: string; excluded?: Record<string, string> }) =>
-  BigInt(page.total!) + Object.values(page.excluded!).reduce((total, count) => total + BigInt(count), 0n);
+const sum = (page: { total?: string; excluded?: Record<string, string> }) => BigInt(page.total!) + Object.values(page.excluded!).reduce((total, count) => total + BigInt(count), 0n);
 const dmWindow = { from: windowFrom, before: asOf };
 
 test("DM activity reads the latest stored DM of verified recipients in a half-open window at one clock", async () => {
@@ -208,22 +194,11 @@ test("DM activity reads the latest stored DM of verified recipients in a half-op
   // No response carries a DM recipient ID or a DM message time.
   const body = JSON.stringify([list, preview]);
   assert.equal(/"90\d\d"/.test(body), false);
-  for (const time of ["2026-10-09T12:00:00", "2026-10-08T03:00:00", "2026-10-07T02:59:59"])
-    assert.equal(body.includes(time), false, time);
+  for (const time of ["2026-10-09T12:00:00", "2026-10-08T03:00:00", "2026-10-07T02:59:59"]) assert.equal(body.includes(time), false, time);
   // A wider window takes in 101 (one microsecond early) but never 102 (at asOf) or 104 (latest after asOf).
-  assert.deepEqual(senders(await listContacts(listClock(), owner, query({ connection_id: C, last_dm_days: "4" }))), [
-    "100",
-    "101",
-    "103",
-    "105",
-    "111",
-  ]);
+  assert.deepEqual(senders(await listContacts(listClock(), owner, query({ connection_id: C, last_dm_days: "4" }))), ["100", "101", "103", "105", "111"]);
   // One day keeps only the DMs after asOf minus 24 hours.
-  assert.deepEqual(senders(await listContacts(listClock(), owner, query({ connection_id: C, last_dm_days: "1" }))), [
-    "103",
-    "105",
-    "111",
-  ]);
+  assert.deepEqual(senders(await listContacts(listClock(), owner, query({ connection_id: C, last_dm_days: "1" }))), ["103", "105", "111"]);
   // Every account: 110 on C3 has no verified identity; the foreign workspace sees only its own contact.
   const all = await listContacts(listClock(), owner, query({ preview: "true", last_dm_days: "3" }));
   assert.equal(all.evaluated, "12");
@@ -263,15 +238,9 @@ test("DM activity combines with DM consent over any verified recipient, not one 
 
 test("DM activity is a separate limit after comment activity and consent, outside the tag-field OR", async () => {
   await fixture();
-  await pool.query(
-    "UPDATE instagram_comment_events SET created_at='2026-10-01T00:00:00Z' WHERE connection_id=$1 AND sender_id='105'",
-    [C],
-  );
+  await pool.query("UPDATE instagram_comment_events SET created_at='2026-10-01T00:00:00Z' WHERE connection_id=$1 AND sender_id='105'", [C]);
   const base = { connection_id: C, preview: "true", last_dm_days: "3" };
-  for (const activity of [
-    { last_comment_days: "3" },
-    { last_comment_from: "2026-10-08T00:00:00.000Z", last_comment_before: "2026-10-10T00:00:00.000Z" },
-  ] as Record<string, string>[]) {
+  for (const activity of [{ last_comment_days: "3" }, { last_comment_from: "2026-10-08T00:00:00.000Z", last_comment_before: "2026-10-10T00:00:00.000Z" }] as Record<string, string>[]) {
     const page = await listContacts(listClock(), owner, query({ ...base, ...activity }));
     assert.deepEqual(senders(page), ["100", "103", "111"], JSON.stringify(activity));
     assert.deepEqual(page.excluded, {
@@ -291,11 +260,7 @@ test("DM activity is a separate limit after comment activity and consent, outsid
   assert.deepEqual(calendar.dm_activity_window, dmWindow);
   assert.equal(calendar.activity_window?.time_zone, "Asia/Seoul");
   for (const sender of ["100", "101", "106"]) await consent("comment_sender", sender);
-  const consented = await listContacts(
-    listClock(),
-    owner,
-    query({ ...base, consent_purpose: "marketing", consent_state: "granted" }),
-  );
+  const consented = await listContacts(listClock(), owner, query({ ...base, consent_purpose: "marketing", consent_state: "granted" }));
   assert.deepEqual(senders(consented), ["100"]);
   assert.deepEqual(consented.excluded, {
     consent: "8",
@@ -306,21 +271,9 @@ test("DM activity is a separate limit after comment activity and consent, outsid
     both: "0",
   });
   // Tags: 100, 101 and 106 have lead; 103 has a score of 5.
-  for (const sender of ["100", "101", "106"])
-    await pool.query(
-      "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,$3,'{lead}')",
-      [workspace, C, sender],
-    );
-  const field = (
-    await pool.query(
-      "INSERT INTO instagram_contact_fields(workspace_id,name,type) VALUES($1,'score','number') RETURNING id",
-      [workspace],
-    )
-  ).rows[0].id as string;
-  await pool.query(
-    "INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,'103',$3,'5')",
-    [workspace, C, field],
-  );
+  for (const sender of ["100", "101", "106"]) await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,$3,'{lead}')", [workspace, C, sender]);
+  const field = (await pool.query("INSERT INTO instagram_contact_fields(workspace_id,name,type) VALUES($1,'score','number') RETURNING id", [workspace])).rows[0].id as string;
+  await pool.query("INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,'103',$3,'5')", [workspace, C, field]);
   const tagField = { ...base, tag: "lead", field_id: field, field_operator: "gte", field_value: "1" };
   // OR: 101 (tag, old DM) and 106 (tag, no verified DM) stay excluded by the DM limit.
   const or = await listContacts(listClock(), owner, query({ ...tagField, condition_operator: "or" }));
@@ -363,10 +316,7 @@ test("DM activity segments save, edit, evaluate, export at one clock and archive
   const [header, ...rows] = parseContactCsv(exported.body);
   assert.deepEqual(header, [...CONTACT_CSV_HEADER]);
   const at = (name: string) => CONTACT_CSV_HEADER.indexOf(name as (typeof CONTACT_CSV_HEADER)[number]);
-  assert.deepEqual(
-    rows.map((row) => `${row[at("connection_id")]}:${decodeContactScalar(row[at("sender_id")]!)}`).sort(),
-    selected.contacts.map((contact) => `${contact.connection_id}:${contact.sender_id}`).sort(),
-  );
+  assert.deepEqual(rows.map((row) => `${row[at("connection_id")]}:${decodeContactScalar(row[at("sender_id")]!)}`).sort(), selected.contacts.map((contact) => `${contact.connection_id}:${contact.sender_id}`).sort());
   assert.equal(/(^|[^0-9])90\d\d([^0-9]|$)/.test(exported.body), false);
   // An unchanged edit keeps the version; changed days increment it and change the selection.
   const unchanged = await updateContactSegment(pool, owner, segment.id, {
@@ -393,20 +343,10 @@ test("DM activity segments save, edit, evaluate, export at one clock and archive
   const removedList = await listContacts(listClock(), owner, bySegment);
   assert.equal("dm_activity_window" in removedList, false);
   // segment_id cannot be mixed with the manual DM activity key.
-  await assert.rejects(
-    listContacts(pool, owner, query({ segment_id: segment.id, last_dm_days: "3" })),
-    (error: unknown) =>
-      error instanceof ApiError && error.status === 400 && error.message === "invalid_contact_request",
-  );
-  await assert.rejects(
-    listContacts(pool, outsider, bySegment),
-    (error: unknown) => error instanceof ApiError && error.status === 404,
-  );
+  await assert.rejects(listContacts(pool, owner, query({ segment_id: segment.id, last_dm_days: "3" })), (error: unknown) => error instanceof ApiError && error.status === 400 && error.message === "invalid_contact_request");
+  await assert.rejects(listContacts(pool, outsider, bySegment), (error: unknown) => error instanceof ApiError && error.status === 404);
   await archiveContactSegment(pool, owner, segment.id);
-  await assert.rejects(
-    listContacts(pool, owner, bySegment),
-    (error: unknown) => error instanceof ApiError && error.status === 404,
-  );
+  await assert.rejects(listContacts(pool, owner, bySegment), (error: unknown) => error instanceof ApiError && error.status === 404);
 });
 
 test("DM activity segment migration preserves existing rows and enforces 1 to 366 on replay", async () => {
@@ -415,22 +355,11 @@ test("DM activity segment migration preserves existing rows and enforces 1 to 36
     await client.query("BEGIN");
     await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN last_dm_days");
     await client.query("DROP INDEX instagram_inbox_messages_latest_idx");
-    await client.query(
-      "INSERT INTO instagram_contact_segments(workspace_id,name,dm_consent_purpose,dm_consent_state,last_comment_days) VALUES($1,'Legacy','marketing','granted',7)",
-      [workspace],
-    );
-    const migration = await readFile(
-      new URL("../../db/migrations/059_segment_dm_activity.sql", import.meta.url),
-      "utf8",
-    );
+    await client.query("INSERT INTO instagram_contact_segments(workspace_id,name,dm_consent_purpose,dm_consent_state,last_comment_days) VALUES($1,'Legacy','marketing','granted',7)", [workspace]);
+    const migration = await readFile(new URL("../../db/migrations/059_segment_dm_activity.sql", import.meta.url), "utf8");
     await client.query(migration);
     await client.query(migration);
-    const read = async () =>
-      (
-        await client.query(
-          "SELECT name,dm_consent_purpose,dm_consent_state,last_comment_days,last_dm_days FROM instagram_contact_segments",
-        )
-      ).rows;
+    const read = async () => (await client.query("SELECT name,dm_consent_purpose,dm_consent_state,last_comment_days,last_dm_days FROM instagram_contact_segments")).rows;
     assert.deepEqual(await read(), [
       {
         name: "Legacy",
@@ -440,19 +369,11 @@ test("DM activity segment migration preserves existing rows and enforces 1 to 36
         last_dm_days: null,
       },
     ]);
-    assert.deepEqual(
-      (
-        await client.query(
-          "SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND indexname='instagram_inbox_messages_latest_idx'",
-        )
-      ).rows,
-      [
-        {
-          indexdef:
-            "CREATE INDEX instagram_inbox_messages_latest_idx ON public.instagram_inbox_messages USING btree (workspace_id, connection_id, recipient_id, message_at DESC)",
-        },
-      ],
-    );
+    assert.deepEqual((await client.query("SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND indexname='instagram_inbox_messages_latest_idx'")).rows, [
+      {
+        indexdef: "CREATE INDEX instagram_inbox_messages_latest_idx ON public.instagram_inbox_messages USING btree (workspace_id, connection_id, recipient_id, message_at DESC)",
+      },
+    ]);
     for (const days of [1, 366]) {
       await client.query("UPDATE instagram_contact_segments SET last_dm_days=$1", [days]);
       await client.query(migration);
@@ -460,10 +381,7 @@ test("DM activity segment migration preserves existing rows and enforces 1 to 36
     }
     for (const days of [0, 367, -1]) {
       await client.query("SAVEPOINT invalid_dm_activity");
-      await assert.rejects(
-        client.query("UPDATE instagram_contact_segments SET last_dm_days=$1", [days]),
-        (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "23514",
-      );
+      await assert.rejects(client.query("UPDATE instagram_contact_segments SET last_dm_days=$1", [days]), (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "23514");
       await client.query("ROLLBACK TO SAVEPOINT invalid_dm_activity");
     }
   } finally {

@@ -7,8 +7,7 @@ function invalid(): never {
   throw new ApiError(400, "invalid_identity_link_request");
 }
 function validatePath(connection: string, sender: string, recipient?: string) {
-  if (!isUuid(connection) || !/^\d{1,40}$/.test(sender) || (recipient !== undefined && !/^\d{1,40}$/.test(recipient)))
-    invalid();
+  if (!isUuid(connection) || !/^\d{1,40}$/.test(sender) || (recipient !== undefined && !/^\d{1,40}$/.test(recipient))) invalid();
 }
 type Change = {
   action: "confirm" | "detach";
@@ -17,29 +16,10 @@ type Change = {
   evidence_reply_id: string | null;
 };
 export function parseIdentityLinkChange(input: unknown): Change {
-  if (
-    !isRecord(input) ||
-    !["confirm", "detach"].includes(String(input.action)) ||
-    !isUuid(input.request_key) ||
-    !Number.isInteger(input.expected_version) ||
-    Number(input.expected_version) < 0 ||
-    Number(input.expected_version) >= 2147483647
-  )
-    invalid();
-  const fields = [
-    "action",
-    "request_key",
-    "expected_version",
-    ...(input.action === "confirm" ? ["evidence_reply_id"] : []),
-  ];
+  if (!isRecord(input) || !["confirm", "detach"].includes(String(input.action)) || !isUuid(input.request_key) || !Number.isInteger(input.expected_version) || Number(input.expected_version) < 0 || Number(input.expected_version) >= 2147483647) invalid();
+  const fields = ["action", "request_key", "expected_version", ...(input.action === "confirm" ? ["evidence_reply_id"] : [])];
   if (Object.keys(input).length !== fields.length || !fields.every((key) => key in input)) invalid();
-  if (
-    input.action === "confirm" &&
-    (typeof input.evidence_reply_id !== "string" ||
-      !/^[1-9]\d{0,18}$/.test(input.evidence_reply_id) ||
-      BigInt(input.evidence_reply_id) > 9223372036854775807n)
-  )
-    invalid();
+  if (input.action === "confirm" && (typeof input.evidence_reply_id !== "string" || !/^[1-9]\d{0,18}$/.test(input.evidence_reply_id) || BigInt(input.evidence_reply_id) > 9223372036854775807n)) invalid();
   return {
     action: input.action as Change["action"],
     request_key: input.request_key,
@@ -49,14 +29,7 @@ export function parseIdentityLinkChange(input: unknown): Change {
 }
 const currentColumns = "sender_id,recipient_id,state,version,evidence_reply_id::text,last_event_id::text,updated_at";
 // Confirmation is advisory. Neither delivery nor deletion traverses these links.
-export async function changeIdentityLink(
-  pool: Pool,
-  user: User,
-  connection: string,
-  sender: string,
-  recipient: string,
-  input: unknown,
-) {
+export async function changeIdentityLink(pool: Pool, user: User, connection: string, sender: string, recipient: string, input: unknown) {
   validatePath(connection, sender, recipient);
   const change = parseIdentityLinkChange(input);
   const workspace = await workspaceFor(pool, user, "admin");
@@ -64,77 +37,31 @@ export async function changeIdentityLink(
   try {
     await client.query("BEGIN");
     await lockWorkspaceForMember(client, workspace, user, "admin");
-    const owned = await client.query(
-      "SELECT id FROM instagram_connections WHERE workspace_id=$1 AND id=$2 FOR NO KEY UPDATE",
-      [workspace, connection],
-    );
+    const owned = await client.query("SELECT id FROM instagram_connections WHERE workspace_id=$1 AND id=$2 FOR NO KEY UPDATE", [workspace, connection]);
     if (!owned.rows.length) throw new ApiError(404, "contact_not_found");
-    const current =
-      (
-        await client.query(
-          `SELECT ${currentColumns} FROM instagram_contact_identity_links WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 FOR UPDATE`,
-          [workspace, connection, recipient],
-        )
-      ).rows[0] ?? null;
-    const previous = (
-      await client.query(
-        "SELECT id::text,connection_id,sender_id,recipient_id,action,version,evidence_reply_id::text FROM instagram_contact_identity_link_events WHERE workspace_id=$1 AND request_key=$2",
-        [workspace, change.request_key],
-      )
-    ).rows[0];
+    const current = (await client.query(`SELECT ${currentColumns} FROM instagram_contact_identity_links WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 FOR UPDATE`, [workspace, connection, recipient])).rows[0] ?? null;
+    const previous = (await client.query("SELECT id::text,connection_id,sender_id,recipient_id,action,version,evidence_reply_id::text FROM instagram_contact_identity_link_events WHERE workspace_id=$1 AND request_key=$2", [workspace, change.request_key])).rows[0];
     if (previous) {
-      if (
-        previous.connection_id !== connection ||
-        previous.sender_id !== sender ||
-        previous.recipient_id !== recipient ||
-        previous.action !== change.action ||
-        previous.version !== change.expected_version + 1 ||
-        previous.evidence_reply_id !== change.evidence_reply_id
-      )
+      if (previous.connection_id !== connection || previous.sender_id !== sender || previous.recipient_id !== recipient || previous.action !== change.action || previous.version !== change.expected_version + 1 || previous.evidence_reply_id !== change.evidence_reply_id)
         throw new ApiError(409, "identity_link_conflict");
       await client.query("COMMIT");
       return { event: previous, current, replayed: true };
     }
     if (change.action === "confirm") {
-      const exists = await client.query(
-        "SELECT 1 FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3 LIMIT 1",
-        [workspace, connection, sender],
-      );
+      const exists = await client.query("SELECT 1 FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3 LIMIT 1", [workspace, connection, sender]);
       if (!exists.rows.length) throw new ApiError(404, "contact_not_found");
     } else if (!current || current.sender_id !== sender) throw new ApiError(404, "contact_not_found");
     if ((current?.version ?? 0) !== change.expected_version) throw new ApiError(409, "identity_link_conflict");
     if (change.action === "confirm") {
-      const bridge = (
-        await client.query(
-          `SELECT evidence_reply_id FROM (${verifiedDmRecipientsSql("workspace_id=$1 AND id=$2")}) verified WHERE sender_id=$3 AND recipient_id=$4`,
-          [workspace, connection, sender, recipient],
-        )
-      ).rows[0];
-      if (!bridge || bridge.evidence_reply_id !== change.evidence_reply_id)
-        throw new ApiError(409, "identity_link_evidence_changed");
-      if (
-        current?.state === "confirmed" &&
-        (current.sender_id !== sender || current.evidence_reply_id === change.evidence_reply_id)
-      )
-        throw new ApiError(409, "identity_link_conflict");
+      const bridge = (await client.query(`SELECT evidence_reply_id FROM (${verifiedDmRecipientsSql("workspace_id=$1 AND id=$2")}) verified WHERE sender_id=$3 AND recipient_id=$4`, [workspace, connection, sender, recipient])).rows[0];
+      if (!bridge || bridge.evidence_reply_id !== change.evidence_reply_id) throw new ApiError(409, "identity_link_evidence_changed");
+      if (current?.state === "confirmed" && (current.sender_id !== sender || current.evidence_reply_id === change.evidence_reply_id)) throw new ApiError(409, "identity_link_conflict");
     } else if (current.state !== "confirmed") throw new ApiError(409, "identity_link_conflict");
     const event = (
       await client.query(
         `INSERT INTO instagram_contact_identity_link_events(workspace_id,connection_id,sender_id,recipient_id,previous_sender_id,previous_state,action,version,evidence_reply_id,request_key,actor_id)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id::text,action,version,evidence_reply_id::text`,
-        [
-          workspace,
-          connection,
-          sender,
-          recipient,
-          current?.sender_id ?? null,
-          current?.state ?? null,
-          change.action,
-          change.expected_version + 1,
-          change.evidence_reply_id,
-          change.request_key,
-          user.id,
-        ],
+        [workspace, connection, sender, recipient, current?.sender_id ?? null, current?.state ?? null, change.action, change.expected_version + 1, change.evidence_reply_id, change.request_key, user.id],
       )
     ).rows[0];
     const saved = (
@@ -143,16 +70,7 @@ export async function changeIdentityLink(
       VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(workspace_id,connection_id,recipient_id) DO UPDATE SET
       sender_id=EXCLUDED.sender_id,state=EXCLUDED.state,version=EXCLUDED.version,evidence_reply_id=EXCLUDED.evidence_reply_id,last_event_id=EXCLUDED.last_event_id,updated_at=now()
       RETURNING ${currentColumns}`,
-        [
-          workspace,
-          connection,
-          recipient,
-          sender,
-          change.action === "confirm" ? "confirmed" : "detached",
-          event.version,
-          change.evidence_reply_id,
-          event.id,
-        ],
+        [workspace, connection, recipient, sender, change.action === "confirm" ? "confirmed" : "detached", event.version, change.evidence_reply_id, event.id],
       )
     ).rows[0];
     await client.query("COMMIT");
@@ -165,13 +83,7 @@ export async function changeIdentityLink(
   }
 }
 
-export async function listIdentityLinks(
-  pool: Pool,
-  user: User,
-  connection: string,
-  sender: string,
-  query: URLSearchParams,
-) {
+export async function listIdentityLinks(pool: Pool, user: User, connection: string, sender: string, query: URLSearchParams) {
   validatePath(connection, sender);
   for (const key of query.keys()) if (key !== "after" || query.getAll(key).length !== 1) invalid();
   type Cursor = { workspace_id: string; connection_id: string; sender_id: string; recipient_id: string };
@@ -181,16 +93,7 @@ export async function listIdentityLinks(
       const encoded = query.get("after")!;
       if (encoded.length > 1024 || !/^[A-Za-z0-9_-]+$/.test(encoded)) invalid();
       const value: unknown = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
-      if (
-        !isRecord(value) ||
-        Object.keys(value).length !== 4 ||
-        !isUuid(value.workspace_id) ||
-        value.connection_id !== connection ||
-        value.sender_id !== sender ||
-        typeof value.recipient_id !== "string" ||
-        !/^\d{1,40}$/.test(value.recipient_id)
-      )
-        invalid();
+      if (!isRecord(value) || Object.keys(value).length !== 4 || !isUuid(value.workspace_id) || value.connection_id !== connection || value.sender_id !== sender || typeof value.recipient_id !== "string" || !/^\d{1,40}$/.test(value.recipient_id)) invalid();
       after = value as Cursor;
     } catch {
       invalid();

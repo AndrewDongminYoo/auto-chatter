@@ -5,19 +5,13 @@ import type { Pool } from "pg";
 export async function seedWorkspace(pool: Pool, workspace: string, user: string, connection: string, account: string) {
   await pool.query("INSERT INTO workspaces(id) VALUES($1)", [workspace]);
   await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2)", [workspace, user]);
-  await pool.query(
-    "INSERT INTO workspace_reply_templates(workspace_id,name,body,created_by,updated_by) VALUES($1,'Greeting','Hello {{name}}',$2,$2)",
-    [workspace, user],
-  );
+  await pool.query("INSERT INTO workspace_reply_templates(workspace_id,name,body,created_by,updated_by) VALUES($1,'Greeting','Hello {{name}}',$2,$2)", [workspace, user]);
   await pool.query(
     `INSERT INTO workspace_invites(workspace_id,email,role,token_hash,created_by,expires_at)
      VALUES($1,$2,'agent',encode(sha256(convert_to($2,'UTF8')),'hex'),$3,now()+interval '7 days')`,
     [workspace, `agent-${account}@example.test`, user],
   );
-  await pool.query(
-    "INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES($1,$2,$3,now()+interval '5 minutes')",
-    [`state-hash-${account}`, user, workspace],
-  );
+  await pool.query("INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES($1,$2,$3,now()+interval '5 minutes')", [`state-hash-${account}`, user, workspace]);
   await pool.query(
     `INSERT INTO instagram_connections(id,workspace_id,account_id,username,access_token_encrypted,token_expires_at)
      VALUES($1,$2,$3,$3,$4,now()+interval '30 days')`,
@@ -54,10 +48,7 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      VALUES($1,$2,$3,'following',now())`,
     [connection, reply, `follow-mid-${account}`],
   );
-  await pool.query("INSERT INTO instagram_message_receipts(connection_id,message_id,received_at) VALUES($1,$2,now())", [
-    connection,
-    `m-${account}`,
-  ]);
+  await pool.query("INSERT INTO instagram_message_receipts(connection_id,message_id,received_at) VALUES($1,$2,now())", [connection, `m-${account}`]);
   await pool.query(
     `INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at)
      VALUES($1,$2,'900',$3,'dm text','text',now())`,
@@ -68,20 +59,9 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      VALUES($1,$2,'900',$3,'kept dm text','2026-10-01T00:00:00Z')`,
     [workspace, connection, `kept-${account}`],
   );
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'123',true)",
-    [workspace, connection],
-  );
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'123','{vip}')",
-    [workspace, connection],
-  );
-  const segment = (
-    await pool.query(
-      "INSERT INTO instagram_contact_segments(workspace_id,name,connection_id,tag) VALUES($1,'vips',$2,'vip') RETURNING id",
-      [workspace, connection],
-    )
-  ).rows[0].id;
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'123',true)", [workspace, connection]);
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'123','{vip}')", [workspace, connection]);
+  const segment = (await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name,connection_id,tag) VALUES($1,'vips',$2,'vip') RETURNING id", [workspace, connection])).rows[0].id;
   const snapshot = (
     await pool.query(
       `INSERT INTO instagram_segment_snapshots(workspace_id,segment_id,created_by,as_of,definition,segment_name,counts,member_count)
@@ -89,10 +69,7 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
       [workspace, segment, user],
     )
   ).rows[0].id;
-  await pool.query(
-    "INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,'123')",
-    [snapshot, workspace, connection],
-  );
+  await pool.query("INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,'123')", [snapshot, workspace, connection]);
   const draft = (
     await pool.query(
       `INSERT INTO campaign_drafts(id,workspace_id,snapshot_id,name,body,create_request_hash,created_by,updated_by)
@@ -143,20 +120,9 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
       [workspace, executed, draft, snapshot, counts],
     )
   ).rows[0].id;
-  await pool.query(
-    "INSERT INTO campaign_deliveries(workspace_id,run_id,connection_id,sender_id,recipient_id) VALUES($1,$2,$3,'123','900')",
-    [workspace, campaignRun, connection],
-  );
-  const field = (
-    await pool.query(
-      "INSERT INTO instagram_contact_fields(workspace_id,name,type) VALUES($1,'city','text') RETURNING id",
-      [workspace],
-    )
-  ).rows[0].id;
-  await pool.query(
-    `INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,'123',$3,'"Seoul"')`,
-    [workspace, connection, field],
-  );
+  await pool.query("INSERT INTO campaign_deliveries(workspace_id,run_id,connection_id,sender_id,recipient_id) VALUES($1,$2,$3,'123','900')", [workspace, campaignRun, connection]);
+  const field = (await pool.query("INSERT INTO instagram_contact_fields(workspace_id,name,type) VALUES($1,'city','text') RETURNING id", [workspace])).rows[0].id;
+  await pool.query(`INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,'123',$3,'"Seoul"')`, [workspace, connection, field]);
   await pool.query(
     `INSERT INTO instagram_inbox_handoffs(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,updated_by)
      VALUES($1,$2,'900','123',$3,true,1,$4)`,
@@ -182,21 +148,9 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      VALUES($1,$2,'900',$3,1)`,
     [workspace, connection, user],
   );
-  const label = (
-    await pool.query("INSERT INTO instagram_inbox_labels(workspace_id,name,created_by) VALUES($1,$2,$3) RETURNING id", [
-      workspace,
-      `vip ${account}`,
-      user,
-    ])
-  ).rows[0].id;
+  const label = (await pool.query("INSERT INTO instagram_inbox_labels(workspace_id,name,created_by) VALUES($1,$2,$3) RETURNING id", [workspace, `vip ${account}`, user])).rows[0].id;
   // A keyword rule added a second label at version 2; its audit row names the rule and no member.
-  const ruleLabel = (
-    await pool.query("INSERT INTO instagram_inbox_labels(workspace_id,name,created_by) VALUES($1,$2,$3) RETURNING id", [
-      workspace,
-      `refund ${account}`,
-      user,
-    ])
-  ).rows[0].id;
+  const ruleLabel = (await pool.query("INSERT INTO instagram_inbox_labels(workspace_id,name,created_by) VALUES($1,$2,$3) RETURNING id", [workspace, `refund ${account}`, user])).rows[0].id;
   const labelRule = (
     await pool.query(
       `INSERT INTO instagram_inbox_label_rules(workspace_id,label_id,match_mode,keywords,created_by,updated_by)
@@ -214,10 +168,7 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      VALUES($1,$2,'900',1,ARRAY[$3::uuid],'{}',$4,NULL),($1,$2,'900',2,ARRAY[$5::uuid],'{}',NULL,$6)`,
     [workspace, connection, label, user, ruleLabel, labelRule],
   );
-  await pool.query(
-    "INSERT INTO instagram_inbox_notes(workspace_id,connection_id,recipient_id,author_id,body) VALUES($1,$2,'900',$3,'note text')",
-    [workspace, connection, user],
-  );
+  await pool.query("INSERT INTO instagram_inbox_notes(workspace_id,connection_id,recipient_id,author_id,body) VALUES($1,$2,'900',$3,'note text')", [workspace, connection, user]);
   // The seeded conversation is closed, so its reminder was cancelled by the close.
   const reminder = (
     await pool.query(
@@ -268,12 +219,7 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      FROM channel_consent_events WHERE id=$1`,
     [consent],
   );
-  const flow = (
-    await pool.query(
-      `INSERT INTO flows(workspace_id,name,draft,draft_revision) VALUES($1,'welcome','{"nodes":[]}',1) RETURNING id`,
-      [workspace],
-    )
-  ).rows[0].id;
+  const flow = (await pool.query(`INSERT INTO flows(workspace_id,name,draft,draft_revision) VALUES($1,'welcome','{"nodes":[]}',1) RETURNING id`, [workspace])).rows[0].id;
   const version = (
     await pool.query(
       `INSERT INTO flow_versions(flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,published_by)
@@ -306,12 +252,7 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
     [workspace, connection, flowEvent, run, `comment-flow-${account}`],
   );
   // A run that a DM started (#33): its own DM-trigger flow version (no media), start event, run and first-message row.
-  const dmFlow = (
-    await pool.query(
-      `INSERT INTO flows(workspace_id,name,draft,draft_revision) VALUES($1,'dm welcome','{"nodes":[]}',1) RETURNING id`,
-      [workspace],
-    )
-  ).rows[0].id;
+  const dmFlow = (await pool.query(`INSERT INTO flows(workspace_id,name,draft,draft_revision) VALUES($1,'dm welcome','{"nodes":[]}',1) RETURNING id`, [workspace])).rows[0].id;
   const dmVersion = (
     await pool.query(
       `INSERT INTO flow_versions(flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_type,published_by)
@@ -338,20 +279,9 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
      VALUES($1,$2,$3,'901','dm flow reply')`,
     [workspace, connection, dmRun],
   );
-  await pool.query(
-    "INSERT INTO instagram_dm_automation(workspace_id,connection_id,recipient_id,paused) VALUES($1,$2,'901',true)",
-    [workspace, connection],
-  );
-  await pool.query(
-    "INSERT INTO instagram_message_reads(workspace_id,connection_id,recipient_id,message_id,read_at) VALUES($1,$2,'901',$3,now())",
-    [workspace, connection, `read-mid-${account}`],
-  );
-  const endpoint = (
-    await pool.query("INSERT INTO webhook_endpoints(workspace_id,name,url) VALUES($1,'crm',$2) RETURNING id", [
-      workspace,
-      `https://hooks.example.test/${account}`,
-    ])
-  ).rows[0].id;
+  await pool.query("INSERT INTO instagram_dm_automation(workspace_id,connection_id,recipient_id,paused) VALUES($1,$2,'901',true)", [workspace, connection]);
+  await pool.query("INSERT INTO instagram_message_reads(workspace_id,connection_id,recipient_id,message_id,read_at) VALUES($1,$2,'901',$3,now())", [workspace, connection, `read-mid-${account}`]);
+  const endpoint = (await pool.query("INSERT INTO webhook_endpoints(workspace_id,name,url) VALUES($1,'crm',$2) RETURNING id", [workspace, `https://hooks.example.test/${account}`])).rows[0].id;
   await pool.query(
     `INSERT INTO webhook_signing_keys(id,workspace_id,endpoint_id,slot,secret_encrypted)
      VALUES(gen_random_uuid(),$1,$2,1,$3)`,
@@ -364,10 +294,7 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
       [workspace, endpoint, connection, flow, run],
     )
   ).rows[0].event_id;
-  await pool.query(
-    "INSERT INTO webhook_redelivery_events(workspace_id,connection_id,delivery_event_id,actor_id) VALUES($1,$2,$3,$4)",
-    [workspace, connection, delivery, user],
-  );
+  await pool.query("INSERT INTO webhook_redelivery_events(workspace_id,connection_id,delivery_event_id,actor_id) VALUES($1,$2,$3,$4)", [workspace, connection, delivery, user]);
   await pool.query(
     `INSERT INTO data_deletion_records(workspace_id,connection_id,requested_by,deleted_counts,retained_counts)
      VALUES($1,$2,$3,'{"instagram_comment_events":0}','{}')`,
@@ -376,40 +303,13 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
   return { dmVersion: dmVersion as string, dmRun: dmRun as string, dmStart: dmStart as string };
 }
 
-const ZERO_COUNTS = JSON.stringify(
-  Object.fromEntries(
-    [
-      "original_member_count",
-      "remaining_member_count",
-      "connection_unavailable",
-      "contact_paused",
-      "no_dm_identity",
-      "opted_out",
-      "marketing_consent_required",
-      "reply_window_closed",
-      "candidate",
-    ].map((key) => [key, "0"]),
-  ),
-);
+const ZERO_COUNTS = JSON.stringify(Object.fromEntries(["original_member_count", "remaining_member_count", "connection_unavailable", "contact_paused", "no_dm_identity", "opted_out", "marketing_consent_required", "reply_window_closed", "candidate"].map((key) => [key, "0"])));
 
 // One executed campaign approval whose completed run started at `startedAt` (a timestamptz SQL expression) with
 // `count` delivery rows on `connection`, for the monthly campaign send count (#52). Every row gets `status`; a
 // cancelled row records a provider call only when `providerCalled` is set. Returns the run ID.
-export async function seedCampaignSends(
-  pool: Pool,
-  workspace: string,
-  connection: string,
-  user: string,
-  count: number,
-  startedAt: string,
-  rows: { status?: "pending" | "cancelled"; providerCalled?: boolean } = {},
-): Promise<string> {
-  const segment = (
-    await pool.query(
-      "INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'Sent '||gen_random_uuid()) RETURNING id",
-      [workspace],
-    )
-  ).rows[0].id;
+export async function seedCampaignSends(pool: Pool, workspace: string, connection: string, user: string, count: number, startedAt: string, rows: { status?: "pending" | "cancelled"; providerCalled?: boolean } = {}): Promise<string> {
+  const segment = (await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'Sent '||gen_random_uuid()) RETURNING id", [workspace])).rows[0].id;
   const snapshot = (
     await pool.query(
       `INSERT INTO instagram_segment_snapshots(workspace_id,segment_id,created_by,as_of,definition,segment_name,counts,member_count)

@@ -48,8 +48,7 @@ export function verifySignedRequest(signedRequest: string, appSecret: string): D
   } catch {
     return null;
   }
-  if (!isRecord(data) || typeof data.algorithm !== "string" || data.algorithm.toUpperCase() !== "HMAC-SHA256")
-    return null;
+  if (!isRecord(data) || typeof data.algorithm !== "string" || data.algorithm.toUpperCase() !== "HMAC-SHA256") return null;
   const userId = normalizedUserId(data.user_id);
   if (userId === null) return null;
   // Meta does not document the Instagram Login payload, so an absent issued_at is accepted; a present one must
@@ -78,14 +77,8 @@ export function parseDeauthorizeBody(body: Uint8Array, appSecret: string): Deaut
 // in ID order, and records deauthorized_at even when it was already disconnected. A match whose stored token
 // was obtained in a later second than issued_at is skipped, so a delayed or replayed request cannot undo a
 // reconnect; so is one that left its workspace after the lookup.
-export async function deauthorizeInstagramUser(
-  pool: Pool,
-  { userId, issuedAt }: DeauthorizeRequest,
-): Promise<{ disconnected: string[]; skipped: string[] }> {
-  const matched = await pool.query<{ id: string; workspace_id: string }>(
-    "SELECT id,workspace_id FROM instagram_connections WHERE account_id=$1 OR instagram_user_id=$1 ORDER BY id",
-    [userId],
-  );
+export async function deauthorizeInstagramUser(pool: Pool, { userId, issuedAt }: DeauthorizeRequest): Promise<{ disconnected: string[]; skipped: string[] }> {
+  const matched = await pool.query<{ id: string; workspace_id: string }>("SELECT id,workspace_id FROM instagram_connections WHERE account_id=$1 OR instagram_user_id=$1 ORDER BY id", [userId]);
   const disconnected: string[] = [];
   const skipped: string[] = [];
   for (const { id, workspace_id } of matched.rows) {

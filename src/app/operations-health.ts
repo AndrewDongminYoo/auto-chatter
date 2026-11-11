@@ -2,11 +2,7 @@ import type { Pool } from "pg";
 import type { User } from "./auth.ts";
 import { logOperation, type OperationStep } from "./operations-log.ts";
 import { workspaceFor } from "./settings.ts";
-import {
-  campaignBudgetOpenSql,
-  campaignBudgetReopenedAtSql,
-  privateReplyBudgetOpenSql,
-} from "../instagram/send-quota.ts";
+import { campaignBudgetOpenSql, campaignBudgetReopenedAtSql, privateReplyBudgetOpenSql } from "../instagram/send-quota.ts";
 import { campaignDeliveryDueSql } from "../instagram/campaign-delivery-worker.ts";
 import { dmFlowDeliveryDueSql } from "../instagram/dm-flow-delivery-worker.ts";
 
@@ -131,24 +127,10 @@ export async function connectionMetrics(pool: Pool, workspaceId: string | null):
 // oldest-pending alert is suppressed then.
 export function connectionAlerts(metrics: ConnectionMetrics, globalSendEnabled: boolean): AlertName[] {
   const alerts: AlertName[] = [];
-  if (
-    globalSendEnabled &&
-    metrics.oldest_due_pending_seconds !== null &&
-    metrics.oldest_due_pending_seconds > ALERT_THRESHOLDS.oldest_pending_minutes * 60
-  )
-    alerts.push("oldest_pending");
-  if (
-    metrics.longest_sending_seconds !== null &&
-    metrics.longest_sending_seconds > ALERT_THRESHOLDS.sending_dwell_minutes * 60
-  )
-    alerts.push("sending_dwell");
+  if (globalSendEnabled && metrics.oldest_due_pending_seconds !== null && metrics.oldest_due_pending_seconds > ALERT_THRESHOLDS.oldest_pending_minutes * 60) alerts.push("oldest_pending");
+  if (metrics.longest_sending_seconds !== null && metrics.longest_sending_seconds > ALERT_THRESHOLDS.sending_dwell_minutes * 60) alerts.push("sending_dwell");
   if (metrics.unknown_24h > 0) alerts.push("unknown_outcome");
-  if (
-    metrics.active &&
-    metrics.token_expires_in_seconds !== null &&
-    metrics.token_expires_in_seconds < ALERT_THRESHOLDS.token_expiry_days * 86_400
-  )
-    alerts.push("token_expiring");
+  if (metrics.active && metrics.token_expires_in_seconds !== null && metrics.token_expires_in_seconds < ALERT_THRESHOLDS.token_expiry_days * 86_400) alerts.push("token_expiring");
   return alerts;
 }
 
@@ -164,12 +146,7 @@ async function cronStatus(pool: Pool): Promise<{ last_success_at: Date | null; s
 // at is when the step finished, defaulting to now(); a run that records later passes the time it captured.
 // A stored time never moves back, and failure_code changes only with a failure that is not older than the
 // stored one, so an overlapping run that records an older outcome later leaves the newer one in place.
-export async function recordStep(
-  pool: Pool,
-  name: OperationStep | "cron",
-  failure: string | null,
-  at: Date | null = null,
-): Promise<void> {
+export async function recordStep(pool: Pool, name: OperationStep | "cron", failure: string | null, at: Date | null = null): Promise<void> {
   const time = at?.toISOString() ?? null;
   if (failure === null)
     await pool.query(
@@ -218,11 +195,7 @@ export async function recordSteps(pool: Pool, outcomes: readonly StepOutcome[]):
        failure_code=CASE WHEN excluded.failure_code IS NOT NULL AND (scheduled_steps.last_failure_at IS NULL
            OR excluded.last_failure_at>=scheduled_steps.last_failure_at) THEN excluded.failure_code
          ELSE scheduled_steps.failure_code END`,
-    [
-      outcomes.map((outcome) => outcome.name),
-      outcomes.map((outcome) => outcome.failure),
-      outcomes.map((outcome) => outcome.at.toISOString()),
-    ],
+    [outcomes.map((outcome) => outcome.name), outcomes.map((outcome) => outcome.failure), outcomes.map((outcome) => outcome.at.toISOString())],
   );
 }
 
@@ -266,18 +239,11 @@ interface AlertInputs {
 // that alert to the next run. The seen count changes only from the value read with the total, so a run that
 // read an older count cannot overwrite a newer one. runSucceeded says every earlier step of the calling cron
 // run succeeded: that run records the 'cron' row after this evaluation, so it is not stale.
-export async function evaluateAlerts(
-  pool: Pool,
-  globalSendEnabled: boolean,
-  correlationId: string,
-  runSucceeded = false,
-): Promise<void> {
-  const inputs = (await pool.query<AlertInputs>(ALERT_INPUTS_SQL, [null, ALERTS.map((alert) => `alert_${alert}`)]))
-    .rows[0]!;
+export async function evaluateAlerts(pool: Pool, globalSendEnabled: boolean, correlationId: string, runSucceeded = false): Promise<void> {
+  const inputs = (await pool.query<AlertInputs>(ALERT_INPUTS_SQL, [null, ALERTS.map((alert) => `alert_${alert}`)])).rows[0]!;
   const readAt = inputs.read_at;
   const active = new Set<AlertName>();
-  for (const metrics of inputs.metrics)
-    for (const alert of connectionAlerts(metrics, globalSendEnabled)) active.add(alert);
+  for (const metrics of inputs.metrics) for (const alert of connectionAlerts(metrics, globalSendEnabled)) active.add(alert);
   if (!runSucceeded && inputs.cron_stale) active.add("cron_stale");
   const unknown = { total: inputs.total, seen: inputs.seen };
   const storedActive = new Set(inputs.active_alerts);
@@ -295,24 +261,15 @@ export async function evaluateAlerts(
              RETURNING 1`,
             [name, seenCount, readAt],
           );
-      if (started?.rowCount === 1)
-        logOperation({ event: "alert_started", code: name, correlation_id: correlationId }, "warn");
+      if (started?.rowCount === 1) logOperation({ event: "alert_started", code: name, correlation_id: correlationId }, "warn");
       else if (seenCount !== null && seenCount !== unknown.seen) {
         // Raised or lowered (data deletion) only if no other run changed it since the read.
-        const changed = await pool.query(
-          "UPDATE scheduled_steps SET alert_seen_count=$2 WHERE name=$1 AND alert_active AND alert_seen_count IS NOT DISTINCT FROM $3::bigint RETURNING 1",
-          [name, seenCount, unknown.seen],
-        );
-        if (changed.rowCount === 1 && unknown.seen !== null && BigInt(seenCount) > BigInt(unknown.seen))
-          logOperation({ event: "alert_new_occurrence", code: name, correlation_id: correlationId }, "warn");
+        const changed = await pool.query("UPDATE scheduled_steps SET alert_seen_count=$2 WHERE name=$1 AND alert_active AND alert_seen_count IS NOT DISTINCT FROM $3::bigint RETURNING 1", [name, seenCount, unknown.seen]);
+        if (changed.rowCount === 1 && unknown.seen !== null && BigInt(seenCount) > BigInt(unknown.seen)) logOperation({ event: "alert_new_occurrence", code: name, correlation_id: correlationId }, "warn");
       }
     } else if (storedActive.has(name)) {
-      const cleared = await pool.query(
-        "UPDATE scheduled_steps SET alert_active=false,alert_changed_at=now() WHERE name=$1 AND alert_active AND alert_changed_at<$2::timestamptz RETURNING 1",
-        [name, readAt],
-      );
-      if (cleared.rowCount === 1)
-        logOperation({ event: "alert_cleared", code: name, correlation_id: correlationId }, "info");
+      const cleared = await pool.query("UPDATE scheduled_steps SET alert_active=false,alert_changed_at=now() WHERE name=$1 AND alert_active AND alert_changed_at<$2::timestamptz RETURNING 1", [name, readAt]);
+      if (cleared.rowCount === 1) logOperation({ event: "alert_cleared", code: name, correlation_id: correlationId }, "info");
     }
   }
 }

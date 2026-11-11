@@ -11,8 +11,7 @@ import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: databaseUrl, max: 12 });
 const workspace = "11111111-1111-4111-8111-111111111111";
 const foreignWorkspace = "22222222-2222-4222-8222-222222222222";
@@ -27,10 +26,7 @@ let sequence = 0;
 before(async () => pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8")));
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces,workspace_deletion_records CASCADE");
-  await pool.query("INSERT INTO workspaces(id,time_zone,plan) VALUES($1,'UTC','advanced'),($2,'UTC','advanced')", [
-    workspace,
-    foreignWorkspace,
-  ]);
+  await pool.query("INSERT INTO workspaces(id,time_zone,plan) VALUES($1,'UTC','advanced'),($2,'UTC','advanced')", [workspace, foreignWorkspace]);
   await pool.query(
     `INSERT INTO workspace_members(workspace_id,user_id,role)
      VALUES($1,$2,'owner'),($1,$3,'agent'),($1,$5,'admin'),($4,$6,'owner')`,
@@ -59,10 +55,7 @@ function sharedPool(pause?: RegExp) {
       reached = resolve;
       return;
     }
-    const timer = setTimeout(
-      () => reject(new Error(`no query matched ${pause} within ${GATE_TIMEOUT_MS} ms`)),
-      GATE_TIMEOUT_MS,
-    );
+    const timer = setTimeout(() => reject(new Error(`no query matched ${pause} within ${GATE_TIMEOUT_MS} ms`)), GATE_TIMEOUT_MS);
     timer.unref();
     reached = () => {
       clearTimeout(timer);
@@ -123,8 +116,7 @@ async function request(method: string, path: string, body?: unknown, actor = own
       WORKSPACE_EXPORT_LIMIT: { limit: async () => ({ success: true }) },
     },
     () => source,
-    (async () =>
-      Response.json({ id: actor, email: "member@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actor, email: "member@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 async function expect(response: Response, status = 200) {
@@ -193,12 +185,7 @@ async function qualifying(sender: string, recipient: string, ago = "1 hour", con
 // Freezes the given members into a snapshot and returns a version-1 draft that references it.
 async function draftFor(members: Array<[string, string]>, ws = workspace) {
   const actor = ws === workspace ? owner : outsider;
-  const segment = (
-    await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,$2) RETURNING id", [
-      ws,
-      `Audience ${++sequence}`,
-    ])
-  ).rows[0]!.id;
+  const segment = (await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,$2) RETURNING id", [ws, `Audience ${++sequence}`])).rows[0]!.id;
   const snapshot = (
     await pool.query(
       `INSERT INTO instagram_segment_snapshots(workspace_id,segment_id,created_by,as_of,definition,segment_name,counts,member_count)
@@ -206,11 +193,7 @@ async function draftFor(members: Array<[string, string]>, ws = workspace) {
       [ws, segment, actor, members.length],
     )
   ).rows[0]!.id as string;
-  for (const [conn, sender] of members)
-    await pool.query(
-      "INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,$4)",
-      [snapshot, ws, conn, sender],
-    );
+  for (const [conn, sender] of members) await pool.query("INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,$4)", [snapshot, ws, conn, sender]);
   const id = randomUUID();
   await pool.query(
     `INSERT INTO campaign_drafts(id,workspace_id,snapshot_id,name,body,create_request_hash,created_by,updated_by)
@@ -243,12 +226,7 @@ async function runOf(approval: string) {
   return (await pool.query("SELECT * FROM campaign_runs WHERE approval_id=$1", [approval])).rows[0];
 }
 async function deliveries(run: string) {
-  return (
-    await pool.query(
-      "SELECT connection_id,sender_id,recipient_id,status FROM campaign_deliveries WHERE run_id=$1 ORDER BY sender_id",
-      [run],
-    )
-  ).rows;
+  return (await pool.query("SELECT connection_id,sender_id,recipient_id,status FROM campaign_deliveries WHERE run_id=$1 ORDER BY sender_id", [run])).rows;
 }
 // A row the delivery worker (PR 2) would have claimed; this PR never writes one.
 async function insertSending(run: string, sender: string, recipient: string, ws = workspace, conn = C) {
@@ -296,9 +274,7 @@ test("only approved approvals that are due start, and each run writes one pendin
     assert.equal(run.draft_version, 1);
     assert.equal(run.snapshot_id, approval.snapshot_id);
     assert.equal(run.start_counts.candidate, "1");
-    assert.deepEqual(await deliveries(run.id), [
-      { connection_id: C, sender_id: "1001", recipient_id: "2001", status: "pending" },
-    ]);
+    assert.deepEqual(await deliveries(run.id), [{ connection_id: C, sender_id: "1001", recipient_id: "2001", status: "pending" }]);
   }
   // An executed approval is never started again, and nothing reached an outbox, consent or webhook table.
   assert.deepEqual(await startDueCampaignRuns(pool), { started: 0, skipped: 0, failed: 0 });
@@ -320,12 +296,7 @@ test("each step run starts at most the cap, oldest due first", async () => {
   await pool.query("UPDATE campaign_approvals SET updated_at=now()-interval '30 minutes' WHERE id=$1", [ids[2]]);
   await pool.query("UPDATE campaign_approvals SET scheduled_at=now()-interval '2 hours' WHERE id=$1", [scheduled.id]);
   assert.deepEqual(await startDueCampaignRuns(pool, { limit: 2 }), { started: 2, skipped: 0, failed: 0 });
-  assert.deepEqual(await Promise.all([ids[0]!, scheduled.id, ids[1]!, ids[2]!].map(approvalStatus)), [
-    "executed",
-    "executed",
-    "approved",
-    "approved",
-  ]);
+  assert.deepEqual(await Promise.all([ids[0]!, scheduled.id, ids[1]!, ids[2]!].map(approvalStatus)), ["executed", "executed", "approved", "approved"]);
   assert.deepEqual(await startDueCampaignRuns(pool, { limit: 1 }), { started: 1, skipped: 0, failed: 0 });
   assert.equal(await approvalStatus(ids[1]!), "executed");
   assert.equal(await approvalStatus(ids[2]!), "approved");
@@ -359,15 +330,11 @@ test("approvals that keep failing go behind the others, so a full batch of failu
   const broken: Array<{ id: string; draft_id: string }> = [];
   for (const [index, sender] of ["1001", "1002"].entries()) {
     broken.push(await approve(await draftFor([[C, sender]])));
-    await pool.query(`UPDATE campaign_approvals SET updated_at=now()-interval '${3 - index} hours' WHERE id=$1`, [
-      broken[index]!.id,
-    ]);
+    await pool.query(`UPDATE campaign_approvals SET updated_at=now()-interval '${3 - index} hours' WHERE id=$1`, [broken[index]!.id]);
     await pool.query("UPDATE campaign_drafts SET version=2 WHERE id=$1", [broken[index]!.draft_id]);
   }
   const healthy = await approve(await draftFor([[C, "1003"]]));
-  const failedAt = async (id: string) =>
-    (await pool.query("SELECT start_failed_at FROM campaign_approvals WHERE id=$1", [id])).rows[0]
-      .start_failed_at as Date | null;
+  const failedAt = async (id: string) => (await pool.query("SELECT start_failed_at FROM campaign_approvals WHERE id=$1", [id])).rows[0].start_failed_at as Date | null;
   mock.method(console, "error", () => undefined);
   try {
     // The two oldest due approvals fill the batch and both fail; the healthy one is not reached.
@@ -395,21 +362,11 @@ test("two workspaces that hold the same approval ID each start their run", async
     [foreignWorkspace, FC, outsider],
   ] as const) {
     const draft = await draftFor([[conn, "1001"]], ws);
-    await expect(
-      await request(
-        "POST",
-        `/api/campaign-drafts/${draft}/approvals`,
-        { id, expected_version: 1, schedule_local: null, expected_time_zone: "UTC" },
-        actor,
-      ),
-      201,
-    );
+    await expect(await request("POST", `/api/campaign-drafts/${draft}/approvals`, { id, expected_version: 1, schedule_local: null, expected_time_zone: "UTC" }, actor), 201);
   }
   assert.deepEqual(await startDueCampaignRuns(pool), { started: 2, skipped: 0, failed: 0 });
   assert.deepEqual(
-    (
-      await pool.query("SELECT workspace_id FROM campaign_runs WHERE approval_id=$1 ORDER BY workspace_id", [id])
-    ).rows.map((row) => row.workspace_id),
+    (await pool.query("SELECT workspace_id FROM campaign_runs WHERE approval_id=$1 ORDER BY workspace_id", [id])).rows.map((row) => row.workspace_id),
     [workspace, foreignWorkspace],
   );
 });
@@ -431,13 +388,7 @@ test("two concurrent starts write one run and one row per member; the member key
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM campaign_runs")).rows[0].n, 1);
   const run = await runOf(approval.id);
   assert.equal((await deliveries(run.id)).length, 2);
-  await assert.rejects(
-    pool.query(
-      "INSERT INTO campaign_deliveries(workspace_id,run_id,connection_id,sender_id,recipient_id) VALUES($1,$2,$3,'1001','2009')",
-      [workspace, run.id, C],
-    ),
-    { code: "23505", constraint: "campaign_deliveries_member" },
-  );
+  await assert.rejects(pool.query("INSERT INTO campaign_deliveries(workspace_id,run_id,connection_id,sender_id,recipient_id) VALUES($1,$2,$3,'1001','2009')", [workspace, run.id, C]), { code: "23505", constraint: "campaign_deliveries_member" });
   // One run per approval, also against a second insert that bypassed the status check.
   await assert.rejects(
     pool.query(
@@ -456,13 +407,7 @@ test("a start and an approval cancel or schedule change serialize in either orde
     const pending =
       change === "cancel"
         ? request("POST", `/api/campaign-approvals/${approval.id}/cancel`, { expected_version: 1 }, owner, gated.pool)
-        : request(
-            "PUT",
-            `/api/campaign-approvals/${approval.id}/schedule`,
-            { expected_version: 1, schedule_local: "2099-01-01T00:00", expected_time_zone: "UTC" },
-            owner,
-            gated.pool,
-          );
+        : request("PUT", `/api/campaign-approvals/${approval.id}/schedule`, { expected_version: 1, schedule_local: "2099-01-01T00:00", expected_time_zone: "UTC" }, owner, gated.pool);
     await gated.held;
     const starting = startDueCampaignRuns(pool);
     await waitForWorkspaceLock();
@@ -508,10 +453,7 @@ test("the start re-evaluates the frozen target and its counts can differ from th
   assert.equal(approval.preview.counts.candidate, "2");
   // After the approval, one recipient opts out and the other member is paused.
   await consent("2001", "revoke");
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'1002',true)",
-    [workspace, C],
-  );
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'1002',true)", [workspace, C]);
   await startDueCampaignRuns(pool);
   const run = await runOf(approval.id);
   assert.deepEqual(run.start_counts, {
@@ -553,11 +495,7 @@ test("the candidate count equals the rows, and a candidate gets its qualifying r
   assert.equal(run.start_counts.no_dm_identity, "1");
   assert.equal(run.start_counts.reply_window_closed, "1");
   // started_at is the evaluation's one clock, as the preview's as_of is.
-  assert.equal(
-    (await pool.query("SELECT started_at<=now() AND started_at>now()-interval '1 minute' AS ok FROM campaign_runs"))
-      .rows[0].ok,
-    true,
-  );
+  assert.equal((await pool.query("SELECT started_at<=now() AND started_at>now()-interval '1 minute' AS ok FROM campaign_runs")).rows[0].ok, true);
   assert.deepEqual(await deliveries(run.id), [
     { connection_id: C, sender_id: "1001", recipient_id: "2002", status: "pending" },
     { connection_id: C, sender_id: "1002", recipient_id: "2004", status: "pending" },
@@ -578,10 +516,7 @@ test("cancelling a run cancels its pending rows only, and the read returns count
   const { id } = await runOf(approval.id);
   await insertSending(id, "17841400000001003", "17841400000002003");
   const baseline = await untouched();
-  assert.equal(
-    (await expect(await request("GET", `/api/campaign-runs/${id}`, undefined, agent), 403)).error,
-    "role_forbidden",
-  );
+  assert.equal((await expect(await request("GET", `/api/campaign-runs/${id}`, undefined, agent), 403)).error, "role_forbidden");
   const path = `/api/campaign-runs/${id}`;
   const read = await expect(await request("GET", path, undefined, admin));
   assert.equal(read.status, "running");
@@ -599,30 +534,13 @@ test("cancelling a run cancels its pending rows only, and the read returns count
     unknown: "0",
     cancelled: "0",
   });
-  for (const identifier of [
-    "17841400000001001",
-    "17841400000001002",
-    "17841400000001003",
-    "17841400000002001",
-    "17841400000002002",
-    "17841400000002003",
-  ])
-    assert.ok(!JSON.stringify(read).includes(identifier), identifier);
+  for (const identifier of ["17841400000001001", "17841400000001002", "17841400000001003", "17841400000002001", "17841400000002002", "17841400000002003"]) assert.ok(!JSON.stringify(read).includes(identifier), identifier);
   const approvalRead = await expect(await request("GET", `/api/campaign-approvals/${approval.id}`));
   assert.deepEqual([approvalRead.run_id, approvalRead.run_status], [id, "running"]);
-  assert.equal(
-    (await expect(await request("GET", "/api/campaign-approvals"))).approvals.find(
-      (item: { id: string }) => item.id === approval.id,
-    ).run_id,
-    id,
-  );
+  assert.equal((await expect(await request("GET", "/api/campaign-approvals"))).approvals.find((item: { id: string }) => item.id === approval.id).run_id, id);
 
-  for (const body of [{}, { expected_version: 0 }, { expected_version: 1, extra: true }, { expected_version: "1" }])
-    assert.equal((await expect(await request("POST", `${path}/cancel`, body), 400)).error, "invalid_campaign_run");
-  assert.equal(
-    (await expect(await request("POST", `${path}/cancel`, { expected_version: 1 }, agent), 403)).error,
-    "role_forbidden",
-  );
+  for (const body of [{}, { expected_version: 0 }, { expected_version: 1, extra: true }, { expected_version: "1" }]) assert.equal((await expect(await request("POST", `${path}/cancel`, body), 400)).error, "invalid_campaign_run");
+  assert.equal((await expect(await request("POST", `${path}/cancel`, { expected_version: 1 }, agent), 403)).error, "role_forbidden");
   const stale = await expect(await request("POST", `${path}/cancel`, { expected_version: 2 }), 409);
   assert.equal(stale.error, "campaign_run_conflict");
   assert.equal(stale.run.status, "running");
@@ -635,33 +553,20 @@ test("cancelling a run cancels its pending rows only, and the read returns count
   assert.equal(cancelled.sending_recalled, false);
   assert.equal(cancelled.delivery_counts.cancelled, "2");
   assert.equal(cancelled.delivery_counts.sending, "1");
-  assert.deepEqual(
-    (await pool.query("SELECT sender_id,status FROM campaign_deliveries WHERE run_id=$1 ORDER BY sender_id", [id]))
-      .rows,
-    [
-      { sender_id: "17841400000001001", status: "cancelled" },
-      { sender_id: "17841400000001002", status: "cancelled" },
-      { sender_id: "17841400000001003", status: "sending" },
-    ],
-  );
+  assert.deepEqual((await pool.query("SELECT sender_id,status FROM campaign_deliveries WHERE run_id=$1 ORDER BY sender_id", [id])).rows, [
+    { sender_id: "17841400000001001", status: "cancelled" },
+    { sender_id: "17841400000001002", status: "cancelled" },
+    { sender_id: "17841400000001003", status: "sending" },
+  ]);
   const again = await expect(await request("POST", `${path}/cancel`, { expected_version: 2 }), 409);
   assert.equal(again.error, "campaign_run_cancelled");
   assert.deepEqual(await untouched(), baseline);
 
   await pool.query("UPDATE campaign_runs SET status='completed',cancelled_by=NULL,cancelled_at=NULL WHERE id=$1", [id]);
-  assert.equal(
-    (await expect(await request("POST", `${path}/cancel`, { expected_version: 2 }), 409)).error,
-    "campaign_run_completed",
-  );
+  assert.equal((await expect(await request("POST", `${path}/cancel`, { expected_version: 2 }), 409)).error, "campaign_run_completed");
   for (const missing of [randomUUID(), "not-a-uuid"]) {
-    assert.equal(
-      (await expect(await request("GET", `/api/campaign-runs/${missing}`), 404)).error,
-      "campaign_run_not_found",
-    );
-    assert.equal(
-      (await expect(await request("POST", `/api/campaign-runs/${missing}/cancel`, { expected_version: 1 }), 404)).error,
-      "campaign_run_not_found",
-    );
+    assert.equal((await expect(await request("GET", `/api/campaign-runs/${missing}`), 404)).error, "campaign_run_not_found");
+    assert.equal((await expect(await request("POST", `/api/campaign-runs/${missing}/cancel`, { expected_version: 1 }), 404)).error, "campaign_run_not_found");
   }
   // Another workspace's run is not found.
   assert.equal((await expect(await request("GET", path, undefined, outsider), 404)).error, "campaign_run_not_found");
@@ -682,10 +587,7 @@ test("an executed approval refuses a schedule change and a cancel, and its draft
   assert.equal(schedule.error, "campaign_approval_executed");
   assert.equal(schedule.approval.status, "executed");
   assert.equal(schedule.approval.schedule_kind, "immediate");
-  const cancel = await expect(
-    await request("POST", `/api/campaign-approvals/${approval.id}/cancel`, { expected_version: 1 }),
-    409,
-  );
+  const cancel = await expect(await request("POST", `/api/campaign-approvals/${approval.id}/cancel`, { expected_version: 1 }), 409);
   assert.equal(cancel.error, "campaign_approval_executed");
   assert.equal(await approvalStatus(approval.id), "executed");
   // The executed draft version is not approved again (#36): the refusal carries the executed approval and writes
@@ -696,21 +598,13 @@ test("an executed approval refuses a schedule change and a cancel, and its draft
     schedule_local: null,
     expected_time_zone: "UTC",
   };
-  const refused = await expect(
-    await request("POST", `/api/campaign-drafts/${approval.draft_id}/approvals`, again),
-    409,
-  );
+  const refused = await expect(await request("POST", `/api/campaign-drafts/${approval.draft_id}/approvals`, again), 409);
   assert.equal(refused.error, "campaign_version_executed");
   assert.equal(refused.approval.id, approval.id);
   assert.equal(refused.approval.status, "executed");
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS n FROM campaign_approvals WHERE draft_id=$1", [approval.draft_id]))
-      .rows[0].n,
-    1,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM campaign_approvals WHERE draft_id=$1", [approval.draft_id])).rows[0].n, 1);
   // The draft can be edited and its new version approved; that approval would start its own run.
-  const snapshot = (await pool.query("SELECT snapshot_id FROM campaign_drafts WHERE id=$1", [approval.draft_id]))
-    .rows[0].snapshot_id;
+  const snapshot = (await pool.query("SELECT snapshot_id FROM campaign_drafts WHERE id=$1", [approval.draft_id])).rows[0].snapshot_id;
   await expect(
     await request("PUT", `/api/campaign-drafts/${approval.draft_id}`, {
       snapshot_id: snapshot,
@@ -719,10 +613,7 @@ test("an executed approval refuses a schedule change and a cancel, and its draft
       expected_version: 1,
     }),
   );
-  const edited = await expect(
-    await request("POST", `/api/campaign-drafts/${approval.draft_id}/approvals`, { ...again, expected_version: 2 }),
-    201,
-  );
+  const edited = await expect(await request("POST", `/api/campaign-drafts/${approval.draft_id}/approvals`, { ...again, expected_version: 2 }), 201);
   assert.equal(edited.draft_version, 2);
   // A replay of the request that created the executed approval still answers it as a success.
   const replayed = await expect(
@@ -747,18 +638,9 @@ test("connection, person and workspace deletion remove delivery rows and refuse 
   );
   await startDueCampaignRuns(pool);
   const run = (await runOf(approval.id)).id;
-  const sending = () =>
-    pool.query(
-      "UPDATE campaign_deliveries SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE run_id=$1 AND sender_id='1001'",
-      [run],
-    );
-  const pending = () =>
-    pool.query(
-      "UPDATE campaign_deliveries SET status='pending',attempt_id=NULL,attempt_started_at=NULL WHERE run_id=$1 AND sender_id='1001'",
-      [run],
-    );
-  const person = (kind: string, value: string) =>
-    pool.query("SELECT public.delete_person_data($1,$2,$3,$4,$5) AS result", [workspace, C, owner, kind, value]);
+  const sending = () => pool.query("UPDATE campaign_deliveries SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE run_id=$1 AND sender_id='1001'", [run]);
+  const pending = () => pool.query("UPDATE campaign_deliveries SET status='pending',attempt_id=NULL,attempt_started_at=NULL WHERE run_id=$1 AND sender_id='1001'", [run]);
+  const person = (kind: string, value: string) => pool.query("SELECT public.delete_person_data($1,$2,$3,$4,$5) AS result", [workspace, C, owner, kind, value]);
 
   await sending();
   await assert.rejects(person("comment_sender", "1001"), { message: "sending_in_progress" });
@@ -767,9 +649,7 @@ test("connection, person and workspace deletion remove delivery rows and refuse 
   const personHolder = await pool.connect();
   try {
     await personHolder.query("BEGIN");
-    await personHolder.query("SELECT 1 FROM campaign_deliveries WHERE run_id=$1 AND sender_id='1001' FOR UPDATE", [
-      run,
-    ]);
+    await personHolder.query("SELECT 1 FROM campaign_deliveries WHERE run_id=$1 AND sender_id='1001' FOR UPDATE", [run]);
     // Bounded, so a deletion that waits on the held row fails here instead of hanging the file.
     let timer: NodeJS.Timeout | undefined;
     const waited = new Promise<never>((_, reject) => {
@@ -793,17 +673,10 @@ test("connection, person and workspace deletion remove delivery rows and refuse 
 
   // Connection deletion: a sending row or a row held by another transaction refuses; the run and its counts stay.
   await insertSending(run, "1005", "2005");
-  await pool.query(
-    "UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1",
-    [C],
-  );
-  const connection = () =>
-    pool.query("SELECT public.delete_connection_data($1,$2,$3,'100') AS result", [workspace, C, owner]);
+  await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1", [C]);
+  const connection = () => pool.query("SELECT public.delete_connection_data($1,$2,$3,'100') AS result", [workspace, C, owner]);
   await assert.rejects(connection(), { message: "sending_in_progress" });
-  await pool.query(
-    "UPDATE campaign_deliveries SET status='pending',attempt_id=NULL,attempt_started_at=NULL WHERE run_id=$1",
-    [run],
-  );
+  await pool.query("UPDATE campaign_deliveries SET status='pending',attempt_id=NULL,attempt_started_at=NULL WHERE run_id=$1", [run]);
   const holder = await pool.connect();
   try {
     await holder.query("BEGIN");
@@ -820,10 +693,7 @@ test("connection, person and workspace deletion remove delivery rows and refuse 
   await insertSending(run, "1006", "2006");
   const wipe = () => pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [workspace, owner]);
   await assert.rejects(wipe(), { message: "sending_in_progress" });
-  await pool.query(
-    "UPDATE campaign_deliveries SET status='pending',attempt_id=NULL,attempt_started_at=NULL WHERE run_id=$1",
-    [run],
-  );
+  await pool.query("UPDATE campaign_deliveries SET status='pending',attempt_id=NULL,attempt_started_at=NULL WHERE run_id=$1", [run]);
   const deleted = (await wipe()).rows[0].result.deleted_counts;
   assert.equal(deleted.campaign_deliveries, 1);
   assert.equal(deleted.campaign_runs, 1);
@@ -839,11 +709,7 @@ test("a person deletion waits for a start on the connection lock and then remove
   const gated = sharedPool(/AS candidates/);
   const starting = startDueCampaignRuns(gated.pool);
   await gated.held;
-  const deleting = pool.query("SELECT public.delete_person_data($1,$2,$3,'comment_sender','1001') AS result", [
-    workspace,
-    C,
-    owner,
-  ]);
+  const deleting = pool.query("SELECT public.delete_person_data($1,$2,$3,'comment_sender','1001') AS result", [workspace, C, owner]);
   try {
     await waitForWorkspaceLock("delete_person_data");
   } finally {
@@ -872,10 +738,7 @@ test("the export carries runs and delivery rows, and either table alone blocks b
     const client = await pool.connect();
     try {
       await client.query("INSERT INTO workspaces(id) VALUES($1),($2)", [own, target]);
-      await client.query("INSERT INTO workspace_members(user_id,workspace_id,role) VALUES($1,$2,'owner')", [
-        mover,
-        own,
-      ]);
+      await client.query("INSERT INTO workspace_members(user_id,workspace_id,role) VALUES($1,$2,'owner')", [mover, own]);
       await client.query("SET session_replication_role=replica");
       if (table === "campaign_runs")
         await client.query(
@@ -892,22 +755,11 @@ test("the export carries runs and delivery rows, and either table alone blocks b
           [own],
         );
       await client.query("RESET session_replication_role");
-      const invite = await expect(
-        await request("POST", "/api/workspace/invites", { email: "member@example.test", role: "agent" }),
-        201,
-      );
-      await expect(
-        await request("POST", "/api/invites/accept", { token: invite.link.split("#invite=")[1] }, mover),
-        409,
-      );
+      const invite = await expect(await request("POST", "/api/workspace/invites", { email: "member@example.test", role: "agent" }), 201);
+      await expect(await request("POST", "/api/invites/accept", { token: invite.link.split("#invite=")[1] }, mover), 409);
       const script = await readFile(new URL("../../deploy/assign-workspace-owner.sql", import.meta.url), "utf8");
       await client.query("CREATE TEMP TABLE IF NOT EXISTS verified_users(id uuid,email_confirmed_at timestamptz)");
-      await client.query(
-        script
-          .slice(script.indexOf("CREATE FUNCTION"), script.indexOf("SELECT pg_temp.assign_workspace_owner"))
-          .replace("auth.users", "pg_temp.verified_users")
-          .replace("CREATE FUNCTION", "CREATE OR REPLACE FUNCTION"),
-      );
+      await client.query(script.slice(script.indexOf("CREATE FUNCTION"), script.indexOf("SELECT pg_temp.assign_workspace_owner")).replace("auth.users", "pg_temp.verified_users").replace("CREATE FUNCTION", "CREATE OR REPLACE FUNCTION"));
       await client.query("INSERT INTO verified_users VALUES($1,now())", [mover]);
       await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
       await pool.query("UPDATE workspace_invites SET revoked_at=now() WHERE workspace_id=$1", [workspace]);
@@ -938,42 +790,19 @@ test("delivery rows tie their status to their columns", async () => {
     code: "23514",
   });
   await assert.rejects(insert("status,provider_message_id,sent_at", "'pending','m',now()"), { code: "23514" });
-  await insert(
-    "status,attempt_id,attempt_started_at,provider_message_id,sent_at",
-    "'sent',gen_random_uuid(),now(),'m',now()",
-  );
-  await insert(
-    "status,attempt_id,attempt_started_at,failure_code",
-    "'blocked',gen_random_uuid(),now(),'recipient_opted_out'",
-  );
+  await insert("status,attempt_id,attempt_started_at,provider_message_id,sent_at", "'sent',gen_random_uuid(),now(),'m',now()");
+  await insert("status,attempt_id,attempt_started_at,failure_code", "'blocked',gen_random_uuid(),now(),'recipient_opted_out'");
   await insert("status", "'cancelled'");
   // Recipient IDs are the DM recipient's numeric ID; the foreign workspace's connection is refused.
-  await assert.rejects(
-    pool.query(
-      "INSERT INTO campaign_deliveries(workspace_id,run_id,connection_id,sender_id,recipient_id) VALUES($1,$2,$3,'x','abc')",
-      [workspace, run, C],
-    ),
-    { code: "23514" },
-  );
-  await assert.rejects(
-    pool.query(
-      "INSERT INTO campaign_deliveries(workspace_id,run_id,connection_id,sender_id,recipient_id) VALUES($1,$2,$3,'x','1')",
-      [workspace, run, FC],
-    ),
-    { code: "23503" },
-  );
+  await assert.rejects(pool.query("INSERT INTO campaign_deliveries(workspace_id,run_id,connection_id,sender_id,recipient_id) VALUES($1,$2,$3,'x','abc')", [workspace, run, C]), { code: "23514" });
+  await assert.rejects(pool.query("INSERT INTO campaign_deliveries(workspace_id,run_id,connection_id,sender_id,recipient_id) VALUES($1,$2,$3,'x','1')", [workspace, run, FC]), { code: "23503" });
 });
 
 test("migration 065 replays over stored runs and reproduces the canonical deletion functions", async () => {
   await qualifying("1001", "2001");
   const approval = await approve(await draftFor([[C, "1001"]]));
   await startDueCampaignRuns(pool);
-  const definitions = async () =>
-    (
-      await pool.query(
-        "SELECT proname,pg_get_functiondef(oid) AS definition FROM pg_proc WHERE proname IN ('delete_person_data','delete_connection_data','delete_workspace_data') ORDER BY proname",
-      )
-    ).rows;
+  const definitions = async () => (await pool.query("SELECT proname,pg_get_functiondef(oid) AS definition FROM pg_proc WHERE proname IN ('delete_person_data','delete_connection_data','delete_workspace_data') ORDER BY proname")).rows;
   const canonical = await definitions();
   for (const { definition } of canonical) assert.match(definition, /campaign_deliveries/);
   const sql = await readFile(new URL("../../db/migrations/065_campaign_runs.sql", import.meta.url), "utf8");
@@ -982,25 +811,15 @@ test("migration 065 replays over stored runs and reproduces the canonical deleti
   // 068 redefines the deletion functions again, so the runner's later body is restored after the replay.
   await pool.query(await readFile(new URL("../../db/migrations/068_dm_start_triggers.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/069_dm_flow_delivery.sql", import.meta.url), "utf8"));
-  await pool.query(
-    await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8"),
-  );
-  await pool.query(
-    await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"),
-  );
+  await pool.query(await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"));
   assert.deepEqual(await definitions(), canonical);
   assert.equal(await approvalStatus(approval.id), "executed");
   assert.equal((await deliveries((await runOf(approval.id)).id)).length, 1);
   // The executed status needs the replaced checks; a cancelled approval still needs its cancel columns.
-  await assert.rejects(
-    pool.query("UPDATE campaign_approvals SET cancelled_by=$2,cancelled_at=now() WHERE id=$1", [approval.id, owner]),
-    { code: "23514" },
-  );
+  await assert.rejects(pool.query("UPDATE campaign_approvals SET cancelled_by=$2,cancelled_at=now() WHERE id=$1", [approval.id, owner]), { code: "23514" });
   const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
-  assert.ok(
-    runner.indexOf("065_campaign_runs.sql") > runner.indexOf("064_campaign_approvals.sql") &&
-      runner.indexOf("065_campaign_runs.sql") < runner.indexOf("supabase-access.sql"),
-  );
+  assert.ok(runner.indexOf("065_campaign_runs.sql") > runner.indexOf("064_campaign_approvals.sql") && runner.indexOf("065_campaign_runs.sql") < runner.indexOf("supabase-access.sql"));
 });
 
 test("migration 066 replays over stored rows and keeps the delivery checks", async () => {
@@ -1011,36 +830,14 @@ test("migration 066 replays over stored rows and keeps the delivery checks", asy
   const sql = await readFile(new URL("../../db/migrations/066_campaign_delivery.sql", import.meta.url), "utf8");
   await pool.query(sql);
   await pool.query(sql);
-  const row = (
-    await pool.query(
-      "SELECT status,next_attempt_at<=clock_timestamp() AS due,provider_called_at FROM campaign_deliveries WHERE run_id=$1",
-      [run],
-    )
-  ).rows;
+  const row = (await pool.query("SELECT status,next_attempt_at<=clock_timestamp() AS due,provider_called_at FROM campaign_deliveries WHERE run_id=$1", [run])).rows;
   assert.deepEqual(row, [{ status: "pending", due: true, provider_called_at: null }]);
-  const indexes = (
-    await pool.query(
-      "SELECT indexname FROM pg_indexes WHERE tablename='campaign_deliveries' AND indexname LIKE 'campaign_deliveries_%_idx' ORDER BY indexname",
-    )
-  ).rows.map((index) => index.indexname);
-  for (const name of [
-    "campaign_deliveries_called_idx",
-    "campaign_deliveries_due_idx",
-    "campaign_deliveries_sending_idx",
-  ])
-    assert.ok(indexes.includes(name), name);
+  const indexes = (await pool.query("SELECT indexname FROM pg_indexes WHERE tablename='campaign_deliveries' AND indexname LIKE 'campaign_deliveries_%_idx' ORDER BY indexname")).rows.map((index) => index.indexname);
+  for (const name of ["campaign_deliveries_called_idx", "campaign_deliveries_due_idx", "campaign_deliveries_sending_idx"]) assert.ok(indexes.includes(name), name);
   // A pending row still holds no attempt.
-  await assert.rejects(
-    pool.query("UPDATE campaign_deliveries SET attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE run_id=$1", [
-      run,
-    ]),
-    { code: "23514" },
-  );
+  await assert.rejects(pool.query("UPDATE campaign_deliveries SET attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE run_id=$1", [run]), { code: "23514" });
   const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
-  assert.ok(
-    runner.indexOf("066_campaign_delivery.sql") > runner.indexOf("065_campaign_runs.sql") &&
-      runner.indexOf("066_campaign_delivery.sql") < runner.indexOf("supabase-access.sql"),
-  );
+  assert.ok(runner.indexOf("066_campaign_delivery.sql") > runner.indexOf("065_campaign_runs.sql") && runner.indexOf("066_campaign_delivery.sql") < runner.indexOf("supabase-access.sql"));
 });
 
 test("a start that the month's remaining campaign sends cannot hold records a completed run with no row", async () => {
@@ -1090,22 +887,15 @@ test("a start that the month's remaining campaign sends cannot hold records a co
   assert.equal(approval.run_status, "completed");
   assert.equal(approval.run_limited, true, "the approval read tells a limited run from a completed one");
   // A completed run cannot be cancelled, and the step never starts the approval again.
-  const refused = await expect(
-    await request("POST", `/api/campaign-runs/${run.id}/cancel`, { expected_version: 1 }),
-    409,
-  );
+  const refused = await expect(await request("POST", `/api/campaign-runs/${run.id}/cancel`, { expected_version: 1 }), 409);
   assert.equal(refused.error, "campaign_run_completed");
   assert.deepEqual(await startDueCampaignRuns(pool), { started: 0, skipped: 0, failed: 0 });
   // An ordinary run reads no marker.
   const fits = await approve(await draftFor([[FC, "3001"]], foreignWorkspace), false, outsider);
   await startDueCampaignRuns(pool);
-  const ordinary = await expect(
-    await request("GET", `/api/campaign-runs/${(await runOf(fits.id)).id}`, undefined, outsider),
-  );
+  const ordinary = await expect(await request("GET", `/api/campaign-runs/${(await runOf(fits.id)).id}`, undefined, outsider));
   assert.equal(ordinary.start.broadcast_limit_exceeded, null);
-  const ordinaryApproval = await expect(
-    await request("GET", `/api/campaign-approvals/${fits.id}`, undefined, outsider),
-  );
+  const ordinaryApproval = await expect(await request("GET", `/api/campaign-approvals/${fits.id}`, undefined, outsider));
   assert.equal(ordinaryApproval.run_limited, false);
 });
 
@@ -1133,10 +923,7 @@ test("the start counts the other approvals in force due in the same month, as th
   // 399 + 600 + 2 > 1,000: B does not start, although 399 + 2 alone would fit; A keeps its reservation.
   const run = await runOf(grown.id);
   assert.equal(run.status, "completed");
-  assert.deepEqual(
-    [run.start_counts.plan_limit_exceeded, run.start_counts.plan_limit_used, run.start_counts.plan_limit_reserved],
-    ["2", "399", "600"],
-  );
+  assert.deepEqual([run.start_counts.plan_limit_exceeded, run.start_counts.plan_limit_used, run.start_counts.plan_limit_reserved], ["2", "399", "600"]);
   assert.deepEqual(await deliveries(run.id), []);
   assert.equal(await approvalStatus(reserved.id), "approved");
   const read = await expect(await request("GET", `/api/campaign-runs/${run.id}`));

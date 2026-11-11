@@ -12,11 +12,7 @@ async function isolationProbe() {
   assert.deepEqual(Object.keys(process.env).sort(), allowed.sort(), "Environment is not the explicit allowlist");
   assert.equal(process.getuid(), 65534, "Fixture must not run as root");
   for (const file of ["/target/write-probe", "/tools/write-probe", "/fixture/write-probe", "/tmp/write-probe"]) {
-    await assert.rejects(
-      writeFile(file, "probe"),
-      (e) => ["EROFS", "EACCES"].includes(e.code),
-      `Unexpected writable path: ${file}`,
-    );
+    await assert.rejects(writeFile(file, "probe"), (e) => ["EROFS", "EACCES"].includes(e.code), `Unexpected writable path: ${file}`);
   }
   await mkdir("/scratch/tmp", { recursive: true });
   await mkdir("/scratch/home", { recursive: true });
@@ -41,8 +37,7 @@ async function isolationProbe() {
   });
   assert.notEqual(outcome, "connected", "External network probe escaped");
   const limits = {};
-  for (const key of ["memory.max", "pids.max", "cpu.max"])
-    limits[key] = (await readFile(`/sys/fs/cgroup/${key}`, "utf8")).trim();
+  for (const key of ["memory.max", "pids.max", "cpu.max"]) limits[key] = (await readFile(`/sys/fs/cgroup/${key}`, "utf8")).trim();
   assert.equal(limits["memory.max"], String(768 * 1024 * 1024));
   assert.equal(limits["pids.max"], "128");
   assert.equal(limits["cpu.max"], "100000 100000");
@@ -79,19 +74,14 @@ const provider = async (input, init) => {
   const url = new URL(input),
     body = init.body ? JSON.parse(init.body) : undefined;
   if (url.pathname === "/auth/v1/token") {
-    const account =
-      url.searchParams.get("grant_type") === "refresh_token"
-        ? body.refresh_token?.[0]
-        : Object.keys(users).find((k) => users[k].email === body.email);
+    const account = url.searchParams.get("grant_type") === "refresh_token" ? body.refresh_token?.[0] : Object.keys(users).find((k) => users[k].email === body.email);
     assert.ok(users[account], "Dummy provider must identify A or B");
     events.push({ event: "provider_token", account, grant: url.searchParams.get("grant_type") });
     return Response.json({ access_token: account + "-access", refresh_token: account + "-refresh", expires_in: 3600 });
   }
   if (url.pathname === "/auth/v1/user") {
     const account = new Headers(init.headers).get("authorization")?.slice(7, 8);
-    return users[account]
-      ? Response.json({ ...users[account], email_confirmed_at: "2026-10-22T00:00:00Z" })
-      : new Response(null, { status: 401 });
+    return users[account] ? Response.json({ ...users[account], email_confirmed_at: "2026-10-22T00:00:00Z" }) : new Response(null, { status: 401 });
   }
   throw new Error("Unexpected provider call");
 };
@@ -107,116 +97,109 @@ function json(res, code, value) {
   res.writeHead(code, { "Content-Type": "application/json", "Cache-Control": "no-store" });
   res.end(JSON.stringify(value));
 }
-const server = https.createServer(
-  { key: await readFile("/fixture/key.pem"), cert: await readFile("/fixture/cert.pem") },
-  async (req, res) => {
-    try {
-      const url = new URL(req.url, origin);
-      if (url.pathname.startsWith("/api/")) {
-        const account = /__Host-ac-access=([AB])-access/.exec(req.headers.cookie ?? "")?.[1];
-        events.push({ event: "request", path: url.pathname, account: account ?? null, method: req.method });
-        if (url.pathname === "/api/me" && forceUnauthorized) {
-          forceUnauthorized = false;
-          return json(res, 401, { error: "login_required" });
-        }
-        if (url.pathname.startsWith("/api/auth/") || url.pathname === "/api/me") {
-          let body = "";
-          for await (const chunk of req) body += chunk;
-          const request = new Request(url, { method: req.method, headers: req.headers, ...(body ? { body } : {}) });
-          const response = await appApi(
-            request,
-            env,
-            () => {
-              throw new Error("Database access forbidden in auth fixture");
-            },
-            provider,
-          );
-          if (url.pathname === heldAuthPath && refreshArrived) {
-            const arrived = refreshArrived;
-            refreshArrived = undefined;
-            await new Promise((resolve) => {
-              releaseRefresh = resolve;
-              arrived();
-            });
-          }
-          const headers = Object.fromEntries(response.headers);
-          delete headers["set-cookie"];
-          headers["set-cookie"] = response.headers.getSetCookie();
-          res.writeHead(response.status, headers);
-          res.end(Buffer.from(await response.arrayBuffer()));
-          events.push({ event: "response", path: url.pathname, account: account ?? null, status: response.status });
-          return;
-        }
-        if (!account) return json(res, 401, { error: "login_required" });
-        if (url.pathname === "/api/stale-error-probe") {
-          res.writeHead(409, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-          res.flushHeaders();
-          await new Promise((resolve) => {
-            releaseError = resolve;
-            errorArrived();
-          });
-          return res.end(
-            JSON.stringify({
-              error: "version_conflict",
-              segment: { name: "previous-session-private" },
-              rows: [{ value: "previous-session-private" }],
-            }),
-          );
-        }
-        if (url.pathname === "/api/shared-read-probe") {
-          await new Promise((resolve) => {
-            protectedReleases.push(resolve);
-            if (protectedReleases.length === 2) protectedReadArrived();
-          });
-          return json(res, 200, { synthetic: true });
-        }
-        if (url.pathname === "/api/workspace")
-          return json(res, 200, {
-            role: account === "A" ? "admin" : "agent",
-            time_zone: "UTC",
-            plan: "advanced",
-            limits: { seats: 10, connections: 10 },
-            usage: { seats: 1, connections: 0 },
-          });
-        const empty = {
-          "/api/connections": { connections: [] },
-          "/api/rules": { rules: [] },
-          "/api/flows": { flows: [] },
-          "/api/contact-fields": { fields: [] },
-          "/api/contact-segments": { segments: [] },
-          "/api/contacts": { contacts: [], next_cursor: null },
-          "/api/webhooks/endpoints": { endpoints: [] },
-          "/api/webhooks/deliveries": { deliveries: [] },
-          "/api/workspace/health": {
-            checked_at: "2026-10-22T00:00:00Z",
-            thresholds: {},
-            alerts: [],
-            connections: [],
-            global_send_enabled: false,
-          },
-        };
-        return json(res, empty[url.pathname] ? 200 : 503, empty[url.pathname] ?? { error: "service_unavailable" });
+const server = https.createServer({ key: await readFile("/fixture/key.pem"), cert: await readFile("/fixture/cert.pem") }, async (req, res) => {
+  try {
+    const url = new URL(req.url, origin);
+    if (url.pathname.startsWith("/api/")) {
+      const account = /__Host-ac-access=([AB])-access/.exec(req.headers.cookie ?? "")?.[1];
+      events.push({ event: "request", path: url.pathname, account: account ?? null, method: req.method });
+      if (url.pathname === "/api/me" && forceUnauthorized) {
+        forceUnauthorized = false;
+        return json(res, 401, { error: "login_required" });
       }
-      const root = "/target/public",
-        target = path.resolve(root, "." + (url.pathname === "/app/" ? "/app/index.html" : url.pathname));
-      assert.ok(target.startsWith(root + "/"));
-      const csp = /^\s+Content-Security-Policy: (.+)$/m.exec(await readFile(root + "/_headers", "utf8"))?.[1];
-      res.writeHead(200, {
-        "Content-Type": target.endsWith(".html")
-          ? "text/html"
-          : target.endsWith(".js")
-            ? "text/javascript"
-            : "text/css",
-        "Cache-Control": "no-cache",
-        ...(csp ? { "Content-Security-Policy": csp } : {}),
-      });
-      res.end(await readFile(target));
-    } catch (e) {
-      events.push({ event: "fixture_error", message: e.message });
-      json(res, 500, { error: "fixture_failure" });
+      if (url.pathname.startsWith("/api/auth/") || url.pathname === "/api/me") {
+        let body = "";
+        for await (const chunk of req) body += chunk;
+        const request = new Request(url, { method: req.method, headers: req.headers, ...(body ? { body } : {}) });
+        const response = await appApi(
+          request,
+          env,
+          () => {
+            throw new Error("Database access forbidden in auth fixture");
+          },
+          provider,
+        );
+        if (url.pathname === heldAuthPath && refreshArrived) {
+          const arrived = refreshArrived;
+          refreshArrived = undefined;
+          await new Promise((resolve) => {
+            releaseRefresh = resolve;
+            arrived();
+          });
+        }
+        const headers = Object.fromEntries(response.headers);
+        delete headers["set-cookie"];
+        headers["set-cookie"] = response.headers.getSetCookie();
+        res.writeHead(response.status, headers);
+        res.end(Buffer.from(await response.arrayBuffer()));
+        events.push({ event: "response", path: url.pathname, account: account ?? null, status: response.status });
+        return;
+      }
+      if (!account) return json(res, 401, { error: "login_required" });
+      if (url.pathname === "/api/stale-error-probe") {
+        res.writeHead(409, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.flushHeaders();
+        await new Promise((resolve) => {
+          releaseError = resolve;
+          errorArrived();
+        });
+        return res.end(
+          JSON.stringify({
+            error: "version_conflict",
+            segment: { name: "previous-session-private" },
+            rows: [{ value: "previous-session-private" }],
+          }),
+        );
+      }
+      if (url.pathname === "/api/shared-read-probe") {
+        await new Promise((resolve) => {
+          protectedReleases.push(resolve);
+          if (protectedReleases.length === 2) protectedReadArrived();
+        });
+        return json(res, 200, { synthetic: true });
+      }
+      if (url.pathname === "/api/workspace")
+        return json(res, 200, {
+          role: account === "A" ? "admin" : "agent",
+          time_zone: "UTC",
+          plan: "advanced",
+          limits: { seats: 10, connections: 10 },
+          usage: { seats: 1, connections: 0 },
+        });
+      const empty = {
+        "/api/connections": { connections: [] },
+        "/api/rules": { rules: [] },
+        "/api/flows": { flows: [] },
+        "/api/contact-fields": { fields: [] },
+        "/api/contact-segments": { segments: [] },
+        "/api/contacts": { contacts: [], next_cursor: null },
+        "/api/webhooks/endpoints": { endpoints: [] },
+        "/api/webhooks/deliveries": { deliveries: [] },
+        "/api/workspace/health": {
+          checked_at: "2026-10-22T00:00:00Z",
+          thresholds: {},
+          alerts: [],
+          connections: [],
+          global_send_enabled: false,
+        },
+      };
+      return json(res, empty[url.pathname] ? 200 : 503, empty[url.pathname] ?? { error: "service_unavailable" });
     }
-  },
-);
+    const root = "/target/public",
+      target = path.resolve(root, "." + (url.pathname === "/app/" ? "/app/index.html" : url.pathname));
+    assert.ok(target.startsWith(root + "/"));
+    const csp = /^\s+Content-Security-Policy: (.+)$/m.exec(await readFile(root + "/_headers", "utf8"))?.[1];
+    res.writeHead(200, {
+      "Content-Type": target.endsWith(".html") ? "text/html" : target.endsWith(".js") ? "text/javascript" : "text/css",
+      "Cache-Control": "no-cache",
+      ...(csp ? { "Content-Security-Policy": csp } : {}),
+    });
+    res.end(await readFile(target));
+  } catch (e) {
+    events.push({ event: "fixture_error", message: e.message });
+    json(res, 500, { error: "fixture_failure" });
+  }
+});
 let browser, contextForDiagnostics;
 const pending = new Set();
 try {
@@ -242,13 +225,7 @@ try {
   for (const tab of [a, b]) tab.on("pageerror", (e) => pageErrors.push(e.message));
   for (const tab of [a, b]) {
     await tab.goto(origin + "/app/", { waitUntil: "domcontentloaded" });
-    await tab.waitForFunction(
-      () =>
-        typeof api === "function" &&
-        document.querySelector("#startup").hidden &&
-        !document.querySelector("#auth").hidden &&
-        refreshPromise === undefined,
-    );
+    await tab.waitForFunction(() => typeof api === "function" && document.querySelector("#startup").hidden && !document.querySelector("#auth").hidden && refreshPromise === undefined);
     events.push({ event: "initialization_settled", page: tab === a ? "A" : "B" });
   }
   await a.waitForFunction(() => typeof api === "function");
@@ -298,16 +275,8 @@ try {
       );
     }, users.B);
     // Observe an actual pending Web Lock, or an incorrectly completed login on affected source.
-    await b.waitForFunction(
-      async () =>
-        window.loginResult !== null ||
-        (await navigator.locks.query()).pending.some((lock) => lock.name === "auto-chatter-auth-cookies"),
-    );
-    assert.equal(
-      await b.evaluate(() => window.loginResult),
-      null,
-      "Login must wait until the older refresh response settles",
-    );
+    await b.waitForFunction(async () => window.loginResult !== null || (await navigator.locks.query()).pending.some((lock) => lock.name === "auto-chatter-auth-cookies"));
+    assert.equal(await b.evaluate(() => window.loginResult), null, "Login must wait until the older refresh response settles");
     events.push({ event: "login_waited_for_refresh" });
     releaseRefresh();
     await b.waitForFunction(() => window.loginResult !== null);
@@ -326,14 +295,9 @@ try {
   const afterCount = events.filter((e) => e.event === "request" && e.path === "/api/me").length;
   assert.equal(result.ok, false, "Original request must reject after account switch");
   assert.match(result.message, /로그인 상태가 변경되었습니다/);
-  assert.equal(
-    afterCount,
-    requestCount + 2,
-    "Only native before/after identity probes may run; original A request must not replay",
-  );
+  assert.equal(afterCount, requestCount + 2, "Only native before/after identity probes may run; original A request must not replay");
   const rollback = after === users.A.id;
-  if (mode === "negative" || mode === "fixed")
-    assert.equal(after, users.B.id, "Late refresh response must not roll shared cookies from B back to A");
+  if (mode === "negative" || mode === "fixed") assert.equal(after, users.B.id, "Late refresh response must not roll shared cookies from B back to A");
   if (mode === "observe") assert.equal(rollback, true, "Observation must reproduce the proposed cookie rollback");
   events.push({ event: "assertions_passed", original_request_replays: afterCount - requestCount - 2 });
   if (mode === "fixed") {
@@ -359,16 +323,8 @@ try {
         },
       );
     }, writePath);
-    await a.waitForFunction(
-      async () =>
-        window.initialWriteResult !== null ||
-        (await navigator.locks.query()).pending.some((lock) => lock.name === "auto-chatter-auth-cookies"),
-    );
-    assert.equal(
-      events.filter((event) => event.event === "request" && event.path === writePath).length,
-      0,
-      "Initial protected write must not bypass the authentication transition lock",
-    );
+    await a.waitForFunction(async () => window.initialWriteResult !== null || (await navigator.locks.query()).pending.some((lock) => lock.name === "auto-chatter-auth-cookies"));
+    assert.equal(events.filter((event) => event.event === "request" && event.path === writePath).length, 0, "Initial protected write must not bypass the authentication transition lock");
     releaseRefresh();
     await b.evaluate(() => window.transitionLogin);
     await a.evaluate(() => window.initialWrite);
@@ -381,9 +337,7 @@ try {
     // Both protected reads must hold shared locks concurrently, before response headers.
     await login(a, "A");
     await b.reload({ waitUntil: "domcontentloaded" });
-    await b.waitForFunction(
-      () => typeof api === "function" && document.querySelector("#startup").hidden && refreshPromise === undefined,
-    );
+    await b.waitForFunction(() => typeof api === "function" && document.querySelector("#startup").hidden && refreshPromise === undefined);
     const bothReadsArrived = new Promise((resolve) => {
       protectedReadArrived = resolve;
     });
@@ -391,12 +345,7 @@ try {
       await tab.evaluate(() => {
         window.sharedRead = api("/api/shared-read-probe");
       });
-    await a.waitForFunction(
-      async () =>
-        (await navigator.locks.query()).held.filter(
-          (lock) => lock.name === "auto-chatter-auth-cookies" && lock.mode === "shared",
-        ).length === 2,
-    );
+    await a.waitForFunction(async () => (await navigator.locks.query()).held.filter((lock) => lock.name === "auto-chatter-auth-cookies" && lock.mode === "shared").length === 2);
     await bothReadsArrived;
     assert.equal(protectedReleases.length, 2, "Protected reads must run concurrently under shared locks");
     for (const release of protectedReleases) release();
@@ -408,17 +357,11 @@ try {
       globalThis.BroadcastChannel = undefined;
     });
     await a.reload({ waitUntil: "domcontentloaded" });
-    await a.waitForFunction(
-      () => typeof api === "function" && document.querySelector("#startup").hidden && refreshPromise === undefined,
-    );
+    await a.waitForFunction(() => typeof api === "function" && document.querySelector("#startup").hidden && refreshPromise === undefined);
     const oldGeneration = await a.evaluate(() => workspaceGeneration);
     await login(b, "B");
     assert.equal(await principal(b), users.B.id);
-    assert.equal(
-      await a.evaluate(() => workspaceGeneration),
-      oldGeneration,
-      "No broadcast invalidation should have occurred",
-    );
+    assert.equal(await a.evaluate(() => workspaceGeneration), oldGeneration, "No broadcast invalidation should have occurred");
     const completedPath = "/api/post-login-old-ui-write-probe";
     const completedWrite = await a.evaluate(async (path) => {
       try {
@@ -438,9 +381,7 @@ try {
         void start();
       }),
     ]);
-    await a.waitForFunction(
-      () => typeof api === "function" && document.querySelector("#startup").hidden && refreshPromise === undefined,
-    );
+    await a.waitForFunction(() => typeof api === "function" && document.querySelector("#startup").hidden && refreshPromise === undefined);
     assert.equal(await a.evaluate(async () => (await api("/api/workspace")).role), "agent");
     events.push({ event: "explicit_document_reload_adopted_B" });
     const errorStarted = new Promise((resolve) => {
@@ -475,8 +416,7 @@ try {
     original_request: result,
     events,
     page_errors: pageErrors,
-    evidence_limits:
-      "Real appApi/AuthClient and unmodified dashboard assets; in-process dummy provider accepts A refresh. No database, production provider revocation, live credentials, or customer-data disclosure tested.",
+    evidence_limits: "Real appApi/AuthClient and unmodified dashboard assets; in-process dummy provider accepts A refresh. No database, production provider revocation, live credentials, or customer-data disclosure tested.",
     screenshot_base64: screenshot.toString("base64"),
   };
   await browser.close();

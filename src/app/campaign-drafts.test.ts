@@ -18,19 +18,9 @@ test("draft text counts UTF-16 units while its normalized name counts code point
 });
 test("campaign creation and editing require disjoint exact payloads", () => {
   const { id, ...fields } = input;
-  for (const bad of [
-    null,
-    [],
-    {},
-    { ...input, extra: 1 },
-    { ...input, id: undefined },
-    { ...input, snapshot_id: "bad" },
-    { ...input, name: "bad\nname" },
-  ])
-    assert.throws(() => parseCampaignDraft(bad), /invalid_campaign_draft/);
+  for (const bad of [null, [], {}, { ...input, extra: 1 }, { ...input, id: undefined }, { ...input, snapshot_id: "bad" }, { ...input, name: "bad\nname" }]) assert.throws(() => parseCampaignDraft(bad), /invalid_campaign_draft/);
   assert.throws(() => parseCampaignDraft({ ...input, expected_version: 1 }, true), /invalid_campaign_draft/);
-  for (const value of [0, -1, 1.5, "1", null, 2147483647])
-    assert.throws(() => parseCampaignDraft({ ...fields, expected_version: value }, true), /invalid_campaign_draft/);
+  for (const value of [0, -1, 1.5, "1", null, 2147483647]) assert.throws(() => parseCampaignDraft({ ...fields, expected_version: value }, true), /invalid_campaign_draft/);
   assert.equal(parseCampaignDraft({ ...fields, expected_version: 1 }, true).expected_version, 1);
   assert.equal(parseCampaignDraft({ ...input, id: id.toUpperCase() }).id, id);
 });
@@ -63,10 +53,7 @@ class DraftElement {
     await this.listeners.get(name)?.({ preventDefault() {} });
   }
   querySelectorAll(selector: string): DraftElement[] {
-    return this.children.flatMap((child) => [
-      ...(selector === "button" && child.type === "button" ? [child] : []),
-      ...child.querySelectorAll(selector),
-    ]);
+    return this.children.flatMap((child) => [...(selector === "button" && child.type === "button" ? [child] : []), ...child.querySelectorAll(selector)]);
   }
   setAttribute(name: string, value: string) {
     this.attributes.set(name, value);
@@ -262,8 +249,7 @@ function draftHarness(override?: DraftApi, initialApprovals: Approval[] = []) {
     if (change) {
       const index = approvals.findIndex((item) => item.id === change[1]);
       const next: Approval = { ...approvals[index]!, version: approvals[index]!.version + 1 };
-      if (change[2] === "cancel")
-        Object.assign(next, { status: "cancelled", cancelled_by: "user-other", cancelled_at: "2026-10-27T04:00:00Z" });
+      if (change[2] === "cancel") Object.assign(next, { status: "cancelled", cancelled_by: "user-other", cancelled_at: "2026-10-27T04:00:00Z" });
       else
         Object.assign(next, {
           schedule_kind: body!.schedule_local === null ? "immediate" : "scheduled",
@@ -280,14 +266,7 @@ function draftHarness(override?: DraftApi, initialApprovals: Approval[] = []) {
       const current = runs.get(runPath[1]!);
       if (!current) throw { status: 404, code: "campaign_run_not_found" };
       if (!runPath[2]) return structuredClone(current);
-      const refusal =
-        current.status === "cancelled"
-          ? "campaign_run_cancelled"
-          : current.status === "completed"
-            ? "campaign_run_completed"
-            : current.version !== body!.expected_version
-              ? "campaign_run_conflict"
-              : null;
+      const refusal = current.status === "cancelled" ? "campaign_run_cancelled" : current.status === "completed" ? "campaign_run_completed" : current.version !== body!.expected_version ? "campaign_run_conflict" : null;
       if (refusal) throw { status: 409, code: refusal, run: structuredClone(current) };
       const cancelled = current.delivery_counts.pending!;
       const next: Run = {
@@ -394,11 +373,7 @@ test("campaign screen creates a plain-text draft against an archived segment sna
 test("campaign edits use the loaded version and archive makes the detail read-only", async () => {
   const h = await adminDraft();
   await openSaved(h);
-  assert.equal(
-    h.get("campaign-draft-editor-title").focused,
-    true,
-    "opening a draft must move keyboard focus to its editor",
-  );
+  assert.equal(h.get("campaign-draft-editor-title").focused, true, "opening a draft must move keyboard focus to its editor");
   h.fields.body.value = "Updated message";
   await h.form.dispatch("submit");
   assert.deepEqual(h.writes[0], {
@@ -637,43 +612,24 @@ test("session invalidation prevents a pending workspace bootstrap from reconfigu
         throw new Error("fixture stops after campaign configuration");
       },
     });
-    vm.runInContext(
-      source.slice(start, end + 3) +
-        "\n" +
-        source.slice(invalidationStart, invalidationEnd + 3) +
-        "\nglobalThis.invalidate = invalidateContactSession;",
-      context,
-    );
+    vm.runInContext(source.slice(start, end + 3) + "\n" + source.slice(invalidationStart, invalidationEnd + 3) + "\nglobalThis.invalidate = invalidateContactSession;", context);
     const pending = context.loadWorkspace().catch((error: Error) => {
       if (error.message !== "fixture stops after campaign configuration") throw error;
     });
     await draftSettle();
     context.invalidate();
-    release(
-      pausedAt === "/api/me"
-        ? { user: { id: "old-user" } }
-        : { role: "admin", workspace_id: "old-workspace", time_zone: "UTC" },
-    );
+    release(pausedAt === "/api/me" ? { user: { id: "old-user" } } : { role: "admin", workspace_id: "old-workspace", time_zone: "UTC" });
     await pending;
     assert.equal(configurations, 0, `${pausedAt} response from before invalidation must not restore campaign data`);
   }
 });
 
 // Preview UI (#35 follow-up): an explicit read that never claims anyone can be sent to.
-const previewIds = [
-  "campaign-draft-preview",
-  "campaign-draft-preview-warnings",
-  "campaign-draft-preview-status",
-  "campaign-draft-preview-summary",
-  "campaign-draft-preview-rows",
-];
-const previewText = (h: ReturnType<typeof draftHarness>) =>
-  previewIds.map((id) => h.get(id).allText()).join(" ") + h.get("campaign-draft-preview-run").textContent;
-const previewRequests = (h: ReturnType<typeof draftHarness>) =>
-  h.requests.filter((path) => path.endsWith("/preview")).length;
+const previewIds = ["campaign-draft-preview", "campaign-draft-preview-warnings", "campaign-draft-preview-status", "campaign-draft-preview-summary", "campaign-draft-preview-rows"];
+const previewText = (h: ReturnType<typeof draftHarness>) => previewIds.map((id) => h.get(id).allText()).join(" ") + h.get("campaign-draft-preview-run").textContent;
+const previewRequests = (h: ReturnType<typeof draftHarness>) => h.requests.filter((path) => path.endsWith("/preview")).length;
 const runPreview = (h: ReturnType<typeof draftHarness>) => h.get("campaign-draft-preview-run").dispatch("click");
-const rendered = (h: ReturnType<typeof draftHarness>) =>
-  !h.get("campaign-draft-preview-result").hidden && h.get("campaign-draft-preview-rows").children.length > 0;
+const rendered = (h: ReturnType<typeof draftHarness>) => !h.get("campaign-draft-preview-result").hidden && h.get("campaign-draft-preview-rows").children.length > 0;
 
 test("the preview is fetched only by its button, once per click, and renders warnings, reasons and decimal counts", async () => {
   const h = await adminDraft();
@@ -714,10 +670,7 @@ test("the preview is fetched only by its button, once per click, and renders war
   assert.match(summary, /원래 인원\s+4명/);
   assert.match(summary, /현재 남은 인원\s+9,007,199,254,741,014명/, "counts beyond 2^53 must not round");
   assert.match(summary, /예상 공급자 호출 수\s+9,007,199,254,740,993회/);
-  assert.match(
-    summary,
-    /요금제 월 캠페인 발송 한도\s+2026년 10월 50,000,000,000,000,000,000건 · 사용 1건 · 다른 승인 2건 · 남음 49,999,999,999,999,999,997건/,
-  );
+  assert.match(summary, /요금제 월 캠페인 발송 한도\s+2026년 10월 50,000,000,000,000,000,000건 · 사용 1건 · 다른 승인 2건 · 남음 49,999,999,999,999,999,997건/);
   // The day-period word (오후 or PM) comes from the runtime's ICU data, so build the expected text with the same formatter.
   const asOf = new Date(previewResponse.as_of);
   const seoulAsOf = asOf.toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
@@ -753,32 +706,22 @@ test("the preview hides warnings that do not apply and warns when the month's ca
   await openSaved(exact);
   await runPreview(exact);
   assert.equal(exact.get("campaign-draft-preview-warnings").children.length, 0);
-  assert.match(
-    exact.get("campaign-draft-preview-summary").allText(),
-    /요금제 월 캠페인 발송 한도\s+2026년 11월 1,000건 · 사용 990건 · 다른 승인 5건 · 남음 5건/,
-  );
+  assert.match(exact.get("campaign-draft-preview-summary").allText(), /요금제 월 캠페인 발송 한도\s+2026년 11월 1,000건 · 사용 990건 · 다른 승인 5건 · 남음 5건/);
   const over = await adminDraft(limited({ ...month, remaining: "5" }, "6"));
   await openSaved(over);
   await runPreview(over);
   assert.deepEqual(
     over.get("campaign-draft-preview-warnings").children.map((child) => child.textContent),
-    [
-      "조건 통과 인원이 이번 달 남은 캠페인 발송 한도보다 많아 즉시 또는 이번 달 실행으로는 승인할 수 없습니다. 다음 달 실행으로 예약하거나 다른 승인을 취소해 주세요.",
-    ],
+    ["조건 통과 인원이 이번 달 남은 캠페인 발송 한도보다 많아 즉시 또는 이번 달 실행으로는 승인할 수 없습니다. 다음 달 실행으로 예약하거나 다른 승인을 취소해 주세요."],
   );
-  const free = await adminDraft(
-    limited({ month: "2026-11", limit: "0", used: "0", reserved: "0", remaining: "0" }, "0"),
-  );
+  const free = await adminDraft(limited({ month: "2026-11", limit: "0", used: "0", reserved: "0", remaining: "0" }, "0"));
   await openSaved(free);
   await runPreview(free);
   assert.deepEqual(
     free.get("campaign-draft-preview-warnings").children.map((child) => child.textContent),
     ["현재 요금제에서는 캠페인을 승인할 수 없습니다."],
   );
-  assert.match(
-    free.get("campaign-draft-preview-summary").allText(),
-    /요금제 월 캠페인 발송 한도\s+현재 요금제에서는 캠페인을 승인할 수 없음 \(2026년 11월\)/,
-  );
+  assert.match(free.get("campaign-draft-preview-summary").allText(), /요금제 월 캠페인 발송 한도\s+현재 요금제에서는 캠페인을 승인할 수 없음 \(2026년 11월\)/);
   // A missing or malformed allowance is a malformed response: nothing renders.
   for (const allowance of [null, { ...month, remaining: "-1" }, { ...month, month: "11/2026", remaining: "5" }]) {
     const broken = await adminDraft(limited(allowance));
@@ -910,8 +853,7 @@ for (const [name, button] of [
     });
     await openSaved(h);
     const pendingPreview = runPreview(h);
-    const pendingWrite =
-      button === "submit" ? h.form.dispatch("submit") : h.get("campaign-draft-archive").dispatch("click");
+    const pendingWrite = button === "submit" ? h.form.dispatch("submit") : h.get("campaign-draft-archive").dispatch("click");
     // The open draft still has version 3 here, so only the write's invalidation can discard this response.
     releasePreview(structuredClone(previewResponse));
     await pendingPreview;
@@ -1053,8 +995,7 @@ const approvalText = (h: ApprovalHarness) => approvalTextIds.map((id) => h.get(i
 const approvalWrites = (h: ApprovalHarness) => h.writes.filter((write) => /approval/.test(write.path));
 const approvalReads = (h: ApprovalHarness) => h.requests.filter((path) => path === "/api/campaign-approvals").length;
 const click = (h: ApprovalHarness, id: string) => h.get(id).dispatch("click");
-const approvalShown = (h: ApprovalHarness) =>
-  !h.get("campaign-approval-current").hidden && h.get("campaign-approval-rows").children.length > 0;
+const approvalShown = (h: ApprovalHarness) => !h.get("campaign-approval-current").hidden && h.get("campaign-approval-rows").children.length > 0;
 async function chooseSchedule(h: ApprovalHarness, value: string | null) {
   h.get("campaign-approval-timing").value = value === null ? "now" : "later";
   await h.get("campaign-approval-timing").dispatch("change");
@@ -1245,9 +1186,7 @@ test("an approval in force shows its stored counts and schedule zone and locks t
   assert.match(summary, /승인 시점 남은 인원\s+9,007,199,254,741,014명/);
   assert.deepEqual(
     h.get("campaign-approval-warnings").children.map((child) => child.textContent),
-    [
-      "실행 시점이 되면 서비스 전체 발송이 켜져 있을 때만 실행이 시작됩니다. 보내기 직전마다 모든 조건을 다시 확인하며, 조건을 통과하지 못한 사람에게는 보내지 않습니다.",
-    ],
+    ["실행 시점이 되면 서비스 전체 발송이 켜져 있을 때만 실행이 시작됩니다. 보내기 직전마다 모든 조건을 다시 확인하며, 조건을 통과하지 못한 사람에게는 보내지 않습니다."],
   );
   assertDraftLocked(h, true);
   assert.equal(h.get("campaign-approval-start").hidden, true);
@@ -1375,8 +1314,7 @@ test("an executed conflict shows the executed approval, unlocks the draft and al
 
 test("an approval that already exists elsewhere is shown and locks the draft", async () => {
   const h = await adminDraft(async (path, method) => {
-    if (path.endsWith("/approvals") && method === "POST")
-      throw { status: 409, code: "approval_exists", approval: storedApproval };
+    if (path.endsWith("/approvals") && method === "POST") throw { status: 409, code: "approval_exists", approval: storedApproval };
   });
   await openSaved(h);
   await approveNow(h);
@@ -1389,8 +1327,7 @@ test("an approval that already exists elsewhere is shown and locks the draft", a
 test("an executed draft version is refused with the executed approval and leaves the draft editable", async () => {
   const executed = { ...storedApproval, status: "executed", run_id: "run-1", run_status: "completed" };
   const h = await adminDraft(async (path, method) => {
-    if (path.endsWith("/approvals") && method === "POST")
-      throw { status: 409, code: "campaign_version_executed", approval: executed };
+    if (path.endsWith("/approvals") && method === "POST") throw { status: 409, code: "campaign_version_executed", approval: executed };
   });
   await openSaved(h);
   await approveNow(h);
@@ -1410,16 +1347,12 @@ test("an executed version whose run the monthly limit kept from starting says no
     run_limited: true,
   };
   const h = await adminDraft(async (path, method) => {
-    if (path.endsWith("/approvals") && method === "POST")
-      throw { status: 409, code: "campaign_version_executed", approval: executed };
+    if (path.endsWith("/approvals") && method === "POST") throw { status: 409, code: "campaign_version_executed", approval: executed };
   });
   await openSaved(h);
   await approveNow(h);
   assert.equal(h.get("campaign-approval-current-title").textContent, "최근 승인 · 실행을 시작하지 않음");
-  assert.equal(
-    h.get("campaign-approval-status").textContent,
-    "이 초안 버전의 실행은 월 캠페인 발송 한도를 넘어 시작하지 않았고 아무에게도 보내지 않았습니다. 다시 보내려면 초안을 수정해 저장한 뒤 승인해 주세요. 그 승인을 표시합니다.",
-  );
+  assert.equal(h.get("campaign-approval-status").textContent, "이 초안 버전의 실행은 월 캠페인 발송 한도를 넘어 시작하지 않았고 아무에게도 보내지 않았습니다. 다시 보내려면 초안을 수정해 저장한 뒤 승인해 주세요. 그 승인을 표시합니다.");
   assert.doesNotMatch(h.get("campaign-approval-summary").allText(), /실행 시작됨/);
   assertDraftLocked(h, false);
 });
@@ -1435,15 +1368,11 @@ test("an approval refused by the monthly campaign send limit names the month and
   };
   let body: Record<string, unknown> | null = allowance;
   const h = await adminDraft(async (path, method) => {
-    if (path.endsWith("/approvals") && method === "POST")
-      throw { status: 409, code: "broadcast_limit_reached", broadcast_limit: body };
+    if (path.endsWith("/approvals") && method === "POST") throw { status: 409, code: "broadcast_limit_reached", broadcast_limit: body };
   });
   await openSaved(h);
   await approveNow(h);
-  assert.equal(
-    h.get("campaign-approval-status").textContent,
-    "2026년 11월 캠페인 발송 한도 1,000건 중 남은 5건으로는 조건 통과 1,234명을 승인할 수 없습니다(이번 달 사용 990건, 같은 달 다른 승인 5건). 실행 시점을 다른 달로 옮기거나 다른 승인을 취소해 주세요.",
-  );
+  assert.equal(h.get("campaign-approval-status").textContent, "2026년 11월 캠페인 발송 한도 1,000건 중 남은 5건으로는 조건 통과 1,234명을 승인할 수 없습니다(이번 달 사용 990건, 같은 달 다른 승인 5건). 실행 시점을 다른 달로 옮기거나 다른 승인을 취소해 주세요.");
   assert.equal(approvalShown(h), false, "nothing was recorded");
   assertDraftLocked(h, false);
   assert.equal(approvalWrites(h).length, 1);
@@ -1455,10 +1384,7 @@ test("an approval refused by the monthly campaign send limit names the month and
   assert.match(h.get("campaign-approval-status").textContent, /현재 요금제에서는 캠페인을 승인할 수 없습니다/);
   body = null;
   await approveNow(h);
-  assert.match(
-    h.get("campaign-approval-status").textContent,
-    /^요금제의 이번 달 캠페인 발송 한도를 넘어 승인할 수 없습니다/,
-  );
+  assert.match(h.get("campaign-approval-status").textContent, /^요금제의 이번 달 캠페인 발송 한도를 넘어 승인할 수 없습니다/);
 });
 
 test("a schedule change refused by the monthly campaign send limit keeps the approval shown", async () => {
@@ -1485,10 +1411,7 @@ test("a schedule change refused by the monthly campaign send limit keeps the app
   await openSaved(h);
   await chooseSchedule(h, null);
   await click(h, "campaign-approval-reschedule");
-  assert.match(
-    h.get("campaign-approval-status").textContent,
-    /^2026년 10월 캠페인 발송 한도 1,000건 중 남은 0건으로는/,
-  );
+  assert.match(h.get("campaign-approval-status").textContent, /^2026년 10월 캠페인 발송 한도 1,000건 중 남은 0건으로는/);
   assert.equal(approvalShown(h), true);
   assert.equal(h.get("campaign-approval-current-title").textContent, "유효한 승인");
   assertDraftLocked(h, true);
@@ -1520,8 +1443,7 @@ test("a draft conflict on approval shows the current draft, reads the approval a
 
 test("a draft conflict on approval clears the preview of the older draft version", async () => {
   const h = await adminDraft(async (path, method) => {
-    if (path.endsWith("/approvals") && method === "POST")
-      throw { status: 409, code: "campaign_draft_conflict", draft: { ...savedDraft, version: 4 } };
+    if (path.endsWith("/approvals") && method === "POST") throw { status: 409, code: "campaign_draft_conflict", draft: { ...savedDraft, version: 4 } };
   });
   await openSaved(h);
   await runPreview(h);
@@ -1561,8 +1483,7 @@ test("a retried create that succeeds reads the approval state and finds one reco
 
 test("a time zone mismatch asks for a reload and drops the request", async () => {
   const h = await adminDraft(async (path, method) => {
-    if (path.endsWith("/approvals") && method === "POST")
-      throw { status: 409, code: "campaign_schedule_timezone_changed" };
+    if (path.endsWith("/approvals") && method === "POST") throw { status: 409, code: "campaign_schedule_timezone_changed" };
   });
   await openSaved(h);
   await approveNow(h);
@@ -1621,11 +1542,7 @@ for (const [name, change] of [
     await draftSettle();
     assert.equal(h.get("campaign-approval-confirm").hidden, false);
     assert.equal(h.get("campaign-approval-submit").textContent, "같은 요청 재시도");
-    assert.match(
-      h.get("campaign-approval-confirm-summary").allText(),
-      /Saved draft · 버전 3.*VIP.*즉시/,
-      "the retry must still show what it sends",
-    );
+    assert.match(h.get("campaign-approval-confirm-summary").allText(), /Saved draft · 버전 3.*VIP.*즉시/, "the retry must still show what it sends");
     await click(h, "campaign-approval-submit");
     assert.deepEqual(approvalWrites(h)[1], approvalWrites(h)[0]);
     assert.equal(approvalWrites(h)[1]!.body.expected_time_zone, "Asia/Seoul");
@@ -1859,8 +1776,7 @@ test("the approval markup labels its inputs, keeps its messages in live regions 
   assert.match(section, /<label\s*>실행 시점<select id="campaign-approval-timing"/);
   assert.match(section, /<label\s*>예약 시각<input\s+id="campaign-approval-schedule"\s+type="datetime-local"/);
   assert.doesNotMatch(section, /\sstep=/, "the server accepts minutes only");
-  for (const id of ["campaign-approval-status", "campaign-approval-warnings"])
-    assert.match(section, new RegExp(`id="${id}"[^>]*role="status"`));
+  for (const id of ["campaign-approval-status", "campaign-approval-warnings"]) assert.match(section, new RegExp(`id="${id}"[^>]*role="status"`));
   assert.match(section, /<th scope="col">조건<\/th>/);
   // The formatter may break these sentences at any space.
   assert.match(section, /서비스\s+전체\s+발송이\s+켜져\s+있을\s+때만\s+실행이\s+시작되고/);
@@ -1880,24 +1796,13 @@ test("the draft notice says an approved draft runs only while service-wide sendi
 });
 
 // Campaign run panel (#36 PR ③): reads only on approval load and explicit refresh, cancels with a frozen version.
-const runTextIds = [
-  "campaign-run-status",
-  "campaign-run-summary",
-  "campaign-run-rows",
-  "campaign-run-deliveries",
-  "campaign-run-confirm-summary",
-  "campaign-run-cancel",
-  "campaign-run-cancel-submit",
-];
+const runTextIds = ["campaign-run-status", "campaign-run-summary", "campaign-run-rows", "campaign-run-deliveries", "campaign-run-confirm-summary", "campaign-run-cancel", "campaign-run-cancel-submit"];
 const runText = (h: ApprovalHarness) => runTextIds.map((id) => h.get(id).allText()).join(" ");
-const runReads = (h: ApprovalHarness, id = runId) =>
-  h.requests.filter((path) => path === `/api/campaign-runs/${id}`).length;
+const runReads = (h: ApprovalHarness, id = runId) => h.requests.filter((path) => path === `/api/campaign-runs/${id}`).length;
 const runWrites = (h: ApprovalHarness) => h.writes.filter((write) => write.path.startsWith("/api/campaign-runs/"));
-const runShown = (h: ApprovalHarness) =>
-  !h.get("campaign-run-current").hidden && h.get("campaign-run-deliveries").children.length > 0;
+const runShown = (h: ApprovalHarness) => !h.get("campaign-run-current").hidden && h.get("campaign-run-deliveries").children.length > 0;
 // The dt/dd pairs of a definition list, in order.
-const pairs = (element: DraftElement) =>
-  element.children.map((item) => [item.children[0]!.textContent, item.children[1]!.textContent]);
+const pairs = (element: DraftElement) => element.children.map((item) => [item.children[0]!.textContent, item.children[1]!.textContent]);
 async function openExecuted(override?: DraftApi, approvals: Approval[] = [executedApproval]) {
   const h = await adminDraft(override, approvals);
   await openSaved(h);
@@ -1922,10 +1827,7 @@ test("a run the monthly campaign send limit kept from starting says so instead o
     start: {
       ...storedRun.start,
       counts: { ...storedRun.start.counts, candidate: "0" },
-      broadcast_limit_exceeded: { candidate: "1234", limit: "1000", used: "999", reserved: "5" } as Record<
-        string,
-        string
-      > | null,
+      broadcast_limit_exceeded: { candidate: "1234", limit: "1000", used: "999", reserved: "5" } as Record<string, string> | null,
     },
     delivery_counts: Object.fromEntries(Object.keys(storedRun.delivery_counts).map((key) => [key, "0"])),
   };
@@ -1939,16 +1841,10 @@ test("a run the monthly campaign send limit kept from starting says so instead o
   assert.equal(runShown(h), true);
   // The approval panel above the run says the same; it never claims the run started.
   assert.equal(h.get("campaign-approval-current-title").textContent, "최근 승인 · 실행을 시작하지 않음");
-  assert.deepEqual(pairs(h.get("campaign-approval-summary"))[0], [
-    "상태",
-    "실행을 시작하지 않음 · 이번 달 캠페인 발송 한도 초과",
-  ]);
+  assert.deepEqual(pairs(h.get("campaign-approval-summary"))[0], ["상태", "실행을 시작하지 않음 · 이번 달 캠페인 발송 한도 초과"]);
   assert.deepEqual(pairs(h.get("campaign-run-summary")).slice(0, 2), [
     ["상태", "시작하지 않음 · 이번 달 캠페인 발송 한도 초과"],
-    [
-      "시작하지 않은 이유",
-      "실행 시작 시점에 이번 달 캠페인 발송 한도 1,000건 중 999건을 이미 사용했고 같은 달 다른 승인에 5건이 예정되어 있어, 조건 통과 1,234명 모두에게 보내지 않았습니다.",
-    ],
+    ["시작하지 않은 이유", "실행 시작 시점에 이번 달 캠페인 발송 한도 1,000건 중 999건을 이미 사용했고 같은 달 다른 승인에 5건이 예정되어 있어, 조건 통과 1,234명 모두에게 보내지 않았습니다."],
   ]);
   assert.deepEqual(
     h
@@ -1971,20 +1867,15 @@ test("a run the monthly campaign send limit kept from starting says so instead o
         },
       };
   });
-  assert.equal(
-    pairs(free.get("campaign-run-summary"))[1]![1],
-    "현재 요금제에서는 캠페인을 보낼 수 없어 조건 통과 2명 모두에게 보내지 않았습니다.",
-  );
+  assert.equal(pairs(free.get("campaign-run-summary"))[1]![1], "현재 요금제에서는 캠페인을 보낼 수 없어 조건 통과 2명 모두에게 보내지 않았습니다.");
   // An ordinary completed run keeps its label, and a malformed marker is a malformed response.
   const ordinary = await openExecuted(async (path) => {
-    if (path === `/api/campaign-runs/${runId}`)
-      return { ...limitedRun, start: { ...limitedRun.start, broadcast_limit_exceeded: null } };
+    if (path === `/api/campaign-runs/${runId}`) return { ...limitedRun, start: { ...limitedRun.start, broadcast_limit_exceeded: null } };
   });
   assert.deepEqual(pairs(ordinary.get("campaign-run-summary"))[0], ["상태", "완료"]);
   assert.equal(ordinary.get("campaign-run-rows").children.length, 7, "an ordinary run has only the seven reasons");
   const broken = await openExecuted(async (path) => {
-    if (path === `/api/campaign-runs/${runId}`)
-      return { ...limitedRun, start: { ...limitedRun.start, broadcast_limit_exceeded: { candidate: "x" } } };
+    if (path === `/api/campaign-runs/${runId}`) return { ...limitedRun, start: { ...limitedRun.start, broadcast_limit_exceeded: { candidate: "x" } } };
   });
   assert.equal(runShown(broken), false);
 });
@@ -2095,9 +1986,7 @@ test("cancel goes through a confirmation that freezes the displayed version and 
   await click(h, "campaign-run-cancel");
   h.runs.set(runId, { ...storedRun, version: 7 });
   await click(h, "campaign-run-cancel-submit");
-  assert.deepEqual(runWrites(h), [
-    { path: `/api/campaign-runs/${runId}/cancel`, method: "POST", body: { expected_version: 1 } },
-  ]);
+  assert.deepEqual(runWrites(h), [{ path: `/api/campaign-runs/${runId}/cancel`, method: "POST", body: { expected_version: 1 } }]);
   assert.equal(approvalWrites(h).length, 0);
 });
 
@@ -2105,10 +1994,7 @@ test("a successful cancel shows the cancelled count, notes unrecallable sending 
   const h = await openExecuted();
   await cancelThroughConfirmation(h);
   assert.equal(runReads(h), 1, "the cancel response is rendered without another read");
-  assert.equal(
-    h.get("campaign-run-status").textContent,
-    "실행을 취소했습니다. 대기 중이던 11건을 취소했습니다. 이미 발송 처리 중이던 12건은 되돌릴 수 없습니다.",
-  );
+  assert.equal(h.get("campaign-run-status").textContent, "실행을 취소했습니다. 대기 중이던 11건을 취소했습니다. 이미 발송 처리 중이던 12건은 되돌릴 수 없습니다.");
   assert.deepEqual(pairs(h.get("campaign-run-summary"))[0], ["상태", "취소됨"]);
   assert.deepEqual(pairs(h.get("campaign-run-deliveries"))[0], ["발송 대기", "0건"]);
   assert.equal(h.get("campaign-run-cancel").hidden, true);
@@ -2253,8 +2139,7 @@ test("a malformed cancel response stays an unknown outcome with the same retry",
 test("a cancel success whose run is not cancelled stays an unknown outcome with the same retry", async () => {
   let attempt = 0;
   const h = await openExecuted(async (path) => {
-    if (path.endsWith("/cancel") && ++attempt === 1)
-      return { ...structuredClone(storedRun), cancelled_delivery_count: "0", sending_recalled: false };
+    if (path.endsWith("/cancel") && ++attempt === 1) return { ...structuredClone(storedRun), cancelled_delivery_count: "0", sending_recalled: false };
   });
   await cancelThroughConfirmation(h);
   assert.equal(h.get("campaign-run-cancel-submit").textContent, "같은 요청 재시도");
@@ -2345,8 +2230,7 @@ test("a run read or cancel refused by role clears protected campaign data", asyn
   for (const target of ["read", "cancel"] as const) {
     const h = await adminDraft(
       async (path) => {
-        if (target === "read" ? path === `/api/campaign-runs/${runId}` : path.endsWith("/cancel"))
-          throw { status: 403, code: "role_forbidden" };
+        if (target === "read" ? path === `/api/campaign-runs/${runId}` : path.endsWith("/cancel")) throw { status: 403, code: "role_forbidden" };
       },
       [executedApproval],
     );
@@ -2360,8 +2244,7 @@ test("a run read or cancel refused by role clears protected campaign data", asyn
 test("an executed approval carried by a refused approval write reads its run", async () => {
   const h = await adminDraft(
     async (path) => {
-      if (path === `/api/campaign-approvals/${approvalId}/cancel`)
-        throw { status: 409, code: "campaign_approval_executed", approval: executedApproval };
+      if (path === `/api/campaign-approvals/${approvalId}/cancel`) throw { status: 409, code: "campaign_approval_executed", approval: executedApproval };
     },
     [storedApproval],
   );
@@ -2380,13 +2263,7 @@ test("the run panel markup sits inside the approval area, keeps its status live 
   const panel = html.slice(start, html.indexOf('class="campaign-approval-schedule"', start));
   assert.match(panel, /id="campaign-run-status"[^>]*role="status"[^>]*aria-live="polite"/);
   assert.match(panel, /<dl id="campaign-run-deliveries"/);
-  for (const id of [
-    "campaign-run-refresh",
-    "campaign-run-cancel",
-    "campaign-run-cancel-submit",
-    "campaign-run-cancel-back",
-  ])
-    assert.match(panel, new RegExp(`<button id="${id}" type="button"`));
+  for (const id of ["campaign-run-refresh", "campaign-run-cancel", "campaign-run-cancel-submit", "campaign-run-cancel-back"]) assert.match(panel, new RegExp(`<button id="${id}" type="button"`));
   // The formatter may break these sentences at any space.
   assert.match(panel, /모든\s+행은\s+보내기\s+직전에\s+조건을\s+다시\s+확인하며/);
   assert.match(panel, /서비스\s+전체\s+발송이\s+켜져\s+있을\s+때만/);
@@ -2415,66 +2292,24 @@ const cancelledApproval: Approval = {
   cancelled_at: "2026-10-27T04:00:00Z",
 };
 type ApprovalKind = "create" | "schedule" | "cancel";
-const approvalButton = (kind: ApprovalKind) =>
-  kind === "create"
-    ? "campaign-approval-submit"
-    : kind === "schedule"
-      ? "campaign-approval-reschedule"
-      : "campaign-approval-cancel";
-const isApprovalWrite = (kind: ApprovalKind, path: string, method?: string) =>
-  kind === "create" ? path.endsWith("/approvals") && method === "POST" : path.endsWith(`/${kind}`);
+const approvalButton = (kind: ApprovalKind) => (kind === "create" ? "campaign-approval-submit" : kind === "schedule" ? "campaign-approval-reschedule" : "campaign-approval-cancel");
+const isApprovalWrite = (kind: ApprovalKind, path: string, method?: string) => (kind === "create" ? path.endsWith("/approvals") && method === "POST" : path.endsWith(`/${kind}`));
 // Opens the saved draft and prepares the write so the next click on approvalButton(kind) sends it.
 async function prepareApprovalWrite(h: ApprovalHarness, kind: ApprovalKind) {
   await openSaved(h);
   if (kind === "create") await click(h, "campaign-approval-start");
   if (kind === "schedule") await chooseSchedule(h, "2026-10-29T06:30");
 }
-const unknownOutcome =
-  "처리 결과를 확인하지 못했습니다. 같은 요청 재시도로 결과를 확인해 주세요. 다른 요청은 보낼 수 없습니다.";
+const unknownOutcome = "처리 결과를 확인하지 못했습니다. 같은 요청 재시도로 결과를 확인해 주세요. 다른 요청은 보낼 수 없습니다.";
 
 const refusals: [string, ApprovalKind, Record<string, unknown>, string][] = [
-  [
-    "a create refused without an approval to show",
-    "create",
-    { status: 409, code: "campaign_schedule_timezone_changed" },
-    "campaign-approval-title",
-  ],
-  [
-    "a create refused with the approval recorded elsewhere",
-    "create",
-    { status: 409, code: "approval_exists", approval: storedApproval },
-    "campaign-approval-current-title",
-  ],
-  [
-    "a create refused by a draft conflict",
-    "create",
-    { status: 409, code: "campaign_draft_conflict", draft: { ...savedDraft, version: 4 } },
-    "campaign-approval-title",
-  ],
-  [
-    "a schedule change refused while the approval stays shown",
-    "schedule",
-    { status: 422, code: "campaign_schedule_out_of_range" },
-    "campaign-approval-current-title",
-  ],
-  [
-    "a schedule change refused with an unusable carried approval",
-    "schedule",
-    { status: 409, code: "campaign_approval_conflict", approval: { ...storedApproval, version: "2" } },
-    "campaign-approval-title",
-  ],
-  [
-    "a cancel refused with the cancelled approval",
-    "cancel",
-    { status: 409, code: "campaign_approval_cancelled", approval: cancelledApproval },
-    "campaign-approval-current-title",
-  ],
-  [
-    "a cancel refused without a carried approval",
-    "cancel",
-    { status: 404, code: "campaign_approval_not_found" },
-    "campaign-approval-current-title",
-  ],
+  ["a create refused without an approval to show", "create", { status: 409, code: "campaign_schedule_timezone_changed" }, "campaign-approval-title"],
+  ["a create refused with the approval recorded elsewhere", "create", { status: 409, code: "approval_exists", approval: storedApproval }, "campaign-approval-current-title"],
+  ["a create refused by a draft conflict", "create", { status: 409, code: "campaign_draft_conflict", draft: { ...savedDraft, version: 4 } }, "campaign-approval-title"],
+  ["a schedule change refused while the approval stays shown", "schedule", { status: 422, code: "campaign_schedule_out_of_range" }, "campaign-approval-current-title"],
+  ["a schedule change refused with an unusable carried approval", "schedule", { status: 409, code: "campaign_approval_conflict", approval: { ...storedApproval, version: "2" } }, "campaign-approval-title"],
+  ["a cancel refused with the cancelled approval", "cancel", { status: 409, code: "campaign_approval_cancelled", approval: cancelledApproval }, "campaign-approval-current-title"],
+  ["a cancel refused without a carried approval", "cancel", { status: 404, code: "campaign_approval_not_found" }, "campaign-approval-current-title"],
 ];
 for (const [name, kind, refusal, heading] of refusals)
   test(`${name} moves focus to a visible approval heading`, async () => {
@@ -2490,23 +2325,14 @@ for (const [name, kind, refusal, heading] of refusals)
     await click(h, approvalButton(kind));
     assert.equal(approvalWrites(h).length, 1);
     assert.deepEqual(focusedHeadings(h), [heading]);
-    if (heading === "campaign-approval-current-title")
-      assert.equal(h.get("campaign-approval-current").hidden, false, "the focused heading is visible");
+    if (heading === "campaign-approval-current-title") assert.equal(h.get("campaign-approval-current").hidden, false, "the focused heading is visible");
   });
 
 const otherApprovalId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 const mismatches: [string, ApprovalKind, Approval][] = [
   ["create answered with another approval", "create", { ...storedApproval, id: otherApprovalId }],
-  [
-    "create answered with another draft's approval",
-    "create",
-    { ...storedApproval, id: input.id, draft_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" },
-  ],
-  [
-    "schedule change answered with another approval",
-    "schedule",
-    { ...storedApproval, id: otherApprovalId, version: 2 },
-  ],
+  ["create answered with another draft's approval", "create", { ...storedApproval, id: input.id, draft_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" }],
+  ["schedule change answered with another approval", "schedule", { ...storedApproval, id: otherApprovalId, version: 2 }],
   ["schedule change answered as cancelled", "schedule", cancelledApproval],
   ["cancel answered with another approval", "cancel", { ...cancelledApproval, id: otherApprovalId }],
   ["cancel answered as still approved", "cancel", { ...storedApproval, version: 2 }],
@@ -2554,12 +2380,7 @@ for (const [name, kind, body] of mismatches)
 // The server answers a repeated create ID with the approval's current state, whatever happened since (another tab or
 // admin can cancel it, or its run can start, while this tab holds the create as unknown).
 const replays: [string, Approval, string, string][] = [
-  [
-    "its executed approval",
-    { ...executedApproval, id: input.id },
-    "최근 승인 · 실행 시작됨",
-    "실행 승인이 이미 기록되어 실행이 시작되었습니다. 보내기 직전마다 모든 조건을 다시 확인합니다.",
-  ],
+  ["its executed approval", { ...executedApproval, id: input.id }, "최근 승인 · 실행 시작됨", "실행 승인이 이미 기록되어 실행이 시작되었습니다. 보내기 직전마다 모든 조건을 다시 확인합니다."],
   [
     // The cron can start the run while the create is unknown, and the monthly limit can keep that run from starting.
     "its executed approval whose run the monthly limit kept from starting",
@@ -2567,12 +2388,7 @@ const replays: [string, Approval, string, string][] = [
     "최근 승인 · 실행을 시작하지 않음",
     "실행 승인이 이미 기록되었지만, 이번 달 캠페인 발송 한도를 넘어 실행을 시작하지 않았고 아무에게도 보내지 않았습니다.",
   ],
-  [
-    "its cancelled approval",
-    { ...cancelledApproval, id: input.id },
-    "최근 승인 · 취소됨",
-    "실행 승인이 이미 기록된 뒤 취소되었습니다. 응답받은 상태를 표시합니다.",
-  ],
+  ["its cancelled approval", { ...cancelledApproval, id: input.id }, "최근 승인 · 취소됨", "실행 승인이 이미 기록된 뒤 취소되었습니다. 응답받은 상태를 표시합니다."],
 ];
 for (const [name, replay, title, notice] of replays)
   test(`a create retry answered with ${name} is accepted and releases the request`, async () => {
@@ -2640,8 +2456,7 @@ for (const newer of [false, true])
 test("create and schedule successes say when the approval runs and never claim that nothing was sent", async () => {
   const h = await adminDraft(undefined, [], "America/New_York");
   await openSaved(h);
-  const due =
-    "실행 시점이 되면 서비스 전체 발송이 켜져 있을 때만 실행되며, 보내기 직전마다 모든 조건을 다시 확인합니다.";
+  const due = "실행 시점이 되면 서비스 전체 발송이 켜져 있을 때만 실행되며, 보내기 직전마다 모든 조건을 다시 확인합니다.";
   await approveNow(h);
   const created = approvalStatus(h);
   assert.equal(created, `실행 승인을 기록했습니다. ${due}`);

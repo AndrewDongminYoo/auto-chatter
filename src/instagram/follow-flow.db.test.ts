@@ -3,24 +3,13 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { ingestComments } from "./store.ts";
-import {
-  clearExpiredUnmatchedReplies,
-  ingestMessages,
-  processNextFollowReply,
-  reconcileUnmatchedReplies,
-} from "./follow-flow.ts";
+import { clearExpiredUnmatchedReplies, ingestMessages, processNextFollowReply, reconcileUnmatchedReplies } from "./follow-flow.ts";
 import { createNodeFollowTransport, assertNodePrivateReplyAllowed } from "./node-delivery.ts";
-import {
-  ProviderRateLimitedError,
-  ProviderRejectedError,
-  runPrivateReplyWorker,
-  processNextPrivateReply,
-} from "./reply-worker.ts";
+import { ProviderRateLimitedError, ProviderRejectedError, runPrivateReplyWorker, processNextPrivateReply } from "./reply-worker.ts";
 import { recordChannelConsentEvent } from "./channel-consent.ts";
 import { ingestMessageReads } from "./message-reads.ts";
 const url = new URL(process.env.TEST_DATABASE_URL ?? "http://invalid");
-if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: url.toString() });
 const workspace = "11111111-1111-4111-8111-111111111111",
   connection = "22222222-2222-4222-8222-222222222222",
@@ -29,9 +18,7 @@ let replyId: string;
 before(async () => {
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/007_confirmation_button.sql", import.meta.url), "utf8"));
-  await pool.query(
-    await readFile(new URL("../../db/migrations/006_follow_conversations.sql", import.meta.url), "utf8"),
-  );
+  await pool.query(await readFile(new URL("../../db/migrations/006_follow_conversations.sql", import.meta.url), "utf8"));
 });
 after(async () => {
   await pool.end();
@@ -39,30 +26,18 @@ after(async () => {
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
   await pool.query("INSERT INTO workspaces VALUES($1)", [workspace]);
-  await pool.query(
-    "INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,access_token_encrypted,token_expires_at) VALUES($1,$2,'123',true,true,'test',now()+interval '1 day')",
-    [connection, workspace],
-  );
-  await pool.query(
-    "INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES($1,$2,$3,'111','link','Reply with confirm',true)",
-    [rule, workspace, connection],
-  );
-  const event = (
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'222','111','456','link') RETURNING id",
-      [workspace, connection],
-    )
-  ).rows[0].id;
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,access_token_encrypted,token_expires_at) VALUES($1,$2,'123',true,true,'test',now()+interval '1 day')", [connection, workspace]);
+  await pool.query("INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES($1,$2,$3,'111','link','Reply with confirm',true)", [rule, workspace, connection]);
+  const event = (await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'222','111','456','link') RETURNING id", [workspace, connection])).rows[0].id;
   replyId = (
-    await pool.query(
-      "INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text,status,sent_at,recipient_id) VALUES($1,$2,$3,$4,'222','111','456','Confirm','sent',now()-interval '1 hour','456') RETURNING id",
-      [workspace, connection, event, rule],
-    )
+    await pool.query("INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text,status,sent_at,recipient_id) VALUES($1,$2,$3,$4,'222','111','456','Confirm','sent',now()-interval '1 hour','456') RETURNING id", [
+      workspace,
+      connection,
+      event,
+      rule,
+    ])
   ).rows[0].id;
-  await pool.query(
-    "INSERT INTO instagram_follow_conversations(reply_id,connection_id,recipient_id,confirmation_keyword,follower_reply_text,non_follower_reply_text) VALUES($1,$2,'456','확인','Here is the link','Follow then reply again')",
-    [replyId, connection],
-  );
+  await pool.query("INSERT INTO instagram_follow_conversations(reply_id,connection_id,recipient_id,confirmation_keyword,follower_reply_text,non_follower_reply_text) VALUES($1,$2,'456','확인','Here is the link','Follow then reply again')", [replyId, connection]);
 });
 const incoming = (id = "mid-1", text = "확인", timestamp = new Date()) => ({
   accountId: "123",
@@ -71,14 +46,8 @@ const incoming = (id = "mid-1", text = "확인", timestamp = new Date()) => ({
   text,
   timestamp,
 });
-const state = async () =>
-  (await pool.query("SELECT * FROM instagram_follow_conversations WHERE reply_id=$1", [replyId])).rows[0];
-async function recordConsent(
-  identityKind: "comment_sender" | "dm_recipient",
-  identityValue: string,
-  decision: "grant" | "revoke",
-  requestKey: string,
-) {
+const state = async () => (await pool.query("SELECT * FROM instagram_follow_conversations WHERE reply_id=$1", [replyId])).rows[0];
+async function recordConsent(identityKind: "comment_sender" | "dm_recipient", identityValue: string, decision: "grant" | "revoke", requestKey: string) {
   await recordChannelConsentEvent(pool, {
     requestKey,
     workspaceId: workspace,
@@ -95,12 +64,7 @@ async function recordConsent(
   });
 }
 test("only matching inbound confirmation starts work; old, future, foreign and replay events do not", async () => {
-  await ingestMessages(pool, [
-    incoming("old", "확인", new Date(Date.now() - 2 * 3600000)),
-    incoming("future", "확인", new Date(Date.now() + 600000)),
-    incoming("other", "hello"),
-    { ...incoming("foreign"), accountId: "999" },
-  ]);
+  await ingestMessages(pool, [incoming("old", "확인", new Date(Date.now() - 2 * 3600000)), incoming("future", "확인", new Date(Date.now() + 600000)), incoming("other", "hello"), { ...incoming("foreign"), accountId: "999" }]);
   assert.equal((await state()).status, "waiting");
   await ingestMessages(pool, [incoming()]);
   assert.equal((await state()).status, "pending");
@@ -127,10 +91,7 @@ test("nonfollowers can confirm again; followers receive one final response and d
   assert.equal((await state()).follow_status, "not_following");
   follows = true;
   await ingestMessages(pool, [incoming("mid-2", " 확인 ", new Date(Date.now() + 10))]);
-  await Promise.all([
-    processNextFollowReply(pool, connection, transport),
-    processNextFollowReply(pool, connection, transport),
-  ]);
+  await Promise.all([processNextFollowReply(pool, connection, transport), processNextFollowReply(pool, connection, transport)]);
   assert.deepEqual(sent, ["Follow then reply again", "Here is the link"]);
   assert.equal((await state()).status, "sent");
   await ingestMessages(pool, [incoming("mid-3")]);
@@ -153,11 +114,7 @@ test("every follow reply keeps its message ID, so a late read of an earlier repl
   assert.equal(sends, 3);
   // The follow row keeps the latest ID only; the history keeps all three, each with the status it was sent for.
   assert.equal((await state()).provider_message_id, "follow-sent-3");
-  const history = (
-    await pool.query(
-      "SELECT connection_id,reply_id::text,provider_message_id,follow_status,sent_at IS NOT NULL AS dated FROM instagram_follow_messages ORDER BY provider_message_id",
-    )
-  ).rows;
+  const history = (await pool.query("SELECT connection_id,reply_id::text,provider_message_id,follow_status,sent_at IS NOT NULL AS dated FROM instagram_follow_messages ORDER BY provider_message_id")).rows;
   assert.deepEqual(history, [
     {
       connection_id: connection,
@@ -192,9 +149,7 @@ test("every follow reply keeps its message ID, so a late read of an earlier repl
     })),
   );
   assert.deepEqual(
-    (await pool.query("SELECT message_id FROM instagram_message_reads ORDER BY message_id")).rows.map(
-      (row) => row.message_id,
-    ),
+    (await pool.query("SELECT message_id FROM instagram_message_reads ORDER BY message_id")).rows.map((row) => row.message_id),
     ["follow-sent-1", "follow-sent-2", "follow-sent-3"],
   );
 });
@@ -215,9 +170,7 @@ test("a failed follow send keeps the earlier message IDs and adds none", async (
   assert.equal(row.status, "failed");
   assert.equal(row.provider_message_id, "follow-sent-1");
   assert.deepEqual(
-    (await pool.query("SELECT provider_message_id FROM instagram_follow_messages")).rows.map(
-      (history) => history.provider_message_id,
-    ),
+    (await pool.query("SELECT provider_message_id FROM instagram_follow_messages")).rows.map((history) => history.provider_message_id),
     ["follow-sent-1"],
   );
 });
@@ -247,9 +200,7 @@ test("unknown profile never selects nonfollower content and expired windows neve
   assert.equal((await state()).status, "pending");
   assert.equal((await state()).follow_status, "unknown");
   assert.equal(sends, 0);
-  await pool.query(
-    "UPDATE instagram_follow_conversations SET confirmed_at=now()-interval '24 hours',next_attempt_at=now()",
-  );
+  await pool.query("UPDATE instagram_follow_conversations SET confirmed_at=now()-interval '24 hours',next_attempt_at=now()");
   await processNextFollowReply(pool, connection, transport);
   assert.equal((await state()).status, "waiting");
   assert.equal((await state()).failure_code, "response_window_expired");
@@ -329,9 +280,7 @@ test("rejected and exhausted throttled sends keep their last claim time; a retry
   });
   assert.equal((await state()).status, "failed");
   assert.ok((await state()).attempt_started_at instanceof Date);
-  await pool.query(
-    "UPDATE instagram_follow_conversations SET status='pending',failure_code=NULL,next_attempt_at=now(),rate_limit_retries=3,attempt_started_at=NULL",
-  );
+  await pool.query("UPDATE instagram_follow_conversations SET status='pending',failure_code=NULL,next_attempt_at=now(),rate_limit_retries=3,attempt_started_at=NULL");
   await processNextFollowReply(pool, connection, {
     followStatus: async () => true,
     send: async () => {
@@ -341,9 +290,7 @@ test("rejected and exhausted throttled sends keep their last claim time; a retry
   assert.equal((await state()).status, "failed");
   assert.ok((await state()).attempt_started_at instanceof Date);
   // A row that goes back to pending is no longer claimed.
-  await pool.query(
-    "UPDATE instagram_connections SET send_paused_until=NULL; UPDATE instagram_follow_conversations SET status='pending',next_attempt_at=now(),rate_limit_retries=0",
-  );
+  await pool.query("UPDATE instagram_connections SET send_paused_until=NULL; UPDATE instagram_follow_conversations SET status='pending',next_attempt_at=now(),rate_limit_retries=0");
   await processNextFollowReply(pool, connection, {
     followStatus: async () => true,
     send: async () => {
@@ -389,9 +336,7 @@ test("Node polling drains confirmed follow replies using its environment account
                 controller.abort();
                 return Response.json({ message_id: "node-follow-1" });
               }
-              return Response.json(
-                String(input).includes("/me?") ? { user_id: "123" } : { is_user_follow_business: true },
-              );
+              return Response.json(String(input).includes("/me?") ? { user_id: "123" } : { is_user_follow_business: true });
             },
           }),
         },
@@ -404,25 +349,14 @@ test("Node polling drains confirmed follow replies using its environment account
   assert.equal((await state()).status, "sent");
 });
 
-for (const scenario of [
-  "mismatched_account",
-  "disabled_sending",
-  "oauth_credential",
-  "expired_window",
-  "disabled_rule",
-  "paused_connection",
-  "lost_claim",
-  "ambiguous_post",
-] as const) {
+for (const scenario of ["mismatched_account", "disabled_sending", "oauth_credential", "expired_window", "disabled_rule", "paused_connection", "lost_claim", "ambiguous_post"] as const) {
   test(`Node follow guard handles ${scenario} without unsafe resends`, async () => {
     await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL");
     await ingestMessages(pool, [incoming()]);
     if (scenario === "mismatched_account") await pool.query("UPDATE instagram_connections SET account_id='999'");
     if (scenario === "disabled_sending") await pool.query("UPDATE instagram_connections SET send_enabled=false");
-    if (scenario === "oauth_credential")
-      await pool.query("UPDATE instagram_connections SET access_token_encrypted='new-credential'");
-    if (scenario === "expired_window")
-      await pool.query("UPDATE instagram_follow_conversations SET confirmed_at=now()-interval '24 hours'");
+    if (scenario === "oauth_credential") await pool.query("UPDATE instagram_connections SET access_token_encrypted='new-credential'");
+    if (scenario === "expired_window") await pool.query("UPDATE instagram_follow_conversations SET confirmed_at=now()-interval '24 hours'");
     let posts = 0;
     const transport = createNodeFollowTransport(pool, {
       accountId: "123",
@@ -436,10 +370,8 @@ for (const scenario of [
         }
         if (String(input).includes("/me?")) return Response.json({ user_id: "123" });
         if (scenario === "disabled_rule") await pool.query("UPDATE instagram_comment_rules SET enabled=false");
-        if (scenario === "paused_connection")
-          await pool.query("UPDATE instagram_connections SET send_paused_until=now()+interval '1 hour'");
-        if (scenario === "lost_claim")
-          await pool.query("UPDATE instagram_follow_conversations SET attempt_id=gen_random_uuid()");
+        if (scenario === "paused_connection") await pool.query("UPDATE instagram_connections SET send_paused_until=now()+interval '1 hour'");
+        if (scenario === "lost_claim") await pool.query("UPDATE instagram_follow_conversations SET attempt_id=gen_random_uuid()");
         return Response.json({ is_user_follow_business: true });
       },
     });
@@ -493,9 +425,7 @@ test("Cloudflare default still requires a stored unexpired credential", async ()
 });
 
 test("Node startup recovery scopes stale follow claims to its configured connection", async () => {
-  await pool.query(
-    "UPDATE instagram_follow_conversations SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '11 minutes'",
-  );
+  await pool.query("UPDATE instagram_follow_conversations SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '11 minutes'");
   const foreignConnection = "55555555-5555-4555-8555-555555555555";
   const controller = new AbortController();
   controller.abort();
@@ -526,9 +456,7 @@ test("Node startup recovery scopes stale follow claims to its configured connect
 });
 
 test("an unsupported transport blocks a follow rule before its first DM", async () => {
-  await pool.query("UPDATE private_reply_outbox SET status='pending',follow_config=$1", [
-    JSON.stringify({ confirmation_keyword: "confirm" }),
-  ]);
+  await pool.query("UPDATE private_reply_outbox SET status='pending',follow_config=$1", [JSON.stringify({ confirmation_keyword: "confirm" })]);
   await processNextPrivateReply(
     pool,
     {
@@ -543,8 +471,7 @@ test("an unsupported transport blocks a follow rule before its first DM", async 
     () => new Date(),
     connection,
   );
-  const reply = (await pool.query("SELECT status,failure_code FROM private_reply_outbox WHERE id=$1", [replyId]))
-    .rows[0];
+  const reply = (await pool.query("SELECT status,failure_code FROM private_reply_outbox WHERE id=$1", [replyId])).rows[0];
   assert.equal(reply.status, "blocked");
   assert.equal(reply.failure_code, "follow_requires_instagram_login");
 });
@@ -553,12 +480,9 @@ for (const condition of ["enabled", "disabled", "oauth", "foreign_account", "los
   test(`Node private reply pre-POST authorization: ${condition}`, async () => {
     const attemptId = "44444444-4444-4444-8444-444444444444";
     await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL");
-    await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=$1,attempt_started_at=now()", [
-      attemptId,
-    ]);
+    await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=$1,attempt_started_at=now()", [attemptId]);
     if (condition === "disabled") await pool.query("UPDATE instagram_connections SET send_enabled=false");
-    if (condition === "oauth")
-      await pool.query("UPDATE instagram_connections SET access_token_encrypted='managed-token'");
+    if (condition === "oauth") await pool.query("UPDATE instagram_connections SET access_token_encrypted='managed-token'");
     if (condition === "foreign_account") await pool.query("UPDATE instagram_connections SET account_id='999'");
     if (condition === "lost_claim") await pool.query("UPDATE private_reply_outbox SET attempt_id=gen_random_uuid()");
     if (condition === "inactive_rule") await pool.query("UPDATE instagram_comment_rules SET enabled=false");
@@ -584,10 +508,7 @@ for (const condition of ["enabled", "disabled", "oauth", "foreign_account", "los
 }
 
 test("bound button taps ignore visible text, reject foreign actors and deduplicate receipts", async () => {
-  await pool.query(
-    "UPDATE instagram_follow_conversations SET confirmation_button_title='자료 받기' WHERE reply_id=$1",
-    [replyId],
-  );
+  await pool.query("UPDATE instagram_follow_conversations SET confirmation_button_title='자료 받기' WHERE reply_id=$1", [replyId]);
   const tap = { ...incoming("tap", "자료 받기"), confirmationReplyId: replyId };
   await ingestMessages(pool, [
     { ...tap, senderId: "999" },
@@ -608,18 +529,13 @@ test("bound button taps ignore visible text, reject foreign actors and deduplica
   assert.equal((context as { confirmationButtonTitle: string }).confirmationButtonTitle, "자료 받기");
   await ingestMessages(pool, [tap]);
   assert.equal((await state()).status, "waiting");
-  await pool.query("UPDATE instagram_follow_conversations SET confirmation_button_title='' WHERE reply_id=$1", [
-    replyId,
-  ]);
+  await pool.query("UPDATE instagram_follow_conversations SET confirmation_button_title='' WHERE reply_id=$1", [replyId]);
   await ingestMessages(pool, [{ ...tap, messageId: "new-tap", timestamp: new Date(Date.now() + 1000) }]);
   assert.equal((await state()).status, "waiting");
 });
 
 test("comment ingestion snapshots button settings through first delivery and later rule edits", async () => {
-  await pool.query(
-    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_button_title='자료 받기',follower_reply_text='링크',non_follower_reply_text='팔로우 안내' WHERE id=$1",
-    [rule],
-  );
+  await pool.query("UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_button_title='자료 받기',follower_reply_text='링크',non_follower_reply_text='팔로우 안내' WHERE id=$1", [rule]);
   await ingestComments(pool, [{ accountId: "123", commentId: "333", postId: "111", senderId: "789", text: "link" }]);
   const queued = (await pool.query("SELECT * FROM private_reply_outbox WHERE comment_id='333'")).rows[0];
   assert.equal(queued.follow_config.confirmation_button_title, "자료 받기");
@@ -638,19 +554,12 @@ test("comment ingestion snapshots button settings through first delivery and lat
     connection,
   );
   assert.equal(deliveredTitle, "자료 받기");
-  const flow = (
-    await pool.query("SELECT confirmation_button_title FROM instagram_follow_conversations WHERE reply_id=$1", [
-      queued.id,
-    ])
-  ).rows[0];
+  const flow = (await pool.query("SELECT confirmation_button_title FROM instagram_follow_conversations WHERE reply_id=$1", [queued.id])).rows[0];
   assert.equal(flow.confirmation_button_title, "자료 받기");
 });
 
 async function pauseAutomation(paused = true) {
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'456',$3) ON CONFLICT(workspace_id,connection_id,sender_id) DO UPDATE SET paused=$3",
-    [workspace, connection, paused],
-  );
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'456',$3) ON CONFLICT(workspace_id,connection_id,sender_id) DO UPDATE SET paused=$3", [workspace, connection, paused]);
 }
 test("paused confirmation is ignored and deduplicated after resume", async () => {
   await pauseAutomation();
@@ -708,9 +617,7 @@ test("Node final private and follow guards defer a contact paused after authoriz
   const attemptId = "44444444-4444-4444-8444-444444444444";
   await pauseAutomation();
   await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL");
-  await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=$1,attempt_started_at=now()", [
-    attemptId,
-  ]);
+  await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=$1,attempt_started_at=now()", [attemptId]);
   await assert.rejects(
     assertNodePrivateReplyAllowed(
       pool,
@@ -730,10 +637,7 @@ test("Node final private and follow guards defer a contact paused after authoriz
     { disposition: "retry", failureCode: "contact_paused" },
   );
   await pool.query("UPDATE private_reply_outbox SET status='sent'");
-  await pool.query(
-    "UPDATE instagram_follow_conversations SET status='sending',confirmed_at=now(),attempt_id=$1,attempt_started_at=now()",
-    [attemptId],
-  );
+  await pool.query("UPDATE instagram_follow_conversations SET status='sending',confirmed_at=now(),attempt_id=$1,attempt_started_at=now()", [attemptId]);
   let sends = 0;
   const transport = createNodeFollowTransport(pool, {
     accountId: "123",
@@ -761,9 +665,7 @@ test("a pause committed while the confirmation receipt waits prevents later acti
     pending = ingestMessages(pool, [incoming("paused-race")]);
     let waiting = false;
     for (let attempt = 0; attempt < 100; attempt++) {
-      const blocked = await pool.query(
-        "SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%INSERT INTO instagram_message_receipts%'",
-      );
+      const blocked = await pool.query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%INSERT INTO instagram_message_receipts%'");
       if (blocked.rowCount) {
         waiting = true;
         break;
@@ -802,9 +704,7 @@ test("a throttled follow send and a DM that waits for its row both commit (#130)
   await ingestMessages(pool, [incoming()]);
   const lockWaiters = async (count: number) => {
     for (let attempt = 0; attempt < 200; attempt++) {
-      const waiting = await pool.query<{ n: number }>(
-        "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'",
-      );
+      const waiting = await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'");
       if (waiting.rows[0]!.n >= count) return true;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
@@ -831,35 +731,20 @@ test("a throttled follow send and a DM that waits for its row both commit (#130)
     await blocker.query("LOCK TABLE flow_runs IN ACCESS EXCLUSIVE MODE");
     ingestion = ingestMessages(pool, [incoming("race", "확인", new Date(Date.now() + 10))]);
     assert.equal(await lockWaiters(1), true, "Fixture must stop ingestion before its follow lookup");
-    await assert.rejects(
-      pool.query("SELECT 1 FROM instagram_connections WHERE id=$1 FOR NO KEY UPDATE NOWAIT", [connection]),
-      { code: "55P03" },
-      "Ingestion must hold the connection lock while it is stopped",
-    );
+    await assert.rejects(pool.query("SELECT 1 FROM instagram_connections WHERE id=$1 FOR NO KEY UPDATE NOWAIT", [connection]), { code: "55P03" }, "Ingestion must hold the connection lock while it is stopped");
     reject!(new ProviderRateLimitedError(4));
     assert.equal(await lockWaiters(2), true, "The rate-limit write must wait for the connection lock");
     await blocker.query("COMMIT");
     const [ingested, throttled] = await Promise.allSettled([ingestion, worker]);
     assert.deepEqual(
-      [ingested, throttled].map((outcome) =>
-        outcome.status === "fulfilled"
-          ? "fulfilled"
-          : ((outcome.reason as { code?: string }).code ?? String(outcome.reason)),
-      ),
+      [ingested, throttled].map((outcome) => (outcome.status === "fulfilled" ? "fulfilled" : ((outcome.reason as { code?: string }).code ?? String(outcome.reason)))),
       ["fulfilled", "fulfilled"],
     );
     const flow = await state();
     assert.equal(flow.status, "pending");
     assert.equal(flow.rate_limit_retries, 1);
     assert.equal(flow.attempt_id, null);
-    assert.equal(
-      (
-        await pool.query("SELECT send_paused_until>now() AS paused FROM instagram_connections WHERE id=$1", [
-          connection,
-        ])
-      ).rows[0].paused,
-      true,
-    );
+    assert.equal((await pool.query("SELECT send_paused_until>now() AS paused FROM instagram_connections WHERE id=$1", [connection])).rows[0].paused, true);
     // The DM reached the follow row: a paused contact's confirmation keeps only its receipt.
     assert.equal((await pool.query("SELECT 1 FROM instagram_message_receipts WHERE message_id='race'")).rowCount, 1);
   } finally {
@@ -892,10 +777,7 @@ test("confirmations received while paused pending work cannot restart a waiting 
 });
 
 async function handoffPause() {
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,handoff_paused) VALUES($1,$2,'456',true)",
-    [workspace, connection],
-  );
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,handoff_paused) VALUES($1,$2,'456',true)", [workspace, connection]);
 }
 test("handoff ignores and deduplicates confirmations without replay on resume", async () => {
   await handoffPause();
@@ -935,9 +817,7 @@ test("handoff is checked by Node private final authorization", async () => {
   await handoffPause();
   const attemptId = "44444444-4444-4444-8444-444444444444";
   await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL");
-  await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=$1,attempt_started_at=now()", [
-    attemptId,
-  ]);
+  await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=$1,attempt_started_at=now()", [attemptId]);
   await assert.rejects(
     assertNodePrivateReplyAllowed(
       pool,
@@ -962,10 +842,7 @@ test("handoff is checked by Node follow final authorization", async () => {
   await handoffPause();
   const attemptId = "44444444-4444-4444-8444-444444444444";
   await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL");
-  await pool.query(
-    "UPDATE instagram_follow_conversations SET status='sending',confirmed_at=now(),attempt_id=$1,attempt_started_at=now()",
-    [attemptId],
-  );
+  await pool.query("UPDATE instagram_follow_conversations SET status='sending',confirmed_at=now(),attempt_id=$1,attempt_started_at=now()", [attemptId]);
   let sends = 0;
   const transport = createNodeFollowTransport(pool, {
     accountId: "123",
@@ -985,17 +862,9 @@ test("handoff is checked by Node follow final authorization", async () => {
 });
 
 test("opt-out committed after authorization blocks Node private and follow final POST", async () => {
-  const privateEvent = (
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'private-race','111','789','link') RETURNING id",
-      [workspace, connection],
-    )
-  ).rows[0].id;
+  const privateEvent = (await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'private-race','111','789','link') RETURNING id", [workspace, connection])).rows[0].id;
   const privateReply = (
-    await pool.query(
-      "INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text) VALUES($1,$2,$3,$4,'private-race','111','789','Private') RETURNING id",
-      [workspace, connection, privateEvent, rule],
-    )
+    await pool.query("INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text) VALUES($1,$2,$3,$4,'private-race','111','789','Private') RETURNING id", [workspace, connection, privateEvent, rule])
   ).rows[0].id;
   await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL");
   let privatePosts = 0;
@@ -1018,15 +887,9 @@ test("opt-out committed after authorization blocks Node private and follow final
     connection,
   );
   assert.equal(privatePosts, 0);
-  assert.deepEqual(
-    (await pool.query("SELECT status,failure_code FROM private_reply_outbox WHERE id=$1", [privateReply])).rows[0],
-    { status: "blocked", failure_code: "recipient_opted_out" },
-  );
+  assert.deepEqual((await pool.query("SELECT status,failure_code FROM private_reply_outbox WHERE id=$1", [privateReply])).rows[0], { status: "blocked", failure_code: "recipient_opted_out" });
 
-  await pool.query(
-    "UPDATE instagram_follow_conversations SET status='pending',confirmed_at=now(),next_attempt_at=now(),attempt_id=NULL,attempt_started_at=NULL WHERE reply_id=$1",
-    [replyId],
-  );
+  await pool.query("UPDATE instagram_follow_conversations SET status='pending',confirmed_at=now(),next_attempt_at=now(),attempt_id=NULL,attempt_started_at=NULL WHERE reply_id=$1", [replyId]);
   await pool.query("UPDATE private_reply_outbox SET provider_message_id='follow-bridge-ack' WHERE id=$1", [replyId]);
   let followPosts = 0;
   let revokedBeforeFinalGuard = false;
@@ -1056,26 +919,13 @@ test("opt-out committed after authorization blocks Node private and follow final
   assert.equal(await processNextFollowReply(pool, connection, followTransport, () => new Date(), "123"), true);
   assert.equal(revokedBeforeFinalGuard, true);
   assert.equal(followPosts, 0);
-  assert.deepEqual(
-    await pool
-      .query("SELECT status,failure_code FROM instagram_follow_conversations WHERE reply_id=$1", [replyId])
-      .then((result) => result.rows[0]),
-    { status: "blocked", failure_code: "recipient_opted_out" },
-  );
+  assert.deepEqual(await pool.query("SELECT status,failure_code FROM instagram_follow_conversations WHERE reply_id=$1", [replyId]).then((result) => result.rows[0]), { status: "blocked", failure_code: "recipient_opted_out" });
 });
 
 test("consent read failures defer Node private and follow final POSTs", async () => {
-  const privateEvent = (
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'private-consent-fault','111','789','link') RETURNING id",
-      [workspace, connection],
-    )
-  ).rows[0].id;
+  const privateEvent = (await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'private-consent-fault','111','789','link') RETURNING id", [workspace, connection])).rows[0].id;
   const privateReply = (
-    await pool.query(
-      "INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text) VALUES($1,$2,$3,$4,'private-consent-fault','111','789','Private') RETURNING id",
-      [workspace, connection, privateEvent, rule],
-    )
+    await pool.query("INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text) VALUES($1,$2,$3,$4,'private-consent-fault','111','789','Private') RETURNING id", [workspace, connection, privateEvent, rule])
   ).rows[0].id;
   await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL");
   const consentFailurePool = {
@@ -1094,11 +944,7 @@ test("consent read failures defer Node private and follow final POSTs", async ()
         mediaOwned: true,
       }),
       send: async (request) => {
-        await assertNodePrivateReplyAllowed(
-          consentFailurePool,
-          { connectionId: connection, accountId: "123" },
-          request,
-        );
+        await assertNodePrivateReplyAllowed(consentFailurePool, { connectionId: connection, accountId: "123" }, request);
         privatePosts++;
         return { messageId: "must-not-send" };
       },
@@ -1107,16 +953,9 @@ test("consent read failures defer Node private and follow final POSTs", async ()
     connection,
   );
   assert.equal(privatePosts, 0);
-  assert.deepEqual(
-    (await pool.query("SELECT status,failure_code,attempt_id FROM private_reply_outbox WHERE id=$1", [privateReply]))
-      .rows[0],
-    { status: "pending", failure_code: "consent_unavailable", attempt_id: null },
-  );
+  assert.deepEqual((await pool.query("SELECT status,failure_code,attempt_id FROM private_reply_outbox WHERE id=$1", [privateReply])).rows[0], { status: "pending", failure_code: "consent_unavailable", attempt_id: null });
 
-  await pool.query(
-    "UPDATE instagram_follow_conversations SET status='pending',confirmed_at=now(),next_attempt_at=now(),attempt_id=NULL,attempt_started_at=NULL WHERE reply_id=$1",
-    [replyId],
-  );
+  await pool.query("UPDATE instagram_follow_conversations SET status='pending',confirmed_at=now(),next_attempt_at=now(),attempt_id=NULL,attempt_started_at=NULL WHERE reply_id=$1", [replyId]);
   let followPosts = 0;
   const followTransport = createNodeFollowTransport(consentFailurePool, {
     accountId: "123",
@@ -1135,19 +974,11 @@ test("consent read failures defer Node private and follow final POSTs", async ()
   });
   assert.equal(await processNextFollowReply(pool, connection, followTransport, () => new Date(), "123"), true);
   assert.equal(followPosts, 0);
-  assert.deepEqual(
-    await pool
-      .query("SELECT status,failure_code,attempt_id FROM instagram_follow_conversations WHERE reply_id=$1", [replyId])
-      .then((result) => result.rows[0]),
-    { status: "pending", failure_code: "consent_unavailable", attempt_id: null },
-  );
+  assert.deepEqual(await pool.query("SELECT status,failure_code,attempt_id FROM instagram_follow_conversations WHERE reply_id=$1", [replyId]).then((result) => result.rows[0]), { status: "pending", failure_code: "consent_unavailable", attempt_id: null });
 });
 
 test("consent read failure at follow admission defers claimed work", async () => {
-  await pool.query(
-    "UPDATE instagram_follow_conversations SET status='pending',confirmed_at=now(),next_attempt_at=now() WHERE reply_id=$1",
-    [replyId],
-  );
+  await pool.query("UPDATE instagram_follow_conversations SET status='pending',confirmed_at=now(),next_attempt_at=now() WHERE reply_id=$1", [replyId]);
   const consentFailurePool = {
     query: (sql: string, values?: unknown[]) => {
       if (sql.includes("FROM channel_consent_state state")) throw new Error("consent database unavailable");
@@ -1169,21 +1000,13 @@ test("consent read failure at follow admission defers claimed work", async () =>
     true,
   );
   assert.equal(providerCalls, 0);
-  assert.deepEqual(
-    await pool
-      .query("SELECT status,failure_code,attempt_id FROM instagram_follow_conversations WHERE reply_id=$1", [replyId])
-      .then((result) => result.rows[0]),
-    { status: "pending", failure_code: "consent_unavailable", attempt_id: null },
-  );
+  assert.deepEqual(await pool.query("SELECT status,failure_code,attempt_id FROM instagram_follow_conversations WHERE reply_id=$1", [replyId]).then((result) => result.rows[0]), { status: "pending", failure_code: "consent_unavailable", attempt_id: null });
 });
 
 // Queues a follow-gated reply to comment 333 and sends it with a transport that receives DMs from its
 // recipient 7890 while the reply is being sent (#108), dated just after the claim and so before sent_at.
 async function sendFollowReplyWhileReceiving(deliver: (at: Date, replyId: string) => Promise<void>, button = "") {
-  await pool.query(
-    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',confirmation_button_title=$2,follower_reply_text='링크',non_follower_reply_text='팔로우 안내' WHERE id=$1",
-    [rule, button],
-  );
+  await pool.query("UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',confirmation_button_title=$2,follower_reply_text='링크',non_follower_reply_text='팔로우 안내' WHERE id=$1", [rule, button]);
   await ingestComments(pool, [{ accountId: "123", commentId: "333", postId: "111", senderId: "789", text: "link" }]);
   let deliveredAt: Date | undefined;
   await processNextPrivateReply(
@@ -1191,9 +1014,7 @@ async function sendFollowReplyWhileReceiving(deliver: (at: Date, replyId: string
     {
       verify: async () => ({ commentCreatedAt: new Date(), authorizationVerified: true, mediaOwned: true }),
       send: async (request) => {
-        const started = (
-          await pool.query("SELECT attempt_started_at FROM private_reply_outbox WHERE id=$1", [request.id])
-        ).rows[0].attempt_started_at as Date;
+        const started = (await pool.query("SELECT attempt_started_at FROM private_reply_outbox WHERE id=$1", [request.id])).rows[0].attempt_started_at as Date;
         deliveredAt = new Date(started.getTime() + 1);
         await deliver(deliveredAt, request.id);
         await new Promise((resolve) => setTimeout(resolve, 5));
@@ -1203,8 +1024,7 @@ async function sendFollowReplyWhileReceiving(deliver: (at: Date, replyId: string
     () => new Date(),
     connection,
   );
-  const early = (await pool.query("SELECT id::text,status,sent_at FROM private_reply_outbox WHERE comment_id='333'"))
-    .rows[0];
+  const early = (await pool.query("SELECT id::text,status,sent_at FROM private_reply_outbox WHERE comment_id='333'")).rows[0];
   assert.equal(early.status, "sent");
   assert.ok(deliveredAt! < early.sent_at, "the DM must be dated before the reply was recorded as sent");
   return { at: deliveredAt!, replyId: early.id as string };
@@ -1217,40 +1037,18 @@ const earlyDm = (id: string, text: string, timestamp: Date, confirmationReplyId?
   timestamp,
   ...(confirmationReplyId ? { confirmationReplyId } : {}),
 });
-const conversation = async (id: string) =>
-  (
-    await pool.query(
-      "SELECT status,confirmed_at,last_message_at FROM instagram_follow_conversations WHERE reply_id=$1",
-      [id],
-    )
-  ).rows[0];
-const unmatched = async () =>
-  (
-    await pool.query(
-      "SELECT message_id,message_text,matched_at IS NOT NULL AS matched,text_cleared_at IS NOT NULL AS cleared FROM instagram_unmatched_replies ORDER BY message_id",
-    )
-  ).rows;
+const conversation = async (id: string) => (await pool.query("SELECT status,confirmed_at,last_message_at FROM instagram_follow_conversations WHERE reply_id=$1", [id])).rows[0];
+const unmatched = async () => (await pool.query("SELECT message_id,message_text,matched_at IS NOT NULL AS matched,text_cleared_at IS NOT NULL AS cleared FROM instagram_unmatched_replies ORDER BY message_id")).rows;
 
 test("a typed confirmation that arrives while the first DM is being sent starts the follow check (#108)", async () => {
-  const { at, replyId: early } = await sendFollowReplyWhileReceiving((time) =>
-    ingestMessages(pool, [earlyDm("early-confirm", " 확인 ", time)]),
-  );
+  const { at, replyId: early } = await sendFollowReplyWhileReceiving((time) => ingestMessages(pool, [earlyDm("early-confirm", " 확인 ", time)]));
   assert.deepEqual(await conversation(early), { status: "pending", confirmed_at: at, last_message_at: at });
-  assert.deepEqual(await unmatched(), [
-    { message_id: "early-confirm", message_text: " 확인 ", matched: true, cleared: false },
-  ]);
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS count FROM instagram_message_receipts WHERE message_id='early-confirm'"))
-      .rows[0].count,
-    1,
-  );
+  assert.deepEqual(await unmatched(), [{ message_id: "early-confirm", message_text: " 확인 ", matched: true, cleared: false }]);
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_message_receipts WHERE message_id='early-confirm'")).rows[0].count, 1);
 });
 
 test("a confirmation button tapped while the first DM is being sent starts the follow check (#108)", async () => {
-  const { at, replyId: early } = await sendFollowReplyWhileReceiving(
-    (time, id) => ingestMessages(pool, [earlyDm("early-tap", "자료 받기", time, id)]),
-    "자료 받기",
-  );
+  const { at, replyId: early } = await sendFollowReplyWhileReceiving((time, id) => ingestMessages(pool, [earlyDm("early-tap", "자료 받기", time, id)]), "자료 받기");
   assert.deepEqual(await conversation(early), { status: "pending", confirmed_at: at, last_message_at: at });
 });
 
@@ -1266,8 +1064,7 @@ test("the reconcile of an earlier reply to the same person leaves a button bound
     () => new Date(),
     connection,
   );
-  const a = (await pool.query("SELECT id::text FROM private_reply_outbox WHERE comment_id='444' AND status='sent'"))
-    .rows[0].id as string;
+  const a = (await pool.query("SELECT id::text FROM private_reply_outbox WHERE comment_id='444' AND status='sent'")).rows[0].id as string;
   let reconciledForA: number | undefined;
   const { at, replyId: b } = await sendFollowReplyWhileReceiving(async (time, id) => {
     await ingestMessages(pool, [earlyDm("early-tap", "자료 받기", time, id)]);
@@ -1282,25 +1079,18 @@ test("the reconcile of an earlier reply to the same person leaves a button bound
 // it may be the reply a DM kept during 333's send answers.
 async function anotherReplySending(): Promise<void> {
   await ingestComments(pool, [{ accountId: "123", commentId: "444", postId: "111", senderId: "790", text: "link" }]);
-  await pool.query(
-    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute' WHERE comment_id='444'",
-  );
+  await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute' WHERE comment_id='444'");
 }
 
 test("a reply's own pass takes a button bound to it while another reply is being sent", async () => {
   await anotherReplySending();
-  const { at, replyId: early } = await sendFollowReplyWhileReceiving(
-    (time, id) => ingestMessages(pool, [earlyDm("early-tap", "자료 받기", time, id)]),
-    "자료 받기",
-  );
+  const { at, replyId: early } = await sendFollowReplyWhileReceiving((time, id) => ingestMessages(pool, [earlyDm("early-tap", "자료 받기", time, id)]), "자료 받기");
   assert.deepEqual(await conversation(early), { status: "pending", confirmed_at: at, last_message_at: at });
 });
 
 test("a typed confirmation kept while another reply is being sent waits for the scheduled reconcile", async () => {
   await anotherReplySending();
-  const { at, replyId: early } = await sendFollowReplyWhileReceiving((time) =>
-    ingestMessages(pool, [earlyDm("early-confirm", "확인", time)]),
-  );
+  const { at, replyId: early } = await sendFollowReplyWhileReceiving((time) => ingestMessages(pool, [earlyDm("early-confirm", "확인", time)]));
   // The other reply may be the one it answers, so 333's own pass leaves it.
   assert.equal((await conversation(early)).status, "waiting");
   assert.equal(await reconcileUnmatchedReplies(pool), 0);
@@ -1324,11 +1114,7 @@ test("an early confirmation delivered again during or after the send confirms on
       ["early-other", true],
     ],
   );
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS count FROM instagram_message_receipts WHERE message_id='early-confirm'"))
-      .rows[0].count,
-    1,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_message_receipts WHERE message_id='early-confirm'")).rows[0].count, 1);
 });
 
 test("a DM is kept only while a reply of the same connection has been sending for under 10 minutes", async () => {
@@ -1336,14 +1122,10 @@ test("a DM is kept only while a reply of the same connection has been sending fo
   await ingestMessages(pool, [earlyDm("idle", "hello", new Date())]);
   assert.deepEqual(await unmatched(), []);
   await ingestComments(pool, [{ accountId: "123", commentId: "333", postId: "111", senderId: "789", text: "link" }]);
-  await pool.query(
-    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '11 minutes' WHERE comment_id='333'",
-  );
+  await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '11 minutes' WHERE comment_id='333'");
   await ingestMessages(pool, [earlyDm("stale", "hello", new Date())]);
   assert.deepEqual(await unmatched(), []);
-  await pool.query(
-    "UPDATE private_reply_outbox SET attempt_started_at=now()-interval '1 minute' WHERE comment_id='333'",
-  );
+  await pool.query("UPDATE private_reply_outbox SET attempt_started_at=now()-interval '1 minute' WHERE comment_id='333'");
   await ingestMessages(pool, [
     earlyDm("before-attempt", "hello", new Date(Date.now() - 120_000)),
     earlyDm("nul", "a\u0000b", new Date()),
@@ -1358,22 +1140,16 @@ test("a DM is kept only while a reply of the same connection has been sending fo
 
 test("the text of a kept DM is removed after 15 minutes and it is no longer linked", async () => {
   await ingestComments(pool, [{ accountId: "123", commentId: "333", postId: "111", senderId: "789", text: "link" }]);
-  await pool.query(
-    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute' WHERE comment_id='333'",
-  );
+  await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute' WHERE comment_id='333'");
   await ingestMessages(pool, [earlyDm("old", "확인", new Date()), earlyDm("new", "확인", new Date())]);
-  await pool.query(
-    "UPDATE instagram_unmatched_replies SET received_at=now()-interval '15 minutes' WHERE message_id='old'",
-  );
+  await pool.query("UPDATE instagram_unmatched_replies SET received_at=now()-interval '15 minutes' WHERE message_id='old'");
   assert.equal(await clearExpiredUnmatchedReplies(pool), 1);
   assert.equal(await clearExpiredUnmatchedReplies(pool), 0);
   assert.deepEqual(await unmatched(), [
     { message_id: "new", message_text: "확인", matched: false, cleared: false },
     { message_id: "old", message_text: null, matched: false, cleared: true },
   ]);
-  await pool.query(
-    "UPDATE private_reply_outbox SET status='sent',recipient_id='7890',provider_message_id='mid',sent_at=now() WHERE comment_id='333'",
-  );
+  await pool.query("UPDATE private_reply_outbox SET status='sent',recipient_id='7890',provider_message_id='mid',sent_at=now() WHERE comment_id='333'");
   assert.equal(await reconcileUnmatchedReplies(pool), 1);
   assert.deepEqual(
     (await unmatched()).map((row) => [row.message_id, row.matched]),
@@ -1386,31 +1162,19 @@ test("the text of a kept DM is removed after 15 minutes and it is no longer link
 
 test("a DM is not kept after a connection deletion that commits while it is being ingested", async () => {
   await ingestComments(pool, [{ accountId: "123", commentId: "333", postId: "111", senderId: "789", text: "link" }]);
-  await pool.query(
-    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute' WHERE comment_id='333'",
-  );
+  await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute' WHERE comment_id='333'");
   // The reply is recorded as sent, the account disconnected and its data deleted in one transaction that
   // takes the connection lock before the DM is ingested and commits after the DM read the sending reply.
   const deletion = await pool.connect();
   let ingest: Promise<void> | undefined;
   try {
     await deletion.query("BEGIN");
-    await deletion.query(
-      "UPDATE private_reply_outbox SET status='sent',recipient_id='7890',provider_message_id='mid',sent_at=now() WHERE comment_id='333'",
-    );
-    await deletion.query(
-      "UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1",
-      [connection],
-    );
-    await deletion.query("SELECT public.delete_connection_data($1,$2,gen_random_uuid(),'123')", [
-      workspace,
-      connection,
-    ]);
+    await deletion.query("UPDATE private_reply_outbox SET status='sent',recipient_id='7890',provider_message_id='mid',sent_at=now() WHERE comment_id='333'");
+    await deletion.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1", [connection]);
+    await deletion.query("SELECT public.delete_connection_data($1,$2,gen_random_uuid(),'123')", [workspace, connection]);
     ingest = ingestMessages(pool, [earlyDm("late", "hello", new Date())]);
     for (let attempt = 0; ; attempt++) {
-      const waiting = await pool.query(
-        "SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'",
-      );
+      const waiting = await pool.query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'");
       if (waiting.rowCount) break;
       if (attempt === 100) assert.fail("the DM ingestion never waited for the deletion");
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -1428,10 +1192,5 @@ test("migration 028 replays and every deletion function removes kept DMs", async
   const migration = await readFile(new URL("../../db/migrations/028_unmatched_replies.sql", import.meta.url), "utf8");
   await pool.query(migration);
   await pool.query(migration);
-  for (const name of ["delete_connection_data", "delete_person_data", "delete_workspace_data"])
-    assert.match(
-      (await pool.query("SELECT prosrc FROM pg_proc WHERE proname=$1", [name])).rows[0].prosrc,
-      /DELETE FROM public\.instagram_unmatched_replies/,
-      name,
-    );
+  for (const name of ["delete_connection_data", "delete_person_data", "delete_workspace_data"]) assert.match((await pool.query("SELECT prosrc FROM pg_proc WHERE proname=$1", [name])).rows[0].prosrc, /DELETE FROM public\.instagram_unmatched_replies/, name);
 });

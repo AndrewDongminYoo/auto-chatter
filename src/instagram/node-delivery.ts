@@ -56,11 +56,7 @@ export function createNodeFollowTransport(
   });
 }
 
-export async function assertNodePrivateReplyAllowed(
-  pool: Pool,
-  config: { connectionId: string; accountId: string },
-  request: PrivateReplyRequest,
-): Promise<void> {
+export async function assertNodePrivateReplyAllowed(pool: Pool, config: { connectionId: string; accountId: string }, request: PrivateReplyRequest): Promise<void> {
   const permitted = await pool
     .query(
       `SELECT reply.workspace_id::text,reply.sender_id,reply.recipient_id,

@@ -81,32 +81,19 @@ function error(code: string, path: string, extra: { node_id?: string; edge_index
 }
 
 export function parseFlowDocument(input: unknown): { document: FlowDocument } | { errors: FlowError[] } {
-  if (!isRecord(input) || input.schema_version !== 1 || !Array.isArray(input.nodes) || !Array.isArray(input.edges))
-    return { errors: [error("invalid_document", "")] };
+  if (!isRecord(input) || input.schema_version !== 1 || !Array.isArray(input.nodes) || !Array.isArray(input.edges)) return { errors: [error("invalid_document", "")] };
   if (input.nodes.length > MAX_NODES) return { errors: [error("too_many_nodes", "nodes")] };
   if (input.edges.length > MAX_EDGES) return { errors: [error("too_many_edges", "edges")] };
   if (Buffer.byteLength(JSON.stringify(input)) > MAX_BYTES) return { errors: [error("document_too_large", "")] };
   const errors: FlowError[] = [];
   const ids = new Set<string>();
   input.nodes.forEach((node, index) => {
-    if (
-      !isRecord(node) ||
-      typeof node.id !== "string" ||
-      !IDENTIFIER.test(node.id) ||
-      typeof node.type !== "string" ||
-      !IDENTIFIER.test(node.type) ||
-      !isRecord(node.config)
-    )
-      errors.push(error("invalid_node", `nodes[${index}]`));
+    if (!isRecord(node) || typeof node.id !== "string" || !IDENTIFIER.test(node.id) || typeof node.type !== "string" || !IDENTIFIER.test(node.type) || !isRecord(node.config)) errors.push(error("invalid_node", `nodes[${index}]`));
     else if (ids.has(node.id)) errors.push(error("duplicate_node_id", `nodes[${index}].id`, { node_id: node.id }));
     else ids.add(node.id);
   });
   input.edges.forEach((edge, index) => {
-    if (
-      !isRecord(edge) ||
-      [edge.from, edge.port, edge.to].some((value) => typeof value !== "string" || !IDENTIFIER.test(value))
-    )
-      errors.push(error("invalid_edge", `edges[${index}]`, { edge_index: index }));
+    if (!isRecord(edge) || [edge.from, edge.port, edge.to].some((value) => typeof value !== "string" || !IDENTIFIER.test(value))) errors.push(error("invalid_edge", `edges[${index}]`, { edge_index: index }));
   });
   if (errors.length) return { errors };
   return { document: { schema_version: 1, nodes: input.nodes as FlowNode[], edges: input.edges as FlowEdge[] } };
@@ -114,9 +101,7 @@ export function parseFlowDocument(input: unknown): { document: FlowDocument } | 
 
 function exactKeys(config: Record<string, unknown>, required: string[], optional: string[] = []) {
   const keys = Object.keys(config);
-  return (
-    required.every((key) => Object.hasOwn(config, key)) && keys.every((key) => [...required, ...optional].includes(key))
-  );
+  return required.every((key) => Object.hasOwn(config, key)) && keys.every((key) => [...required, ...optional].includes(key));
 }
 
 function oneOf(value: unknown, allowed: string[]): boolean {
@@ -164,11 +149,7 @@ function validConfig(node: FlowNode): boolean {
     case "instagram_dm_default":
       return exactKeys(config, ["connection_id"]) && isUuid(config.connection_id);
     case "instagram_message":
-      return (
-        exactKeys(config, ["text"], ["button_title"]) &&
-        text(config.text, 1000) &&
-        (config.button_title === undefined || (text(config.button_title, 20) && String(config.text).length <= 640))
-      );
+      return exactKeys(config, ["text"], ["button_title"]) && text(config.text, 1000) && (config.button_title === undefined || (text(config.button_title, 20) && String(config.text).length <= 640));
     case "follows_account":
       return exactKeys(config, []);
     case "has_tag":
@@ -179,19 +160,12 @@ function validConfig(node: FlowNode): boolean {
       return (
         exactKeys(config, ["field_id", "field_operator"], ["field_value"]) &&
         isUuid(config.field_id) &&
-        (config.field_operator === "eq"
-          ? config.field_value !== undefined && config.field_value !== null
-          : oneOf(config.field_operator, ["is_set", "is_unset"]) && config.field_value === undefined)
+        (config.field_operator === "eq" ? config.field_value !== undefined && config.field_value !== null : oneOf(config.field_operator, ["is_set", "is_unset"]) && config.field_value === undefined)
       );
     case "set_field":
       return exactKeys(config, ["field_id", "value"]) && isUuid(config.field_id) && config.value !== null;
     case "delay":
-      return (
-        exactKeys(config, ["minutes"]) &&
-        Number.isInteger(config.minutes) &&
-        (config.minutes as number) >= 1 &&
-        (config.minutes as number) <= MAX_DELAY_MINUTES
-      );
+      return exactKeys(config, ["minutes"]) && Number.isInteger(config.minutes) && (config.minutes as number) >= 1 && (config.minutes as number) <= MAX_DELAY_MINUTES;
     case "wait_until":
       return exactKeys(config, ["time"]) && typeof config.time === "string" && WALL_CLOCK_TIME.test(config.time);
     case "wait_for_reply":
@@ -236,40 +210,25 @@ function fieldErrors(node: FlowNode, fields: Map<string, string>, path: string):
   const type = fields.get(id.toLowerCase());
   if (!type) return [error("unknown_field", path, { node_id: node.id })];
   const value = node.type === "set_field" ? node.config.value : node.config.field_value;
-  if (value !== undefined && !isValidFieldValue(type, value))
-    return [error("invalid_field_value", path, { node_id: node.id })];
+  if (value !== undefined && !isValidFieldValue(type, value)) return [error("invalid_field_value", path, { node_id: node.id })];
   return [];
 }
 
 // The fields the reply waits of a document save the reply DM into, in lower case.
 export function replySaveFields(document: Pick<FlowDocument, "nodes">): Set<string> {
-  return new Set(
-    document.nodes.flatMap((node) =>
-      node.type === "wait_for_reply" && typeof node.config.save_field_id === "string"
-        ? [node.config.save_field_id.toLowerCase()]
-        : [],
-    ),
-  );
+  return new Set(document.nodes.flatMap((node) => (node.type === "wait_for_reply" && typeof node.config.save_field_id === "string" ? [node.config.save_field_id.toLowerCase()] : [])));
 }
 
 // The fields a run of a document may write: set_field targets and the fields its reply waits save into.
 // A run and a test run both keep only the unarchived ones.
 export function fieldWriteTargets(document: Pick<FlowDocument, "nodes">): string[] {
-  return document.nodes.flatMap((node) =>
-    node.type === "set_field" && typeof node.config.field_id === "string"
-      ? [node.config.field_id]
-      : node.type === "wait_for_reply" && typeof node.config.save_field_id === "string"
-        ? [node.config.save_field_id]
-        : [],
-  );
+  return document.nodes.flatMap((node) => (node.type === "set_field" && typeof node.config.field_id === "string" ? [node.config.field_id] : node.type === "wait_for_reply" && typeof node.config.save_field_id === "string" ? [node.config.save_field_id] : []));
 }
 
 // The fields the webhook nodes of a document name, as written; replySavedFields picks the ones a reply
 // wait saves into (#117).
 export function webhookFieldIds(document: Pick<FlowDocument, "nodes">): unknown[] {
-  return document.nodes.flatMap((node) =>
-    node.type === "webhook" && Array.isArray(node.config.field_ids) ? (node.config.field_ids as unknown[]) : [],
-  );
+  return document.nodes.flatMap((node) => (node.type === "webhook" && Array.isArray(node.config.field_ids) ? (node.config.field_ids as unknown[]) : []));
 }
 
 // A reply is saved as text, so the field it goes into must be an active text field, and not one that
@@ -280,27 +239,18 @@ function saveFieldErrors(node: FlowNode, context: PublishContext, path: string):
   const type = context.fields.get(id.toLowerCase());
   if (!type) return [error("unknown_field", path, { node_id: node.id })];
   if (type !== "text") return [error("invalid_field_type", path, { node_id: node.id })];
-  if (context.webhookFields.has(id.toLowerCase()))
-    return [error("reply_field_not_sendable", path, { node_id: node.id })];
+  if (context.webhookFields.has(id.toLowerCase())) return [error("reply_field_not_sendable", path, { node_id: node.id })];
   return [];
 }
 
 // A webhook node sends to one of the workspace's active endpoints, and only fields that are not archived.
 // It sends no field that this draft or a published version saves a reply into (replyFields).
-function webhookErrors(
-  node: FlowNode,
-  context: PublishContext,
-  replyFields: ReadonlySet<string>,
-  path: string,
-): FlowError[] {
+function webhookErrors(node: FlowNode, context: PublishContext, replyFields: ReadonlySet<string>, path: string): FlowError[] {
   const errors: FlowError[] = [];
   const ids = (node.config.field_ids as string[]).map((id) => id.toLowerCase());
-  if (!context.endpoints.has(String(node.config.endpoint_id).toLowerCase()))
-    errors.push(error("endpoint_unavailable", `${path}.endpoint_id`, { node_id: node.id }));
-  if (ids.some((id) => !context.fields.has(id)))
-    errors.push(error("unknown_field", `${path}.field_ids`, { node_id: node.id }));
-  if (ids.some((id) => replyFields.has(id)))
-    errors.push(error("reply_field_not_sendable", `${path}.field_ids`, { node_id: node.id }));
+  if (!context.endpoints.has(String(node.config.endpoint_id).toLowerCase())) errors.push(error("endpoint_unavailable", `${path}.endpoint_id`, { node_id: node.id }));
+  if (ids.some((id) => !context.fields.has(id))) errors.push(error("unknown_field", `${path}.field_ids`, { node_id: node.id }));
+  if (ids.some((id) => replyFields.has(id))) errors.push(error("reply_field_not_sendable", `${path}.field_ids`, { node_id: node.id }));
   return errors;
 }
 
@@ -315,12 +265,7 @@ function delayTotals(nodes: FlowNode[], edges: FlowEdge[]): Map<string, number> 
     const known = totals.get(id);
     if (known !== undefined) return known;
     const node = byId.get(id);
-    const own =
-      node?.type === "delay" && Number.isInteger(node.config.minutes)
-        ? (node.config.minutes as number)
-        : node?.type === "wait_until"
-          ? TIME_WAIT_MINUTES
-          : 0;
+    const own = node?.type === "delay" && Number.isInteger(node.config.minutes) ? (node.config.minutes as number) : node?.type === "wait_until" ? TIME_WAIT_MINUTES : 0;
     const value = Math.max(0, ...(incoming.get(id) ?? []).map(total)) + own;
     totals.set(id, value);
     return value;
@@ -373,9 +318,7 @@ export function dmTriggersOverlap(left: FlowNode, right: FlowNode): boolean {
 // The conflicts of a DM trigger with the other enabled DM trigger flows on its connection (#33).
 export function dmTriggerConflicts(trigger: FlowNode, others: readonly FlowNode[], path: string): FlowError[] {
   if (!DM_TRIGGER_TYPES.has(trigger.type) || !others.some((other) => dmTriggersOverlap(trigger, other))) return [];
-  return trigger.type === "instagram_dm_default"
-    ? [error("dm_default_conflict", path, { node_id: trigger.id })]
-    : [error("dm_keyword_conflict", `${path}.keywords`, { node_id: trigger.id })];
+  return trigger.type === "instagram_dm_default" ? [error("dm_default_conflict", path, { node_id: trigger.id })] : [error("dm_keyword_conflict", `${path}.keywords`, { node_id: trigger.id })];
 }
 
 export function validateFlowForPublish(input: unknown, context: PublishContext): FlowError[] {
@@ -398,21 +341,17 @@ export function validateFlowForPublish(input: unknown, context: PublishContext):
       errors.push(error("invalid_config", path, { node_id: node.id }));
       return;
     }
-    if (node.type === "set_field" || node.type === "field_equals")
-      errors.push(...fieldErrors(node, context.fields, path));
+    if (node.type === "set_field" || node.type === "field_equals") errors.push(...fieldErrors(node, context.fields, path));
     if (node.type === "wait_for_reply") errors.push(...saveFieldErrors(node, context, path));
     if (node.type === "webhook") errors.push(...webhookErrors(node, context, replyFields, path));
-    if (node.type === "instagram_message")
-      errors.push(...variableErrors(String(node.config.text), context.fields, `${path}.text`, node.id));
+    if (node.type === "instagram_message") errors.push(...variableErrors(String(node.config.text), context.fields, `${path}.text`, node.id));
   });
   const triggers = nodes.filter((node) => TRIGGER_TYPES.has(node.type));
   if (triggers.length !== 1) errors.push(error("trigger_count", "nodes"));
   if (triggers.length === 1 && DM_TRIGGER_TYPES.has(triggers[0]!.type))
     nodes.forEach((node, index) => {
-      if (portsOf(node.type) && !DM_FLOW_TYPES.has(node.type))
-        errors.push(error("dm_trigger_unsupported_node", `nodes[${index}].type`, { node_id: node.id }));
-      else if (node.type === "instagram_message" && /\{\{|\}\}/.test(String(node.config.text)))
-        errors.push(error("dm_trigger_unsupported_variable", `nodes[${index}].config.text`, { node_id: node.id }));
+      if (portsOf(node.type) && !DM_FLOW_TYPES.has(node.type)) errors.push(error("dm_trigger_unsupported_node", `nodes[${index}].type`, { node_id: node.id }));
+      else if (node.type === "instagram_message" && /\{\{|\}\}/.test(String(node.config.text))) errors.push(error("dm_trigger_unsupported_variable", `nodes[${index}].config.text`, { node_id: node.id }));
     });
   const valid: FlowEdge[] = [];
   const used = new Set<string>();
@@ -433,11 +372,9 @@ export function validateFlowForPublish(input: unknown, context: PublishContext):
       return;
     }
     used.add(key);
-    if (TRIGGER_TYPES.has(to.type))
-      errors.push(error("trigger_has_incoming", `edges[${index}].to`, { edge_index: index }));
+    if (TRIGGER_TYPES.has(to.type)) errors.push(error("trigger_has_incoming", `edges[${index}].to`, { edge_index: index }));
     // A reply wait listens for an answer to the private reply sent just before it.
-    if (to.type === "wait_for_reply" && from.type !== "instagram_message")
-      errors.push(error("wait_requires_message", `edges[${index}].from`, { edge_index: index }));
+    if (to.type === "wait_for_reply" && from.type !== "instagram_message") errors.push(error("wait_requires_message", `edges[${index}].from`, { edge_index: index }));
     valid.push(edge);
   });
   if (triggers.length !== 1) return errors;
@@ -468,31 +405,25 @@ export function validateFlowForPublish(input: unknown, context: PublishContext):
       }
   }
   nodes.forEach((node, index) => {
-    if (node.type === "instagram_message" && afterWait.has(node.id))
-      errors.push(error("message_after_wait", `nodes[${index}]`, { node_id: node.id }));
+    if (node.type === "instagram_message" && afterWait.has(node.id)) errors.push(error("message_after_wait", `nodes[${index}]`, { node_id: node.id }));
   });
   if (hasCycle(nodes, valid)) errors.push(error("immediate_cycle", "edges"));
   else {
     const totals = delayTotals(nodes, valid);
     nodes.forEach((node, index) => {
-      if (node.type === "instagram_message" && (totals.get(node.id) ?? 0) > MAX_DELAY_MINUTES)
-        errors.push(error("delay_exceeds_reply_window", `nodes[${index}]`, { node_id: node.id }));
+      if (node.type === "instagram_message" && (totals.get(node.id) ?? 0) > MAX_DELAY_MINUTES) errors.push(error("delay_exceeds_reply_window", `nodes[${index}]`, { node_id: node.id }));
     });
   }
   if (!configValid.get(trigger.id)) return errors;
   const triggerPath = `nodes[${nodes.indexOf(trigger)}].config`;
   const connection = context.connection;
-  if (!connection || connection.id !== String(trigger.config.connection_id).toLowerCase() || !connection.active)
-    errors.push(error("connection_unavailable", `${triggerPath}.connection_id`, { node_id: trigger.id }));
+  if (!connection || connection.id !== String(trigger.config.connection_id).toLowerCase() || !connection.active) errors.push(error("connection_unavailable", `${triggerPath}.connection_id`, { node_id: trigger.id }));
   else
     nodes.forEach((node, index) => {
-      if (node.type === "follows_account" && !connection.oauth)
-        errors.push(error("login_mode_required", `nodes[${index}]`, { node_id: node.id }));
+      if (node.type === "follows_account" && !connection.oauth) errors.push(error("login_mode_required", `nodes[${index}]`, { node_id: node.id }));
     });
-  if (context.legacyRuleEnabled)
-    errors.push(error("legacy_rule_conflict", `${triggerPath}.media_id`, { node_id: trigger.id }));
-  if (context.otherFlowPublished)
-    errors.push(error("flow_trigger_conflict", `${triggerPath}.media_id`, { node_id: trigger.id }));
+  if (context.legacyRuleEnabled) errors.push(error("legacy_rule_conflict", `${triggerPath}.media_id`, { node_id: trigger.id }));
+  if (context.otherFlowPublished) errors.push(error("flow_trigger_conflict", `${triggerPath}.media_id`, { node_id: trigger.id }));
   errors.push(...dmTriggerConflicts(trigger, context.dmTriggers ?? [], triggerPath));
   return errors;
 }
@@ -514,24 +445,16 @@ export function flowReferences(document: FlowDocument): {
   for (const node of document.nodes) {
     if (node.type === "webhook") {
       if (isUuid(node.config.endpoint_id)) endpoints.add(node.config.endpoint_id.toLowerCase());
-      if (Array.isArray(node.config.field_ids))
-        for (const id of node.config.field_ids) if (isUuid(id)) fields.add(id.toLowerCase());
+      if (Array.isArray(node.config.field_ids)) for (const id of node.config.field_ids) if (isUuid(id)) fields.add(id.toLowerCase());
     }
-    if ((node.type === "set_field" || node.type === "field_equals") && isUuid(node.config.field_id))
-      fields.add(node.config.field_id.toLowerCase());
-    if (node.type === "wait_for_reply" && isUuid(node.config.save_field_id))
-      fields.add(node.config.save_field_id.toLowerCase());
-    if (node.type === "instagram_message" && typeof node.config.text === "string")
-      for (const match of node.config.text.matchAll(/\{\{field:([^{}]+)\}\}/g))
-        if (isUuid(match[1])) fields.add(match[1].toLowerCase());
+    if ((node.type === "set_field" || node.type === "field_equals") && isUuid(node.config.field_id)) fields.add(node.config.field_id.toLowerCase());
+    if (node.type === "wait_for_reply" && isUuid(node.config.save_field_id)) fields.add(node.config.save_field_id.toLowerCase());
+    if (node.type === "instagram_message" && typeof node.config.text === "string") for (const match of node.config.text.matchAll(/\{\{field:([^{}]+)\}\}/g)) if (isUuid(match[1])) fields.add(match[1].toLowerCase());
   }
   return {
     trigger_type: trigger?.type ?? null,
     connection_id: isUuid(trigger?.config.connection_id) ? trigger.config.connection_id.toLowerCase() : null,
-    media_id:
-      trigger?.type === "instagram_comment" && typeof trigger.config.media_id === "string"
-        ? trigger.config.media_id
-        : null,
+    media_id: trigger?.type === "instagram_comment" && typeof trigger.config.media_id === "string" ? trigger.config.media_id : null,
     field_ids: [...fields].sort(),
     endpoint_ids: [...endpoints].sort(),
   };

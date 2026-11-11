@@ -23,8 +23,7 @@ function createReplyTemplates({ api, node, getRole, getComposer, appendToDraft }
     invalid_template_body: "본문과 변수 문법을 확인해 주세요. 본문은 1,000자, 서로 다른 변수는 10개까지입니다.",
     invalid_template_values: "모든 변수에 공백이 아닌 문구를 입력해 주세요.",
     template_text_too_long: "완성된 문구가 1,000자를 넘습니다. 변수 값을 줄여 주세요.",
-    template_conflict:
-      "다른 멤버가 템플릿을 수정했습니다. 편집 내용은 유지됩니다. 목록을 새로고침하고 다시 선택해 주세요.",
+    template_conflict: "다른 멤버가 템플릿을 수정했습니다. 편집 내용은 유지됩니다. 목록을 새로고침하고 다시 선택해 주세요.",
     template_archived: "보관된 템플릿입니다. 목록을 새로고침하고 다른 템플릿을 선택해 주세요.",
     template_not_found: "사용할 수 없는 템플릿입니다. 목록을 새로고침해 주세요.",
     template_name_exists: "같은 이름의 템플릿이 있습니다. 다른 이름을 입력해 주세요.",
@@ -32,8 +31,7 @@ function createReplyTemplates({ api, node, getRole, getComposer, appendToDraft }
     role_forbidden: "관리자와 소유자만 템플릿을 관리할 수 있습니다.",
     rate_limited: "요청이 많습니다. 잠시 후 다시 시도해 주세요.",
   };
-  const failure = (error) =>
-    errors[error.code] || "요청 결과를 확인하지 못했습니다. 입력 내용은 유지됩니다. 새로고침 후 확인해 주세요.";
+  const failure = (error) => errors[error.code] || "요청 결과를 확인하지 못했습니다. 입력 내용은 유지됩니다. 새로고침 후 확인해 주세요.";
 
   function controls() {
     const disabled = locked();
@@ -169,11 +167,7 @@ function createReplyTemplates({ api, node, getRole, getComposer, appendToDraft }
     invalidate();
     controls();
     try {
-      await api(
-        `${endpoint}${archiveId || target ? `/${archiveId || target.id}` : ""}`,
-        archiveId ? "DELETE" : target ? "PATCH" : "POST",
-        body,
-      );
+      await api(`${endpoint}${archiveId || target ? `/${archiveId || target.id}` : ""}`, archiveId ? "DELETE" : target ? "PATCH" : "POST", body);
       if (session !== currentSession) return;
       if (!archiveId || editing?.id === archiveId) clearEditor();
       byId("reply-template-status").textContent = archiveId ? "템플릿을 보관했습니다." : "템플릿을 저장했습니다.";
@@ -194,9 +188,7 @@ function createReplyTemplates({ api, node, getRole, getComposer, appendToDraft }
     invalidate();
     const request = previewRequest,
       currentSession = session;
-    const values = Object.fromEntries(
-      [...byId("inbox-template-values").querySelectorAll("input")].map((input) => [input.name, input.value]),
-    );
+    const values = Object.fromEntries([...byId("inbox-template-values").querySelectorAll("input")].map((input) => [input.name, input.value]));
     previewing = true;
     controls();
     try {
@@ -208,11 +200,9 @@ function createReplyTemplates({ api, node, getRole, getComposer, appendToDraft }
       preview = result.text;
       byId("inbox-template-output").textContent = preview;
       byId("inbox-template-output").hidden = false;
-      byId("inbox-template-status").textContent =
-        `${preview.length} / 1,000 · 작성 내용에 추가한 뒤 문구를 확인하세요.`;
+      byId("inbox-template-status").textContent = `${preview.length} / 1,000 · 작성 내용에 추가한 뒤 문구를 확인하세요.`;
     } catch (error) {
-      if (session === currentSession && request === previewRequest)
-        byId("inbox-template-status").textContent = failure(error);
+      if (session === currentSession && request === previewRequest) byId("inbox-template-status").textContent = failure(error);
     } finally {
       if (session === currentSession && request === previewRequest) {
         previewing = false;
@@ -233,8 +223,7 @@ function createReplyTemplates({ api, node, getRole, getComposer, appendToDraft }
   byId("inbox-template-apply").addEventListener("click", () => {
     if (locked() || loading || !preview) return;
     if (!appendToDraft(preview)) {
-      byId("inbox-template-status").textContent =
-        "기존 문구와 합치면 1,000자를 넘습니다. 작성 내용을 줄인 뒤 다시 추가해 주세요.";
+      byId("inbox-template-status").textContent = "기존 문구와 합치면 1,000자를 넘습니다. 작성 내용을 줄인 뒤 다시 추가해 주세요.";
       return;
     }
     invalidate();

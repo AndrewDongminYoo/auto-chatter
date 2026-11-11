@@ -1,12 +1,7 @@
 import { confirmationMessage } from "./confirmation-button.ts";
 import { PreSendVerificationError, type PrivateReplyRequest, type PrivateReplyTransport } from "./reply-worker.ts";
 import { evaluatePrivateReply } from "./reply-policy.ts";
-import {
-  classifyMetaGraphFailure,
-  metaTokenRejected,
-  reportIdentity,
-  type IdentityObserver,
-} from "./meta-graph-error.ts";
+import { classifyMetaGraphFailure, metaTokenRejected, reportIdentity, type IdentityObserver } from "./meta-graph-error.ts";
 
 export interface InstagramLoginPrivateReplyConfig {
   graphVersion: string;
@@ -41,8 +36,7 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
   constructor(config: InstagramLoginPrivateReplyConfig) {
     if (!/^v\d+\.\d+$/.test(config.graphVersion)) throw new Error("Invalid Meta Graph version");
     if (!/^\d+$/.test(config.accountId)) throw new Error("Invalid Instagram account ID");
-    if (config.connectionId !== undefined && !validConnectionId(config.connectionId))
-      throw new Error("Invalid Instagram connection ID");
+    if (config.connectionId !== undefined && !validConnectionId(config.connectionId)) throw new Error("Invalid Instagram connection ID");
     if (!config.accessToken) throw new Error("Instagram access token is required");
     const timeoutMs = config.timeoutMs ?? 10_000;
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1) throw new Error("Invalid Meta request timeout");
@@ -90,12 +84,7 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
   }
 
   private async inspectIdentity(): Promise<AccountIdentity> {
-    const result = await this.graphRequest(
-      this.graphUrl("me", { fields: "id,user_id,username" }),
-      "GET",
-      undefined,
-      true,
-    );
+    const result = await this.graphRequest(this.graphUrl("me", { fields: "id,user_id,username" }), "GET", undefined, true);
     const profile = isRecord(result) && Array.isArray(result.data) ? result.data[0] : result;
     if (!isRecord(profile) || typeof profile.user_id !== "string") {
       return { verified: false, reason: "account_unverified" };
@@ -121,24 +110,14 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
     const account = await this.inspectIdentity();
     if (!account.verified) return denied;
 
-    const comment = await this.graphRequest(
-      this.graphUrl(encodeURIComponent(request.commentId), { fields: "id,from,media,timestamp" }),
-    );
+    const comment = await this.graphRequest(this.graphUrl(encodeURIComponent(request.commentId), { fields: "id,from,media,timestamp" }));
     if (!isRecord(comment) || comment.id !== request.commentId) return denied;
     const createdAt = typeof comment.timestamp === "string" ? new Date(comment.timestamp) : null;
-    const commentMatches =
-      isRecord(comment.from) &&
-      comment.from.id === request.senderId &&
-      isRecord(comment.media) &&
-      comment.media.id === request.mediaId;
+    const commentMatches = isRecord(comment.from) && comment.from.id === request.senderId && isRecord(comment.media) && comment.media.id === request.mediaId;
     if (!commentMatches) return { commentCreatedAt: createdAt, authorizationVerified: true, mediaOwned: false };
 
     const media = await this.graphRequest(this.graphUrl(encodeURIComponent(request.mediaId), { fields: "id,owner" }));
-    const mediaOwned =
-      isRecord(media) &&
-      media.id === request.mediaId &&
-      isRecord(media.owner) &&
-      (media.owner.id === request.accountId || media.owner.id === account.ownerId);
+    const mediaOwned = isRecord(media) && media.id === request.mediaId && isRecord(media.owner) && (media.owner.id === request.accountId || media.owner.id === account.ownerId);
     return {
       commentCreatedAt: createdAt,
       authorizationVerified: true,
@@ -148,8 +127,7 @@ export class InstagramLoginPrivateReplyTransport implements PrivateReplyTranspor
   }
 
   async send(request: PrivateReplyRequest): ReturnType<PrivateReplyTransport["send"]> {
-    if (!this.matchesConnection(request) || !request.text.trim())
-      throw new PreSendVerificationError("block", "invalid_request");
+    if (!this.matchesConnection(request) || !request.text.trim()) throw new PreSendVerificationError("block", "invalid_request");
     const message = confirmationMessage(request.text, request.confirmationButtonTitle, request.id);
     let verification;
     try {

@@ -8,8 +8,7 @@ import { appApi } from "./api.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 // The concurrent acceptance test needs nine creators, an acceptor, a blocker and a lock observer.
 const pool = new Pool({ connectionString: databaseUrl, max: 12 });
@@ -35,10 +34,7 @@ before(async () => {
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
   // The largest plan, so these tests are not limited by seats; plans.db.test.ts covers the seat limits.
-  await pool.query("INSERT INTO workspaces(id,plan) VALUES($1,'advanced'),($2,'advanced')", [
-    workspaceId,
-    otherWorkspaceId,
-  ]);
+  await pool.query("INSERT INTO workspaces(id,plan) VALUES($1,'advanced'),($2,'advanced')", [workspaceId, otherWorkspaceId]);
   await pool.query(
     `INSERT INTO workspace_members(workspace_id,user_id,role,email)
      VALUES($1,$2,'owner',$3),($1,$4,'admin',$5),($6,$7,'owner',$8)`,
@@ -85,9 +81,7 @@ test("only the owner manages invites, and the stored invite holds only a hash of
     role: "agent",
     token_hash: createHash("sha256").update(token).digest("hex"),
   });
-  const listed = await body<{ invites: Record<string, unknown>[] }>(
-    await request(owner, "GET", "/api/workspace/invites"),
-  );
+  const listed = await body<{ invites: Record<string, unknown>[] }>(await request(owner, "GET", "/api/workspace/invites"));
   assert.equal(listed.invites.length, 1);
   assert.doesNotMatch(JSON.stringify(listed), new RegExp(token));
 
@@ -103,10 +97,7 @@ test("only the owner manages invites, and the stored invite holds only a hash of
     assert.equal(denied.status, 403, `${method} ${path}`);
     assert.equal((await body<{ error: string }>(denied)).error, "role_forbidden");
   }
-  assert.equal(
-    (await request(owner, "POST", "/api/workspace/invites", { email: "x@example.test", role: "owner" })).status,
-    400,
-  );
+  assert.equal((await request(owner, "POST", "/api/workspace/invites", { email: "x@example.test", role: "owner" })).status, 400);
   const member = await request(owner, "POST", "/api/workspace/invites", { email: "ADMIN@example.test", role: "agent" });
   assert.equal(member.status, 409);
   assert.equal((await body<{ error: string }>(member)).error, "already_member");
@@ -129,9 +120,7 @@ test("an invite joins the matching confirmed email once and then gives that role
   const again = await accept(invitee, token);
   assert.equal(again.status, 200);
   assert.deepEqual(await body(again), { workspace_id: workspaceId, role: "agent" });
-  const members = await body<{ members: { email: string; role: string }[] }>(
-    await request(owner, "GET", "/api/workspace/members"),
-  );
+  const members = await body<{ members: { email: string; role: string }[] }>(await request(owner, "GET", "/api/workspace/members"));
   assert.deepEqual(
     members.members.map((entry) => [entry.email, entry.role]),
     [
@@ -144,10 +133,7 @@ test("an invite joins the matching confirmed email once and then gives that role
 
 test("expired, revoked and replaced invites cannot be used", async () => {
   const expired = await invite("invitee@example.test");
-  await pool.query(
-    "UPDATE workspace_invites SET created_at=now()-interval '8 days',expires_at=now()-interval '1 day' WHERE id=$1",
-    [expired.id],
-  );
+  await pool.query("UPDATE workspace_invites SET created_at=now()-interval '8 days',expires_at=now()-interval '1 day' WHERE id=$1", [expired.id]);
   const late = await accept(invitee, expired.token);
   assert.equal(late.status, 410);
   assert.equal((await body<{ error: string }>(late)).error, "invite_expired");
@@ -170,11 +156,7 @@ test("an invitee moves out of their own empty workspace but not out of one with 
   const created = await body<{ workspace_id: string; role: string }>(await request(invitee, "POST", "/api/workspace"));
   assert.equal(created.role, "owner");
   assert.equal((await accept(invitee, first.token)).status, 200);
-  assert.equal(
-    (await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [invitee.id])).rows[0]
-      .workspace_id,
-    workspaceId,
-  );
+  assert.equal((await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [invitee.id])).rows[0].workspace_id, workspaceId);
 
   const busyInvite = await request(outsider, "POST", "/api/workspace/invites", {
     email: stranger.email,
@@ -182,25 +164,18 @@ test("an invitee moves out of their own empty workspace but not out of one with 
   });
   const busyToken = (await body<{ link: string }>(busyInvite)).link.split("#invite=")[1]!;
   await body(await request(stranger, "POST", "/api/workspace"));
-  const strangerWorkspace = (
-    await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [stranger.id])
-  ).rows[0].workspace_id;
+  const strangerWorkspace = (await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [stranger.id])).rows[0].workspace_id;
   await pool.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'kept','{}')", [strangerWorkspace]);
   const refused = await accept(stranger, busyToken);
   assert.equal(refused.status, 409);
   assert.equal((await body<{ error: string }>(refused)).error, "workspace_not_empty");
-  assert.equal(
-    (await pool.query("SELECT accepted_at FROM workspace_invites WHERE workspace_id=$1", [otherWorkspaceId])).rows[0]
-      .accepted_at,
-    null,
-  );
+  assert.equal((await pool.query("SELECT accepted_at FROM workspace_invites WHERE workspace_id=$1", [otherWorkspaceId])).rows[0].accepted_at, null);
 });
 
 test("a sole owner whose workspace holds only an inbox label is not moved by accepting an invite", async () => {
   const { token } = await invite(stranger.email, "agent");
   await body(await request(stranger, "POST", "/api/workspace"));
-  const ownWorkspace = (await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [stranger.id]))
-    .rows[0].workspace_id;
+  const ownWorkspace = (await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [stranger.id])).rows[0].workspace_id;
   const created = await request(stranger, "POST", "/api/inbox/labels", { name: "VIP" });
   assert.equal(created.status, 201);
   const label = await body<{ id: string }>(created);
@@ -210,44 +185,28 @@ test("a sole owner whose workspace holds only an inbox label is not moved by acc
     const refused = await accept(stranger, token);
     assert.equal(refused.status, 409);
     assert.equal((await body<{ error: string }>(refused)).error, "workspace_not_empty");
-    assert.deepEqual(
-      (await pool.query("SELECT workspace_id,role FROM workspace_members WHERE user_id=$1", [stranger.id])).rows,
-      [{ workspace_id: ownWorkspace, role: "owner" }],
-    );
+    assert.deepEqual((await pool.query("SELECT workspace_id,role FROM workspace_members WHERE user_id=$1", [stranger.id])).rows, [{ workspace_id: ownWorkspace, role: "owner" }]);
   }
-  assert.equal(
-    (await pool.query("SELECT accepted_at FROM workspace_invites WHERE email=$1", [stranger.email])).rows[0]
-      .accepted_at,
-    null,
-  );
+  assert.equal((await pool.query("SELECT accepted_at FROM workspace_invites WHERE email=$1", [stranger.email])).rows[0].accepted_at, null);
 });
 
 for (const active of [true, false]) {
   test(`a sole owner whose workspace holds only an ${active ? "active" : "inactive"} webhook endpoint cannot leave it`, async () => {
     const { id: inviteId, token } = await invite(stranger.email, "agent");
-    const { workspace_id: ownWorkspace } = await body<{ workspace_id: string }>(
-      await request(stranger, "POST", "/api/workspace"),
-    );
+    const { workspace_id: ownWorkspace } = await body<{ workspace_id: string }>(await request(stranger, "POST", "/api/workspace"));
     const created = await request(stranger, "POST", "/api/webhooks/endpoints", {
       name: "kept endpoint",
       url: "https://hooks.example.test/in",
     });
     assert.equal(created.status, 201);
     const endpoint = await body<{ id: string }>(created);
-    if (!active)
-      assert.equal((await request(stranger, "POST", `/api/webhooks/endpoints/${endpoint.id}/disable`)).status, 200);
+    if (!active) assert.equal((await request(stranger, "POST", `/api/webhooks/endpoints/${endpoint.id}/disable`)).status, 200);
 
     const refused = await accept(stranger, token);
     assert.equal(refused.status, 409);
     assert.equal((await body<{ error: string }>(refused)).error, "workspace_not_empty");
-    assert.deepEqual(
-      (await pool.query("SELECT workspace_id,role FROM workspace_members WHERE user_id=$1", [stranger.id])).rows,
-      [{ workspace_id: ownWorkspace, role: "owner" }],
-    );
-    assert.equal(
-      (await pool.query("SELECT accepted_at FROM workspace_invites WHERE id=$1", [inviteId])).rows[0].accepted_at,
-      null,
-    );
+    assert.deepEqual((await pool.query("SELECT workspace_id,role FROM workspace_members WHERE user_id=$1", [stranger.id])).rows, [{ workspace_id: ownWorkspace, role: "owner" }]);
+    assert.equal((await pool.query("SELECT accepted_at FROM workspace_invites WHERE id=$1", [inviteId])).rows[0].accepted_at, null);
     const listed = await request(stranger, "GET", "/api/webhooks/endpoints");
     assert.equal(listed.status, 200);
     const { endpoints } = await body<{ endpoints: { id: string; active: boolean; keys: unknown[] }[] }>(listed);
@@ -274,10 +233,7 @@ test("a removed member is refused on the next request and a role change applies 
   const fresh = await body<{ workspace_id: string; role: string }>(await request(invitee, "POST", "/api/workspace"));
   assert.notEqual(fresh.workspace_id, workspaceId);
   assert.equal(fresh.role, "owner");
-  assert.deepEqual(
-    (await request(invitee, "GET", "/api/flows").then((response) => body<{ flows: unknown[] }>(response))).flows,
-    [],
-  );
+  assert.deepEqual((await request(invitee, "GET", "/api/flows").then((response) => body<{ flows: unknown[] }>(response))).flows, []);
 
   for (const [method, payload] of [
     ["DELETE", undefined],
@@ -299,10 +255,7 @@ test("the owner role can be neither granted nor invited, and open invites stop a
     const invited = await request(owner, "POST", "/api/workspace/invites", { email: "x@example.test", role });
     assert.equal(invited.status, 400, role);
   }
-  const members = await pool.query<{ user_id: string; role: string }>(
-    "SELECT user_id, role FROM workspace_members WHERE workspace_id=$1 AND (role='owner' OR user_id=$2) ORDER BY role",
-    [workspaceId, invitee.id],
-  );
+  const members = await pool.query<{ user_id: string; role: string }>("SELECT user_id, role FROM workspace_members WHERE workspace_id=$1 AND (role='owner' OR user_id=$2) ORDER BY role", [workspaceId, invitee.id]);
   assert.deepEqual(members.rows, [
     { user_id: invitee.id, role: "agent" },
     { user_id: owner.id, role: "owner" },
@@ -324,9 +277,7 @@ test("an acceptance waits for a concurrent re-invite instead of deadlocking with
     await reinviting.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [workspaceId]);
     const accepting = accept(invitee, token);
     for (let attempt = 0; attempt < 40; attempt++) {
-      const waiting = await pool.query(
-        "SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FROM workspaces WHERE id=%FOR NO KEY UPDATE%'",
-      );
+      const waiting = await pool.query("SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FROM workspaces WHERE id=%FOR NO KEY UPDATE%'");
       if (waiting.rowCount) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
@@ -345,21 +296,13 @@ test("owners cannot reach another workspace's members or invites", async () => {
   assert.equal((await request(outsider, "DELETE", `/api/workspace/invites/${id}`)).status, 404);
   assert.equal((await request(outsider, "DELETE", `/api/workspace/members/${admin.id}`)).status, 404);
   assert.equal((await request(outsider, "PATCH", `/api/workspace/members/${admin.id}`, { role: "agent" })).status, 404);
-  const listed = await body<{ members: { user_id: string }[] }>(
-    await request(outsider, "GET", "/api/workspace/members"),
-  );
+  const listed = await body<{ members: { user_id: string }[] }>(await request(outsider, "GET", "/api/workspace/members"));
   assert.deepEqual(
     listed.members.map((entry) => entry.user_id),
     [outsider.id],
   );
-  assert.deepEqual(
-    (await body<{ invites: unknown[] }>(await request(outsider, "GET", "/api/workspace/invites"))).invites,
-    [],
-  );
-  assert.equal(
-    (await pool.query("SELECT role FROM workspace_members WHERE user_id=$1", [admin.id])).rows[0].role,
-    "admin",
-  );
+  assert.deepEqual((await body<{ invites: unknown[] }>(await request(outsider, "GET", "/api/workspace/invites"))).invites, []);
+  assert.equal((await pool.query("SELECT role FROM workspace_members WHERE user_id=$1", [admin.id])).rows[0].role, "admin");
 });
 
 test("workspace deletion removes invites and names only the owner for login deletion", async () => {
@@ -378,33 +321,18 @@ test("the invite migration replays and the schema keeps one active owner and no 
   const migration = await readFile(new URL("../../db/migrations/024_workspace_invites.sql", import.meta.url), "utf8");
   await pool.query(migration);
   await pool.query(migration);
-  await assert.rejects(
-    pool.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [owner.id, admin.id]),
-    { code: "23514" },
-  );
-  await pool.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [
-    admin.id,
-    owner.id,
-  ]);
+  await assert.rejects(pool.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [owner.id, admin.id]), { code: "23514" });
+  await pool.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [admin.id, owner.id]);
   await assert.rejects(pool.query("UPDATE workspace_members SET role='owner' WHERE user_id=$1", [admin.id]), {
     code: "23514",
   });
-  await assert.rejects(
-    pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,gen_random_uuid(),'owner')", [
-      workspaceId,
-    ]),
-    { code: "23505" },
-  );
+  await assert.rejects(pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,gen_random_uuid(),'owner')", [workspaceId]), { code: "23505" });
 });
 
 test("creations that resolved the old workspace before an acceptance moved the user are refused", async () => {
   const ownWorkspace = "88888888-8888-4888-8888-888888888888";
   await pool.query("INSERT INTO workspaces(id) VALUES($1)", [ownWorkspace]);
-  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role,email) VALUES($1,$2,'owner',$3)", [
-    ownWorkspace,
-    stranger.id,
-    stranger.email,
-  ]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role,email) VALUES($1,$2,'owner',$3)", [ownWorkspace, stranger.id, stranger.email]);
   async function waitForLockWaiters(count: number) {
     for (let attempt = 0; attempt < 80; attempt++) {
       const waiting = await pool.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type='Lock'");
@@ -430,10 +358,7 @@ test("creations that resolved the old workspace before an acceptance moved the u
     ],
     ["/api/webhooks/endpoints", { name: "late endpoint", url: "https://hooks.example.test/in" }],
     // The membership recheck comes before the label lookup, so a rule is refused before its (absent) label is read.
-    [
-      "/api/inbox/label-rules",
-      { label_id: "abababab-abab-4bab-8bab-abababababab", match_mode: "contains", keywords: ["late"] },
-    ],
+    ["/api/inbox/label-rules", { label_id: "abababab-abab-4bab-8bab-abababababab", match_mode: "contains", keywords: ["late"] }],
     ["/api/workspace/invites", { email: "late@example.test", role: "agent" }],
   ];
   const { token } = await invite(stranger.email, "admin");
@@ -448,8 +373,7 @@ test("creations that resolved the old workspace before an acceptance moved the u
     await waitForLockWaiters(1 + creations.length);
     await blocker.query("COMMIT");
     assert.equal((await accepting).status, 200);
-    for (const [index, response] of (await Promise.all(creating)).entries())
-      assert.equal(response.status, 403, creations[index]![0]);
+    for (const [index, response] of (await Promise.all(creating)).entries()) assert.equal(response.status, 403, creations[index]![0]);
   } finally {
     blocker.release();
   }
@@ -472,11 +396,7 @@ test("creations that resolved the old workspace before an acceptance moved the u
 test("two owners accepting each other's invites get workspace_not_empty instead of a deadlock", async () => {
   const strangerWorkspace = "99999999-9999-4999-8999-999999999999";
   await pool.query("INSERT INTO workspaces(id,plan) VALUES($1,'advanced')", [strangerWorkspace]);
-  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role,email) VALUES($1,$2,'owner',$3)", [
-    strangerWorkspace,
-    stranger.id,
-    stranger.email,
-  ]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role,email) VALUES($1,$2,'owner',$3)", [strangerWorkspace, stranger.id, stranger.email]);
   async function inviteFrom(actor: Actor, email: string) {
     const response = await request(actor, "POST", "/api/workspace/invites", { email, role: "admin" });
     assert.equal(response.status, 201);
@@ -488,9 +408,7 @@ test("two owners accepting each other's invites get workspace_not_empty instead 
   try {
     // Release both acceptances at once so each takes its destination lock before its source lock.
     await blocker.query("BEGIN");
-    await blocker.query("SELECT id FROM workspaces WHERE id=ANY($1) FOR UPDATE", [
-      [strangerWorkspace, otherWorkspaceId],
-    ]);
+    await blocker.query("SELECT id FROM workspaces WHERE id=ANY($1) FOR UPDATE", [[strangerWorkspace, otherWorkspaceId]]);
     const accepting = [accept(stranger, toStranger), accept(outsider, toOutsider)];
     for (let attempt = 0; attempt < 80; attempt++) {
       const waiting = await pool.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type='Lock'");
@@ -520,11 +438,7 @@ test("a removed member cannot rejoin with the invite link they already used", as
 test("an owner whose workspace holds only revoked or expired invites cannot leave it", async () => {
   const strangerWorkspace = "99999999-9999-4999-8999-999999999998";
   await pool.query("INSERT INTO workspaces(id,plan) VALUES($1,'advanced')", [strangerWorkspace]);
-  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role,email) VALUES($1,$2,'owner',$3)", [
-    strangerWorkspace,
-    stranger.id,
-    stranger.email,
-  ]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role,email) VALUES($1,$2,'owner',$3)", [strangerWorkspace, stranger.id, stranger.email]);
   const created = await request(stranger, "POST", "/api/workspace/invites", {
     email: "old@example.test",
     role: "agent",
@@ -536,31 +450,20 @@ test("an owner whose workspace holds only revoked or expired invites cannot leav
   const refused = await accept(stranger, token);
   assert.equal(refused.status, 409);
   assert.equal((await body<{ error: string }>(refused)).error, "workspace_not_empty");
-  assert.equal(
-    (await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [stranger.id])).rows[0]
-      .workspace_id,
-    strangerWorkspace,
-  );
+  assert.equal((await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [stranger.id])).rows[0].workspace_id, strangerWorkspace);
 });
 
 test("active and archived reply templates keep a sole owner in their workspace", async () => {
   const { token } = await invite(stranger.email, "agent");
-  const { workspace_id: ownWorkspace } = await body<{ workspace_id: string }>(
-    await request(stranger, "POST", "/api/workspace"),
-  );
+  const { workspace_id: ownWorkspace } = await body<{ workspace_id: string }>(await request(stranger, "POST", "/api/workspace"));
   const created = await request(stranger, "POST", "/api/inbox/reply-templates", { name: "Kept", body: "text" });
   assert.equal(created.status, 201);
   const template = await body<{ id: string }>(created);
   for (const archived of [false, true]) {
-    if (archived)
-      assert.equal((await request(stranger, "DELETE", `/api/inbox/reply-templates/${template.id}`)).status, 200);
+    if (archived) assert.equal((await request(stranger, "DELETE", `/api/inbox/reply-templates/${template.id}`)).status, 200);
     const refused = await accept(stranger, token);
     assert.equal(refused.status, 409);
     assert.equal((await body<{ error: string }>(refused)).error, "workspace_not_empty");
-    assert.equal(
-      (await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [stranger.id])).rows[0]
-        .workspace_id,
-      ownWorkspace,
-    );
+    assert.equal((await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [stranger.id])).rows[0].workspace_id, ownWorkspace);
   }
 });

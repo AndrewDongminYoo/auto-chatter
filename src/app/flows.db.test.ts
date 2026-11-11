@@ -7,8 +7,7 @@ import { appApi } from "./api.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const userId = "11111111-1111-4111-8111-111111111111";
@@ -29,12 +28,7 @@ before(async () => {
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspaceId, otherWorkspaceId]);
-  await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2),($3,$4)", [
-    workspaceId,
-    userId,
-    otherWorkspaceId,
-    otherUserId,
-  ]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2),($3,$4)", [workspaceId, userId, otherWorkspaceId, otherUserId]);
   await pool.query(
     `INSERT INTO instagram_connections(id,workspace_id,account_id,active,access_token_encrypted)
      VALUES($1,$2,'owned-account',true,'token'),($3,$4,'foreign-account',true,'token'),($5,$2,'env-account',true,NULL)`,
@@ -45,10 +39,7 @@ beforeEach(async () => {
      VALUES($1,$2,$3,'1789','link','{link}','legacy reply',false)`,
     [ruleId, workspaceId, connectionId],
   );
-  await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'city','text')", [
-    fieldId,
-    workspaceId,
-  ]);
+  await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'city','text')", [fieldId, workspaceId]);
 });
 
 after(async () => pool.end());
@@ -62,8 +53,7 @@ function request(method: string, path: string, body?: unknown, actorId = userId)
     }),
     apiEnv,
     () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: actorId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actorId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 
@@ -218,10 +208,7 @@ test("a legacy rule and a published flow cannot both claim one media", async () 
     [false],
   );
   assert.equal((await enableRule()).status, 200);
-  assert.equal(
-    (await request("PUT", `/api/flows/${flow.id}`, { expected_revision: 0, draft: document() })).status,
-    409,
-  );
+  assert.equal((await request("PUT", `/api/flows/${flow.id}`, { expected_revision: 0, draft: document() })).status, 409);
 });
 
 test("concurrent publishes and rule enables on one media leave a single owner", async () => {
@@ -261,10 +248,7 @@ test("publish checks connection ownership, activity and login mode", async () =>
   await pool.query("UPDATE instagram_connections SET active=false WHERE id=$1", [connectionId]);
   const inactive = await createdFlow();
   const unavailable = await publish(inactive.id);
-  assert.equal(
-    ((await unavailable.json()) as { errors: { code: string }[] }).errors[0]!.code,
-    "connection_unavailable",
-  );
+  assert.equal(((await unavailable.json()) as { errors: { code: string }[] }).errors[0]!.code, "connection_unavailable");
 });
 
 test("a workspace holds at most 50 active flows; archived flows do not count", async () => {

@@ -8,8 +8,7 @@ import { evaluateChannelConsent } from "../instagram/channel-consent.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const userId = "11111111-1111-4111-8111-111111111111";
@@ -27,12 +26,7 @@ before(async () => {
 beforeEach(async () => {
   await pool.query("TRUNCATE channel_consent_state,channel_consent_events,workspaces CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspaceId, otherWorkspaceId]);
-  await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2),($3,$4)", [
-    workspaceId,
-    userId,
-    otherWorkspaceId,
-    otherUserId,
-  ]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2),($3,$4)", [workspaceId, userId, otherWorkspaceId, otherUserId]);
   await pool.query(
     `INSERT INTO instagram_connections(id,workspace_id,account_id,active,access_token_encrypted)
      VALUES($1,$2,'owned-account',true,'access-token-secret'),($3,$4,'foreign-account',true,'foreign-token-secret')`,
@@ -60,8 +54,7 @@ function consentRequest(connection: string, body: unknown, actorId = userId) {
     }),
     apiEnv,
     () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: actorId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actorId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 
@@ -89,23 +82,14 @@ test("owned consent API records idempotent revoke and scoped re-consent", async 
     ],
   });
   assert.match(firstBody.event_id, /^\d+$/);
-  for (const secret of ["evidence-reference-secret", "webhook-body-secret", "access-token-secret", "INSERT INTO"])
-    assert.equal(JSON.stringify(firstBody).includes(secret), false);
+  for (const secret of ["evidence-reference-secret", "webhook-body-secret", "access-token-secret", "INSERT INTO"]) assert.equal(JSON.stringify(firstBody).includes(secret), false);
 
   const replay = await consentRequest(connectionId, revokeBody);
   assert.equal(replay.status, 200);
   const replayBody = await replay.json();
   assert.equal(replayBody.event_id, firstBody.event_id);
   assert.equal(replayBody.applied, false);
-  assert.equal(
-    (
-      await pool.query(
-        "SELECT count(*)::int AS count FROM channel_consent_events WHERE workspace_id=$1 AND request_key=$2",
-        [workspaceId, revokeBody.request_key],
-      )
-    ).rows[0].count,
-    1,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM channel_consent_events WHERE workspace_id=$1 AND request_key=$2", [workspaceId, revokeBody.request_key])).rows[0].count, 1);
 
   const conflict = await consentRequest(connectionId, {
     ...revokeBody,
@@ -135,23 +119,11 @@ test("owned consent API records idempotent revoke and scoped re-consent", async 
     assert.equal(nonExplicitGrant.status, 400);
     assert.deepEqual(await nonExplicitGrant.json(), { error: "invalid_consent_event" });
   }
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT purpose,decision,last_event_id::text AS last_event_id FROM channel_consent_state WHERE workspace_id=$1 AND connection_id=$2 AND identity_value='123456' ORDER BY purpose",
-        [workspaceId, connectionId],
-      )
-    ).rows,
-    [
-      { purpose: "marketing", decision: "revoke", last_event_id: firstBody.event_id },
-      { purpose: "service_reply", decision: "revoke", last_event_id: firstBody.event_id },
-    ],
-  );
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS count FROM channel_consent_events WHERE workspace_id=$1", [workspaceId]))
-      .rows[0].count,
-    1,
-  );
+  assert.deepEqual((await pool.query("SELECT purpose,decision,last_event_id::text AS last_event_id FROM channel_consent_state WHERE workspace_id=$1 AND connection_id=$2 AND identity_value='123456' ORDER BY purpose", [workspaceId, connectionId])).rows, [
+    { purpose: "marketing", decision: "revoke", last_event_id: firstBody.event_id },
+    { purpose: "service_reply", decision: "revoke", last_event_id: firstBody.event_id },
+  ]);
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM channel_consent_events WHERE workspace_id=$1", [workspaceId])).rows[0].count, 1);
 
   const serviceGrant = await consentRequest(connectionId, {
     ...revokeBody,
@@ -167,18 +139,10 @@ test("owned consent API records idempotent revoke and scoped re-consent", async 
     applied: true,
     states: [{ purpose: "service_reply", decision: "grant", occurred_at: "2026-09-29T03:04:05.000Z" }],
   });
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT purpose,decision FROM channel_consent_state WHERE workspace_id=$1 AND connection_id=$2 AND identity_kind='comment_sender' AND identity_value='123456' ORDER BY purpose",
-        [workspaceId, connectionId],
-      )
-    ).rows,
-    [
-      { purpose: "marketing", decision: "revoke" },
-      { purpose: "service_reply", decision: "grant" },
-    ],
-  );
+  assert.deepEqual((await pool.query("SELECT purpose,decision FROM channel_consent_state WHERE workspace_id=$1 AND connection_id=$2 AND identity_kind='comment_sender' AND identity_value='123456' ORDER BY purpose", [workspaceId, connectionId])).rows, [
+    { purpose: "marketing", decision: "revoke" },
+    { purpose: "service_reply", decision: "grant" },
+  ]);
 
   const importGrant = await consentRequest(connectionId, {
     ...revokeBody,
@@ -191,9 +155,7 @@ test("owned consent API records idempotent revoke and scoped re-consent", async 
   });
   assert.equal(importGrant.status, 201);
   const importGrantBody = await importGrant.json();
-  assert.deepEqual(importGrantBody.states, [
-    { purpose: "marketing", decision: "grant", occurred_at: "2026-09-29T02:03:04.000Z" },
-  ]);
+  assert.deepEqual(importGrantBody.states, [{ purpose: "marketing", decision: "grant", occurred_at: "2026-09-29T02:03:04.000Z" }]);
   assert.equal("allowed" in importGrantBody, false);
   assert.equal("eligible" in importGrantBody, false);
   const importedState = (
@@ -227,9 +189,7 @@ test("owned consent API records idempotent revoke and scoped re-consent", async 
     { eligible: false, reason: "marketing_consent_required" },
   );
 
-  const countBeforeDenials = (
-    await pool.query("SELECT count(*)::int AS count FROM channel_consent_events WHERE workspace_id=$1", [workspaceId])
-  ).rows[0].count;
+  const countBeforeDenials = (await pool.query("SELECT count(*)::int AS count FROM channel_consent_events WHERE workspace_id=$1", [workspaceId])).rows[0].count;
   const foreign = await consentRequest(foreignConnectionId, {
     ...revokeBody,
     request_key: "99999999-9999-4999-8999-999999999999",
@@ -255,12 +215,7 @@ test("owned consent API records idempotent revoke and scoped re-consent", async 
     assert.equal(invalid.status, 400);
     const error = await invalid.json();
     assert.deepEqual(error, { error: "invalid_consent_event" });
-    for (const secret of ["webhook-body-secret", "access-token-secret", "SELECT ", "INSERT INTO"])
-      assert.equal(JSON.stringify(error).includes(secret), false);
+    for (const secret of ["webhook-body-secret", "access-token-secret", "SELECT ", "INSERT INTO"]) assert.equal(JSON.stringify(error).includes(secret), false);
   }
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS count FROM channel_consent_events WHERE workspace_id=$1", [workspaceId]))
-      .rows[0].count,
-    countBeforeDenials,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM channel_consent_events WHERE workspace_id=$1", [workspaceId])).rows[0].count, countBeforeDenials);
 });

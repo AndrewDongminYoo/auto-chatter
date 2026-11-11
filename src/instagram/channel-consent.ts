@@ -2,21 +2,11 @@ import type { Pool, PoolClient } from "pg";
 
 // Preserve existing imports while the pure policy is shared with other channel adapters.
 export * from "../channels/policy.ts";
-import type {
-  ChannelConsentIdentityScope,
-  ChannelConsentState,
-  ConsentPurpose,
-  ConsentEventPurpose,
-  ConsentDecision,
-  ConsentEvidenceKind,
-} from "../channels/policy.ts";
+import type { ChannelConsentIdentityScope, ChannelConsentState, ConsentPurpose, ConsentEventPurpose, ConsentDecision, ConsentEvidenceKind } from "../channels/policy.ts";
 
 export type ConsentQueryable = Pool | PoolClient;
 
-export async function recipientOptedOut(
-  queryable: ConsentQueryable,
-  scopes: readonly ChannelConsentIdentityScope[],
-): Promise<boolean> {
+export async function recipientOptedOut(queryable: ConsentQueryable, scopes: readonly ChannelConsentIdentityScope[]): Promise<boolean> {
   if (scopes.length === 0) return false;
   const requested = scopes.map((scope) => ({
     workspace_id: scope.workspaceId,
@@ -67,14 +57,8 @@ export const deliveryRecipientOptedOutSql = (workspace: string, connection: stri
          AND state.purpose='service_reply' AND state.decision='revoke'
      )`;
 
-export async function deliveryRecipientOptedOut(
-  queryable: ConsentQueryable,
-  input: { workspaceId: string; connectionId: string; senderId: string },
-): Promise<boolean> {
-  const result = await queryable.query<{ opted_out: boolean }>(
-    `${deliveryRecipientOptedOutSql("$1", "$2", "$3")} AS opted_out`,
-    [input.workspaceId, input.connectionId, input.senderId],
-  );
+export async function deliveryRecipientOptedOut(queryable: ConsentQueryable, input: { workspaceId: string; connectionId: string; senderId: string }): Promise<boolean> {
+  const result = await queryable.query<{ opted_out: boolean }>(`${deliveryRecipientOptedOutSql("$1", "$2", "$3")} AS opted_out`, [input.workspaceId, input.connectionId, input.senderId]);
   return result.rows[0]?.opted_out === true;
 }
 
@@ -83,10 +67,7 @@ export async function deliveryRecipientOptedOut(
 // the deliveryRecipientOptedOutSql check of that comment sender (its own revoke and the revokes of every DM
 // recipient bridged to it). The bridge is read from the recipient side here; it is the same verified bridge, not
 // an assumption that the two IDs are equal.
-export async function messagingRecipientOptedOut(
-  queryable: ConsentQueryable,
-  input: { workspaceId: string; connectionId: string; recipientId: string },
-): Promise<boolean> {
+export async function messagingRecipientOptedOut(queryable: ConsentQueryable, input: { workspaceId: string; connectionId: string; recipientId: string }): Promise<boolean> {
   const result = await queryable.query<{ opted_out: boolean }>(
     `SELECT EXISTS(
          SELECT 1 FROM channel_consent_state state
@@ -148,18 +129,12 @@ export class ConsentConnectionNotFoundError extends Error {
   }
 }
 
-export async function recordChannelConsentEvent(
-  pool: Pool,
-  input: RecordChannelConsentEventInput,
-): Promise<RecordChannelConsentEventResult> {
+export async function recordChannelConsentEvent(pool: Pool, input: RecordChannelConsentEventInput): Promise<RecordChannelConsentEventResult> {
   if (input.purpose === "all" && input.decision !== "revoke") throw new RangeError("all_consent_must_revoke");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const connection = await client.query(
-      "SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR UPDATE",
-      [input.connectionId, input.workspaceId],
-    );
+    const connection = await client.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR UPDATE", [input.connectionId, input.workspaceId]);
     if (!connection.rows[0]) throw new ConsentConnectionNotFoundError();
 
     const inserted = await client.query(
@@ -169,20 +144,7 @@ export async function recordChannelConsentEvent(
        ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        ON CONFLICT(workspace_id,request_key) DO NOTHING
        RETURNING id::text`,
-      [
-        input.requestKey,
-        input.workspaceId,
-        input.connectionId,
-        input.channel,
-        input.identityKind,
-        input.identityValue,
-        input.purpose,
-        input.decision,
-        input.evidenceKind,
-        input.evidenceReference,
-        input.occurredAt,
-        input.actorId,
-      ],
+      [input.requestKey, input.workspaceId, input.connectionId, input.channel, input.identityKind, input.identityValue, input.purpose, input.decision, input.evidenceKind, input.evidenceReference, input.occurredAt, input.actorId],
     );
     let eventId: string;
     let applied = true;

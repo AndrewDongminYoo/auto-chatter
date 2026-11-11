@@ -1,12 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
-import {
-  CAMPAIGN_RECIPIENT_STAGE_SQL,
-  CONNECTION_SENDABLE,
-  CONTACT_PAUSED,
-  latestTextSql,
-  recipientStageSql,
-} from "../app/campaign-drafts.ts";
+import { CAMPAIGN_RECIPIENT_STAGE_SQL, CONNECTION_SENDABLE, CONTACT_PAUSED, latestTextSql, recipientStageSql } from "../app/campaign-drafts.ts";
 import { verifiedDmRecipientsSql } from "../app/inbox-identity.ts";
 import { instagramAdapter } from "./channel-adapter.ts";
 import { deliveryRecipientOptedOut, deliveryRecipientOptedOutSql, type ConsentQueryable } from "./channel-consent.ts";
@@ -67,9 +61,7 @@ export interface CampaignClaim {
 // so a row whose window closed or whose consent is missing ends instead of retrying for as long as a pause lasts.
 // Within each kind the first reason in the preview's order is reported.
 export async function assertCampaignDeliveryAllowed(pool: ConsentQueryable, claim: CampaignClaim): Promise<void> {
-  const row = (
-    await pool.query(GUARD_SQL, [claim.workspaceId, claim.id, claim.attempt, claim.connectionId, claim.encryptedToken])
-  ).rows[0];
+  const row = (await pool.query(GUARD_SQL, [claim.workspaceId, claim.id, claim.attempt, claim.connectionId, claim.encryptedToken])).rows[0];
   if (!row) throw new PreSendVerificationError("block", "delivery_changed");
   if (row.run_status !== "running") throw new PreSendVerificationError("retry", "run_cancelled");
   const blocks: string[] = [];
@@ -83,15 +75,7 @@ export async function assertCampaignDeliveryAllowed(pool: ConsentQueryable, clai
   // The stored recipient's stage with the preview's predicates; undefined when the read failed.
   let stage: number | null | undefined;
   try {
-    stage =
-      (
-        await pool.query<{ stage: number }>(CAMPAIGN_RECIPIENT_STAGE_SQL, [
-          claim.workspaceId,
-          claim.connectionId,
-          row.sender_id,
-          row.recipient_id,
-        ])
-      ).rows[0]?.stage ?? null;
+    stage = (await pool.query<{ stage: number }>(CAMPAIGN_RECIPIENT_STAGE_SQL, [claim.workspaceId, claim.connectionId, row.sender_id, row.recipient_id])).rows[0]?.stage ?? null;
   } catch {
     retries.push("consent_unavailable");
   }
@@ -128,10 +112,7 @@ export interface CampaignDeliveryTransport {
 // states never returns to them, so a run seen empty stays empty. It locks only run rows, skips one another
 // transaction holds (a cancel, or a finish that holds the run FOR SHARE; that finish completes the run itself),
 // and is never called while a delivery row is held. Without `run` it completes every such run (the cron).
-export async function completeCampaignRuns(
-  pool: Pick<Pool, "query">,
-  run: { workspaceId: string; runId: string } | null = null,
-): Promise<number> {
+export async function completeCampaignRuns(pool: Pick<Pool, "query">, run: { workspaceId: string; runId: string } | null = null): Promise<number> {
   const result = await pool.query(
     `UPDATE campaign_runs SET status='completed',version=version+1,updated_at=clock_timestamp()
      WHERE status='running' AND (workspace_id,id) IN (
@@ -204,10 +185,7 @@ const SWEEP_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp()
 // Ends, as blocked with the final guard's code, the pending campaign rows that the worker cannot reach and that a
 // block reason applies to now (#273). It never claims a row, never sets an attempt and never calls a provider.
 // The campaign_start cron step calls it after the starts and before completeCampaignRuns. Returns the rows ended.
-export async function endUnreachableCampaignDeliveries(
-  pool: Pick<Pool, "query">,
-  options: { limit?: number } = {},
-): Promise<number> {
+export async function endUnreachableCampaignDeliveries(pool: Pick<Pool, "query">, options: { limit?: number } = {}): Promise<number> {
   const result = await pool.query(SWEEP_SQL, [options.limit ?? CAMPAIGN_SWEEP_LIMIT]);
   return result.rowCount ?? 0;
 }
@@ -221,13 +199,7 @@ export async function recoverStaleCampaignDeliveries(pool: Pick<Pool, "query">):
 }
 
 // Claims and processes at most one row of the connection; returns whether a row was claimed.
-export async function processNextCampaignDelivery(
-  pool: Pool,
-  connection: string,
-  transport: CampaignDeliveryTransport,
-  encryptedToken: string | null,
-  options: { globalSendEnabled: boolean },
-): Promise<boolean> {
+export async function processNextCampaignDelivery(pool: Pool, connection: string, transport: CampaignDeliveryTransport, encryptedToken: string | null, options: { globalSendEnabled: boolean }): Promise<boolean> {
   const attempt = randomUUID();
   const client = await pool.connect();
   let row: { id: string; workspace_id: string; run_id: string; recipient_id: string; body: string } | undefined;
@@ -273,22 +245,12 @@ export async function processNextCampaignDelivery(
   // cancel waits for this transaction and then cancels a row that went back to pending; a row that would go back to
   // pending in a run that is no longer running is cancelled here instead. A rate limit pauses the connection (locked
   // before the row, as the other workers do) and defers the row to the pause end.
-  const finish = async (
-    status: "pending" | "sent" | "failed" | "blocked" | "unknown",
-    code: string | null,
-    messageId: string | null = null,
-    cooldown: number | null = null,
-  ): Promise<void> => {
+  const finish = async (status: "pending" | "sent" | "failed" | "blocked" | "unknown", code: string | null, messageId: string | null = null, cooldown: number | null = null): Promise<void> => {
     let landed: string = status;
     const writer = await pool.connect();
     try {
       await writer.query("BEGIN");
-      const run = (
-        await writer.query("SELECT status FROM campaign_runs WHERE workspace_id=$1 AND id=$2 FOR SHARE", [
-          claimed.workspace_id,
-          claimed.run_id,
-        ])
-      ).rows[0];
+      const run = (await writer.query("SELECT status FROM campaign_runs WHERE workspace_id=$1 AND id=$2 FOR SHARE", [claimed.workspace_id, claimed.run_id])).rows[0];
       if (status === "pending" && run?.status !== "running") {
         landed = "cancelled";
         code = "run_cancelled";
@@ -326,16 +288,14 @@ export async function processNextCampaignDelivery(
       writer.release();
     }
     // A separate statement after the row lock is released.
-    if (landed !== "pending")
-      await completeCampaignRuns(pool, { workspaceId: claimed.workspace_id, runId: claimed.run_id });
+    if (landed !== "pending") await completeCampaignRuns(pool, { workspaceId: claimed.workspace_id, runId: claimed.run_id });
   };
   const guarded = async (): Promise<boolean> => {
     try {
       await assertCampaignDeliveryAllowed(pool, claim);
       return true;
     } catch (error) {
-      if (error instanceof PreSendVerificationError)
-        await finish(error.disposition === "retry" ? "pending" : "blocked", error.failureCode);
+      if (error instanceof PreSendVerificationError) await finish(error.disposition === "retry" ? "pending" : "blocked", error.failureCode);
       else await finish("pending", "verification_unavailable");
       return false;
     }

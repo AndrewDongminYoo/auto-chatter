@@ -1,13 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  dmTriggersOverlap,
-  flowReferences,
-  parseFlowDocument,
-  validateFlowForPublish,
-  type FlowNode,
-  type PublishContext,
-} from "./flow-schema.ts";
+import { dmTriggersOverlap, flowReferences, parseFlowDocument, validateFlowForPublish, type FlowNode, type PublishContext } from "./flow-schema.ts";
 import { flowExecutionErrors, matchesFlowTrigger, planFlowRun } from "./flow-runtime.ts";
 import { dmPlan } from "../instagram/dm-start-trigger.ts";
 
@@ -62,9 +55,7 @@ test("a DM keyword trigger needs keywords unless its mode is all; the default tr
   assert.deepEqual(codes(dmFlow(keyword({ keywords: [] }))), ["invalid_config"]);
   assert.deepEqual(codes(dmFlow(keyword({ match_mode: "exact", keywords: [] }))), ["invalid_config"]);
   assert.deepEqual(codes(dmFlow(keyword({ media_id: "1789" }))), ["invalid_config"]);
-  assert.deepEqual(codes(dmFlow({ ...fallback(), config: { connection_id: connection, keywords: ["x"] } })), [
-    "invalid_config",
-  ]);
+  assert.deepEqual(codes(dmFlow({ ...fallback(), config: { connection_id: connection, keywords: ["x"] } })), ["invalid_config"]);
   assert.deepEqual(codes(dmFlow(fallback()), context({ connection: null })), ["connection_unavailable"]);
 });
 
@@ -72,9 +63,7 @@ test("a DM flow refuses variables, waits, delays, contact steps and webhooks", (
   assert.deepEqual(codes(dmFlow(keyword(), "You said {{comment.text}}")), ["dm_trigger_unsupported_variable"]);
   assert.deepEqual(codes(dmFlow(keyword(), `Hi {{field:${field}}}`)), ["dm_trigger_unsupported_variable"]);
   const after = (node: unknown) => codes(dmFlow(keyword(), "Hi", [node], [{ from: "m", port: "next", to: "x" }]));
-  assert.ok(
-    after({ id: "x", type: "wait_for_reply", config: { timeout_minutes: 60 } }).includes("dm_trigger_unsupported_node"),
-  );
+  assert.ok(after({ id: "x", type: "wait_for_reply", config: { timeout_minutes: 60 } }).includes("dm_trigger_unsupported_node"));
   const before = (node: unknown) =>
     codes({
       schema_version: 1,
@@ -115,10 +104,7 @@ test("overlap: two default triggers, equal exact keywords, and contained keyword
   assert.equal(dmTriggersOverlap(contains(["price"]), contains(["PRICES"])), true);
   assert.equal(dmTriggersOverlap(contains(["price"]), contains(["shipping"])), false);
   // Excluded keywords do not separate two triggers.
-  assert.equal(
-    dmTriggersOverlap(contains(["price"]), keyword({ keywords: ["price"], excluded_keywords: ["x"] })),
-    true,
-  );
+  assert.equal(dmTriggersOverlap(contains(["price"]), keyword({ keywords: ["price"], excluded_keywords: ["x"] })), true);
   // An all trigger, even with no keywords and with exclusions, overlaps every keyword trigger but no default one.
   const all = keyword({ match_mode: "all", keywords: [], excluded_keywords: ["shipping"] });
   assert.equal(dmTriggersOverlap(all, contains(["shipping"])), true);
@@ -135,14 +121,9 @@ test("an all DM trigger matches every DM except its excluded keywords", () => {
 });
 
 test("publish refuses a trigger that overlaps another enabled DM flow on the connection", () => {
-  const errors = (start: FlowNode, others: FlowNode[]) =>
-    validateFlowForPublish(dmFlow(start), context({ dmTriggers: others }));
-  assert.deepEqual(errors(fallback(), [fallback("b")]), [
-    { code: "dm_default_conflict", node_id: "start", path: "nodes[0].config" },
-  ]);
-  assert.deepEqual(errors(keyword(), [keyword({ keywords: ["price"] }, "b")]), [
-    { code: "dm_keyword_conflict", node_id: "start", path: "nodes[0].config.keywords" },
-  ]);
+  const errors = (start: FlowNode, others: FlowNode[]) => validateFlowForPublish(dmFlow(start), context({ dmTriggers: others }));
+  assert.deepEqual(errors(fallback(), [fallback("b")]), [{ code: "dm_default_conflict", node_id: "start", path: "nodes[0].config" }]);
+  assert.deepEqual(errors(keyword(), [keyword({ keywords: ["price"] }, "b")]), [{ code: "dm_keyword_conflict", node_id: "start", path: "nodes[0].config.keywords" }]);
   assert.deepEqual(errors(keyword(), [fallback("b"), keyword({ keywords: ["shipping"] }, "c")]), []);
   assert.deepEqual(errors(fallback(), [keyword({}, "b")]), []);
 });
@@ -161,11 +142,7 @@ test("DM triggers run: references, matching and the walk to one message", () => 
   assert.equal(matchesFlowTrigger(parsed.document, "What is the PRICE?"), true);
   assert.equal(matchesFlowTrigger(parsed.document, "price refund"), false);
   assert.equal(matchesFlowTrigger(parsed.document, "hello"), false);
-  const plan = planFlowRun(
-    parsed.document,
-    { tags: new Set(), fields: new Map() },
-    { commentText: "", writableFields: new Set() },
-  );
+  const plan = planFlowRun(parsed.document, { tags: new Set(), fields: new Map() }, { commentText: "", writableFields: new Set() });
   assert.equal(plan.status, "message");
   assert.deepEqual(plan.steps, [
     { node_id: "start", node_type: "instagram_dm_keyword", outcome: "next" },

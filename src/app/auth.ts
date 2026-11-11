@@ -22,10 +22,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function isUuid(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
-  );
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 export function json(data: unknown, status = 200): Response {
@@ -37,8 +34,7 @@ export function requireSameOrigin(request: Request): void {
 }
 
 function requireJsonType(request: Request): void {
-  if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json"))
-    throw new ApiError(415, "json_required");
+  if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) throw new ApiError(415, "json_required");
 }
 
 export async function readJson(request: Request, maxBytes = 16_384): Promise<unknown> {
@@ -109,25 +105,14 @@ export class AuthClient {
   // clientIp is the caller's address (CF-Connecting-IP). Supabase counts its per-IP auth limits against it instead
   // of the Worker's shared egress address; without it the header is left out.
   constructor(env: AuthEnv, fetchImpl: typeof fetch = fetch, clientIp: string | null = null) {
-    if (
-      !env.SUPABASE_URL ||
-      !/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/.test(env.SUPABASE_URL) ||
-      !env.SUPABASE_SECRET_KEY?.startsWith("sb_secret_")
-    )
-      throw new ApiError(503, "auth_not_configured");
+    if (!env.SUPABASE_URL || !/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/.test(env.SUPABASE_URL) || !env.SUPABASE_SECRET_KEY?.startsWith("sb_secret_")) throw new ApiError(503, "auth_not_configured");
     this.origin = new URL(env.SUPABASE_URL).origin;
     this.key = env.SUPABASE_SECRET_KEY;
     this.fetchImpl = (input, init) => fetchImpl(input, init);
     this.clientIp = clientIp;
   }
 
-  private async call(
-    path: string,
-    method: string,
-    body?: unknown,
-    accessToken?: string,
-    clientErrorStatus: 400 | 401 = 401,
-  ): Promise<unknown> {
+  private async call(path: string, method: string, body?: unknown, accessToken?: string, clientErrorStatus: 400 | 401 = 401): Promise<unknown> {
     let response: Response;
     try {
       response = await this.fetchImpl(this.origin + "/auth/v1" + path, {
@@ -147,16 +132,7 @@ export class AuthClient {
     }
     if (!response.ok) {
       await response.body?.cancel();
-      throw new ApiError(
-        response.status === 429
-          ? 429
-          : response.status >= 500 || response.status < 400
-            ? 503
-            : (response.status === 400 || response.status === 422) && clientErrorStatus === 400
-              ? 400
-              : 401,
-        "authentication_failed",
-      );
+      throw new ApiError(response.status === 429 ? 429 : response.status >= 500 || response.status < 400 ? 503 : (response.status === 400 || response.status === 422) && clientErrorStatus === 400 ? 400 : 401, "authentication_failed");
     }
     if (response.status === 204) return null;
     try {
@@ -170,27 +146,12 @@ export class AuthClient {
     const token = cookie(request, "__Host-ac-access");
     if (!token) throw new ApiError(401, "login_required");
     const value = await this.call("/user", "GET", undefined, token);
-    if (
-      !isRecord(value) ||
-      !isUuid(value.id) ||
-      typeof value.email !== "string" ||
-      typeof value.email_confirmed_at !== "string" ||
-      !value.email_confirmed_at
-    )
-      throw new ApiError(401, "confirmed_email_required");
+    if (!isRecord(value) || !isUuid(value.id) || typeof value.email !== "string" || typeof value.email_confirmed_at !== "string" || !value.email_confirmed_at) throw new ApiError(401, "confirmed_email_required");
     return { id: value.id, email: value.email };
   }
 
   private credentials(value: unknown): { email: string; password: string } {
-    if (
-      !isRecord(value) ||
-      typeof value.email !== "string" ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.email) ||
-      value.email.length > 254 ||
-      typeof value.password !== "string" ||
-      value.password.length < 8 ||
-      value.password.length > 256
-    )
+    if (!isRecord(value) || typeof value.email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.email) || value.email.length > 254 || typeof value.password !== "string" || value.password.length < 8 || value.password.length > 256)
       throw new ApiError(400, "invalid_credentials");
     return { email: value.email.trim(), password: value.password };
   }
@@ -227,13 +188,7 @@ export class AuthClient {
   }
 
   async resendConfirmation(input: unknown): Promise<Response> {
-    if (
-      !isRecord(input) ||
-      typeof input.email !== "string" ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email.trim()) ||
-      input.email.length > 254
-    )
-      throw new ApiError(400, "invalid_recovery_email");
+    if (!isRecord(input) || typeof input.email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email.trim()) || input.email.length > 254) throw new ApiError(400, "invalid_recovery_email");
     try {
       await this.call("/resend", "POST", { type: "signup", email: input.email.trim() });
     } catch (error) {
@@ -243,13 +198,7 @@ export class AuthClient {
   }
 
   async recover(input: unknown): Promise<Response> {
-    if (
-      !isRecord(input) ||
-      typeof input.email !== "string" ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email.trim()) ||
-      input.email.length > 254
-    )
-      throw new ApiError(400, "invalid_recovery_email");
+    if (!isRecord(input) || typeof input.email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email.trim()) || input.email.length > 254) throw new ApiError(400, "invalid_recovery_email");
     try {
       await this.call("/recover", "POST", { email: input.email.trim() });
     } catch (error) {
@@ -259,15 +208,7 @@ export class AuthClient {
   }
 
   async resetPassword(input: unknown): Promise<Response> {
-    if (
-      !isRecord(input) ||
-      typeof input.access_token !== "string" ||
-      !/^[A-Za-z0-9._~-]{1,3500}$/.test(input.access_token) ||
-      typeof input.password !== "string" ||
-      input.password.length < 8 ||
-      input.password.length > 256
-    )
-      throw new ApiError(400, "invalid_recovery_link");
+    if (!isRecord(input) || typeof input.access_token !== "string" || !/^[A-Za-z0-9._~-]{1,3500}$/.test(input.access_token) || typeof input.password !== "string" || input.password.length < 8 || input.password.length > 256) throw new ApiError(400, "invalid_recovery_link");
     try {
       await this.call("/user", "PUT", { password: input.password }, input.access_token, 400);
     } catch (error) {
@@ -301,8 +242,7 @@ export class AuthClient {
       // Refresh first when possible: the access cookie may exist but already be expired.
       if (refresh) {
         const value = await this.call("/token?grant_type=refresh_token", "POST", { refresh_token: refresh });
-        if (!isRecord(value) || typeof value.access_token !== "string" || !value.access_token)
-          throw new ApiError(503, "auth_unavailable");
+        if (!isRecord(value) || typeof value.access_token !== "string" || !value.access_token) throw new ApiError(503, "auth_unavailable");
         token = value.access_token;
       }
       if (token) await this.call("/logout?scope=local", "POST", undefined, token);

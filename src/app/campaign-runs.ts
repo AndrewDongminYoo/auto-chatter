@@ -12,15 +12,7 @@ import { campaignSendAllowance, campaignSendsFit } from "./plans.ts";
 // Due approvals one campaign_start step starts at most, oldest due first. Each start re-evaluates up to 5,000
 // snapshot members (the freeze limit) in one statement, so a run of the step stays a handful of statements.
 export const CAMPAIGN_START_LIMIT = 5;
-export const CAMPAIGN_DELIVERY_STATUSES = [
-  "pending",
-  "sending",
-  "sent",
-  "failed",
-  "blocked",
-  "unknown",
-  "cancelled",
-] as const;
+export const CAMPAIGN_DELIVERY_STATUSES = ["pending", "sending", "sent", "failed", "blocked", "unknown", "cancelled"] as const;
 const COUNT_KEYS = ["original_member_count", "remaining_member_count", ...CAMPAIGN_PREVIEW_REASONS] as const;
 // An approval in force is due when it is immediate or its scheduled time has come. The run's transaction rechecks it
 // after the locks with the same text.
@@ -41,10 +33,7 @@ async function startOne(client: PoolClient, workspace: string, id: string): Prom
     )
   ).rows[0];
   if (!approval) return false;
-  await client.query("SELECT id FROM campaign_drafts WHERE workspace_id=$1 AND id=$2 FOR UPDATE", [
-    workspace,
-    approval.draft_id,
-  ]);
+  await client.query("SELECT id FROM campaign_drafts WHERE workspace_id=$1 AND id=$2 FOR UPDATE", [workspace, approval.draft_id]);
   await client.query(
     `SELECT id FROM instagram_connections WHERE workspace_id=$1
      AND id IN (SELECT connection_id FROM instagram_segment_snapshot_members WHERE workspace_id=$1 AND snapshot_id=$2)
@@ -53,19 +42,8 @@ async function startOne(client: PoolClient, workspace: string, id: string): Prom
   );
   // An approval in force freezes its draft, so the draft still holds what was approved.
   const evaluated = await evaluateCampaignStart(client, workspace, approval.draft_id);
-  if (
-    !evaluated ||
-    evaluated.draft_version !== approval.draft_version ||
-    evaluated.snapshot_id !== approval.snapshot_id
-  )
-    throw new Error("Campaign approval no longer matches its draft");
-  const counts: Record<string, string> = Object.fromEntries(
-    COUNT_KEYS.map((key) =>
-      key === "original_member_count" || key === "remaining_member_count"
-        ? [key, evaluated[key]]
-        : [key, evaluated.counts[key]],
-    ),
-  );
+  if (!evaluated || evaluated.draft_version !== approval.draft_version || evaluated.snapshot_id !== approval.snapshot_id) throw new Error("Campaign approval no longer matches its draft");
+  const counts: Record<string, string> = Object.fromEntries(COUNT_KEYS.map((key) => (key === "original_member_count" || key === "remaining_member_count" ? [key, evaluated[key]] : [key, evaluated.counts[key]])));
   const { candidates } = evaluated;
   // The monthly campaign send limit (#52) of the month that holds started_at, under the workspace lock above, with
   // the approval's own count: the month's used rows + the other approvals in force due in that month + this run's
@@ -86,16 +64,7 @@ async function startOne(client: PoolClient, workspace: string, id: string): Prom
     await client.query<{ id: string }>(
       `INSERT INTO campaign_runs(workspace_id,approval_id,draft_id,draft_version,snapshot_id,started_at,start_counts,status)
        VALUES($1,$2,$3,$4,$5,$6::timestamptz,$7::jsonb,$8) RETURNING id`,
-      [
-        workspace,
-        id,
-        approval.draft_id,
-        approval.draft_version,
-        approval.snapshot_id,
-        evaluated.as_of,
-        JSON.stringify(counts),
-        limited ? "completed" : "running",
-      ],
+      [workspace, id, approval.draft_id, approval.draft_version, approval.snapshot_id, evaluated.as_of, JSON.stringify(counts), limited ? "completed" : "running"],
     )
   ).rows[0]!.id;
   if (candidates.length && !limited)
@@ -103,20 +72,11 @@ async function startOne(client: PoolClient, workspace: string, id: string): Prom
       `INSERT INTO campaign_deliveries(workspace_id,run_id,connection_id,sender_id,recipient_id)
        SELECT $1,$2,member.connection_id,member.sender_id,member.recipient_id
        FROM unnest($3::uuid[],$4::text[],$5::text[]) AS member(connection_id,sender_id,recipient_id)`,
-      [
-        workspace,
-        run,
-        candidates.map((row) => row.connection_id),
-        candidates.map((row) => row.sender_id),
-        candidates.map((row) => row.recipient_id),
-      ],
+      [workspace, run, candidates.map((row) => row.connection_id), candidates.map((row) => row.sender_id), candidates.map((row) => row.recipient_id)],
     );
   // The run row is the execution record: the approval keeps its version and its audit gets no row, because the
   // step has no actor.
-  await client.query(
-    "UPDATE campaign_approvals SET status='executed',updated_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2",
-    [workspace, id],
-  );
+  await client.query("UPDATE campaign_approvals SET status='executed',updated_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2", [workspace, id]);
   return true;
 }
 
@@ -125,10 +85,7 @@ async function startOne(client: PoolClient, workspace: string, id: string): Prom
 // failed follow, least recently failed first. One approval that fails is logged with a fixed code, stamped with
 // start_failed_at and the others still start; the step then fails. A failed start rolls back, so without the stamp
 // the same `limit` failing approvals would be selected on every run and hold back every approval behind them.
-export async function startDueCampaignRuns(
-  pool: Pool,
-  options: { limit?: number; correlationId?: string } = {},
-): Promise<{ started: number; skipped: number; failed: number }> {
+export async function startDueCampaignRuns(pool: Pool, options: { limit?: number; correlationId?: string } = {}): Promise<{ started: number; skipped: number; failed: number }> {
   const due = (
     await pool.query<{ workspace_id: string; id: string }>(
       `SELECT workspace_id,id FROM campaign_approvals WHERE ${DUE}
@@ -150,12 +107,7 @@ export async function startDueCampaignRuns(
       logOperation({ event: "campaign_start_failed", code: failureCode(error), correlation_id: options.correlationId });
       // Outside the rolled-back transaction, so the stamp stays. It changes neither the version nor the due time;
       // when it cannot be written the approval keeps its place and the step still fails.
-      await client
-        .query(
-          "UPDATE campaign_approvals SET start_failed_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2 AND status='approved'",
-          [workspace_id, id],
-        )
-        .catch(() => undefined);
+      await client.query("UPDATE campaign_approvals SET start_failed_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2 AND status='approved'", [workspace_id, id]).catch(() => undefined);
     } finally {
       client.release();
     }
@@ -209,9 +161,7 @@ async function detail(client: PoolClient, workspace: string, id: string) {
               reserved: start_counts.plan_limit_reserved as string,
             },
     },
-    delivery_counts: Object.fromEntries(
-      CAMPAIGN_DELIVERY_STATUSES.map((status) => [status, (delivery_counts[status] as string | undefined) ?? "0"]),
-    ),
+    delivery_counts: Object.fromEntries(CAMPAIGN_DELIVERY_STATUSES.map((status) => [status, (delivery_counts[status] as string | undefined) ?? "0"])),
     // The delivery worker sends the rows; the global send switch still decides whether it runs.
     delivery_available: true,
   };
@@ -242,19 +192,11 @@ export async function cancelCampaignRun(pool: Pool, user: User, id: string, inpu
   return transaction(pool, user, true, async (client, workspace): Promise<RunCancel> => {
     if (!isUuid(id)) throw new ApiError(404, "campaign_run_not_found");
     id = id.toLowerCase();
-    const current = (
-      await client.query<{ status: string; version: number }>(
-        "SELECT status,version FROM campaign_runs WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
-        [workspace, id],
-      )
-    ).rows[0];
+    const current = (await client.query<{ status: string; version: number }>("SELECT status,version FROM campaign_runs WHERE workspace_id=$1 AND id=$2 FOR UPDATE", [workspace, id])).rows[0];
     if (!current) throw new ApiError(404, "campaign_run_not_found");
-    if (current.status === "cancelled")
-      return { error: "campaign_run_cancelled", run: await detail(client, workspace, id) };
-    if (current.status === "completed")
-      return { error: "campaign_run_completed", run: await detail(client, workspace, id) };
-    if (current.version !== request.expected_version)
-      return { error: "campaign_run_conflict", run: await detail(client, workspace, id) };
+    if (current.status === "cancelled") return { error: "campaign_run_cancelled", run: await detail(client, workspace, id) };
+    if (current.status === "completed") return { error: "campaign_run_completed", run: await detail(client, workspace, id) };
+    if (current.version !== request.expected_version) return { error: "campaign_run_conflict", run: await detail(client, workspace, id) };
     const cancelled = await client.query(
       `UPDATE campaign_deliveries SET status='cancelled',updated_at=clock_timestamp()
        WHERE workspace_id=$1 AND run_id=$2 AND status='pending'`,

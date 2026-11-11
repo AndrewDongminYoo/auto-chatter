@@ -68,37 +68,17 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
   function flowItem(flow) {
     const item = node("div", "", "item");
     const badges = node("div", "", "badges");
-    badges.append(
-      badge(flow.published_version_no ? `발행 v${flow.published_version_no}` : "미발행"),
-      badge(flow.enabled ? "켜짐" : "꺼짐", flow.enabled ? "success" : ""),
-    );
+    badges.append(badge(flow.published_version_no ? `발행 v${flow.published_version_no}` : "미발행"), badge(flow.enabled ? "켜짐" : "꺼짐", flow.enabled ? "success" : ""));
     const open = node("button", "열기", "secondary");
     open.type = "button";
     open.setAttribute("aria-label", `${flow.name} 플로 열기`);
     open.addEventListener("click", () => openFlow(flow.id, open));
-    item.append(
-      node("strong", flow.name),
-      badges,
-      node("p", `${new Date(flow.updated_at).toLocaleString("ko-KR")} 수정`, "hint"),
-      open,
-    );
+    item.append(node("strong", flow.name), badges, node("p", `${new Date(flow.updated_at).toLocaleString("ko-KR")} 수정`, "hint"), open);
     return item;
   }
   function renderList() {
     byId("flow-count").textContent = flows.length;
-    byId("flows").replaceChildren(
-      ...(flows.length
-        ? flows.map(flowItem)
-        : [
-            node(
-              "p",
-              isAdmin()
-                ? "아직 만든 플로가 없습니다. 아래에서 이름을 정해 첫 플로를 만들어 보세요."
-                : "아직 만든 플로가 없습니다.",
-              "hint",
-            ),
-          ]),
-    );
+    byId("flows").replaceChildren(...(flows.length ? flows.map(flowItem) : [node("p", isAdmin() ? "아직 만든 플로가 없습니다. 아래에서 이름을 정해 첫 플로를 만들어 보세요." : "아직 만든 플로가 없습니다.", "hint")]));
   }
   async function loadList() {
     const session = epoch;
@@ -202,11 +182,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
           : current.published
             ? `저장한 초안입니다. 발행 버전은 v${current.published}이며, 초안을 발행해야 실행에 반영됩니다.`
             : `저장한 초안입니다. 발행하고 켜야 새 ${flowStartName(draft)}에 실행됩니다.`;
-    byId("flow-badges").replaceChildren(
-      badge(current.published ? `발행 v${current.published}` : "미발행"),
-      badge(current.enabled ? "켜짐" : "꺼짐", current.enabled ? "success" : ""),
-      ...(unsaved ? [badge("저장 전", "warning")] : []),
-    );
+    byId("flow-badges").replaceChildren(badge(current.published ? `발행 v${current.published}` : "미발행"), badge(current.enabled ? "켜짐" : "꺼짐", current.enabled ? "success" : ""), ...(unsaved ? [badge("저장 전", "warning")] : []));
   }
   function renderEditor() {
     const admin = canEdit();
@@ -265,15 +241,10 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
   // version ({ version_no, definition }), the draft as a test run sent it ({ label, definition }), or null
   // when the published version could not be read.
   function showErrors(errors, heading, checked) {
-    if (checked === undefined || flowSameDocument(checked?.definition, draft))
-      ({ placed, general } = flowPlaceErrors(draft, errors));
+    if (checked === undefined || flowSameDocument(checked?.definition, draft)) ({ placed, general } = flowPlaceErrors(draft, errors));
     else {
       placed = [];
-      general = flowErrorsElsewhere(
-        checked?.definition,
-        errors,
-        checked?.label ?? (checked ? `발행 버전 v${checked.version_no}` : "발행 버전"),
-      );
+      general = flowErrorsElsewhere(checked?.definition, errors, checked?.label ?? (checked ? `발행 버전 v${checked.version_no}` : "발행 버전"));
     }
     generalHeading = heading;
     renderOutline();
@@ -285,8 +256,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
   // or null when it cannot be read.
   async function publishedVersion(id, versionNo) {
     try {
-      const number =
-        versionNo ?? (await api(`/api/flows/${id}/versions`)).versions.find((version) => version.current)?.version_no;
+      const number = versionNo ?? (await api(`/api/flows/${id}/versions`)).versions.find((version) => version.current)?.version_no;
       if (!number) return null;
       return { version_no: number, definition: (await api(`/api/flows/${id}/versions/${number}`)).definition };
     } catch {
@@ -332,19 +302,14 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     for (const [optionValue, text] of options) element.add(new Option(text, optionValue));
     // Without a value the first option stays selected.
     if (value === undefined || value === null) return element;
-    if (![...element.options].some((option) => option.value === value))
-      element.add(new Option("사용할 수 없는 항목", value));
+    if (![...element.options].some((option) => option.value === value)) element.add(new Option("사용할 수 없는 항목", value));
     element.value = value;
     return element;
   }
   function fieldSelect(filter, value, emptyLabel) {
     const options = fields.filter(filter).map((field) => [field.id, `${field.name} · ${fieldTypeLabels[field.type]}`]);
-    const element = select(
-      emptyLabel ? [["", emptyLabel], ...options] : options,
-      value || (emptyLabel ? "" : undefined),
-    );
-    for (const option of element.options)
-      if (option.text === "사용할 수 없는 항목") option.text = "사용할 수 없는 필드";
+    const element = select(emptyLabel ? [["", emptyLabel], ...options] : options, value || (emptyLabel ? "" : undefined));
+    for (const option of element.options) if (option.text === "사용할 수 없는 항목") option.text = "사용할 수 없는 필드";
     return element;
   }
   const fieldOf = (id) => fields.find((field) => sameId(field.id, id));
@@ -434,23 +399,13 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
           condition.sync();
           update({ connection_id: account.value, ...condition.values() });
         });
-        box.append(
-          labelled("Instagram 계정", account, "이 계정이 받은 일반 텍스트 DM에서 시작합니다."),
-          labelled("DM 조건", condition.mode),
-          ...condition.labels,
-        );
+        box.append(labelled("Instagram 계정", account, "이 계정이 받은 일반 텍스트 DM에서 시작합니다."), labelled("DM 조건", condition.mode), ...condition.labels);
         break;
       }
       case "instagram_dm_default": {
         const account = accountSelect(config.connection_id);
         account.addEventListener("input", () => update({ connection_id: account.value }));
-        box.append(
-          labelled(
-            "Instagram 계정",
-            account,
-            "켜진 DM 키워드 플로 어디에도 맞지 않은 일반 텍스트 DM에서 시작합니다. 계정마다 하나만 켤 수 있습니다.",
-          ),
-        );
+        box.append(labelled("Instagram 계정", account, "켜진 DM 키워드 플로 어디에도 맞지 않은 일반 텍스트 DM에서 시작합니다. 계정마다 하나만 켤 수 있습니다."));
         break;
       }
       case "instagram_comment": {
@@ -464,12 +419,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
           condition.sync();
           update({ connection_id: account.value, media_id: media.value.trim(), ...condition.values() });
         });
-        box.append(
-          labelled("Instagram 계정", account),
-          labelled("게시물 ID", media, "자동화할 게시물의 숫자 ID입니다."),
-          labelled("댓글 조건", condition.mode),
-          ...condition.labels,
-        );
+        box.append(labelled("Instagram 계정", account), labelled("게시물 ID", media, "자동화할 게시물의 숫자 ID입니다."), labelled("댓글 조건", condition.mode), ...condition.labels);
         break;
       }
       case "instagram_message": {
@@ -480,17 +430,10 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
         text.addEventListener("input", () => update({ text: text.value }));
         // Publish refuses every variable in a DM flow's messages (dm_trigger_unsupported_variable).
         if (flowIsDmFlow(draft)) {
-          box.append(
-            labelled("보낼 메시지", text, "최대 1,000자입니다. DM 트리거 플로의 메시지에는 변수를 쓸 수 없습니다."),
-          );
+          box.append(labelled("보낼 메시지", text, "최대 1,000자입니다. DM 트리거 플로의 메시지에는 변수를 쓸 수 없습니다."));
           break;
         }
-        const variables = select([
-          ["{{comment.text}}", "댓글 본문"],
-          ...fields
-            .filter((field) => field.type !== "boolean")
-            .map((field) => [`{{field:${field.id}}}`, `${field.name} 필드 값`]),
-        ]);
+        const variables = select([["{{comment.text}}", "댓글 본문"], ...fields.filter((field) => field.type !== "boolean").map((field) => [`{{field:${field.id}}}`, `${field.name} 필드 값`])]);
         const insert = node("button", "넣기", "secondary");
         insert.type = "button";
         insert.addEventListener("click", () => {
@@ -500,10 +443,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
         });
         const variableRow = node("div", "", "flow-slot-form");
         variableRow.append(labelled("변수", variables), insert);
-        box.append(
-          labelled("보낼 메시지", text, "최대 1,000자입니다. 변수는 보내기 전에 한 번만 채웁니다."),
-          variableRow,
-        );
+        box.append(labelled("보낼 메시지", text, "최대 1,000자입니다. 변수는 보내기 전에 한 번만 채웁니다."), variableRow);
         break;
       }
       case "has_tag":
@@ -536,13 +476,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
           // when both fields have the same type, and otherwise starts from the new field's default.
           const before = fieldOf(valueField);
           const chosen = fieldOf(field.value);
-          const typed = !value
-            ? condition
-              ? config.field_value
-              : config.value
-            : before?.type === chosen?.type
-              ? readValue(before, value)
-              : flowFieldDefault(chosen);
+          const typed = !value ? (condition ? config.field_value : config.value) : before?.type === chosen?.type ? readValue(before, value) : flowFieldDefault(chosen);
           valueField = field.value;
           value = valueControl(chosen, typed);
           valueSlot.replaceChildren(labelled(condition ? "비교할 값" : "저장할 값", value));
@@ -602,20 +536,11 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
         const read = () => update({ timeout_minutes: flowTypedNumber(timeout.value), save_field_id: save.value });
         timeout.addEventListener("input", read);
         save.addEventListener("change", read);
-        box.append(
-          labelled("응답을 기다릴 시간(분)", timeout, "1분부터 10,080분(7일)까지입니다."),
-          labelled("응답을 저장할 텍스트 필드", save),
-        );
+        box.append(labelled("응답을 기다릴 시간(분)", timeout, "1분부터 10,080분(7일)까지입니다."), labelled("응답을 저장할 텍스트 필드", save));
         break;
       }
       case "webhook": {
-        const endpoint = select(
-          [
-            ["", "주소 선택"],
-            ...endpoints.map((candidate) => [candidate.id, `${candidate.name}${candidate.active ? "" : " (꺼짐)"}`]),
-          ],
-          config.endpoint_id || "",
-        );
+        const endpoint = select([["", "주소 선택"], ...endpoints.map((candidate) => [candidate.id, `${candidate.name}${candidate.active ? "" : " (꺼짐)"}`])], config.endpoint_id || "");
         const chosen = new Set(flowStoredList(config.field_ids).map((id) => String(id).toLowerCase()));
         const checks = document.createElement("fieldset");
         checks.className = "flow-checks";
@@ -630,16 +555,11 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
           checks.append(label);
           return check;
         };
-        const boxes = fields.map((field) =>
-          checkbox(field.id, chosen.has(field.id.toLowerCase()), `${field.name} · ${fieldTypeLabels[field.type]}`),
-        );
+        const boxes = fields.map((field) => checkbox(field.id, chosen.has(field.id.toLowerCase()), `${field.name} · ${fieldTypeLabels[field.type]}`));
         // Fields the list no longer has (archived) stay checked so publish names this step; unchecking one
         // removes it from the step.
-        const unknown = flowUnavailableFieldIds(config.field_ids, fields).map((id, index) =>
-          checkbox(id, true, `사용할 수 없는 필드 ${index + 1} · 보관됐거나 없음`),
-        );
-        if (unknown.length)
-          checks.append(node("p", "사용할 수 없는 필드는 보낼 수 없습니다. 선택을 해제하고 저장해 주세요.", "hint"));
+        const unknown = flowUnavailableFieldIds(config.field_ids, fields).map((id, index) => checkbox(id, true, `사용할 수 없는 필드 ${index + 1} · 보관됐거나 없음`));
+        if (unknown.length) checks.append(node("p", "사용할 수 없는 필드는 보낼 수 없습니다. 선택을 해제하고 저장해 주세요.", "hint"));
         if (!fields.length) checks.append(node("p", "만든 필드가 없습니다.", "hint"));
         const tags = document.createElement("input");
         tags.type = "checkbox";
@@ -653,12 +573,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
             include_tags: tags.checked,
           });
         box.addEventListener("change", read);
-        box.append(
-          labelled("보낼 주소", endpoint, "외부 전송 영역에서 등록한 주소입니다. 꺼진 주소로는 발행할 수 없습니다."),
-          checks,
-          tagLabel,
-          node("p", `필드는 최대 ${flowLimit("webhookFields")}개까지 보낼 수 있습니다.`, "hint"),
-        );
+        box.append(labelled("보낼 주소", endpoint, "외부 전송 영역에서 등록한 주소입니다. 꺼진 주소로는 발행할 수 없습니다."), checks, tagLabel, node("p", `필드는 최대 ${flowLimit("webhookFields")}개까지 보낼 수 있습니다.`, "hint"));
         break;
       }
       default:
@@ -719,20 +634,15 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
   }
   function slotName(from, port) {
     const item = flowNodeById(draft, from);
-    return flowPorts(item?.type).length > 1
-      ? `${stepName(from)}의 ${flowPortLabel(port)} 가지`
-      : `${stepName(from)} 뒤`;
+    return flowPorts(item?.type).length > 1 ? `${stepName(from)}의 ${flowPortLabel(port)} 가지` : `${stepName(from)} 뒤`;
   }
   function emptyItem(entry) {
     const item = node("li", "", "flow-slot");
     item.dataset.slot = `${entry.from}:${entry.port}`;
-    item.append(
-      node("p", entry.port === "next" ? "여기서 끝납니다." : "이 가지는 비어 있어 여기서 끝납니다.", "flow-slot-text"),
-    );
+    item.append(node("p", entry.port === "next" ? "여기서 끝납니다." : "이 가지는 비어 있어 여기서 끝납니다.", "flow-slot-text"));
     if (!canEdit()) return item;
     const types = flowSlotTypes(draft, entry.from, entry.port);
-    if (types.length)
-      item.append(addForm(entry.from, [entry.port], `${slotName(entry.from, entry.port)}에 추가할 단계`));
+    if (types.length) item.append(addForm(entry.from, [entry.port], `${slotName(entry.from, entry.port)}에 추가할 단계`));
     const link = linkForm(entry.from, entry.port);
     if (link) item.append(link);
     return item;
@@ -752,9 +662,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
       const unlink = node("button", "연결 끊기", "secondary");
       unlink.type = "button";
       unlink.setAttribute("aria-label", `${slotName(entry.from, entry.port)}의 연결 끊기`);
-      unlink.addEventListener("click", () =>
-        change(flowDisconnect(draft, entry.from, entry.port), `[data-slot="${entry.from}:${entry.port}"] select`),
-      );
+      unlink.addEventListener("click", () => change(flowDisconnect(draft, entry.from, entry.port), `[data-slot="${entry.from}:${entry.port}"] select`));
       item.append(unlink);
     }
     return item;
@@ -762,11 +670,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
   function stepItem(entry) {
     const item = flowNodeById(draft, entry.id);
     const errors = placed.filter((error) => error.node_id === entry.id);
-    const element = node(
-      "li",
-      "",
-      `flow-step${path.has(entry.id) ? " on-path" : ""}${errors.length ? " has-error" : ""}`,
-    );
+    const element = node("li", "", `flow-step${path.has(entry.id) ? " on-path" : ""}${errors.length ? " has-error" : ""}`);
     element.id = `flow-step-${entry.id}`;
     const title = node("p", "", "flow-step-title");
     title.id = `flow-step-title-${entry.id}`;
@@ -807,30 +711,13 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     // In front of the step a port already leads to; empty ports have their own slot in the outline.
     const occupied = flowPorts(item.type).filter((port) => flowEdge(draft, item.id, port));
     const insertable = occupied.filter((port) => flowSlotTypes(draft, item.id, port).length);
-    if (insertable.length)
-      menu.append(
-        addForm(
-          item.id,
-          insertable,
-          insertable.length > 1
-            ? "넣을 단계"
-            : flowPorts(item.type).length > 1
-              ? `${slotName(item.id, insertable[0])} 맨 앞에 넣을 단계`
-              : `${stepName(item.id)} 바로 뒤에 넣을 단계`,
-        ),
-      );
+    if (insertable.length) menu.append(addForm(item.id, insertable, insertable.length > 1 ? "넣을 단계" : flowPorts(item.type).length > 1 ? `${slotName(item.id, insertable[0])} 맨 앞에 넣을 단계` : `${stepName(item.id)} 바로 뒤에 넣을 단계`));
     if (flowRemovable(draft, item.id)) {
       const remove = node("button", "단계 삭제", "secondary danger");
       remove.type = "button";
       remove.addEventListener("click", () => {
         const children = flowChildCount(draft, item.id);
-        if (
-          children &&
-          !confirm(
-            `${stepName(item.id)} 단계를 삭제할까요? 뒤에 이어진 단계 ${children}개는 남지만 트리거에서 이어지지 않게 되어, 다시 연결하거나 삭제해야 발행할 수 있습니다.`,
-          )
-        )
-          return;
+        if (children && !confirm(`${stepName(item.id)} 단계를 삭제할까요? 뒤에 이어진 단계 ${children}개는 남지만 트리거에서 이어지지 않게 되어, 다시 연결하거나 삭제해야 발행할 수 있습니다.`)) return;
         const incoming = draft.edges.find((edge) => edge.to === item.id);
         openMenus.delete(item.id);
         // A later step may take this ID again, so its publish errors go with it; change() drops the test path.
@@ -844,8 +731,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
   }
   function sequence(items) {
     const list = node("ol", "", "flow-sequence");
-    for (const entry of items)
-      list.append(entry.kind === "step" ? stepItem(entry) : entry.kind === "link" ? linkItem(entry) : emptyItem(entry));
+    for (const entry of items) list.append(entry.kind === "step" ? stepItem(entry) : entry.kind === "link" ? linkItem(entry) : emptyItem(entry));
     return list;
   }
   function renderOutline() {
@@ -869,24 +755,13 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
           });
           starts.append(start);
         }
-        parts.push(
-          node(
-            "p",
-            "플로는 트리거 하나에서 시작합니다. 트리거 종류는 만든 뒤 바꿀 수 없으니, 다른 종류로 시작하려면 새 플로를 만들어 주세요. DM 트리거 플로에는 메시지 보내기 하나만 이어집니다.",
-            "hint",
-          ),
-          starts,
-        );
+        parts.push(node("p", "플로는 트리거 하나에서 시작합니다. 트리거 종류는 만든 뒤 바꿀 수 없으니, 다른 종류로 시작하려면 새 플로를 만들어 주세요. DM 트리거 플로에는 메시지 보내기 하나만 이어집니다.", "hint"), starts);
       } else parts.push(node("p", "아직 트리거가 없습니다.", "hint"));
     }
     if (outline.steps.length) parts.push(sequence(outline.steps));
     if (outline.unreachable.length) {
       const group = node("div", "", "flow-unreachable");
-      group.append(
-        node("h5", "트리거에서 이어지지 않는 단계"),
-        node("p", "실행되지 않는 단계입니다. 발행하려면 위의 빈 자리에 연결하거나 삭제해 주세요.", "hint"),
-        ...outline.unreachable.map(sequence),
-      );
+      group.append(node("h5", "트리거에서 이어지지 않는 단계"), node("p", "실행되지 않는 단계입니다. 발행하려면 위의 빈 자리에 연결하거나 삭제해 주세요.", "hint"), ...outline.unreachable.map(sequence));
       parts.push(group);
     }
     byId("flow-outline").replaceChildren(...parts);
@@ -960,11 +835,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
       group.append(
         svg("rect", { x: position.x, y: position.y, width: layout.nodeWidth, height: layout.nodeHeight, rx: 6 }),
         svg("text", { x: position.x + 10, y: position.y + 22 }, clip(stepName(position.id), 18)),
-        svg(
-          "text",
-          { x: position.x + 10, y: position.y + 42, class: "flow-graph-detail" },
-          clip(flowSummary(item, names), 20),
-        ),
+        svg("text", { x: position.x + 10, y: position.y + 42, class: "flow-graph-detail" }, clip(flowSummary(item, names), 20)),
       );
       graph.append(group);
     }
@@ -979,17 +850,14 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
   function syncTestForm() {
     const dm = flowIsDmFlow(draft);
     byId("flow-test-text-label").textContent = dm ? "DM 내용" : "댓글 본문";
-    for (const id of ["flow-test-tags", "flow-test-values", "flow-test-reply", "flow-test-branch"])
-      byId(id).hidden = dm;
+    for (const id of ["flow-test-tags", "flow-test-values", "flow-test-reply", "flow-test-branch"]) byId(id).hidden = dm;
   }
   function resetTestForm() {
     const form = byId("flow-test-form");
     form.reset();
     testFields.clear();
     byId("flow-test-fields").replaceChildren();
-    form.elements.field_pick.replaceChildren(
-      ...fields.map((field) => new Option(`${field.name} · ${fieldTypeLabels[field.type]}`, field.id)),
-    );
+    form.elements.field_pick.replaceChildren(...fields.map((field) => new Option(`${field.name} · ${fieldTypeLabels[field.type]}`, field.id)));
     byId("flow-test-add-field").disabled = !fields.length;
   }
   function addTestField() {
@@ -1022,9 +890,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
       source: values.source.value,
       comment_text: values.comment_text.value,
       tags: flowLines(values.tags.value),
-      fields: Object.fromEntries(
-        [...testFields.values()].map(({ field, control }) => [field.id, readValue(field, control)]),
-      ),
+      fields: Object.fromEntries([...testFields.values()].map(({ field, control }) => [field.id, readValue(field, control)])),
       ...(values.reply_text.value ? { reply_text: values.reply_text.value } : {}),
       reply_branch: values.reply_branch.value,
     };
@@ -1044,11 +910,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     const label = same ? stepName : flowStepLabels(ran);
     const box = byId("flow-test-result");
     const source = result.source === "published" ? `발행 버전 v${result.version_no}` : "저장한 초안";
-    const status = node(
-      "p",
-      `${source} · ${flowTestStatus(result.status)}${result.failure_code ? ` ${flowFailureMessage(result.failure_code)}` : ""}`,
-      `flow-test-status${result.status === "failed" ? " form-error" : ""}`,
-    );
+    const status = node("p", `${source} · ${flowTestStatus(result.status)}${result.failure_code ? ` ${flowFailureMessage(result.failure_code)}` : ""}`, `flow-test-status${result.status === "failed" ? " form-error" : ""}`);
     status.setAttribute("role", "status");
     const parts = [node("h5", "테스트 결과"), status];
     if (!same)
@@ -1070,11 +932,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     }
     if (result.messages.length) {
       parts.push(node("h6", "보낼 메시지"));
-      for (const message of result.messages)
-        parts.push(
-          node("p", label(message.node_id), "hint"),
-          node("p", message.text, "bubble outgoing flow-test-message"),
-        );
+      for (const message of result.messages) parts.push(node("p", label(message.node_id), "hint"), node("p", message.text, "bubble outgoing flow-test-message"));
     }
     if (result.waits.length) {
       const waits = node("ul", "");
@@ -1085,26 +943,16 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     const fieldChanges = Object.entries(result.changes.fields);
     const changesList = node("ul", "");
     for (const [tag, member] of tagChanges) changesList.append(node("li", `태그 "${tag}" ${member ? "추가" : "제거"}`));
-    for (const [id, value] of fieldChanges)
-      changesList.append(node("li", `${names.field(id) ?? "사용할 수 없는 필드"} 필드: ${flowValueText(value)}`));
-    parts.push(
-      node("h6", "태그·필드 변경"),
-      tagChanges.length || fieldChanges.length ? changesList : node("p", "바뀌는 태그와 필드 값이 없습니다.", "hint"),
-    );
+    for (const [id, value] of fieldChanges) changesList.append(node("li", `${names.field(id) ?? "사용할 수 없는 필드"} 필드: ${flowValueText(value)}`));
+    parts.push(node("h6", "태그·필드 변경"), tagChanges.length || fieldChanges.length ? changesList : node("p", "바뀌는 태그와 필드 값이 없습니다.", "hint"));
     if (result.webhooks.length) {
       parts.push(node("h6", "외부 전송 미리보기"));
-      for (const webhook of result.webhooks)
-        parts.push(
-          node("p", `${label(webhook.node_id)} → ${names.endpoint(webhook.endpoint_id) ?? "등록한 주소"}`, "hint"),
-          node("pre", JSON.stringify(webhook.payload, null, 2), "flow-test-payload"),
-        );
+      for (const webhook of result.webhooks) parts.push(node("p", `${label(webhook.node_id)} → ${names.endpoint(webhook.endpoint_id) ?? "등록한 주소"}`, "hint"), node("pre", JSON.stringify(webhook.payload, null, 2), "flow-test-payload"));
     }
     parts.push(
       node(
         "p",
-        flowIsDmFlow(flowReadable(ran) ? ran : draft)
-          ? "실제로 보내거나 저장한 것은 없습니다. 수신 거부, 상담 상태와 DM 24시간 응답 기간은 확인하지 않았습니다."
-          : "실제로 보내거나 저장한 것은 없습니다. 저장된 연락처, 동의, 상담 상태와 7일 댓글 답장 기간은 확인하지 않았습니다.",
+        flowIsDmFlow(flowReadable(ran) ? ran : draft) ? "실제로 보내거나 저장한 것은 없습니다. 수신 거부, 상담 상태와 DM 24시간 응답 기간은 확인하지 않았습니다." : "실제로 보내거나 저장한 것은 없습니다. 저장된 연락처, 동의, 상담 상태와 7일 댓글 답장 기간은 확인하지 않았습니다.",
         "hint",
       ),
     );
@@ -1259,12 +1107,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     });
   });
   byId("flow-archive").addEventListener("click", (event) => {
-    if (
-      !confirm(
-        `"${current.name}" 플로를 보관할까요? 꺼지고 발행 버전이 해제되며 목록에서 사라집니다. 기다리는 중인 실행은 재개할 때 취소됩니다. 보관한 플로는 이 화면에서 다시 열 수 없습니다.`,
-      )
-    )
-      return;
+    if (!confirm(`"${current.name}" 플로를 보관할까요? 꺼지고 발행 버전이 해제되며 목록에서 사라집니다. 기다리는 중인 실행은 재개할 때 취소됩니다. 보관한 플로는 이 화면에서 다시 열 수 없습니다.`)) return;
     void run(event.currentTarget, async () => {
       const session = epoch;
       const id = current.id;
@@ -1318,29 +1161,14 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
         if (error.code === "revision_conflict") {
           // The revision it sent was this editor's; an editor opened since has its own.
           if (current !== editing) return;
-          byId("flow-test-result").replaceChildren(
-            node(
-              "p",
-              "다른 곳에서 초안을 먼저 저장해 테스트하지 않았습니다. 최신 초안을 불러온 뒤 다시 실행해 주세요.",
-              "form-error",
-            ),
-          );
+          byId("flow-test-result").replaceChildren(node("p", "다른 곳에서 초안을 먼저 저장해 테스트하지 않았습니다. 최신 초안을 불러온 뒤 다시 실행해 주세요.", "form-error"));
           return showConflict();
         }
         if (error.status === 422 && Array.isArray(error.errors)) {
-          const published =
-            body.source === "published" ? await publishedVersion(id) : { label: "테스트한 초안", definition: tested };
+          const published = body.source === "published" ? await publishedVersion(id) : { label: "테스트한 초안", definition: tested };
           if (session !== epoch || current?.id !== id) return;
-          byId("flow-test-result").replaceChildren(
-            node("p", "테스트할 수 없습니다. 위에 표시한 문제를 고친 뒤 다시 실행해 주세요.", "form-error"),
-          );
-          return showErrors(
-            error.errors,
-            error.code === "flow_not_executable"
-              ? "실행할 수 없는 단계가 있습니다."
-              : "발행 검증을 통과하지 못했습니다.",
-            published,
-          );
+          byId("flow-test-result").replaceChildren(node("p", "테스트할 수 없습니다. 위에 표시한 문제를 고친 뒤 다시 실행해 주세요.", "form-error"));
+          return showErrors(error.errors, error.code === "flow_not_executable" ? "실행할 수 없는 단계가 있습니다." : "발행 검증을 통과하지 못했습니다.", published);
         }
         throw error;
       }

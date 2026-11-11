@@ -52,32 +52,24 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     ["candidate", "조건 통과"],
   ];
   const messages = {
-    invalid_campaign_draft:
-      "이름은 60자 이내, 본문은 1,000자 이내로 입력해 주세요. 변수 문법과 제어 문자는 사용할 수 없습니다.",
-    campaign_draft_conflict:
-      "다른 곳에서 초안이 변경되었거나 보관되었습니다. 입력은 유지됩니다. 저장된 값을 다시 불러온 뒤 수정해 주세요.",
+    invalid_campaign_draft: "이름은 60자 이내, 본문은 1,000자 이내로 입력해 주세요. 변수 문법과 제어 문자는 사용할 수 없습니다.",
+    campaign_draft_conflict: "다른 곳에서 초안이 변경되었거나 보관되었습니다. 입력은 유지됩니다. 저장된 값을 다시 불러온 뒤 수정해 주세요.",
     campaign_draft_not_found: "초안을 찾을 수 없습니다. 목록을 새로고침하고 다시 선택해 주세요.",
     snapshot_not_found: "고정한 대상을 찾을 수 없습니다. 목록을 새로고침하고 다른 대상을 선택해 주세요.",
-    campaign_draft_limit_reached:
-      "초안은 보관된 항목을 포함해 100개까지 저장할 수 있습니다. 보관해도 한도가 늘어나지 않습니다. 기존 초안을 수정해 주세요.",
+    campaign_draft_limit_reached: "초안은 보관된 항목을 포함해 100개까지 저장할 수 있습니다. 보관해도 한도가 늘어나지 않습니다. 기존 초안을 수정해 주세요.",
     role_forbidden: "소유자와 관리자만 캠페인 초안을 관리할 수 있습니다. 작업 공간 소유자에게 권한을 확인해 주세요.",
     rate_limited: "요청이 많습니다. 잠시 후 다시 시도해 주세요.",
-    approval_active:
-      "다른 곳에서 이 초안의 실행 승인이 기록되었습니다. 입력은 유지됩니다. 수정하거나 보관하려면 먼저 승인을 취소해 주세요.",
+    approval_active: "다른 곳에서 이 초안의 실행 승인이 기록되었습니다. 입력은 유지됩니다. 수정하거나 보관하려면 먼저 승인을 취소해 주세요.",
   };
   const message = (error) => messages[error.code] || "불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
   const approvalMessages = {
     approval_exists: "다른 곳에서 이 초안의 실행 승인이 먼저 기록되었습니다. 현재 승인을 표시합니다.",
-    campaign_draft_conflict:
-      "다른 곳에서 초안이 변경되었거나 보관되었습니다. 저장된 초안을 다시 표시했습니다. 내용을 확인한 뒤 다시 승인해 주세요.",
-    campaign_approval_conflict:
-      "다른 곳에서 승인이 변경되었습니다. 현재 승인을 표시합니다. 확인한 뒤 다시 시도해 주세요.",
+    campaign_draft_conflict: "다른 곳에서 초안이 변경되었거나 보관되었습니다. 저장된 초안을 다시 표시했습니다. 내용을 확인한 뒤 다시 승인해 주세요.",
+    campaign_approval_conflict: "다른 곳에서 승인이 변경되었습니다. 현재 승인을 표시합니다. 확인한 뒤 다시 시도해 주세요.",
     campaign_approval_cancelled: "이미 취소된 승인입니다. 현재 상태를 표시합니다.",
     campaign_approval_executed: "이미 실행이 시작된 승인이라 바꾸거나 취소할 수 없습니다. 현재 상태를 표시합니다.",
-    campaign_version_executed:
-      "이 초안 버전은 이미 실행되었습니다. 다시 보내려면 초안을 수정해 저장한 뒤 승인해 주세요. 실행된 승인을 표시합니다.",
-    campaign_schedule_timezone_changed:
-      "작업 공간 시간대가 다른 곳에서 바뀌었습니다. 페이지를 새로고침해 바뀐 시간대를 확인한 뒤 다시 시도해 주세요.",
+    campaign_version_executed: "이 초안 버전은 이미 실행되었습니다. 다시 보내려면 초안을 수정해 저장한 뒤 승인해 주세요. 실행된 승인을 표시합니다.",
+    campaign_schedule_timezone_changed: "작업 공간 시간대가 다른 곳에서 바뀌었습니다. 페이지를 새로고침해 바뀐 시간대를 확인한 뒤 다시 시도해 주세요.",
     campaign_schedule_out_of_range: "예약 시각은 현재보다 1분 이상 뒤여야 합니다. 시각을 다시 선택해 주세요.",
     invalid_campaign_approval: "실행 시점을 확인해 주세요. 예약은 날짜와 시각을 모두 선택해야 합니다.",
     campaign_approval_not_found: "승인을 찾을 수 없습니다. 승인 상태를 새로고침해 주세요.",
@@ -91,8 +83,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
         ? "이 초안 버전의 실행은 월 캠페인 발송 한도를 넘어 시작하지 않았고 아무에게도 보내지 않았습니다. 다시 보내려면 초안을 수정해 저장한 뒤 승인해 주세요. 그 승인을 표시합니다."
         : approvalMessages[error.code] || message(error);
   const runMessages = {
-    campaign_run_conflict:
-      "다른 곳에서 실행 상태가 바뀌었습니다. 현재 실행 현황을 표시합니다. 확인한 뒤 다시 시도해 주세요.",
+    campaign_run_conflict: "다른 곳에서 실행 상태가 바뀌었습니다. 현재 실행 현황을 표시합니다. 확인한 뒤 다시 시도해 주세요.",
     campaign_run_cancelled: "이미 취소된 실행입니다. 현재 실행 현황을 표시합니다.",
     campaign_run_completed: "이미 완료된 실행이라 취소할 수 없습니다. 현재 실행 현황을 표시합니다.",
     campaign_run_not_found: "실행을 찾을 수 없습니다. 승인 상태를 새로고침해 주세요.",
@@ -106,21 +97,9 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   ];
   // The run API's seven delivery statuses (send-status-labels.js). "Meta 접수" is Meta's acceptance only; "결과 확인 필요"
   // is never retried automatically.
-  const deliveryStatuses = sendStatusEntries([
-    "pending",
-    "sending",
-    "sent",
-    "failed",
-    "blocked",
-    "unknown",
-    "cancelled",
-  ]);
+  const deliveryStatuses = sendStatusEntries(["pending", "sending", "sent", "failed", "blocked", "unknown", "cancelled"]);
   function draftChanged() {
-    return editing
-      ? fields.name.value !== editing.name ||
-          fields.body.value !== editing.body ||
-          fields.snapshot_id.value !== editing.snapshot_id
-      : Boolean(fields.name.value || fields.body.value || fields.snapshot_id.value);
+    return editing ? fields.name.value !== editing.name || fields.body.value !== editing.body || fields.snapshot_id.value !== editing.snapshot_id : Boolean(fields.name.value || fields.body.value || fields.snapshot_id.value);
   }
   function hasChanges() {
     if (operation || saving || approvalOperation || approving || runOperation || cancelling) return true;
@@ -140,36 +119,18 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   const scheduleChanged = () => {
     const choice = scheduleChoice();
     if (choice === null) return approval.schedule_kind !== "immediate";
-    return !(
-      approval.schedule_kind === "scheduled" &&
-      approval.schedule_time_zone === timeZone &&
-      approval.schedule_local === choice
-    );
+    return !(approval.schedule_kind === "scheduled" && approval.schedule_time_zone === timeZone && approval.schedule_local === choice);
   };
   function controls() {
     const busy = loading || reading || saving || approving || cancelling;
     const pending = Boolean(operation || approvalOperation || runOperation);
     // A draft with an approval in force, or whose approval is being read or written, is read-only.
-    const approvalLock =
-      Boolean(editing) && (approvalActive() || approvalReading || Boolean(approvalOperation) || approving);
+    const approvalLock = Boolean(editing) && (approvalActive() || approvalReading || Boolean(approvalOperation) || approving);
     const locked = !permitted || busy || pending || Boolean(editing?.archived) || unavailable || approvalLock;
     for (const key of ["name", "body", "snapshot_id"]) fields[key].disabled = locked;
     byId("campaign-draft-approval-lock").hidden = !editing || !approvalActive();
-    byId("campaign-draft-save").disabled =
-      !permitted ||
-      busy ||
-      conflict ||
-      unavailable ||
-      Boolean(editing?.archived) ||
-      approvalLock ||
-      (!editing && !operation && drafts.length >= 100);
-    byId("campaign-draft-save").textContent = saving
-      ? "저장 중…"
-      : operation
-        ? "같은 요청 재시도"
-        : editing
-          ? "수정 저장"
-          : "초안 저장";
+    byId("campaign-draft-save").disabled = !permitted || busy || conflict || unavailable || Boolean(editing?.archived) || approvalLock || (!editing && !operation && drafts.length >= 100);
+    byId("campaign-draft-save").textContent = saving ? "저장 중…" : operation ? "같은 요청 재시도" : editing ? "수정 저장" : "초안 저장";
     byId("campaign-draft-archive").hidden = !editing || editing.archived;
     byId("campaign-draft-archive").disabled = !permitted || busy || pending || conflict || unavailable || approvalLock;
     byId("campaign-draft-reload").hidden = !editing;
@@ -183,8 +144,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     // The preview reads the stored draft, so it waits for unsaved edits to be saved.
     const previewButton = byId("campaign-draft-preview-run");
     byId("campaign-draft-preview").hidden = !editing;
-    previewButton.disabled =
-      !permitted || !editing || reading || saving || previewing || conflict || unavailable || hasChanges();
+    previewButton.disabled = !permitted || !editing || reading || saving || previewing || conflict || unavailable || hasChanges();
     previewButton.textContent = previewing ? "확인하는 중…" : "발송 조건 미리보기";
     previewButton.setAttribute("aria-busy", String(previewing));
     approvalControls(busy);
@@ -196,23 +156,12 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     byId("campaign-approval").hidden = !editing;
     byId("campaign-approval").setAttribute("aria-busy", String(approvalReading || approving));
     // The approve control needs the stored, unarchived, unchanged draft and a read that found no approval in force.
-    const canApprove =
-      idle &&
-      !editing.archived &&
-      !operation &&
-      !conflict &&
-      !unavailable &&
-      !draftChanged() &&
-      approvalLoaded &&
-      !active &&
-      !staged &&
-      scheduleReady();
+    const canApprove = idle && !editing.archived && !operation && !conflict && !unavailable && !draftChanged() && approvalLoaded && !active && !staged && scheduleReady();
     const inputsLocked = !idle || Boolean(staged) || !approvalLoaded || (!active && Boolean(editing?.archived));
     timing().disabled = inputsLocked;
     scheduleInput().disabled = inputsLocked;
     byId("campaign-approval-schedule-fields").hidden = timing().value !== "later";
-    byId("campaign-approval-schedule-help").textContent =
-      `${timeZone || ""} 기준 작업 공간 현지 시각입니다. 현재보다 1분 이상 뒤의 시각을 선택해 주세요.`;
+    byId("campaign-approval-schedule-help").textContent = `${timeZone || ""} 기준 작업 공간 현지 시각입니다. 현재보다 1분 이상 뒤의 시각을 선택해 주세요.`;
     const confirmVisible = Boolean(staged) || kind === "create";
     const start = byId("campaign-approval-start");
     start.hidden = active || confirmVisible;
@@ -220,8 +169,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     const submit = byId("campaign-approval-submit");
     byId("campaign-approval-confirm").hidden = !confirmVisible;
     submit.disabled = !permitted || busy || approvalReading || (kind !== "create" && !staged);
-    submit.textContent =
-      approving && kind === "create" ? "승인 기록 중…" : kind === "create" ? "같은 요청 재시도" : "승인 기록";
+    submit.textContent = approving && kind === "create" ? "승인 기록 중…" : kind === "create" ? "같은 요청 재시도" : "승인 기록";
     submit.setAttribute("aria-busy", String(approving && kind === "create"));
     byId("campaign-approval-back").hidden = kind === "create";
     byId("campaign-approval-back").disabled = approving;
@@ -231,16 +179,12 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     ]) {
       const button = byId(id);
       button.hidden = !active && kind !== action;
-      button.disabled =
-        kind === action
-          ? !permitted || busy || approvalReading
-          : !idle || !active || (action === "schedule" && (!scheduleReady() || !scheduleChanged()));
+      button.disabled = kind === action ? !permitted || busy || approvalReading : !idle || !active || (action === "schedule" && (!scheduleReady() || !scheduleChanged()));
       button.textContent = approving && kind === action ? busyLabel : kind === action ? "같은 요청 재시도" : label;
       button.setAttribute("aria-busy", String(approving && kind === action));
     }
     // An unresolved run cancel keeps its request; reading the approval again would drop it with the run panel.
-    byId("campaign-approval-refresh").disabled =
-      !permitted || !editing || busy || approvalReading || Boolean(runOperation);
+    byId("campaign-approval-refresh").disabled = !permitted || !editing || busy || approvalReading || Boolean(runOperation);
     runControls(busy);
   }
   function runControls(busy) {
@@ -295,8 +239,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   function limitRefusal(value) {
     try {
       const month = monthText(value?.month);
-      if (value.limit === "0")
-        return "현재 요금제에서는 캠페인을 승인할 수 없습니다. 작업 공간 소유자에게 요금제를 확인해 주세요.";
+      if (value.limit === "0") return "현재 요금제에서는 캠페인을 승인할 수 없습니다. 작업 공간 소유자에게 요금제를 확인해 주세요.";
       return `${month} 캠페인 발송 한도 ${decimal(value.limit)}건 중 남은 ${decimal(value.remaining)}건으로는 조건 통과 ${decimal(value.requested)}명을 승인할 수 없습니다(이번 달 사용 ${decimal(value.used)}건, 같은 달 다른 승인 ${decimal(value.reserved)}건). 실행 시점을 다른 달로 옮기거나 다른 승인을 취소해 주세요.`;
     } catch {
       return "요금제의 이번 달 캠페인 발송 한도를 넘어 승인할 수 없습니다. 실행 시점을 다른 달로 옮기거나 다른 승인을 취소해 주세요.";
@@ -325,22 +268,13 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   const member = (id) => (id && id === userId() ? "나" : `다른 멤버 (${String(id).slice(0, 8)})`);
   const snapshotLabel = (id) => {
     const snapshot = snapshots.find((item) => item.id === id);
-    return snapshot
-      ? `${snapshot.segment_name} · ${new Date(snapshot.as_of).toLocaleString("ko-KR", { timeZone })} · 고정 당시 ${snapshot.member_count}명`
-      : "목록에서 찾을 수 없는 고정 대상";
+    return snapshot ? `${snapshot.segment_name} · ${new Date(snapshot.as_of).toLocaleString("ko-KR", { timeZone })} · 고정 당시 ${snapshot.member_count}명` : "목록에서 찾을 수 없는 고정 대상";
   };
   // Scheduled times show in the zone the approval stored, which a later workspace zone change does not move.
-  const scheduleText = (value) =>
-    value.schedule_kind === "immediate" ? "즉시" : instant(value.scheduled_at, value.schedule_time_zone);
+  const scheduleText = (value) => (value.schedule_kind === "immediate" ? "즉시" : instant(value.scheduled_at, value.schedule_time_zone));
   function renderApproval(value) {
     // Build every node first so a malformed response changes nothing on screen.
-    if (
-      !["approved", "cancelled", "executed"].includes(value?.status) ||
-      !Number.isInteger(value.version) ||
-      (value.run_id != null && typeof value.run_id !== "string") ||
-      (value.run_limited != null && typeof value.run_limited !== "boolean")
-    )
-      throw new Error("invalid approval");
+    if (!["approved", "cancelled", "executed"].includes(value?.status) || !Number.isInteger(value.version) || (value.run_id != null && typeof value.run_id !== "string") || (value.run_limited != null && typeof value.run_limited !== "boolean")) throw new Error("invalid approval");
     const active = value.status === "approved";
     // An executed approval started its run (#36), which the delivery worker sends; the run panel below the approval
     // shows it.
@@ -348,48 +282,21 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     // A run the monthly campaign send limit kept from starting (#52) is completed with no delivery row.
     const limited = executed && value.run_limited === true;
     const entries = [
-      [
-        "상태",
-        active
-          ? "승인됨 · 실행 시점에 서비스 발송이 켜져 있으면 시작"
-          : limited
-            ? "실행을 시작하지 않음 · 이번 달 캠페인 발송 한도 초과"
-            : executed
-              ? "실행 시작됨 · 보내기 직전에 조건을 다시 확인해 발송"
-              : "취소됨",
-      ],
+      ["상태", active ? "승인됨 · 실행 시점에 서비스 발송이 켜져 있으면 시작" : limited ? "실행을 시작하지 않음 · 이번 달 캠페인 발송 한도 초과" : executed ? "실행 시작됨 · 보내기 직전에 조건을 다시 확인해 발송" : "취소됨"],
       ["승인한 초안", `${value.name} · 버전 ${value.draft_version}`],
       ["실행 시점", scheduleText(value)],
       ["승인", `${instant(value.approved_at, timeZone)} · ${member(value.approved_by)}`],
     ];
-    if (value.status === "cancelled")
-      entries.push(["취소", `${instant(value.cancelled_at, timeZone)} · ${member(value.cancelled_by)}`]);
-    entries.push(
-      ["승인 시점 원래 인원", `${decimal(value.preview?.original_member_count)}명`],
-      ["승인 시점 남은 인원", `${decimal(value.preview?.remaining_member_count)}명`],
-      ["조건 기준 시각", instant(value.preview?.as_of, timeZone)],
-    );
+    if (value.status === "cancelled") entries.push(["취소", `${instant(value.cancelled_at, timeZone)} · ${member(value.cancelled_by)}`]);
+    entries.push(["승인 시점 원래 인원", `${decimal(value.preview?.original_member_count)}명`], ["승인 시점 남은 인원", `${decimal(value.preview?.remaining_member_count)}명`], ["조건 기준 시각", instant(value.preview?.as_of, timeZone)]);
     const summary = definitions(entries);
     const rows = reasonRows(value.preview?.counts);
-    const warnings = active
-      ? [
-          node(
-            "p",
-            "실행 시점이 되면 서비스 전체 발송이 켜져 있을 때만 실행이 시작됩니다. 보내기 직전마다 모든 조건을 다시 확인하며, 조건을 통과하지 못한 사람에게는 보내지 않습니다.",
-          ),
-        ]
-      : [];
+    const warnings = active ? [node("p", "실행 시점이 되면 서비스 전체 발송이 켜져 있을 때만 실행이 시작됩니다. 보내기 직전마다 모든 조건을 다시 확인하며, 조건을 통과하지 못한 사람에게는 보내지 않습니다.")] : [];
     // Another approval, or the same one now carrying a run, retires the run shown and any response for it.
     if (approval?.id !== value.id || (approval?.run_id ?? null) !== (value.run_id ?? null)) clearRun();
     approval = value;
     approvalLoaded = true;
-    byId("campaign-approval-current-title").textContent = active
-      ? "유효한 승인"
-      : limited
-        ? "최근 승인 · 실행을 시작하지 않음"
-        : executed
-          ? "최근 승인 · 실행 시작됨"
-          : "최근 승인 · 취소됨";
+    byId("campaign-approval-current-title").textContent = active ? "유효한 승인" : limited ? "최근 승인 · 실행을 시작하지 않음" : executed ? "최근 승인 · 실행 시작됨" : "최근 승인 · 취소됨";
     byId("campaign-approval-warnings").replaceChildren(...warnings);
     byId("campaign-approval-summary").replaceChildren(...summary);
     byId("campaign-approval-rows").replaceChildren(...rows);
@@ -430,11 +337,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
           : `실행 시작 시점에 이번 달 캠페인 발송 한도 ${decimal(limited.limit)}건 중 ${decimal(limited.used)}건을 이미 사용했고 같은 달 다른 승인에 ${decimal(limited.reserved)}건이 예정되어 있어, 조건 통과 ${decimal(limited.candidate)}명 모두에게 보내지 않았습니다.`,
       ]);
     if (value.status === "cancelled") entries.push(["취소 시각", instant(value.cancelled_at, timeZone)]);
-    entries.push(
-      ["시작 시각", instant(value.start?.as_of, timeZone)],
-      ["시작 시점 원래 인원", `${decimal(value.start?.original_member_count)}명`],
-      ["시작 시점 남은 인원", `${decimal(value.start?.remaining_member_count)}명`],
-    );
+    entries.push(["시작 시각", instant(value.start?.as_of, timeZone)], ["시작 시점 원래 인원", `${decimal(value.start?.original_member_count)}명`], ["시작 시점 남은 인원", `${decimal(value.start?.remaining_member_count)}명`]);
     const summary = definitions(entries);
     const rows = reasonRows(value.start?.counts);
     // The limited run's candidates moved out of "조건 통과", so the table still adds up to the remaining members.
@@ -445,9 +348,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       row.append(header, node("td", `${decimal(limited.candidate)}명`));
       rows.push(row);
     }
-    const deliveries = definitions(
-      deliveryStatuses.map(([key, label]) => [label, `${decimal(value.delivery_counts?.[key])}건`]),
-    );
+    const deliveries = definitions(deliveryStatuses.map(([key, label]) => [label, `${decimal(value.delivery_counts?.[key])}건`]));
     run = value;
     byId("campaign-run-summary").replaceChildren(...summary);
     byId("campaign-run-rows").replaceChildren(...rows);
@@ -470,22 +371,19 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     runReading = true;
     controls();
     byId("campaign-run-status").textContent = "실행 현황을 불러오는 중…";
-    const current = () =>
-      session === generation && request === runRequest && editing?.id === draftId && approval?.id === approvalId;
+    const current = () => session === generation && request === runRequest && editing?.id === draftId && approval?.id === approvalId;
     try {
       const result = await api(`/api/campaign-runs/${runId}`);
       if (!current()) return;
       if (result?.id !== runId) {
-        byId("campaign-run-status").textContent =
-          "다른 실행의 응답이라 표시하지 않았습니다. ‘실행 현황 새로고침’을 눌러 주세요.";
+        byId("campaign-run-status").textContent = "다른 실행의 응답이라 표시하지 않았습니다. ‘실행 현황 새로고침’을 눌러 주세요.";
         return;
       }
       renderRun(result);
       byId("campaign-run-status").textContent = "";
     } catch (error) {
       if (!current() || authorizationLost(error)) return;
-      byId("campaign-run-status").textContent =
-        `실행 현황을 불러오지 못했습니다. ${runMessage(error)} ‘실행 현황 새로고침’을 눌러 주세요.`;
+      byId("campaign-run-status").textContent = `실행 현황을 불러오지 못했습니다. ${runMessage(error)} ‘실행 현황 새로고침’을 눌러 주세요.`;
     } finally {
       if (current()) {
         runReading = false;
@@ -531,8 +429,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     cancelling = true;
     controls();
     byId("campaign-run-status").textContent = "실행을 취소하는 중…";
-    const current = () =>
-      session === generation && request === runRequest && editing?.id === draftId && approval?.id === approvalId;
+    const current = () => session === generation && request === runRequest && editing?.id === draftId && approval?.id === approvalId;
     try {
       const result = await api(pending.path, "POST", pending.body);
       if (!current()) return;
@@ -545,18 +442,14 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       runOperation = null;
       runStaged = null;
       done = true;
-      byId("campaign-run-status").textContent =
-        `실행을 취소했습니다. 대기 중이던 ${cancelled}건을 취소했습니다.` +
-        (result.delivery_counts.sending !== "0" ? ` 이미 발송 처리 중이던 ${sending}건은 되돌릴 수 없습니다.` : "");
+      byId("campaign-run-status").textContent = `실행을 취소했습니다. 대기 중이던 ${cancelled}건을 취소했습니다.` + (result.delivery_counts.sending !== "0" ? ` 이미 발송 처리 중이던 ${sending}건은 되돌릴 수 없습니다.` : "");
     } catch (error) {
       if (!current() || authorizationLost(error)) return;
       if (!error.status || error.status >= 500) {
-        byId("campaign-run-status").textContent =
-          "처리 결과를 확인하지 못했습니다. 같은 요청 재시도로 결과를 확인해 주세요. 다른 요청은 보낼 수 없습니다.";
+        byId("campaign-run-status").textContent = "처리 결과를 확인하지 못했습니다. 같은 요청 재시도로 결과를 확인해 주세요. 다른 요청은 보낼 수 없습니다.";
       } else if (error.status === 429) {
         // A throttled retry says nothing about the previous attempt's acceptance.
-        byId("campaign-run-status").textContent =
-          "요청이 많습니다. 요청을 유지하고 있습니다. 잠시 후 같은 요청을 재시도해 주세요.";
+        byId("campaign-run-status").textContent = "요청이 많습니다. 요청을 유지하고 있습니다. 잠시 후 같은 요청을 재시도해 주세요.";
       } else {
         // A refusal is final for this request; a 409 shows the run the server sent and never retries.
         runOperation = null;
@@ -589,11 +482,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       const fallback = loadRun();
       const fallbackRequest = runRequest;
       await fallback;
-      const stillShown =
-        session === generation &&
-        fallbackRequest === runRequest &&
-        editing?.id === draftId &&
-        approval?.id === approvalId;
+      const stillShown = session === generation && fallbackRequest === runRequest && editing?.id === draftId && approval?.id === approvalId;
       if (stillShown && !byId("campaign-run-status").textContent) byId("campaign-run-status").textContent = notice;
     }
   }
@@ -621,15 +510,8 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     const allowance = preview.plan_broadcast_limit;
     const limit = limitText(allowance);
     if (allowance.limit === "0") warnings.push(node("p", "현재 요금제에서는 캠페인을 승인할 수 없습니다."));
-    else if (whole(preview.counts?.candidate) > whole(allowance.remaining))
-      warnings.push(
-        node(
-          "p",
-          "조건 통과 인원이 이번 달 남은 캠페인 발송 한도보다 많아 즉시 또는 이번 달 실행으로는 승인할 수 없습니다. 다음 달 실행으로 예약하거나 다른 승인을 취소해 주세요.",
-        ),
-      );
-    if (preview.channel_marketing_supported !== true)
-      warnings.push(node("p", "Instagram 마케팅 발송은 아직 지원하지 않습니다."));
+    else if (whole(preview.counts?.candidate) > whole(allowance.remaining)) warnings.push(node("p", "조건 통과 인원이 이번 달 남은 캠페인 발송 한도보다 많아 즉시 또는 이번 달 실행으로는 승인할 수 없습니다. 다음 달 실행으로 예약하거나 다른 승인을 취소해 주세요."));
+    if (preview.channel_marketing_supported !== true) warnings.push(node("p", "Instagram 마케팅 발송은 아직 지원하지 않습니다."));
     if (preview.global_send_enabled !== true) warnings.push(node("p", "서비스 전체 발송이 꺼져 있습니다."));
     const asOf = new Date(preview.as_of);
     if (Number.isNaN(asOf.getTime())) throw new Error("invalid preview time");
@@ -664,17 +546,11 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     controls();
   }
   function options(previous = fields.snapshot_id.value) {
-    const placeholder = node(
-      "option",
-      snapshots.length ? "고정한 대상 선택" : "먼저 위에서 필터를 선택하고 대상을 고정해 주세요.",
-    );
+    const placeholder = node("option", snapshots.length ? "고정한 대상 선택" : "먼저 위에서 필터를 선택하고 대상을 고정해 주세요.");
     placeholder.value = "";
     const choices = snapshots.map((snapshot) => {
       const date = new Date(snapshot.as_of).toLocaleString("ko-KR", { timeZone });
-      const option = node(
-        "option",
-        `${snapshot.segment_name}${snapshot.segment_archived ? " · 필터 보관됨" : ""} · ${date} · 고정 당시 ${snapshot.member_count}명`,
-      );
+      const option = node("option", `${snapshot.segment_name}${snapshot.segment_archived ? " · 필터 보관됨" : ""} · ${date} · 고정 당시 ${snapshot.member_count}명`);
       option.value = snapshot.id;
       return option;
     });
@@ -691,8 +567,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     const list = byId("campaign-draft-list");
     list.replaceChildren();
     byId("campaign-draft-capacity").textContent = `보관된 초안 포함 ${drafts.length} / 100개`;
-    if (!drafts.length)
-      list.append(node("p", "저장한 초안이 없습니다. 고정한 대상을 선택하고 메시지를 작성해 주세요.", "hint"));
+    if (!drafts.length) list.append(node("p", "저장한 초안이 없습니다. 고정한 대상을 선택하고 메시지를 작성해 주세요.", "hint"));
     for (const draft of drafts) {
       const card = node("article", "", "campaign-draft-card");
       const label = node("h3", `${draft.name}${draft.archived ? " · 보관됨" : ""}`);
@@ -714,8 +589,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     fields.body.value = draft.body;
     options(draft.snapshot_id);
     byId("campaign-draft-editor-title").textContent = draft.archived ? "보관된 초안" : "초안 수정";
-    byId("campaign-draft-summary").textContent =
-      `원래 ${draft.original_member_count}명 · 현재 ${draft.stored_member_count}명 · 버전 ${draft.version}${draft.archived ? " · 보관됨" : ""}. 계정·이용자 데이터 삭제로 명단이 줄어들 수 있습니다. 발송 가능한 인원 수는 아닙니다.`;
+    byId("campaign-draft-summary").textContent = `원래 ${draft.original_member_count}명 · 현재 ${draft.stored_member_count}명 · 버전 ${draft.version}${draft.archived ? " · 보관됨" : ""}. 계정·이용자 데이터 삭제로 명단이 줄어들 수 있습니다. 발송 가능한 인원 수는 아닙니다.`;
     controls();
   }
   function authorizationLost(error) {
@@ -753,19 +627,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     }
   }
   async function openDraft(id) {
-    if (
-      !permitted ||
-      loading ||
-      saving ||
-      reading ||
-      operation ||
-      approvalOperation ||
-      approving ||
-      runOperation ||
-      cancelling ||
-      !canDiscard()
-    )
-      return;
+    if (!permitted || loading || saving || reading || operation || approvalOperation || approving || runOperation || cancelling || !canDiscard()) return;
     const session = generation,
       request = ++detailRequest;
     clearEditor();
@@ -815,8 +677,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       approvalLoaded = false;
       approval = null;
       byId("campaign-approval-current").hidden = true;
-      byId("campaign-approval-status").textContent =
-        `승인 상태를 확인하지 못해 승인할 수 없습니다. ${message(error)} ‘승인 상태 새로고침’을 눌러 주세요.`;
+      byId("campaign-approval-status").textContent = `승인 상태를 확인하지 못해 승인할 수 없습니다. ${message(error)} ‘승인 상태 새로고침’을 눌러 주세요.`;
     } finally {
       if (current()) {
         approvalReading = false;
@@ -837,12 +698,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       ...definitions([
         ["초안", `${editing.name} · 버전 ${editing.version}`],
         ["고정 대상", snapshotLabel(editing.snapshot_id)],
-        [
-          "실행 시점",
-          staged.body.schedule_local === null
-            ? "즉시"
-            : `${staged.body.schedule_local.replace("T", " ")} (${staged.body.expected_time_zone})`,
-        ],
+        ["실행 시점", staged.body.schedule_local === null ? "즉시" : `${staged.body.schedule_local.replace("T", " ")} (${staged.body.expected_time_zone})`],
       ]),
     );
     byId("campaign-approval-status").textContent = "";
@@ -905,8 +761,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       refused = false;
     approving = true;
     controls();
-    byId("campaign-approval-status").textContent =
-      kind === "create" ? "승인을 기록하는 중…" : kind === "schedule" ? "예약을 변경하는 중…" : "승인을 취소하는 중…";
+    byId("campaign-approval-status").textContent = kind === "create" ? "승인을 기록하는 중…" : kind === "schedule" ? "예약을 변경하는 중…" : "승인을 취소하는 중…";
     try {
       const result = await api(pending.path, pending.method, pending.body);
       if (session !== generation) return;
@@ -915,15 +770,13 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       // started its run or been cancelled since.
       if (result?.id !== pending.approvalId) throw new Error("invalid approval");
       if (kind === "create" && result.draft_id !== pending.draftId) throw new Error("invalid approval");
-      const outcomes =
-        kind === "create" ? ["approved", "executed", "cancelled"] : kind === "schedule" ? ["approved"] : ["cancelled"];
+      const outcomes = kind === "create" ? ["approved", "executed", "cancelled"] : kind === "schedule" ? ["approved"] : ["cancelled"];
       if (!outcomes.includes(result.status)) throw new Error("invalid approval");
       renderApproval(result);
       approvalOperation = null;
       closeConfirmation();
       done = true;
-      const due =
-        "실행 시점이 되면 서비스 전체 발송이 켜져 있을 때만 실행되며, 보내기 직전마다 모든 조건을 다시 확인합니다.";
+      const due = "실행 시점이 되면 서비스 전체 발송이 켜져 있을 때만 실행되며, 보내기 직전마다 모든 조건을 다시 확인합니다.";
       byId("campaign-approval-status").textContent =
         kind === "create"
           ? result.status === "executed" && result.run_limited === true
@@ -939,12 +792,10 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     } catch (error) {
       if (session !== generation || authorizationLost(error)) return;
       if (!error.status || error.status >= 500) {
-        byId("campaign-approval-status").textContent =
-          "처리 결과를 확인하지 못했습니다. 같은 요청 재시도로 결과를 확인해 주세요. 다른 요청은 보낼 수 없습니다.";
+        byId("campaign-approval-status").textContent = "처리 결과를 확인하지 못했습니다. 같은 요청 재시도로 결과를 확인해 주세요. 다른 요청은 보낼 수 없습니다.";
       } else if (error.status === 429) {
         // A throttled retry says nothing about the previous attempt's acceptance.
-        byId("campaign-approval-status").textContent =
-          "요청이 많습니다. 요청을 유지하고 있습니다. 잠시 후 같은 요청을 재시도해 주세요.";
+        byId("campaign-approval-status").textContent = "요청이 많습니다. 요청을 유지하고 있습니다. 잠시 후 같은 요청을 재시도해 주세요.";
       } else {
         // A refusal is final for this request; conflicts show the state the server sent and never retry.
         approvalOperation = null;
@@ -974,12 +825,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     if (done && kind !== "schedule" && session === generation) byId("campaign-approval-current-title").focus();
     // A refusal closes the confirmation or changes the shown state; focus a heading that stays visible. The fallback
     // read below hides the shown approval first, so a reload focuses the area title.
-    if (refused && session === generation)
-      byId(
-        !reload && !byId("campaign-approval-current").hidden
-          ? "campaign-approval-current-title"
-          : "campaign-approval-title",
-      ).focus();
+    if (refused && session === generation) byId(!reload && !byId("campaign-approval-current").hidden ? "campaign-approval-current-title" : "campaign-approval-title").focus();
     if (reload && session === generation) {
       const notice = byId("campaign-approval-status").textContent;
       // loadApproval takes its request number before its first await; a newer approval read must not get the old
@@ -988,8 +834,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       const fallbackRequest = approvalRequest;
       await fallback;
       const stillShown = session === generation && fallbackRequest === approvalRequest && editing?.id === draftId;
-      if (stillShown && !byId("campaign-approval-status").textContent)
-        byId("campaign-approval-status").textContent = notice;
+      if (stillShown && !byId("campaign-approval-status").textContent) byId("campaign-approval-status").textContent = notice;
     }
     // A refusal can carry an executed approval (campaign_approval_executed, campaign_version_executed): show its run.
     else if (session === generation && approval?.run_id && !run && !runReading) await loadRun();
@@ -997,34 +842,12 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   function valid() {
     const name = fields.name.value.normalize("NFC").trim();
     const body = fields.body.value;
-    return (
-      form.reportValidity() &&
-      fields.snapshot_id.value &&
-      name &&
-      [...name].length <= 60 &&
-      !/[\u0000-\u001f\u007f]/.test(name) &&
-      body.trim() &&
-      body.length <= 1000 &&
-      !body.includes("\u0000") &&
-      !body.includes("{{") &&
-      !body.includes("}}")
-    );
+    return form.reportValidity() && fields.snapshot_id.value && name && [...name].length <= 60 && !/[\u0000-\u001f\u007f]/.test(name) && body.trim() && body.length <= 1000 && !body.includes("\u0000") && !body.includes("{{") && !body.includes("}}");
   }
   async function save(archive = false) {
     if (!permitted || loading || reading || saving || conflict || unavailable || editing?.archived) return;
-    if (
-      editing &&
-      (approvalActive() || approvalReading || approvalOperation || approving || runOperation || cancelling)
-    )
-      return;
-    if (
-      archive &&
-      (!editing ||
-        operation ||
-        !canDiscard() ||
-        !confirm("이 초안을 보관할까요? 보관한 초안은 다시 수정할 수 없으며 저장 한도에 포함됩니다."))
-    )
-      return;
+    if (editing && (approvalActive() || approvalReading || approvalOperation || approving || runOperation || cancelling)) return;
+    if (archive && (!editing || operation || !canDiscard() || !confirm("이 초안을 보관할까요? 보관한 초안은 다시 수정할 수 없으며 저장 한도에 포함됩니다."))) return;
     if (!operation) {
       if (!archive && !valid()) {
         byId("campaign-draft-status").textContent = messages.invalid_campaign_draft;
@@ -1058,20 +881,16 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       // Every edit and archive moves the version, so a confirmation opened before it shows a version the server refuses.
       closeConfirmation();
       saved = draft.id;
-      byId("campaign-draft-status").textContent = draft.archived
-        ? "초안을 보관했습니다."
-        : "초안을 저장했습니다. 메시지는 전송되지 않았습니다.";
+      byId("campaign-draft-status").textContent = draft.archived ? "초안을 보관했습니다." : "초안을 저장했습니다. 메시지는 전송되지 않았습니다.";
       saving = false;
       await load();
     } catch (error) {
       if (session !== generation || authorizationLost(error)) return;
       if (!error.status || error.status >= 500) {
-        byId("campaign-draft-status").textContent =
-          "저장 결과를 확인하지 못했습니다. 입력을 잠시 잠갔습니다. 같은 요청 재시도로 결과를 확인해 주세요.";
+        byId("campaign-draft-status").textContent = "저장 결과를 확인하지 못했습니다. 입력을 잠시 잠갔습니다. 같은 요청 재시도로 결과를 확인해 주세요.";
       } else if (error.status === 429) {
         // A throttled retry says nothing about the previous attempt's acceptance.
-        byId("campaign-draft-status").textContent =
-          "요청이 많습니다. 입력을 유지하고 있습니다. 잠시 후 같은 요청을 재시도해 주세요.";
+        byId("campaign-draft-status").textContent = "요청이 많습니다. 입력을 유지하고 있습니다. 잠시 후 같은 요청을 재시도해 주세요.";
       } else {
         operation = null;
         conflict = error.code === "campaign_draft_conflict";
@@ -1087,23 +906,11 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     }
     if (approvalChanged && session === generation) await loadApproval();
     // A draft created here (or by a retried create) has no approval read yet; until one succeeds approving stays off.
-    else if (saved && session === generation && editing?.id === saved && !approvalLoaded && !approvalReading)
-      await loadApproval();
+    else if (saved && session === generation && editing?.id === saved && !approvalLoaded && !approvalReading) await loadApproval();
   }
   // A read: an unknown outcome only allows another click, so nothing here locks the editor or the button.
   async function preview() {
-    if (
-      !permitted ||
-      !editing ||
-      reading ||
-      saving ||
-      previewing ||
-      operation ||
-      conflict ||
-      unavailable ||
-      hasChanges()
-    )
-      return;
+    if (!permitted || !editing || reading || saving || previewing || operation || conflict || unavailable || hasChanges()) return;
     clearPreview();
     const session = generation,
       request = previewRequest,
@@ -1115,8 +922,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       const result = await api(`${endpoint}/${draft.id}/preview`);
       if (session !== generation || request !== previewRequest) return;
       if (result.draft_id !== editing?.id || result.draft_version !== editing.version) {
-        byId("campaign-draft-preview-status").textContent =
-          "초안이 다른 곳에서 변경되었습니다. 저장된 값을 다시 불러온 뒤 미리보기를 다시 눌러 주세요.";
+        byId("campaign-draft-preview-status").textContent = "초안이 다른 곳에서 변경되었습니다. 저장된 값을 다시 불러온 뒤 미리보기를 다시 눌러 주세요.";
         return;
       }
       renderPreview(result);
@@ -1197,19 +1003,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   byId("campaign-draft-archive").addEventListener("click", () => save(true));
   byId("campaign-draft-reload").addEventListener("click", () => editing && openDraft(editing.id));
   byId("campaign-draft-new").addEventListener("click", () => {
-    if (
-      !permitted ||
-      loading ||
-      reading ||
-      saving ||
-      operation ||
-      approvalOperation ||
-      approving ||
-      runOperation ||
-      cancelling ||
-      !canDiscard()
-    )
-      return;
+    if (!permitted || loading || reading || saving || operation || approvalOperation || approving || runOperation || cancelling || !canDiscard()) return;
     clearEditor();
     fields.name.focus();
   });

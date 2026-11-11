@@ -7,17 +7,11 @@ export async function ensureWorkspace(pool: Pool, user: User): Promise<string> {
   try {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [user.id]);
-    const existing = await client.query<{ workspace_id: string }>(
-      "SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL",
-      [user.id],
-    );
+    const existing = await client.query<{ workspace_id: string }>("SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL", [user.id]);
     let id = existing.rows[0]?.workspace_id;
     if (id) {
       // Keeps the email owners see in the member list current for members created before it was recorded.
-      await client.query(
-        "UPDATE workspace_members SET email=$2 WHERE user_id=$1 AND removed_at IS NULL AND email IS DISTINCT FROM $2",
-        [user.id, normalizeEmail(user.email)],
-      );
+      await client.query("UPDATE workspace_members SET email=$2 WHERE user_id=$1 AND removed_at IS NULL AND email IS DISTINCT FROM $2", [user.id, normalizeEmail(user.email)]);
     } else {
       // A removed member starts over as the owner of a new workspace; their old row is reused.
       id = randomUUID();
@@ -51,15 +45,8 @@ export async function workspaceFor(pool: Pool, user: User, minimum: WorkspaceRol
   return (await membershipFor(pool, user, minimum)).workspace_id;
 }
 
-export async function membershipFor(
-  pool: Pick<Pool, "query">,
-  user: User,
-  minimum: WorkspaceRole,
-): Promise<{ workspace_id: string; role: WorkspaceRole }> {
-  const result = await pool.query<{ workspace_id: string; role: WorkspaceRole }>(
-    "SELECT workspace_id,role FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL",
-    [user.id],
-  );
+export async function membershipFor(pool: Pick<Pool, "query">, user: User, minimum: WorkspaceRole): Promise<{ workspace_id: string; role: WorkspaceRole }> {
+  const result = await pool.query<{ workspace_id: string; role: WorkspaceRole }>("SELECT workspace_id,role FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL", [user.id]);
   const member = result.rows[0];
   if (!member) throw new ApiError(403, "workspace_required");
   if (!roleAllows(member.role, minimum)) throw new ApiError(403, "role_forbidden");
@@ -69,19 +56,9 @@ export async function membershipFor(
 // Locks the workspace row and re-checks the caller's membership in the same transaction. Accepting an invite can
 // move the caller out of an empty workspace between workspaceFor and this lock (acceptInvite holds the old
 // workspace row FOR UPDATE), and a creation must then not land in the workspace the caller left.
-export async function lockWorkspaceForMember(
-  client: PoolClient,
-  workspace: string,
-  user: User,
-  minimum: WorkspaceRole,
-): Promise<void> {
+export async function lockWorkspaceForMember(client: PoolClient, workspace: string, user: User, minimum: WorkspaceRole): Promise<void> {
   await client.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [workspace]);
-  const member = (
-    await client.query<{ role: WorkspaceRole }>(
-      "SELECT role FROM workspace_members WHERE user_id=$1 AND workspace_id=$2 AND removed_at IS NULL",
-      [user.id, workspace],
-    )
-  ).rows[0];
+  const member = (await client.query<{ role: WorkspaceRole }>("SELECT role FROM workspace_members WHERE user_id=$1 AND workspace_id=$2 AND removed_at IS NULL", [user.id, workspace])).rows[0];
   if (!member) throw new ApiError(403, "workspace_required");
   if (!roleAllows(member.role, minimum)) throw new ApiError(403, "role_forbidden");
 }
@@ -89,9 +66,7 @@ export async function lockWorkspaceForMember(
 // The caller's membership and the workspace settings, plan, limits and usage the dashboard shows to every role.
 export async function currentWorkspace(pool: Pool, user: User) {
   const member = await membershipFor(pool, user, "agent");
-  const settings = await pool.query<{ time_zone: string }>("SELECT time_zone FROM workspaces WHERE id=$1", [
-    member.workspace_id,
-  ]);
+  const settings = await pool.query<{ time_zone: string }>("SELECT time_zone FROM workspaces WHERE id=$1", [member.workspace_id]);
   return {
     ...member,
     time_zone: settings.rows[0]?.time_zone ?? null,
@@ -103,8 +78,7 @@ export async function currentWorkspace(pool: Pool, user: User) {
 // case-sensitively. A plain UPDATE of a non-key column does not conflict with the key-share locks that
 // ingestion's foreign key checks hold on the workspace row.
 export async function saveWorkspaceSettings(pool: Pool, user: User, input: unknown) {
-  if (!isRecord(input) || typeof input.time_zone !== "string" || input.time_zone.length > 100)
-    throw new ApiError(400, "invalid_time_zone");
+  if (!isRecord(input) || typeof input.time_zone !== "string" || input.time_zone.length > 100) throw new ApiError(400, "invalid_time_zone");
   const workspaceId = await workspaceFor(pool, user, "admin");
   const result = await pool.query<{ time_zone: string }>(
     `UPDATE workspaces SET time_zone=$2 WHERE id=$1 AND EXISTS(SELECT 1 FROM pg_timezone_names WHERE name=$2)
@@ -119,8 +93,7 @@ export function normalizeEmail(value: string): string {
   return value.trim().toLowerCase();
 }
 function text(value: unknown, max: number, required = true): string {
-  if (typeof value !== "string" || value.length > max || (required && !value.trim()))
-    throw new ApiError(400, "invalid_rule");
+  if (typeof value !== "string" || value.length > max || (required && !value.trim())) throw new ApiError(400, "invalid_rule");
   return value.trim().normalize("NFC");
 }
 // The editor shows one keyword per line, so a keyword with a line break would come back as two (#144).
@@ -146,13 +119,7 @@ export function parseRule(input: unknown) {
     excluded = keywords(input.excluded_keywords);
   if (input.match_mode !== "all" && !included.length) throw new ApiError(400, "keywords_required");
   const buttonTitle = text(input.confirmation_button_title ?? "", 20, false);
-  if (
-    buttonTitle &&
-    (!input.follow_gate_enabled ||
-      String(input.private_reply_text).length > 640 ||
-      String(input.non_follower_reply_text).length > 640)
-  )
-    throw new ApiError(400, "invalid_confirmation_button");
+  if (buttonTitle && (!input.follow_gate_enabled || String(input.private_reply_text).length > 640 || String(input.non_follower_reply_text).length > 640)) throw new ApiError(400, "invalid_confirmation_button");
   return {
     confirmation_button_title: buttonTitle,
     id: input.id as string | undefined,
@@ -240,10 +207,7 @@ export async function saveRule(pool: Pool, user: User, input: unknown) {
   try {
     await client.query("BEGIN");
     // Flow publish takes the same connection lock, so a rule and a published flow never share one media.
-    await client.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR NO KEY UPDATE", [
-      rule.connection_id,
-      workspaceId,
-    ]);
+    await client.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR NO KEY UPDATE", [rule.connection_id, workspaceId]);
     const conflict = await client.query(
       `SELECT 1 FROM flows f JOIN flow_versions v ON v.id=f.published_version_id
        WHERE f.workspace_id=$1 AND NOT f.archived AND v.trigger_connection_id=$2 AND v.trigger_media_id=$3 LIMIT 1`,
@@ -261,8 +225,7 @@ export async function saveRule(pool: Pool, user: User, input: unknown) {
   }
 }
 export async function updateConnection(pool: Pool, user: User, id: string, input: unknown) {
-  if (!isUuid(id) || !isRecord(input) || typeof input.active !== "boolean" || typeof input.send_enabled !== "boolean")
-    throw new ApiError(400, "invalid_connection");
+  if (!isUuid(id) || !isRecord(input) || typeof input.active !== "boolean" || typeof input.send_enabled !== "boolean") throw new ApiError(400, "invalid_connection");
   const workspaceId = await workspaceFor(pool, user, "admin");
   const result = await pool.query(
     `UPDATE instagram_connections SET active=$3,send_enabled=$4,
@@ -278,17 +241,12 @@ export async function disconnectConnection(pool: Pool, user: User, id: string) {
   if (!isUuid(id)) throw new ApiError(400, "invalid_connection");
   const workspaceId = await workspaceFor(pool, user, "admin");
   // Answer another workspace's or an unknown ID like every other connection route, before taking any lock.
-  if (
-    !(await pool.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [id, workspaceId]))
-      .rowCount
-  )
-    throw new ApiError(404, "connection_not_found");
+  if (!(await pool.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [id, workspaceId])).rowCount) throw new ApiError(404, "connection_not_found");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     // The connection left the workspace after the check above (a workspace deletion); undo the flow changes.
-    if (!(await disconnectInTransaction(client, id, workspaceId, null)))
-      throw new ApiError(404, "connection_not_found");
+    if (!(await disconnectInTransaction(client, id, workspaceId, null))) throw new ApiError(404, "connection_not_found");
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -304,12 +262,7 @@ export async function disconnectConnection(pool: Pool, user: User, id: string) {
 // it, unless the stored token was obtained in a later second than the callback's issued_at: then the callback
 // predates that token and changes nothing. The check is in the UPDATE, so a reconnect that commits while this
 // waits for the row lock is seen.
-export async function disconnectInTransaction(
-  client: Pick<PoolClient, "query">,
-  id: string,
-  workspaceId: string,
-  deauthorization: { issuedAt: number | null } | null,
-): Promise<boolean> {
+export async function disconnectInTransaction(client: Pick<PoolClient, "query">, id: string, workspaceId: string, deauthorization: { issuedAt: number | null } | null): Promise<boolean> {
   // Flows first, all of them: enabling or publishing locks one flow row before its trigger connection
   // row, so waiting here lets a concurrent enable commit and be turned off below, and any later one
   // finds the connection inactive. A row skipped by the filter alone would not wait. NO KEY UPDATE

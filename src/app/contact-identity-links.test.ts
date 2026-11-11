@@ -76,9 +76,7 @@ test("identity UI confirms exact displayed version and refreshes, while agents c
       return {};
     }
     return {
-      links: [
-        { ...candidate, state: confirmed ? "confirmed" : null, version: confirmed ? 1 : 0, evidence_valid: confirmed },
-      ],
+      links: [{ ...candidate, state: confirmed ? "confirmed" : null, version: confirmed ? 1 : 0, evidence_valid: confirmed }],
       after: null,
     };
   };
@@ -143,9 +141,7 @@ test("identity UI retains the request key for an uncertain failed write", async 
 
 test("actual dashboard session listeners invalidate contacts on cross-tab changes and BFCache restore", () => {
   const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
-  const block = source.match(
-    /\/\/ Invalidate contact disclosures on cross-tab sessions and BFCache restoration\.[\s\S]*?\/\/ End contact session listeners\./,
-  )?.[0];
+  const block = source.match(/\/\/ Invalidate contact disclosures on cross-tab sessions and BFCache restoration\.[\s\S]*?\/\/ End contact session listeners\./)?.[0];
   assert.ok(block, "dashboard must wire contact session invalidation");
   let channelListener!: (event: { data: unknown }) => void;
   let pageListener!: (event: { persisted: boolean }) => void;

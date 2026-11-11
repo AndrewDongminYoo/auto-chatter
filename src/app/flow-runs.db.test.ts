@@ -10,8 +10,7 @@ import { processNextPrivateReply, type PrivateReplyTransport } from "../instagra
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const userId = "11111111-1111-4111-8111-111111111111";
@@ -31,21 +30,13 @@ before(async () => {
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspaceId, otherWorkspaceId]);
-  await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2),($3,$4)", [
-    workspaceId,
-    userId,
-    otherWorkspaceId,
-    otherUserId,
-  ]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2),($3,$4)", [workspaceId, userId, otherWorkspaceId, otherUserId]);
   await pool.query(
     `INSERT INTO instagram_connections(id,workspace_id,account_id,active,access_token_encrypted)
      VALUES($1,$2,'owned-account',true,'token'),($3,$2,'env-account',true,NULL)`,
     [connectionId, workspaceId, envConnectionId],
   );
-  await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'city','text')", [
-    fieldId,
-    workspaceId,
-  ]);
+  await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'city','text')", [fieldId, workspaceId]);
 });
 
 after(async () => pool.end());
@@ -59,8 +50,7 @@ function request(method: string, path: string, body?: unknown, actorId = userId)
     }),
     apiEnv,
     () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: actorId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actorId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 
@@ -85,13 +75,7 @@ function document(options: { connection?: string; vipText?: string; unsupported?
       { id: "seoul_reply", type: "instagram_message", config: { text: "Seoul link" } },
       ...(options.unsupported ? [{ id: "follow", type: "follows_account", config: {} }] : []),
     ],
-    edges: [
-      { from: "start", port: "next", to: "vip" },
-      { from: "vip", port: "true", to: "vip_reply" },
-      { from: "vip", port: "false", to: "city" },
-      { from: "city", port: "true", to: "seoul_reply" },
-      ...(options.unsupported ? [{ from: "city", port: "false", to: "follow" }] : []),
-    ],
+    edges: [{ from: "start", port: "next", to: "vip" }, { from: "vip", port: "true", to: "vip_reply" }, { from: "vip", port: "false", to: "city" }, { from: "city", port: "true", to: "seoul_reply" }, ...(options.unsupported ? [{ from: "city", port: "false", to: "follow" }] : [])],
   };
 }
 
@@ -171,10 +155,7 @@ test("publishing alone never runs a flow, and enabling needs a runnable version 
   await comment("comment-before-enable", "sender-1");
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM flow_runs")).rows[0].count, 0);
   assert.equal((await request("POST", `/api/flows/${published}/enable`)).status, 200);
-  assert.equal(
-    ((await (await request("GET", `/api/flows/${published}`)).json()) as { enabled: boolean }).enabled,
-    true,
-  );
+  assert.equal(((await (await request("GET", `/api/flows/${published}`)).json()) as { enabled: boolean }).enabled, true);
   assert.equal((await request("POST", `/api/flows/${published}/enable`, undefined, otherUserId)).status, 404);
 });
 
@@ -187,10 +168,7 @@ test("an enabled flow only publishes runnable versions, and archiving turns it o
 
   assert.deepEqual(await (await request("POST", `/api/flows/${id}/disable`)).json(), { enabled: false });
   const current = (await (await request("GET", `/api/flows/${id}`)).json()) as { draft_revision: number };
-  assert.equal(
-    (await request("POST", `/api/flows/${id}/publish`, { expected_revision: current.draft_revision })).status,
-    201,
-  );
+  assert.equal((await request("POST", `/api/flows/${id}/publish`, { expected_revision: current.draft_revision })).status, 201);
   assert.equal((await request("POST", `/api/flows/${id}/enable`)).status, 422);
 
   const replacement = await republish(id, document());
@@ -203,17 +181,12 @@ test("an enabled flow only publishes runnable versions, and archiving turns it o
 
 test("a comment starts one run pinned to its version and queues the branch's reply in the outbox", async () => {
   const id = await enabledFlow();
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-vip','{vip}')",
-    [workspaceId, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-vip','{vip}')", [workspaceId, connectionId]);
   await comment("comment-vip", "sender-vip");
   await comment("comment-vip", "sender-vip");
   await comment("comment-other-text", "sender-quiet", "hello there");
 
-  const reply = (
-    await pool.query("SELECT rule_id,flow_run_id,private_reply_text,follow_config,status FROM private_reply_outbox")
-  ).rows;
+  const reply = (await pool.query("SELECT rule_id,flow_run_id,private_reply_text,follow_config,status FROM private_reply_outbox")).rows;
   assert.equal(reply.length, 1);
   assert.equal(reply[0].rule_id, null);
   assert.equal(reply[0].private_reply_text, "VIP link");
@@ -230,10 +203,7 @@ test("a comment starts one run pinned to its version and queues the branch's rep
   ]);
 
   assert.equal((await republish(id, document({ vipText: "New VIP link" }))).status, 201);
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-new','{vip}')",
-    [workspaceId, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-new','{vip}')", [workspaceId, connectionId]);
   await comment("comment-new", "sender-new");
   const history = await runs(id);
   assert.deepEqual(
@@ -241,9 +211,7 @@ test("a comment starts one run pinned to its version and queues the branch's rep
     [2, 1],
   );
   assert.deepEqual(
-    (await pool.query("SELECT private_reply_text FROM private_reply_outbox ORDER BY id")).rows.map(
-      (row) => row.private_reply_text,
-    ),
+    (await pool.query("SELECT private_reply_text FROM private_reply_outbox ORDER BY id")).rows.map((row) => row.private_reply_text),
     ["VIP link", "New VIP link"],
   );
   const text = JSON.stringify(history);
@@ -252,10 +220,7 @@ test("a comment starts one run pinned to its version and queues the branch's rep
 
 test("a path without a message ends, and a second comment from one sender is recorded as skipped", async () => {
   const id = await enabledFlow();
-  await pool.query(
-    "INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,'sender-seoul',$3,'\"Seoul\"')",
-    [workspaceId, connectionId, fieldId],
-  );
+  await pool.query("INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,'sender-seoul',$3,'\"Seoul\"')", [workspaceId, connectionId, fieldId]);
   await comment("comment-plain", "sender-plain");
   await comment("comment-seoul-1", "sender-seoul");
   await comment("comment-seoul-2", "sender-seoul");
@@ -309,10 +274,7 @@ test("a run that read the flow before a disable committed keeps its actions, and
     await disabling.query("BEGIN");
     await disabling.query("SELECT 1 FROM flows WHERE id=$1 FOR NO KEY UPDATE", [id]);
     await disabling.query("UPDATE flows SET enabled=false,updated_at=clock_timestamp() WHERE id=$1", [id]);
-    const outcome = await Promise.race([
-      comment("comment-1", "sender-1").then(() => "ingested"),
-      new Promise((resolve) => setTimeout(() => resolve("blocked"), 2000)),
-    ]);
+    const outcome = await Promise.race([comment("comment-1", "sender-1").then(() => "ingested"), new Promise((resolve) => setTimeout(() => resolve("blocked"), 2000))]);
     assert.equal(outcome, "ingested");
     await disabling.query("COMMIT");
   } finally {
@@ -334,9 +296,7 @@ test("disconnecting the trigger connection turns its flows off", async () => {
   assert.equal((await pool.query("SELECT enabled FROM flows WHERE id=$1", [id])).rows[0].enabled, true);
   assert.equal((await request("DELETE", `/api/connections/${connectionId}`)).status, 200);
   assert.equal((await pool.query("SELECT enabled FROM flows WHERE id=$1", [id])).rows[0].enabled, false);
-  await pool.query("UPDATE instagram_connections SET active=true,access_token_encrypted='token' WHERE id=$1", [
-    connectionId,
-  ]);
+  await pool.query("UPDATE instagram_connections SET active=true,access_token_encrypted='token' WHERE id=$1", [connectionId]);
   await comment("comment-after-reconnect", "sender-1");
   assert.equal((await runs(id)).length, 0);
 });
@@ -351,9 +311,7 @@ test("a disconnect waits for a concurrent enable and still turns the flow off", 
     await enabling.query("SELECT 1 FROM instagram_connections WHERE id=$1 FOR NO KEY UPDATE", [connectionId]);
     const disconnecting = request("DELETE", `/api/connections/${connectionId}`);
     for (let attempt = 0; attempt < 40; attempt++) {
-      const waiting = await pool.query(
-        "SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FROM flows WHERE workspace_id%'",
-      );
+      const waiting = await pool.query("SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FROM flows WHERE workspace_id%'");
       if (waiting.rowCount) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
@@ -372,10 +330,7 @@ test("a disconnect does not wait for the foreign key locks an open ingestion hol
   try {
     await ingesting.query("BEGIN");
     await ingesting.query("SELECT 1 FROM flows WHERE id=$1 FOR KEY SHARE", [id]);
-    const outcome = await Promise.race([
-      request("DELETE", `/api/connections/${connectionId}`).then((response) => response.status),
-      new Promise((resolve) => setTimeout(() => resolve("blocked"), 2000)),
-    ]);
+    const outcome = await Promise.race([request("DELETE", `/api/connections/${connectionId}`).then((response) => response.status), new Promise((resolve) => setTimeout(() => resolve("blocked"), 2000))]);
     assert.equal(outcome, 200);
   } finally {
     await ingesting.query("ROLLBACK");
@@ -407,23 +362,15 @@ async function enabledActionFlow(text?: string): Promise<string> {
 }
 
 async function contact(senderId: string) {
-  const tags = await pool.query("SELECT tags FROM instagram_contact_tags WHERE connection_id=$1 AND sender_id=$2", [
-    connectionId,
-    senderId,
-  ]);
-  const fields = await pool.query(
-    "SELECT value FROM instagram_contact_field_values WHERE connection_id=$1 AND sender_id=$2 AND field_id=$3",
-    [connectionId, senderId, fieldId],
-  );
+  const tags = await pool.query("SELECT tags FROM instagram_contact_tags WHERE connection_id=$1 AND sender_id=$2", [connectionId, senderId]);
+  const fields = await pool.query("SELECT value FROM instagram_contact_field_values WHERE connection_id=$1 AND sender_id=$2 AND field_id=$3", [connectionId, senderId, fieldId]);
   return { tags: tags.rows[0]?.tags as string[] | undefined, city: fields.rows[0]?.value as unknown };
 }
 
 // Waits until another backend is blocked on a lock whose query matches the pattern.
 async function lockWait(pattern: string) {
   for (let attempt = 0; attempt < 60; attempt++) {
-    const waiting = await pool.query("SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE $1", [
-      pattern,
-    ]);
+    const waiting = await pool.query("SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE $1", [pattern]);
     if (waiting.rowCount) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -432,10 +379,7 @@ async function lockWait(pattern: string) {
 
 test("tag and field actions write the contact and the reply renders the variables once", async () => {
   const id = await enabledActionFlow();
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1','{old,keep}')",
-    [workspaceId, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1','{old,keep}')", [workspaceId, connectionId]);
   await comment("comment-1", "sender-1", `link {{field:${fieldId}}}`);
   assert.deepEqual(await contact("sender-1"), { tags: ["keep", "lead"], city: "Seoul" });
   const reply = (await pool.query("SELECT private_reply_text FROM private_reply_outbox")).rows;
@@ -471,17 +415,11 @@ test("a paused contact still gets the actions while its reply waits for the paus
 
 test("a missing variable fails the run after the actions before it, and queues no reply", async () => {
   const other = "12121212-1212-4121-8121-121212121212";
-  await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'plan','text')", [
-    other,
-    workspaceId,
-  ]);
+  await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'plan','text')", [other, workspaceId]);
   const id = await enabledActionFlow(`Your plan: {{field:${other}}}`);
   await comment("comment-1", "sender-1");
   const [run] = await runs(id);
-  assert.deepEqual(
-    [run!.status, run!.failure_code, run!.steps.at(-1)!.outcome],
-    ["failed", "variable_missing", "variable_missing"],
-  );
+  assert.deepEqual([run!.status, run!.failure_code, run!.steps.at(-1)!.outcome], ["failed", "variable_missing", "variable_missing"]);
   assert.deepEqual(await contact("sender-1"), { tags: ["lead"], city: "Seoul" });
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM private_reply_outbox")).rows[0].count, 0);
 });
@@ -535,10 +473,7 @@ async function withRunPausedAfterRead(id: string, commentId: string, edit: () =>
 
 test("a run waits for an open manual tag edit and plans from the committed tags", async () => {
   await enabledActionFlow("Thanks");
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1','{old}')",
-    [workspaceId, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1','{old}')", [workspaceId, connectionId]);
   await withOpenContactEdit("UPDATE instagram_contact_tags SET tags='{old,manual}' WHERE sender_id='sender-1'", []);
   assert.deepEqual((await contact("sender-1")).tags, ["manual", "lead"]);
 });
@@ -546,13 +481,8 @@ test("a run waits for an open manual tag edit and plans from the committed tags"
 test("a tag slot taken by an open manual edit is recorded as tag_limit, not as added", async () => {
   const id = await enabledActionFlow("Thanks");
   const nineteen = Array.from({ length: 19 }, (_, index) => `t${index}`);
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1',$3)",
-    [workspaceId, connectionId, nineteen],
-  );
-  await withOpenContactEdit("UPDATE instagram_contact_tags SET tags=$1 WHERE sender_id='sender-1'", [
-    [...nineteen, "manual"],
-  ]);
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1',$3)", [workspaceId, connectionId, nineteen]);
+  await withOpenContactEdit("UPDATE instagram_contact_tags SET tags=$1 WHERE sender_id='sender-1'", [[...nineteen, "manual"]]);
   assert.deepEqual((await contact("sender-1")).tags, [...nineteen, "manual"]);
   assert.deepEqual(
     (await runs(id))[0]!.steps.map((step) => step.outcome),
@@ -572,13 +502,8 @@ test("a run waits for an open manual field edit and plans from the committed val
 
 test("manual tag and field edits that start after a run read the contact wait for that run", async () => {
   const id = await enabledActionFlow("Thanks");
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1','{old}')",
-    [workspaceId, connectionId],
-  );
-  await withRunPausedAfterRead(id, "comment-1", () =>
-    request("PATCH", `/api/connections/${connectionId}/contacts/sender-1`, { tags: ["old", "manual"] }),
-  );
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1','{old}')", [workspaceId, connectionId]);
+  await withRunPausedAfterRead(id, "comment-1", () => request("PATCH", `/api/connections/${connectionId}/contacts/sender-1`, { tags: ["old", "manual"] }));
   // The edit ran after the run, so it replaced the run's result instead of being overwritten by it.
   assert.deepEqual((await contact("sender-1")).tags, ["manual", "old"]);
   assert.deepEqual(
@@ -586,9 +511,7 @@ test("manual tag and field edits that start after a run read the contact wait fo
     ["next", "added", "removed", "set", "queued"],
   );
 
-  await withRunPausedAfterRead(id, "comment-2", () =>
-    request("PUT", `/api/connections/${connectionId}/contacts/sender-1/fields/${fieldId}`, { value: "Busan" }),
-  );
+  await withRunPausedAfterRead(id, "comment-2", () => request("PUT", `/api/connections/${connectionId}/contacts/sender-1/fields/${fieldId}`, { value: "Busan" }));
   assert.equal((await contact("sender-1")).city, "Busan");
 });
 
@@ -639,10 +562,7 @@ test("a run that changes contact data waits for a concurrent disconnect and then
 
 test("enabling refuses a boolean field used as a message variable", async () => {
   const flag = "13131313-1313-4131-8131-131313131313";
-  await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'vip','boolean')", [
-    flag,
-    workspaceId,
-  ]);
+  await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'vip','boolean')", [flag, workspaceId]);
   const id = await publishedFlow(actionDocument(`VIP: {{field:${flag}}}`));
   const refused = await request("POST", `/api/flows/${id}/enable`);
   assert.equal(refused.status, 422);
@@ -672,26 +592,14 @@ test("connection and person deletion remove flow runs with the rows they point a
   );
   await comment("comment-a", "sender-a");
   await comment("comment-b", "sender-b");
-  const person = (
-    await pool.query<{ result: { deleted_counts: Record<string, number> } }>(
-      "SELECT public.delete_person_data($1,$2,$3,'comment_sender','sender-a') AS result",
-      [workspaceId, connectionId, userId],
-    )
-  ).rows[0]!.result;
+  const person = (await pool.query<{ result: { deleted_counts: Record<string, number> } }>("SELECT public.delete_person_data($1,$2,$3,'comment_sender','sender-a') AS result", [workspaceId, connectionId, userId])).rows[0]!.result;
   assert.equal(person.deleted_counts.flow_runs, 1);
   assert.equal(person.deleted_counts.flow_step_runs, 3);
   assert.equal(person.deleted_counts.private_reply_outbox, 1);
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM flow_runs")).rows[0].count, 1);
 
-  await pool.query("UPDATE instagram_connections SET active=false,access_token_encrypted=NULL WHERE id=$1", [
-    connectionId,
-  ]);
-  const connection = (
-    await pool.query<{ result: { deleted_counts: Record<string, number> } }>(
-      "SELECT public.delete_connection_data($1,$2,$3,'owned-account') AS result",
-      [workspaceId, connectionId, userId],
-    )
-  ).rows[0]!.result;
+  await pool.query("UPDATE instagram_connections SET active=false,access_token_encrypted=NULL WHERE id=$1", [connectionId]);
+  const connection = (await pool.query<{ result: { deleted_counts: Record<string, number> } }>("SELECT public.delete_connection_data($1,$2,$3,'owned-account') AS result", [workspaceId, connectionId, userId])).rows[0]!.result;
   assert.equal(connection.deleted_counts.flow_runs, 1);
   assert.equal(connection.deleted_counts.flow_step_runs, 3);
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM flow_step_runs")).rows[0].count, 0);

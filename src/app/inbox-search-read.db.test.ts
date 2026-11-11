@@ -8,8 +8,7 @@ import { EXPORTED_TABLES } from "./workspace-export.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const owner = { id: "11111111-1111-4111-8111-111111111111", email: "owner@example.test" };
@@ -48,20 +47,7 @@ beforeEach(async () => {
   await pool.query(
     `INSERT INTO workspace_members(workspace_id,user_id,role,email)
      VALUES($1,$2,'owner',$3),($1,$4,'admin',$5),($1,$6,'agent',$7),($1,$8,'agent',$9),($10,$11,'owner',$12)`,
-    [
-      workspaceId,
-      owner.id,
-      owner.email,
-      admin.id,
-      admin.email,
-      agent.id,
-      agent.email,
-      other.id,
-      other.email,
-      otherWorkspaceId,
-      outsider.id,
-      outsider.email,
-    ],
+    [workspaceId, owner.id, owner.email, admin.id, admin.email, agent.id, agent.email, other.id, other.email, otherWorkspaceId, outsider.id, outsider.email],
   );
   await pool.query(
     `INSERT INTO instagram_connections(id,workspace_id,account_id,username,active,inbox_enabled,inbox_enabled_at)
@@ -108,10 +94,8 @@ async function recipients(actor: Actor, query = "") {
   return (await page(actor, query)).conversations.map((row) => row.recipient_id);
 }
 
-const readPath = (recipient = "456", connection = connectionId) =>
-  `/api/inbox/conversations/${connection}/${recipient}/read`;
-const markRead = (actor: Actor, messageId: unknown, recipient = "456", connection = connectionId) =>
-  request(actor, "POST", readPath(recipient, connection), { message_id: messageId });
+const readPath = (recipient = "456", connection = connectionId) => `/api/inbox/conversations/${connection}/${recipient}/read`;
+const markRead = (actor: Actor, messageId: unknown, recipient = "456", connection = connectionId) => request(actor, "POST", readPath(recipient, connection), { message_id: messageId });
 
 async function marked(actor: Actor, messageId: string, recipient = "456"): Promise<Position> {
   const response = await markRead(actor, messageId, recipient);
@@ -120,11 +104,7 @@ async function marked(actor: Actor, messageId: string, recipient = "456"): Promi
 }
 
 async function readRows() {
-  return (
-    await pool.query(
-      "SELECT connection_id,recipient_id,user_id,last_read_message_id::text FROM instagram_inbox_read_state ORDER BY recipient_id,user_id",
-    )
-  ).rows;
+  return (await pool.query("SELECT connection_id,recipient_id,user_id,last_read_message_id::text FROM instagram_inbox_read_state ORDER BY recipient_id,user_id")).rows;
 }
 
 // Returns once `operation` either finished or `count` backends wait for a lock. The caller then lets the blocking
@@ -133,9 +113,7 @@ async function settledOrWaiting(operation: Promise<unknown>, count = 1) {
   let settled = false;
   void operation.finally(() => (settled = true)).catch(() => undefined);
   for (let attempt = 0; attempt < 200 && !settled; attempt += 1) {
-    const waiting = await pool.query(
-      "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()",
-    );
+    const waiting = await pool.query("SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()");
     if (waiting.rows[0].waiting >= count) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -170,14 +148,8 @@ function markHeldBeforeCommit(actor: Actor, messageId: string, recipient = "456"
 }
 
 const deletions = {
-  connection: () =>
-    pool.query("SELECT public.delete_connection_data($1,$2,$3,'123') AS result", [workspaceId, connectionId, owner.id]),
-  person: () =>
-    pool.query("SELECT public.delete_person_data($1,$2,$3,'dm_recipient','456') AS result", [
-      workspaceId,
-      connectionId,
-      owner.id,
-    ]),
+  connection: () => pool.query("SELECT public.delete_connection_data($1,$2,$3,'123') AS result", [workspaceId, connectionId, owner.id]),
+  person: () => pool.query("SELECT public.delete_person_data($1,$2,$3,'dm_recipient','456') AS result", [workspaceId, connectionId, owner.id]),
   workspace: () => pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [workspaceId, owner.id]),
 } as const;
 const deletionSql = {
@@ -193,11 +165,7 @@ test("conversations are listed newest first and pages stay stable when last-mess
   const expected: string[] = [];
   for (let index = 0; index < 47; index += 1) {
     const recipient = String(1000 + index);
-    await seed(
-      recipient,
-      `message ${index}`,
-      new Date(Date.parse("2026-10-01T01:00:00Z") - index * 1000).toISOString(),
-    );
+    await seed(recipient, `message ${index}`, new Date(Date.parse("2026-10-01T01:00:00Z") - index * 1000).toISOString());
     expected.push(recipient);
   }
   await seed("1047", "just after the tie", "2026-10-01T00:00:00.000501Z");
@@ -231,9 +199,7 @@ test("conversations are listed newest first and pages stay stable when last-mess
   await seed("1052", "new", "2026-10-01T02:00:00Z");
   assert.equal((await recipients(agent))[0], "1052");
   // The cursor format of the previous key order is refused.
-  const legacy = Buffer.from(JSON.stringify({ connection_id: connectionId, recipient_id: "1000" })).toString(
-    "base64url",
-  );
+  const legacy = Buffer.from(JSON.stringify({ connection_id: connectionId, recipient_id: "1000" })).toString("base64url");
   assert.equal((await request(agent, "GET", `/api/inbox?after=${legacy}`)).status, 400);
 });
 
@@ -243,11 +209,7 @@ test("account, status, assignee, unread and search filters combine", async () =>
   await seed("458", "배송지 변경", "2026-10-01T00:00:03Z");
   await seed("459", "배송 문의", "2026-10-01T00:00:02Z", secondConnectionId);
   await seed("460", "배송 문의", "2026-10-01T00:00:01Z", foreignConnectionId);
-  const put = async (actor: Actor, recipient: string, change: Record<string, unknown>, connection = connectionId) =>
-    assert.equal(
-      (await request(actor, "PUT", `/api/inbox/conversations/${connection}/${recipient}/state`, change)).status,
-      200,
-    );
+  const put = async (actor: Actor, recipient: string, change: Record<string, unknown>, connection = connectionId) => assert.equal((await request(actor, "PUT", `/api/inbox/conversations/${connection}/${recipient}/state`, change)).status, 200);
   await put(agent, "456", { expected_version: 0, assignee_user_id: agent.id });
   await put(admin, "458", { expected_version: 0, assignee_user_id: other.id, status: "closed" });
   await put(other, "459", { expected_version: 0, assignee_user_id: other.id }, secondConnectionId);
@@ -294,21 +256,7 @@ test("search matches stored DM text literally and case-insensitively, and the co
   assert.equal(row!.last_message_at, "2026-10-01T00:00:07.000Z");
 
   assert.deepEqual(await search("가".repeat(100)), []);
-  for (const query of [
-    "?q=",
-    `?q=${"a".repeat(101)}`,
-    `?q=${encodeURIComponent("가".repeat(101))}`,
-    "?q=%00",
-    "?q=a&q=b",
-    "?unread=1",
-    "?unread=false",
-    "?assignee=someone",
-    "?assignee=me&assignee=none",
-    "?status=done",
-    "?connection_id=shop",
-    "?after=invalid",
-    "?label=vip",
-  ])
+  for (const query of ["?q=", `?q=${"a".repeat(101)}`, `?q=${encodeURIComponent("가".repeat(101))}`, "?q=%00", "?q=a&q=b", "?unread=1", "?unread=false", "?assignee=someone", "?assignee=me&assignee=none", "?status=done", "?connection_id=shop", "?after=invalid", "?label=vip"])
     assert.equal((await request(agent, "GET", `/api/inbox${query}`)).status, 400, query);
 });
 
@@ -317,11 +265,9 @@ test("a read position is per member, only moves forward and drives the unread co
   const second = await seed("456", "two", "2026-10-01T00:00:02Z");
   const third = await seed("456", "three", "2026-10-01T00:00:03Z");
   const elsewhere = await seed("457", "other conversation", "2026-10-01T00:00:04Z");
-  const unread = async (actor: Actor) =>
-    Object.fromEntries((await page(actor)).conversations.map((row) => [row.recipient_id, row.unread_count]));
+  const unread = async (actor: Actor) => Object.fromEntries((await page(actor)).conversations.map((row) => [row.recipient_id, row.unread_count]));
   // Each listed conversation carries the caller's own read position, the one its unread count was taken against.
-  const positions = async (actor: Actor) =>
-    Object.fromEntries((await page(actor)).conversations.map((row) => [row.recipient_id, row.last_read_message_id]));
+  const positions = async (actor: Actor) => Object.fromEntries((await page(actor)).conversations.map((row) => [row.recipient_id, row.last_read_message_id]));
   assert.deepEqual(await unread(agent), { "456": 3, "457": 1 });
   assert.deepEqual(await positions(agent), { "456": null, "457": null });
 
@@ -374,10 +320,7 @@ test("a read response counts the messages stored before its commit", async () =>
   const id = await seed("456", "one", "2026-10-01T00:00:01Z");
   const mark = markHeldBeforeCommit(agent, id);
   try {
-    await Promise.race([
-      mark.atCommit,
-      mark.response.then((response) => assert.fail(`the read mark finished before COMMIT with ${response.status}`)),
-    ]);
+    await Promise.race([mark.atCommit, mark.response.then((response) => assert.fail(`the read mark finished before COMMIT with ${response.status}`))]);
     await seed("456", "two", "2026-10-01T00:00:02Z");
     const [row] = (await page(agent)).conversations;
     assert.deepEqual([row!.last_read_message_id, row!.unread_count], [null, 2]);
@@ -393,24 +336,13 @@ test("a read response counts the messages stored before its commit", async () =>
 
 test("read requests are validated, need a membership and must be same-origin", async () => {
   const id = await seed("456", "one", "2026-10-01T00:00:01Z");
-  for (const body of [
-    {},
-    { message_id: Number(id) },
-    { message_id: "0" },
-    { message_id: "01" },
-    { message_id: "abc" },
-    { message_id: "9223372036854775808" },
-    { message_id: id, extra: true },
-  ]) {
+  for (const body of [{}, { message_id: Number(id) }, { message_id: "0" }, { message_id: "01" }, { message_id: "abc" }, { message_id: "9223372036854775808" }, { message_id: id, extra: true }]) {
     const response = await request(agent, "POST", readPath(), body);
     assert.equal(response.status, 400, JSON.stringify(body));
     assert.equal(((await response.json()) as { error: string }).error, "invalid_read_request");
   }
   assert.equal((await request(agent, "POST", `${readPath()}?x=1`, { message_id: id })).status, 400);
-  assert.equal(
-    (await request(agent, "POST", "/api/inbox/conversations/not-a-uuid/456/read", { message_id: id })).status,
-    404,
-  );
+  assert.equal((await request(agent, "POST", "/api/inbox/conversations/not-a-uuid/456/read", { message_id: id })).status, 404);
   assert.equal((await request(agent, "GET", readPath())).status, 404);
   // Every role of the workspace may mark its own reading; a user without a workspace may not.
   for (const actor of [owner, admin, agent]) assert.equal((await markRead(actor, id)).status, 200);
@@ -450,10 +382,7 @@ test("a read mark that waits on a member's removal is refused once the removal c
     await removal.query("BEGIN");
     await removal.query("SELECT 1 FROM workspaces WHERE id=$1 FOR SHARE", [workspaceId]);
     await removal.query("SELECT 1 FROM workspace_members WHERE user_id=$1 FOR UPDATE", [agent.id]);
-    await removal.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [
-      agent.id,
-      owner.id,
-    ]);
+    await removal.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [agent.id, owner.id]);
     const pending = markRead(agent, id);
     await settledOrWaiting(pending);
     await removal.query("COMMIT");
@@ -490,10 +419,7 @@ for (const deletion of ["connection", "person", "workspace"] as const) {
     const id = await seed("456", "one", "2026-10-01T00:00:01Z");
     const mark = markHeldBeforeCommit(agent, id);
     try {
-      await Promise.race([
-        mark.atCommit,
-        mark.response.then((response) => assert.fail(`the read mark finished before COMMIT with ${response.status}`)),
-      ]);
+      await Promise.race([mark.atCommit, mark.response.then((response) => assert.fail(`the read mark finished before COMMIT with ${response.status}`))]);
       let settled = false;
       const removal = deletions[deletion]()
         .then(
@@ -586,15 +512,10 @@ test("migration 032 replays (with later deletion migrations), every deletion fun
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
   const current = await functions();
   assert.equal(current.length, 3);
-  for (const { proname, body } of current)
-    assert.match(body, /DELETE FROM public\.instagram_inbox_read_state\b/, proname);
+  for (const { proname, body } of current) assert.match(body, /DELETE FROM public\.instagram_inbox_read_state\b/, proname);
   const migration = await readFile(new URL("../../db/migrations/032_inbox_read_state.sql", import.meta.url), "utf8");
   // Migrations 033 to 035 redefine the same functions after 032, in the order deploy/migrate-multi-user.sql runs them.
-  const later = await Promise.all(
-    ["033_inbox_labels_notes.sql", "034_inbox_reminders.sql", "035_inbox_label_rules.sql"].map((file) =>
-      readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8"),
-    ),
-  );
+  const later = await Promise.all(["033_inbox_labels_notes.sql", "034_inbox_reminders.sql", "035_inbox_label_rules.sql"].map((file) => readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8")));
   for (let run = 0; run < 2; run++) {
     await pool.query(migration);
     for (const sql of later) await pool.query(sql);
@@ -615,9 +536,7 @@ test("migration 032 replays (with later deletion migrations), every deletion fun
     await pool.query(await readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8"));
   assert.deepEqual(await functions(), current);
   assert.deepEqual(EXPORTED_TABLES.instagram_inbox_read_state, { scope: "workspace" });
-  const foreignKeys = await pool.query(
-    "SELECT confrelid::regclass::text AS target FROM pg_constraint WHERE conrelid='instagram_inbox_read_state'::regclass AND contype='f'",
-  );
+  const foreignKeys = await pool.query("SELECT confrelid::regclass::text AS target FROM pg_constraint WHERE conrelid='instagram_inbox_read_state'::regclass AND contype='f'");
   assert.deepEqual(
     foreignKeys.rows.map((row) => row.target),
     ["instagram_connections"],

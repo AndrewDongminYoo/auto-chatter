@@ -13,8 +13,7 @@ import { ingestComments, resumeDueFlowRuns } from "../instagram/store.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const ownerId = "11111111-1111-4111-8111-111111111111";
@@ -57,22 +56,13 @@ beforeEach(async () => {
      VALUES($1,$2,$3,'username-IG-SENTINEL',true,'token')`,
     [connectionId, workspaceId, accountId],
   );
-  await pool.query(
-    "INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$3,'city','text'),($2,$3,'tier','text')",
-    [cityField, tierField, workspaceId],
-  );
+  await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$3,'city','text'),($2,$3,'tier','text')", [cityField, tierField, workspaceId]);
 });
 
 afterEach(() => mock.restoreAll());
 after(async () => pool.end());
 
-function request(
-  actorId: string,
-  method: string,
-  path: string,
-  body?: unknown,
-  options: { origin?: string | null; env?: Omit<typeof apiEnv, "TOKEN_ENCRYPTION_KEY"> } = {},
-) {
+function request(actorId: string, method: string, path: string, body?: unknown, options: { origin?: string | null; env?: Omit<typeof apiEnv, "TOKEN_ENCRYPTION_KEY"> } = {}) {
   const origin = options.origin === undefined ? "https://app.test" : options.origin;
   return appApi(
     new Request(`https://app.test${path}`, {
@@ -86,8 +76,7 @@ function request(
     }),
     options.env ?? apiEnv,
     () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: actorId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actorId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 
@@ -149,15 +138,8 @@ function comment(commentId: string, sender = senderId, media = mediaId) {
 }
 
 async function contact(sender: string, tags: string[], city?: string) {
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,$3,$4)",
-    [workspaceId, connectionId, sender, tags],
-  );
-  if (city !== undefined)
-    await pool.query(
-      "INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,$3,$4,$5)",
-      [workspaceId, connectionId, sender, cityField, JSON.stringify(city)],
-    );
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,$3,$4)", [workspaceId, connectionId, sender, tags]);
+  if (city !== undefined) await pool.query("INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,$3,$4,$5)", [workspaceId, connectionId, sender, cityField, JSON.stringify(city)]);
 }
 
 type Delivery = {
@@ -264,25 +246,13 @@ test("creating an endpoint returns its signing secret once and stores it sealed"
   assert.equal(created.url, "https://hooks.example.test/in?token=abc");
   assert.equal(created.active, true);
   assert.match(created.key.secret, /^whsec_[A-Za-z0-9_-]{43}$/);
-  const stored = (
-    await pool.query(
-      "SELECT id::text,secret_encrypted,slot,retired_at FROM webhook_signing_keys WHERE endpoint_id=$1",
-      [created.id],
-    )
-  ).rows;
+  const stored = (await pool.query("SELECT id::text,secret_encrypted,slot,retired_at FROM webhook_signing_keys WHERE endpoint_id=$1", [created.id])).rows;
   assert.equal(stored.length, 1);
   assert.equal(stored[0].id, created.key.id);
   assert.ok(!stored[0].secret_encrypted.includes(created.key.secret));
-  assert.equal(
-    openSecret(stored[0].secret_encrypted, encryptionKey, signingKeyContext(workspaceId, created.id, created.key.id)),
-    created.key.secret,
-  );
+  assert.equal(openSecret(stored[0].secret_encrypted, encryptionKey, signingKeyContext(workspaceId, created.id, created.key.id)), created.key.secret);
   // The seal is bound to the workspace, the endpoint and the key.
-  for (const context of [
-    signingKeyContext(otherWorkspaceId, created.id, created.key.id),
-    signingKeyContext(workspaceId, missingId, created.key.id),
-    signingKeyContext(workspaceId, created.id, missingId),
-  ])
+  for (const context of [signingKeyContext(otherWorkspaceId, created.id, created.key.id), signingKeyContext(workspaceId, missingId, created.key.id), signingKeyContext(workspaceId, created.id, missingId)])
     assert.throws(() => openSecret(stored[0].secret_encrypted, encryptionKey, context));
 
   const listed = await request(adminId, "GET", "/api/webhooks/endpoints");
@@ -293,10 +263,7 @@ test("creating an endpoint returns its signing secret once and stores it sealed"
     endpoints: { id: string; name: string; url: string; active: boolean; keys: { id: string }[] }[];
   };
   assert.equal(endpoints.length, 1);
-  assert.deepEqual(
-    [endpoints[0]!.id, endpoints[0]!.name, endpoints[0]!.active, endpoints[0]!.keys.map((key) => key.id)],
-    [created.id, "CRM", true, [created.key.id]],
-  );
+  assert.deepEqual([endpoints[0]!.id, endpoints[0]!.name, endpoints[0]!.active, endpoints[0]!.keys.map((key) => key.id)], [created.id, "CRM", true, [created.key.id]]);
 });
 
 test("creation applies the delivery URL rules and rejects malformed input", async () => {
@@ -319,26 +286,14 @@ test("creation applies the delivery URL rules and rejects malformed input", asyn
     assert.equal(response.status, 400, String(url));
     assert.equal(await errorOf(response), "invalid_webhook_url", String(url));
   }
-  for (const body of [
-    {},
-    { url: "https://hooks.example.test/in" },
-    { name: "", url: "https://hooks.example.test/in" },
-    { name: "a".repeat(61), url: "https://hooks.example.test/in" },
-    { name: "crm", url: "https://hooks.example.test/in", secret: "mine" },
-  ]) {
+  for (const body of [{}, { url: "https://hooks.example.test/in" }, { name: "", url: "https://hooks.example.test/in" }, { name: "a".repeat(61), url: "https://hooks.example.test/in" }, { name: "crm", url: "https://hooks.example.test/in", secret: "mine" }]) {
     const response = await request(adminId, "POST", "/api/webhooks/endpoints", body);
     assert.equal(response.status, 400, JSON.stringify(body));
     assert.equal(await errorOf(response), "invalid_webhook_endpoint", JSON.stringify(body));
   }
   // Without the encryption key no endpoint is stored, because its secret could not be sealed.
   const { TOKEN_ENCRYPTION_KEY: _key, ...withoutKey } = apiEnv;
-  const unavailable = await request(
-    adminId,
-    "POST",
-    "/api/webhooks/endpoints",
-    { name: "crm", url: "https://hooks.example.test/in" },
-    { env: withoutKey },
-  );
+  const unavailable = await request(adminId, "POST", "/api/webhooks/endpoints", { name: "crm", url: "https://hooks.example.test/in" }, { env: withoutKey });
   assert.equal(unavailable.status, 503);
   assert.equal(await errorOf(unavailable), "webhooks_unavailable");
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM webhook_endpoints")).rows[0].count, 0);
@@ -347,8 +302,7 @@ test("creation applies the delivery URL rules and rejects malformed input", asyn
 test("a workspace has a small limit of active endpoints", async () => {
   assert.equal(MAX_ACTIVE_WEBHOOK_ENDPOINTS, 5);
   const created: Created[] = [];
-  for (let index = 0; index < 5; index++)
-    created.push(await createEndpoint(`hook ${index}`, `https://hook${index}.example.test/in`));
+  for (let index = 0; index < 5; index++) created.push(await createEndpoint(`hook ${index}`, `https://hook${index}.example.test/in`));
   const over = await request(adminId, "POST", "/api/webhooks/endpoints", {
     name: "sixth",
     url: "https://sixth.example.test/in",
@@ -388,28 +342,12 @@ test("rotation adds a second valid key, is refused while two are valid, and reti
   assert.equal(refused.status, 409);
   assert.equal(await errorOf(refused), "webhook_rotation_in_progress");
   // The database allows no third valid key either.
-  await assert.rejects(
-    pool.query(
-      "INSERT INTO webhook_signing_keys(id,workspace_id,endpoint_id,slot,secret_encrypted) VALUES(gen_random_uuid(),$1,$2,1,'x')",
-      [workspaceId, endpoint.id],
-    ),
-    { code: "23505" },
-  );
-  await assert.rejects(
-    pool.query(
-      "INSERT INTO webhook_signing_keys(id,workspace_id,endpoint_id,slot,secret_encrypted) VALUES(gen_random_uuid(),$1,$2,3,'x')",
-      [workspaceId, endpoint.id],
-    ),
-    { code: "23514" },
-  );
+  await assert.rejects(pool.query("INSERT INTO webhook_signing_keys(id,workspace_id,endpoint_id,slot,secret_encrypted) VALUES(gen_random_uuid(),$1,$2,1,'x')", [workspaceId, endpoint.id]), { code: "23505" });
+  await assert.rejects(pool.query("INSERT INTO webhook_signing_keys(id,workspace_id,endpoint_id,slot,secret_encrypted) VALUES(gen_random_uuid(),$1,$2,3,'x')", [workspaceId, endpoint.id]), { code: "23514" });
 
   const retired = await retire();
   assert.deepEqual(await retired.json(), { retired_key_id: endpoint.key.id, key_id: second.id });
-  const keys = (
-    await pool.query(
-      "SELECT id::text,retired_at IS NOT NULL AS retired,secret_encrypted IS NULL AS removed FROM webhook_signing_keys ORDER BY created_at",
-    )
-  ).rows;
+  const keys = (await pool.query("SELECT id::text,retired_at IS NOT NULL AS retired,secret_encrypted IS NULL AS removed FROM webhook_signing_keys ORDER BY created_at")).rows;
   assert.deepEqual(keys, [
     { id: endpoint.key.id, retired: true, removed: true },
     { id: second.id, retired: false, removed: false },
@@ -434,8 +372,7 @@ test("a draft saves any webhook config and publishing checks the endpoint and th
     const id = await draftFlow(chain([{ id: "notify", type: "webhook", config }]));
     return request(adminId, "POST", `/api/flows/${id}/publish`, { expected_revision: 0 });
   };
-  const codes = async (response: Response) =>
-    ((await response.json()) as { errors: { code: string }[] }).errors.map((error) => error.code);
+  const codes = async (response: Response) => ((await response.json()) as { errors: { code: string }[] }).errors.map((error) => error.code);
 
   // Shape only at draft save: this config would not publish.
   await draftFlow(chain([{ id: "notify", type: "webhook", config: { endpoint_id: "later" } }]));
@@ -455,9 +392,7 @@ test("a draft saves any webhook config and publishing checks the endpoint and th
   assert.deepEqual(await codes(await publish({ ...ok, field_ids: [tierField] })), ["unknown_field"]);
 
   assert.equal((await publish(ok)).status, 201);
-  assert.deepEqual((await pool.query("SELECT field_ids::text[] AS field_ids FROM flow_versions")).rows, [
-    { field_ids: [cityField] },
-  ]);
+  assert.deepEqual((await pool.query("SELECT field_ids::text[] AS field_ids FROM flow_versions")).rows, [{ field_ids: [cityField] }]);
 });
 
 test("a field that a published webhook node sends cannot be archived", async () => {
@@ -486,9 +421,7 @@ test("a run queues one delivery per webhook node with the facts at that node and
   await contact(senderId, ["vip"], "Seoul");
   await comment("comment-IG-SENTINEL");
   // The whole path ran in the ingestion transaction; no delivery was attempted yet.
-  assert.deepEqual(await stepsOf(flow), [
-    ["start:next", "before:queued", "lead:added", "move:set", "after:queued", "reply:queued"],
-  ]);
+  assert.deepEqual(await stepsOf(flow), [["start:next", "before:queued", "lead:added", "move:set", "after:queued", "reply:queued"]]);
   assert.deepEqual((await pool.query("SELECT status FROM private_reply_outbox")).rows, [{ status: "pending" }]);
   const queued = await deliveries();
   assert.deepEqual(
@@ -500,17 +433,7 @@ test("a run queues one delivery per webhook node with the facts at that node and
   );
   const run = (await pool.query("SELECT id::text,flow_id::text FROM flow_runs")).rows[0];
   const [before, afterActions] = queued.map((delivery) => delivery.payload!);
-  assert.deepEqual(Object.keys(before!).sort(), [
-    "created_at",
-    "event_id",
-    "fields",
-    "flow_id",
-    "flow_version",
-    "node_id",
-    "run_id",
-    "tags",
-    "type",
-  ]);
+  assert.deepEqual(Object.keys(before!).sort(), ["created_at", "event_id", "fields", "flow_id", "flow_version", "node_id", "run_id", "tags", "type"]);
   const { created_at: createdAt, ...identifiers } = before!;
   assert.ok(Math.abs(Date.parse(String(createdAt)) - Date.now()) < 60_000, String(createdAt));
   assert.deepEqual(identifiers, {
@@ -531,19 +454,7 @@ test("a run queues one delivery per webhook node with the facts at that node and
 
   // No comment text, DM text, username or Instagram identifier is in any payload.
   const text = JSON.stringify(queued.map((delivery) => delivery.payload));
-  for (const forbidden of [
-    "COMMENT-TEXT-SENTINEL",
-    commentText,
-    "comment-IG-SENTINEL",
-    senderId,
-    accountId,
-    "username-IG-SENTINEL",
-    mediaId,
-    connectionId,
-    workspaceId,
-    "Thanks",
-  ])
-    assert.ok(!text.includes(forbidden), forbidden);
+  for (const forbidden of ["COMMENT-TEXT-SENTINEL", commentText, "comment-IG-SENTINEL", senderId, accountId, "username-IG-SENTINEL", mediaId, connectionId, workspaceId, "Thanks"]) assert.ok(!text.includes(forbidden), forbidden);
 
   // One delivery per run and node, also in the database.
   await assert.rejects(
@@ -562,15 +473,9 @@ test("a run queues one delivery per webhook node with the facts at that node and
 test("a webhook node of a version that names another workspace's endpoint queues nothing and the run goes on", async () => {
   const endpoint = await createEndpoint();
   const foreign = await createEndpoint("theirs", "https://theirs.example.test/in", outsiderId);
-  const flow = await enabledFlow(
-    chain([hook("notify", endpoint.id), { id: "reply", type: "instagram_message", config: { text: "Thanks" } }]),
-  );
+  const flow = await enabledFlow(chain([hook("notify", endpoint.id), { id: "reply", type: "instagram_message", config: { text: "Thanks" } }]));
   // Publishing refuses this; a stored version is changed directly to prove the insert is workspace-scoped.
-  await pool.query("UPDATE flow_versions SET definition=replace(definition::text,$1,$2)::jsonb WHERE flow_id=$3", [
-    endpoint.id,
-    foreign.id,
-    flow,
-  ]);
+  await pool.query("UPDATE flow_versions SET definition=replace(definition::text,$1,$2)::jsonb WHERE flow_id=$3", [endpoint.id, foreign.id, flow]);
   await comment("comment-1");
   assert.deepEqual(await deliveries(), []);
   assert.deepEqual(await stepsOf(flow), [["start:next", "notify:not_queued", "reply:queued"]]);
@@ -579,12 +484,8 @@ test("a webhook node of a version that names another workspace's endpoint queues
 
 test("a webhook node works after a delay, after a time wait and after a reply wait", async () => {
   const endpoint = await createEndpoint();
-  const delayed = await enabledFlow(
-    chain([{ id: "pause", type: "delay", config: { minutes: 5 } }, hook("notify", endpoint.id)], "1001"),
-  );
-  const timed = await enabledFlow(
-    chain([{ id: "until", type: "wait_until", config: { time: "09:30" } }, hook("notify", endpoint.id)], "1002"),
-  );
+  const delayed = await enabledFlow(chain([{ id: "pause", type: "delay", config: { minutes: 5 } }, hook("notify", endpoint.id)], "1001"));
+  const timed = await enabledFlow(chain([{ id: "until", type: "wait_until", config: { time: "09:30" } }, hook("notify", endpoint.id)], "1002"));
   await comment("comment-delay", "sender-delay", "1001");
   await comment("comment-until", "sender-until", "1002");
   assert.deepEqual(await deliveries(), []);
@@ -602,13 +503,7 @@ test("a webhook node works after a delay, after a time wait and after a reply wa
   // start -> ask -> wait -(replied)-> answered tag -> webhook
   const asked = await enabledFlow({
     schema_version: 1,
-    nodes: [
-      trigger("1003"),
-      { id: "ask", type: "instagram_message", config: { text: "Which size?" } },
-      { id: "wait", type: "wait_for_reply", config: { timeout_minutes: 60 } },
-      { id: "answered", type: "add_tag", config: { tag: "answered" } },
-      hook("notify", endpoint.id),
-    ],
+    nodes: [trigger("1003"), { id: "ask", type: "instagram_message", config: { text: "Which size?" } }, { id: "wait", type: "wait_for_reply", config: { timeout_minutes: 60 } }, { id: "answered", type: "add_tag", config: { tag: "answered" } }, hook("notify", endpoint.id)],
     edges: [
       { from: "start", port: "next", to: "ask" },
       { from: "ask", port: "next", to: "wait" },
@@ -628,35 +523,19 @@ test("a webhook node works after a delay, after a time wait and after a reply wa
       timestamp: new Date(Date.now() + 1000),
     },
   ]);
-  assert.deepEqual(await stepsOf(asked), [
-    ["start:next", "ask:queued", "wait:replied", "answered:added", "notify:queued"],
-  ]);
+  assert.deepEqual(await stepsOf(asked), [["start:next", "ask:queued", "wait:replied", "answered:added", "notify:queued"]]);
   const answered = (await deliveries()).find((delivery) => delivery.sender_id === "sender-ask")!;
   assert.deepEqual(answered.payload!.tags, ["answered"]);
   const text = JSON.stringify(answered.payload);
-  for (const forbidden of ["DM-TEXT-SENTINEL", recipientId, "sender-ask", "Which size?"])
-    assert.ok(!text.includes(forbidden), forbidden);
+  for (const forbidden of ["DM-TEXT-SENTINEL", recipientId, "sender-ask", "Which size?"]) assert.ok(!text.includes(forbidden), forbidden);
 });
 
 // start -> ask -> wait -(replied)-> the given nodes in order
 function asking(media: string, wait: Record<string, unknown>, after: { id: string; type: string; config: unknown }[]) {
   return {
     schema_version: 1,
-    nodes: [
-      trigger(media),
-      { id: "ask", type: "instagram_message", config: { text: "Which size?" } },
-      { id: "wait", type: "wait_for_reply", config: wait },
-      ...after,
-    ],
-    edges: [
-      { from: "start", port: "next", to: "ask" },
-      { from: "ask", port: "next", to: "wait" },
-      ...after.map((node, index) =>
-        index
-          ? { from: after[index - 1]!.id, port: "next", to: node.id }
-          : { from: "wait", port: "replied", to: node.id },
-      ),
-    ],
+    nodes: [trigger(media), { id: "ask", type: "instagram_message", config: { text: "Which size?" } }, { id: "wait", type: "wait_for_reply", config: wait }, ...after],
+    edges: [{ from: "start", port: "next", to: "ask" }, { from: "ask", port: "next", to: "wait" }, ...after.map((node, index) => (index ? { from: after[index - 1]!.id, port: "next", to: node.id } : { from: "wait", port: "replied", to: node.id }))],
   };
 }
 
@@ -694,19 +573,11 @@ test("publishing refuses to send a field that a reply wait saves a reply into", 
 
 test("a stored version that names a reply field sends its payload without that field", async () => {
   const endpoint = await createEndpoint();
-  const fieldsOf = async (sender: string, node = "notify") =>
-    (await deliveries())
-      .filter((delivery) => delivery.sender_id === sender && delivery.node_id === node)
-      .map((delivery) => delivery.payload!.fields);
+  const fieldsOf = async (sender: string, node = "notify") => (await deliveries()).filter((delivery) => delivery.sender_id === sender && delivery.node_id === node).map((delivery) => delivery.payload!.fields);
   // Publishing refuses these shapes, so the stored versions are changed directly, which is what two
   // publishes that passed the check at the same time leave behind.
-  const asked = await enabledFlow(
-    asking("1001", { timeout_minutes: 60 }, [hook("notify", endpoint.id, [cityField, tierField], false)]),
-  );
-  await pool.query(
-    "UPDATE flow_versions SET definition=jsonb_set(definition,'{nodes,2,config,save_field_id}',to_jsonb($2::text)) WHERE flow_id=$1",
-    [asked, cityField],
-  );
+  const asked = await enabledFlow(asking("1001", { timeout_minutes: 60 }, [hook("notify", endpoint.id, [cityField, tierField], false)]));
+  await pool.query("UPDATE flow_versions SET definition=jsonb_set(definition,'{nodes,2,config,save_field_id}',to_jsonb($2::text)) WHERE flow_id=$1", [asked, cityField]);
   await comment("comment-ask", "sender-ask", "1001");
   while (await processNextPrivateReply(pool, transport, () => new Date(), connectionId));
   await ingestMessages(pool, [
@@ -720,26 +591,14 @@ test("a stored version that names a reply field sends its payload without that f
   ]);
   assert.deepEqual(await stepsOf(asked), [["start:next", "ask:queued", "wait:replied", "wait:set", "notify:queued"]]);
   // The reply is stored in the field, and the node right after the wait sends everything but that field.
-  assert.deepEqual(
-    (await pool.query("SELECT sender_id,value FROM instagram_contact_field_values WHERE field_id=$1", [cityField]))
-      .rows,
-    [{ sender_id: "sender-ask", value: "DM-TEXT-SENTINEL" }],
-  );
+  assert.deepEqual((await pool.query("SELECT sender_id,value FROM instagram_contact_field_values WHERE field_id=$1", [cityField])).rows, [{ sender_id: "sender-ask", value: "DM-TEXT-SENTINEL" }]);
   assert.deepEqual(await fieldsOf("sender-ask"), [{ [tierField]: null }]);
 
   // Other flows' versions name the field the first flow saved the reply into: at the start of a run and
   // after a delay.
   const other = await enabledFlow(chain([hook("other", endpoint.id, [tierField], false)], "1002"));
-  const delayed = await enabledFlow(
-    chain(
-      [{ id: "pause", type: "delay", config: { minutes: 5 } }, hook("late", endpoint.id, [tierField], false)],
-      "1003",
-    ),
-  );
-  await pool.query(
-    "UPDATE flow_versions SET definition=replace(definition::text,$2,$3)::jsonb,field_ids=ARRAY[$3::uuid] WHERE flow_id=ANY($1::uuid[])",
-    [[other, delayed], tierField, cityField],
-  );
+  const delayed = await enabledFlow(chain([{ id: "pause", type: "delay", config: { minutes: 5 } }, hook("late", endpoint.id, [tierField], false)], "1003"));
+  await pool.query("UPDATE flow_versions SET definition=replace(definition::text,$2,$3)::jsonb,field_ids=ARRAY[$3::uuid] WHERE flow_id=ANY($1::uuid[])", [[other, delayed], tierField, cityField]);
   await comment("comment-other", "sender-ask", "1002");
   assert.deepEqual(await fieldsOf("sender-ask", "other"), [{}]);
   await comment("comment-late", "sender-ask", "1003");
@@ -753,10 +612,7 @@ test("a stored version that names a reply field sends its payload without that f
   assert.equal((await deliveries()).length, 4);
   assert.ok(!JSON.stringify(await deliveries()).includes("DM-TEXT-SENTINEL"));
   // A field no reply wait saves into is sent as before.
-  await pool.query(
-    "UPDATE flow_versions SET definition=replace(definition::text,$2,$3)::jsonb,field_ids=ARRAY[$3::uuid] WHERE flow_id=$1",
-    [other, cityField, tierField],
-  );
+  await pool.query("UPDATE flow_versions SET definition=replace(definition::text,$2,$3)::jsonb,field_ids=ARRAY[$3::uuid] WHERE flow_id=$1", [other, cityField, tierField]);
   await comment("comment-other-3", "sender-ask", "1002");
   assert.deepEqual((await fieldsOf("sender-ask", "other"))[2], { [tierField]: null });
 });
@@ -764,10 +620,7 @@ test("a stored version that names a reply field sends its payload without that f
 test("without the encryption key an admin gets 503 for a new secret and an agent is still refused by role", async () => {
   const endpoint = await createEndpoint();
   const { TOKEN_ENCRYPTION_KEY: _key, ...withoutKey } = apiEnv;
-  const routes: [string, unknown?][] = [
-    ["/api/webhooks/endpoints", { name: "second", url: "https://second.example.test/in" }],
-    [`/api/webhooks/endpoints/${endpoint.id}/rotate`],
-  ];
+  const routes: [string, unknown?][] = [["/api/webhooks/endpoints", { name: "second", url: "https://second.example.test/in" }], [`/api/webhooks/endpoints/${endpoint.id}/rotate`]];
   for (const [path, body] of routes) {
     const admin = await request(adminId, "POST", path, body, { env: withoutKey });
     assert.equal(admin.status, 503, path);
@@ -783,13 +636,7 @@ test("without the encryption key an admin gets 503 for a new secret and an agent
 
 test("a failing endpoint changes no private, follow or manual reply row and no later node of the run", async () => {
   const endpoint = await createEndpoint();
-  const flow = await enabledFlow(
-    chain([
-      hook("notify", endpoint.id),
-      { id: "lead", type: "add_tag", config: { tag: "lead" } },
-      { id: "reply", type: "instagram_message", config: { text: "Thanks" } },
-    ]),
-  );
+  const flow = await enabledFlow(chain([hook("notify", endpoint.id), { id: "lead", type: "add_tag", config: { tag: "lead" } }, { id: "reply", type: "instagram_message", config: { text: "Thanks" } }]));
   await comment("comment-1");
   const reply = (await pool.query("SELECT id FROM private_reply_outbox")).rows[0].id;
   await pool.query(
@@ -798,10 +645,7 @@ test("a failing endpoint changes no private, follow or manual reply row and no l
     [reply, connectionId, recipientId],
   );
   // A manual reply needs a handoff row; this one has ended, so the contact is not paused.
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused,handoff_paused) VALUES($1,$2,$3,false,false)",
-    [workspaceId, connectionId, senderId],
-  );
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused,handoff_paused) VALUES($1,$2,$3,false,false)", [workspaceId, connectionId, senderId]);
   await pool.query(
     `INSERT INTO instagram_inbox_handoffs(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,updated_by)
      VALUES($1,$2,$3,$4,$5,false,2,$6)`,
@@ -863,25 +707,11 @@ test("recent deliveries are listed without payload or sender, and only a dead on
     ).deliveries;
   const listed = await list();
   assert.equal(listed.length, 1);
-  assert.deepEqual(Object.keys(listed[0]!).sort(), [
-    "attempt_count",
-    "created_at",
-    "endpoint_id",
-    "event_id",
-    "failure_code",
-    "flow_id",
-    "flow_run_id",
-    "last_status_code",
-    "next_attempt_at",
-    "node_id",
-    "sent_at",
-    "status",
-  ]);
+  assert.deepEqual(Object.keys(listed[0]!).sort(), ["attempt_count", "created_at", "endpoint_id", "event_id", "failure_code", "flow_id", "flow_run_id", "last_status_code", "next_attempt_at", "node_id", "sent_at", "status"]);
   const listedText = JSON.stringify(listed);
   for (const forbidden of ["Seoul", "vip", senderId, "payload"]) assert.ok(!listedText.includes(forbidden), forbidden);
 
-  const redeliver = (id = queued!.event_id, actor = adminId) =>
-    request(actor, "POST", `/api/webhooks/deliveries/${id}/redeliver`);
+  const redeliver = (id = queued!.event_id, actor = adminId) => request(actor, "POST", `/api/webhooks/deliveries/${id}/redeliver`);
   const pending = await redeliver();
   assert.equal(pending.status, 409);
   assert.equal(await errorOf(pending), "webhook_delivery_not_dead");
@@ -930,21 +760,14 @@ test("recent deliveries are listed without payload or sender, and only a dead on
       payload: queued!.payload,
     },
   ]);
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT workspace_id::text,connection_id::text,delivery_event_id::text,actor_id::text FROM webhook_redelivery_events",
-      )
-    ).rows,
-    [
-      {
-        workspace_id: workspaceId,
-        connection_id: connectionId,
-        delivery_event_id: queued!.event_id,
-        actor_id: adminId,
-      },
-    ],
-  );
+  assert.deepEqual((await pool.query("SELECT workspace_id::text,connection_id::text,delivery_event_id::text,actor_id::text FROM webhook_redelivery_events")).rows, [
+    {
+      workspace_id: workspaceId,
+      connection_id: connectionId,
+      delivery_event_id: queued!.event_id,
+      actor_id: adminId,
+    },
+  ]);
   // The redelivery is a pending delivery again, so a second request is refused until it is dead again.
   assert.equal((await redeliver()).status, 409);
 
@@ -977,10 +800,7 @@ async function deliveredPeople() {
 }
 
 function sending(sender: string) {
-  return pool.query(
-    "UPDATE webhook_deliveries SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE sender_id=$1",
-    [sender],
-  );
+  return pool.query("UPDATE webhook_deliveries SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE sender_id=$1", [sender]);
 }
 
 async function webhookCounts() {
@@ -997,11 +817,7 @@ async function webhookCounts() {
 
 test("person deletion removes that person's deliveries and their audit, and refuses while one is sending", async () => {
   await deliveredPeople();
-  const deletePerson = (sender: string) =>
-    pool.query<{ result: { deleted_counts: Record<string, number> } }>(
-      "SELECT public.delete_person_data($1,$2,$3,'comment_sender',$4) AS result",
-      [workspaceId, connectionId, ownerId, sender],
-    );
+  const deletePerson = (sender: string) => pool.query<{ result: { deleted_counts: Record<string, number> } }>("SELECT public.delete_person_data($1,$2,$3,'comment_sender',$4) AS result", [workspaceId, connectionId, ownerId, sender]);
   await sending("sender-a");
   await assert.rejects(deletePerson("sender-a"), { code: "AC003" });
   assert.deepEqual(await webhookCounts(), { endpoints: 1, keys: 1, deliveries: 2, audit: 1 });
@@ -1024,12 +840,8 @@ test("person deletion removes that person's deliveries and their audit, and refu
 
 test("connection deletion removes its deliveries and their audit, keeps the endpoints, and refuses while one is sending", async () => {
   await deliveredPeople();
-  await pool.query(
-    "UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1",
-    [connectionId],
-  );
-  const deleteConnection = () =>
-    request(adminId, "POST", `/api/connections/${connectionId}/data-deletion`, { confirm_account_id: accountId });
+  await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1", [connectionId]);
+  const deleteConnection = () => request(adminId, "POST", `/api/connections/${connectionId}/data-deletion`, { confirm_account_id: accountId });
   await sending("sender-b");
   const refused = await deleteConnection();
   assert.equal(refused.status, 409);
@@ -1050,15 +862,8 @@ test("connection deletion removes its deliveries and their audit, keeps the endp
 test("workspace deletion removes endpoints, keys, deliveries and audit, and refuses while a delivery is sending", async () => {
   await deliveredPeople();
   const theirs = await createEndpoint("theirs", "https://theirs.example.test/in", outsiderId);
-  await pool.query(
-    "UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1",
-    [connectionId],
-  );
-  const deleteWorkspace = () =>
-    pool.query<{ result: { deleted_counts: Record<string, number> } }>(
-      "SELECT public.delete_workspace_data($1,$2) AS result",
-      [workspaceId, ownerId],
-    );
+  await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1", [connectionId]);
+  const deleteWorkspace = () => pool.query<{ result: { deleted_counts: Record<string, number> } }>("SELECT public.delete_workspace_data($1,$2) AS result", [workspaceId, ownerId]);
   await sending("sender-a");
   await assert.rejects(deleteWorkspace(), { code: "AC003" });
   assert.deepEqual(await webhookCounts(), { endpoints: 1, keys: 1, deliveries: 2, audit: 1 });
@@ -1070,10 +875,7 @@ test("workspace deletion removes endpoints, keys, deliveries and audit, and refu
   assert.equal(result.deleted_counts.webhook_deliveries, 2);
   assert.equal(result.deleted_counts.webhook_redelivery_events, 1);
   assert.deepEqual(await webhookCounts(), { endpoints: 0, keys: 0, deliveries: 0, audit: 0 });
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS count FROM workspaces WHERE id=$1", [workspaceId])).rows[0].count,
-    0,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM workspaces WHERE id=$1", [workspaceId])).rows[0].count, 0);
   // The other workspace keeps its endpoint and key.
   assert.deepEqual(
     (
@@ -1089,16 +891,11 @@ test("workspace deletion removes endpoints, keys, deliveries and audit, and refu
 
 test("a deletion waits for an uncommitted webhook claim and refuses once it commits as sending", async () => {
   await deliveredPeople();
-  await pool.query(
-    "UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1",
-    [connectionId],
-  );
+  await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1", [connectionId]);
   const claim = await pool.connect();
   try {
     await claim.query("BEGIN");
-    await claim.query(
-      "UPDATE webhook_deliveries SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE sender_id='sender-a'",
-    );
+    await claim.query("UPDATE webhook_deliveries SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE sender_id='sender-a'");
     // The row is held by the claim, so the connection and workspace deletions refuse instead of waiting.
     const connection = await request(adminId, "POST", `/api/connections/${connectionId}/data-deletion`, {
       confirm_account_id: accountId,
@@ -1108,16 +905,10 @@ test("a deletion waits for an uncommitted webhook claim and refuses once it comm
       code: "AC003",
     });
     // Person deletion waits for the claim and then sees it as sending.
-    const person = pool
-      .query("SELECT public.delete_person_data($1,$2,$3,'comment_sender','sender-a')", [
-        workspaceId,
-        connectionId,
-        ownerId,
-      ])
-      .then(
-        () => "deleted",
-        (error: { code?: string }) => error.code,
-      );
+    const person = pool.query("SELECT public.delete_person_data($1,$2,$3,'comment_sender','sender-a')", [workspaceId, connectionId, ownerId]).then(
+      () => "deleted",
+      (error: { code?: string }) => error.code,
+    );
     await new Promise((resolve) => setTimeout(resolve, 300));
     await claim.query("COMMIT");
     assert.equal(await person, "AC003");
@@ -1143,14 +934,7 @@ test("migration 031 replays and, with the later migrations, leaves the deletion 
   for (const { proname, body } of current) assert.match(body, /webhook_deliveries/, proname);
   const migration = await readFile(new URL("../../db/migrations/031_flow_webhooks.sql", import.meta.url), "utf8");
   // Migrations 032 to 035 redefine the same functions after 031, in the order deploy/migrate-multi-user.sql runs them.
-  const later = await Promise.all(
-    [
-      "032_inbox_read_state.sql",
-      "033_inbox_labels_notes.sql",
-      "034_inbox_reminders.sql",
-      "035_inbox_label_rules.sql",
-    ].map((file) => readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8")),
-  );
+  const later = await Promise.all(["032_inbox_read_state.sql", "033_inbox_labels_notes.sql", "034_inbox_reminders.sql", "035_inbox_label_rules.sql"].map((file) => readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8")));
   await deliveredPeople();
   for (let run = 0; run < 2; run++) {
     await pool.query(migration);
@@ -1174,17 +958,8 @@ test("migration 031 replays and, with the later migrations, leaves the deletion 
   assert.deepEqual(await webhookCounts(), { endpoints: 1, keys: 1, deliveries: 2, audit: 1 });
 
   // The delivery states the migration allows.
-  const invalid = [
-    "status='waiting'",
-    "status='sent'",
-    "payload=NULL",
-    "status='sending'",
-    "failure_code='Not A Code'",
-    "last_status_code=42",
-    "node_id='not a node'",
-  ];
-  for (const change of invalid)
-    await assert.rejects(pool.query(`UPDATE webhook_deliveries SET ${change}`), { code: "23514" }, change);
+  const invalid = ["status='waiting'", "status='sent'", "payload=NULL", "status='sending'", "failure_code='Not A Code'", "last_status_code=42", "node_id='not a node'"];
+  for (const change of invalid) await assert.rejects(pool.query(`UPDATE webhook_deliveries SET ${change}`), { code: "23514" }, change);
   await assert.rejects(pool.query("UPDATE webhook_endpoints SET url='http://hooks.example.test/in'"), {
     code: "23514",
   });

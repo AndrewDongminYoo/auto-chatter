@@ -9,8 +9,7 @@ import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: databaseUrl });
 const workspace = "11111111-1111-4111-8111-111111111111";
 const foreignWorkspace = "22222222-2222-4222-8222-222222222222";
@@ -52,10 +51,7 @@ beforeEach(async () => {
   notifications = 0;
   await pool.query("TRUNCATE workspaces,workspace_deletion_records CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspace, foreignWorkspace]);
-  await pool.query(
-    `INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'agent'),($4,$5,'owner')`,
-    [workspace, owner, agent, foreignWorkspace, outsider],
-  );
+  await pool.query(`INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'agent'),($4,$5,'owner')`, [workspace, owner, agent, foreignWorkspace, outsider]);
   await pool.query(
     `INSERT INTO instagram_connections(id,workspace_id,account_id,username,inbox_enabled,inbox_enabled_at)
      VALUES($1,$2,'100','shop',true,now()-interval '1 day'),($3,$4,'101','shop',true,now()-interval '1 day')`,
@@ -85,8 +81,7 @@ async function request(path = detailPath(), actor = owner) {
         },
         end: async () => {},
       }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: actor, email: "member@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actor, email: "member@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
     async () => {
       notifications++;
     },
@@ -140,19 +135,7 @@ async function bridge(
       `INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,
        private_reply_text,recipient_id,status,provider_message_id,sent_at)
      VALUES($1,$2,$3,$4,$5,$6,$7,'PRIVATE SEND BODY',$8,$9,$10,now()+$11::interval) RETURNING id::text`,
-      [
-        ws,
-        conn,
-        event.id,
-        rule,
-        event.comment_id,
-        event.media_id,
-        from,
-        recipient,
-        options.status ?? "sent",
-        options.provider === undefined ? "acknowledged" : options.provider,
-        options.age ?? "-1 hour",
-      ],
+      [ws, conn, event.id, rule, event.comment_id, event.media_id, from, recipient, options.status ?? "sent", options.provider === undefined ? "acknowledged" : options.provider, options.age ?? "-1 hour"],
     )
   ).rows[0].id as string;
 }
@@ -166,14 +149,7 @@ async function message(recipient: string, conn = connection, ws = workspace) {
     )
   ).rows[0].id as string;
 }
-async function consent(
-  identityKind: "comment_sender" | "dm_recipient",
-  identityValue: string,
-  purpose: "service_reply" | "marketing" | "all",
-  decision: "grant" | "revoke",
-  conn = connection,
-  ws = workspace,
-) {
+async function consent(identityKind: "comment_sender" | "dm_recipient", identityValue: string, purpose: "service_reply" | "marketing" | "all", decision: "grant" | "revoke", conn = connection, ws = workspace) {
   return recordChannelConsentEvent(pool, {
     requestKey: randomUUID(),
     workspaceId: ws,
@@ -237,10 +213,7 @@ test("detail rejects malformed identifiers, duplicate/unknown queries and unscop
 });
 
 test("detail preserves active field types and empty values and distinguishes pause reasons", async () => {
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,$3,ARRAY['vip'])",
-    [workspace, connection, sender],
-  );
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,$3,ARRAY['vip'])", [workspace, connection, sender]);
   const expected = [];
   for (const [name, type, value, archived] of [
     ["zero", "number", 0, false],
@@ -249,16 +222,8 @@ test("detail preserves active field types and empty values and distinguishes pau
     ["unset", "date", null, false],
     ["archived", "text", "SECRET ARCHIVED", true],
   ] as const) {
-    const id = (
-      await pool.query(
-        "INSERT INTO instagram_contact_fields(workspace_id,name,type,archived) VALUES($1,$2,$3,$4) RETURNING id",
-        [workspace, name, type, archived],
-      )
-    ).rows[0].id;
-    await pool.query(
-      "INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,$3,$4,$5::jsonb)",
-      [workspace, connection, sender, id, value === null ? null : JSON.stringify(value)],
-    );
+    const id = (await pool.query("INSERT INTO instagram_contact_fields(workspace_id,name,type,archived) VALUES($1,$2,$3,$4) RETURNING id", [workspace, name, type, archived])).rows[0].id;
+    await pool.query("INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,$3,$4,$5::jsonb)", [workspace, connection, sender, id, value === null ? null : JSON.stringify(value)]);
     if (!archived) expected.push({ id, name, type, value });
   }
   const result = await detail();
@@ -292,14 +257,8 @@ test("detail returns only fresh unique provider-acknowledged same-source stored 
   const reply = await bridge("200");
   const dm = await message("200");
   await pool.query("UPDATE instagram_connections SET access_token_encrypted='PRIVATE TOKEN' WHERE id=$1", [connection]);
-  await pool.query(
-    "INSERT INTO instagram_inbox_notes(workspace_id,connection_id,recipient_id,author_id,body) VALUES($1,$2,'200',$3,'PRIVATE NOTE')",
-    [workspace, connection, agent],
-  );
-  await pool.query(
-    "INSERT INTO instagram_inbox_reminders(workspace_id,connection_id,recipient_id,creator_id,due_at,note) VALUES($1,$2,'200',$3,now(),'PRIVATE REMINDER')",
-    [workspace, connection, agent],
-  );
+  await pool.query("INSERT INTO instagram_inbox_notes(workspace_id,connection_id,recipient_id,author_id,body) VALUES($1,$2,'200',$3,'PRIVATE NOTE')", [workspace, connection, agent]);
+  await pool.query("INSERT INTO instagram_inbox_reminders(workspace_id,connection_id,recipient_id,creator_id,due_at,note) VALUES($1,$2,'200',$3,now(),'PRIVATE REMINDER')", [workspace, connection, agent]);
   await bridge("200"); // Same sender across posts remains one identity.
   await bridge("201", { age: "-2 days" });
   await message("201");
@@ -330,29 +289,15 @@ test("detail returns only fresh unique provider-acknowledged same-source stored 
   assert.equal(result.conversations[0]!.message_count, "1");
   assert.equal(result.conversations[0]!.state, "open");
   assert.equal(result.conversations[0]!.handoff_active, false);
-  assert.doesNotMatch(
-    JSON.stringify(result),
-    /PRIVATE|other-comment-id|another-comment-id|reminder|credential|assignee/,
-  );
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,handoff_paused) VALUES($1,$2,$3,true)",
-    [workspace, connection, sender],
-  );
-  await pool.query(
-    "INSERT INTO instagram_inbox_handoffs(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,updated_by) VALUES($1,$2,'200',$3,$4,true,1,$5)",
-    [workspace, connection, sender, reply, owner],
-  );
-  await pool.query(
-    "INSERT INTO instagram_inbox_conversations(workspace_id,connection_id,recipient_id,status,assignee_user_id) VALUES($1,$2,'200','closed',$3)",
-    [workspace, connection, agent],
-  );
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE|other-comment-id|another-comment-id|reminder|credential|assignee/);
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,handoff_paused) VALUES($1,$2,$3,true)", [workspace, connection, sender]);
+  await pool.query("INSERT INTO instagram_inbox_handoffs(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,updated_by) VALUES($1,$2,'200',$3,$4,true,1,$5)", [workspace, connection, sender, reply, owner]);
+  await pool.query("INSERT INTO instagram_inbox_conversations(workspace_id,connection_id,recipient_id,status,assignee_user_id) VALUES($1,$2,'200','closed',$3)", [workspace, connection, agent]);
   const changed = await detail();
   assert.equal(changed.conversations[0]!.state, "closed");
   assert.equal(changed.conversations[0]!.handoff_active, true);
   assert.equal(changed.automation.handoff_paused, true);
-  await pool.query("UPDATE instagram_connections SET inbox_enabled_at=NULL,inbox_enabled=false WHERE id=$1", [
-    connection,
-  ]);
+  await pool.query("UPDATE instagram_connections SET inbox_enabled_at=NULL,inbox_enabled=false WHERE id=$1", [connection]);
   assert.deepEqual((await detail()).conversations, []);
 });
 
@@ -408,30 +353,15 @@ test("verified conversations paginate without duplicates and cursors cannot cros
   }
   const cursor = JSON.parse(Buffer.from(first.after, "base64url").toString("utf8"));
   cursor.workspace_id = foreignWorkspace;
-  assert.equal(
-    (await request(`${detailPath()}?after=${Buffer.from(JSON.stringify(cursor)).toString("base64url")}`)).status,
-    400,
-  );
+  assert.equal((await request(`${detailPath()}?after=${Buffer.from(JSON.stringify(cursor)).toString("base64url")}`)).status, 400);
 });
 
 test("all detail facts share a read-only snapshot and reading changes no product rows or queue", async () => {
   await bridge("500");
   await message("500");
   await consent("comment_sender", sender, "service_reply", "revoke");
-  const tables = (
-    await pool.query("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")
-  ).rows.map((x) => x.tablename as string);
-  const snapshot = async () =>
-    Promise.all(
-      tables.map(
-        async (table) =>
-          (
-            await pool.query(
-              `SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]') AS rows FROM "${table}" t`,
-            )
-          ).rows[0].rows,
-      ),
-    );
+  const tables = (await pool.query("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")).rows.map((x) => x.tablename as string);
+  const snapshot = async () => Promise.all(tables.map(async (table) => (await pool.query(`SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]') AS rows FROM "${table}" t`)).rows[0].rows));
   const beforeRows = await snapshot();
   let readOnly = false;
   inspect = async (client, sql) => {
@@ -449,10 +379,7 @@ test("all detail facts share a read-only snapshot and reading changes no product
   inspect = async (_client, sql) => {
     if (!changed && sql.includes("instagram_comment_events")) {
       changed = true;
-      await pool.query(
-        "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,$3,true)",
-        [workspace, connection, sender],
-      );
+      await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,$3,true)", [workspace, connection, sender]);
       await bridge("500", { sender: "conflict-created-during-read" });
       await consent("comment_sender", sender, "service_reply", "grant");
     }

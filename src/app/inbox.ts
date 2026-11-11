@@ -7,13 +7,9 @@ import { labelsJson, readConversationLabels } from "./inbox-labels.ts";
 import { dueLocalSql, readCallerReminder } from "./inbox-reminders.ts";
 
 export async function setInbox(pool: Pool, user: User, id: string, input: unknown) {
-  if (!isUuid(id) || !isRecord(input) || Object.keys(input).length !== 1 || typeof input.enabled !== "boolean")
-    throw new ApiError(400, "invalid_inbox_setting");
+  if (!isUuid(id) || !isRecord(input) || Object.keys(input).length !== 1 || typeof input.enabled !== "boolean") throw new ApiError(400, "invalid_inbox_setting");
   const workspace = await workspaceFor(pool, user, "admin");
-  const found = await pool.query("SELECT active FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [
-    id,
-    workspace,
-  ]);
+  const found = await pool.query("SELECT active FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [id, workspace]);
   if (!found.rows[0]) throw new ApiError(404, "connection_not_found");
   const result = await pool.query(
     `UPDATE instagram_connections SET inbox_enabled=$3,
@@ -31,8 +27,7 @@ const INBOX_QUERY_KEYS = ["connection_id", "after", "status", "assignee", "unrea
 // millisecond a JavaScript Date keeps are neither skipped nor repeated at a page boundary.
 export async function listInbox(pool: Pool, user: User, query: URLSearchParams) {
   const workspace = await workspaceFor(pool, user, "agent");
-  if ([...query.keys()].some((key) => !INBOX_QUERY_KEYS.includes(key) || query.getAll(key).length !== 1))
-    throw new ApiError(400, "invalid_inbox_query");
+  if ([...query.keys()].some((key) => !INBOX_QUERY_KEYS.includes(key) || query.getAll(key).length !== 1)) throw new ApiError(400, "invalid_inbox_query");
   const connection = query.get("connection_id"),
     status = query.get("status"),
     assignee = query.get("assignee"),
@@ -58,15 +53,7 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
   if (query.has("after")) {
     try {
       const value: unknown = JSON.parse(Buffer.from(query.get("after")!, "base64url").toString());
-      if (
-        !isRecord(value) ||
-        typeof value.at !== "string" ||
-        !/^-?\d{1,18}$/.test(value.at) ||
-        !isUuid(value.connection_id) ||
-        typeof value.recipient_id !== "string" ||
-        !/^\d{1,40}$/.test(value.recipient_id)
-      )
-        throw new Error();
+      if (!isRecord(value) || typeof value.at !== "string" || !/^-?\d{1,18}$/.test(value.at) || !isUuid(value.connection_id) || typeof value.recipient_id !== "string" || !/^\d{1,40}$/.test(value.recipient_id)) throw new Error();
       after = { at: value.at, connection_id: value.connection_id, recipient_id: value.recipient_id };
     } catch {
       throw new ApiError(400, "invalid_inbox_query");
@@ -115,21 +102,7 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
        AND ($12::uuid IS NULL OR $12::uuid=ANY(sets.label_ids))
        AND (NOT $13::boolean OR rem.due_at<=now())
      ORDER BY m.last_message_us DESC,m.connection_id,m.recipient_id LIMIT 51`,
-    [
-      workspace,
-      connection,
-      after?.at ?? null,
-      after?.connection_id ?? null,
-      after?.recipient_id ?? null,
-      status,
-      user.id,
-      assignee === "me" ? user.id : assignee === "none" ? null : assignee,
-      search,
-      unread === "true",
-      assignee === "none",
-      label,
-      reminder === "due",
-    ],
+    [workspace, connection, after?.at ?? null, after?.connection_id ?? null, after?.recipient_id ?? null, status, user.id, assignee === "me" ? user.id : assignee === "none" ? null : assignee, search, unread === "true", assignee === "none", label, reminder === "due"],
   );
   // The badge: every due pending reminder of the caller in the workspace, whatever the filters, and the server time
   // the screen measures due_at against until the next list load.
@@ -188,25 +161,10 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
         : null,
   };
 }
-export async function inboxMessages(
-  pool: Pool,
-  user: User,
-  connection: string,
-  recipient: string,
-  query: URLSearchParams,
-) {
-  if (
-    !isUuid(connection) ||
-    !/^\d{1,40}$/.test(recipient) ||
-    [...query.keys()].some((key) => key !== "before" || query.getAll(key).length !== 1) ||
-    (query.has("before") && !/^[1-9]\d{0,18}$/.test(query.get("before")!))
-  )
-    throw new ApiError(400, "invalid_inbox_query");
+export async function inboxMessages(pool: Pool, user: User, connection: string, recipient: string, query: URLSearchParams) {
+  if (!isUuid(connection) || !/^\d{1,40}$/.test(recipient) || [...query.keys()].some((key) => key !== "before" || query.getAll(key).length !== 1) || (query.has("before") && !/^[1-9]\d{0,18}$/.test(query.get("before")!))) throw new ApiError(400, "invalid_inbox_query");
   const workspace = await workspaceFor(pool, user, "agent");
-  const owned = await pool.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [
-    connection,
-    workspace,
-  ]);
+  const owned = await pool.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [connection, workspace]);
   if (!owned.rowCount) throw new ApiError(404, "connection_not_found");
   const result = await pool.query(
     `SELECT id::text,message_id,text,kind,message_at,received_at FROM instagram_inbox_messages
@@ -224,25 +182,13 @@ export async function inboxMessages(
   };
 }
 
-export async function inboxContext(
-  pool: Pool,
-  user: User,
-  connection: string,
-  recipient: string,
-  query: URLSearchParams,
-) {
-  if (!isUuid(connection) || !/^\d{1,40}$/.test(recipient) || query.size)
-    throw new ApiError(400, "invalid_inbox_query");
+export async function inboxContext(pool: Pool, user: User, connection: string, recipient: string, query: URLSearchParams) {
+  if (!isUuid(connection) || !/^\d{1,40}$/.test(recipient) || query.size) throw new ApiError(400, "invalid_inbox_query");
   const workspace = await workspaceFor(pool, user, "agent");
   return readInboxContext(pool, workspace, connection, recipient);
 }
 
-export async function readInboxContext(
-  pool: Pick<Pool, "query">,
-  workspace: string,
-  connection: string,
-  recipient: string,
-) {
+export async function readInboxContext(pool: Pick<Pool, "query">, workspace: string, connection: string, recipient: string) {
   const result = await pool.query(
     `WITH owned AS (
        SELECT id,workspace_id,inbox_enabled_at FROM instagram_connections WHERE id=$1 AND workspace_id=$2
@@ -266,8 +212,7 @@ export async function readInboxContext(
   const row = result.rows[0];
   if (!row) throw new ApiError(404, "connection_not_found");
   if (!row.last_message_at) throw new ApiError(404, "conversation_not_found");
-  const status =
-    row.sender_count === 0 ? "unmapped" : row.sender_count > 1 ? "ambiguous" : row.fresh ? "verified" : "stale";
+  const status = row.sender_count === 0 ? "unmapped" : row.sender_count > 1 ? "ambiguous" : row.fresh ? "verified" : "stale";
   return {
     mapping_status: status,
     comment_sender_id: status === "verified" ? row.sender_id : null,

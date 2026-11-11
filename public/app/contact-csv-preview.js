@@ -69,15 +69,7 @@ function createContactCsvPreview({ api, node, reloadContacts, sessionSource }) {
       const item = node("li", `${row.row}행 · ${labels[row.status]}`);
       if (detailKeys.includes(row.status)) {
         item.append(node("p", `계정 ${row.connection_id} · 참여자 ${row.sender_id}`, "hint"));
-        item.append(
-          node(
-            "p",
-            row.status === "applied"
-              ? `이전: ${tags(row.current_tags)} → 현재: ${tags(row.proposed_tags)}`
-              : `현재: ${tags(row.current_tags)} → 예상: ${tags(row.proposed_tags)}`,
-            "hint",
-          ),
-        );
+        item.append(node("p", row.status === "applied" ? `이전: ${tags(row.current_tags)} → 현재: ${tags(row.proposed_tags)}` : `현재: ${tags(row.current_tags)} → 예상: ${tags(row.proposed_tags)}`, "hint"));
       }
       list.append(item);
     }
@@ -97,14 +89,7 @@ function createContactCsvPreview({ api, node, reloadContacts, sessionSource }) {
       previewKeys.reduce((sum, key) => sum + counts[key], 0) === counts.total &&
       Number.isFinite(Date.parse(result.checked_at)) &&
       result.rows.every(
-        (row, i) =>
-          row.row === i + 1 &&
-          previewKeys.includes(row.status) &&
-          (!["changed", "unchanged"].includes(row.status) ||
-            (typeof row.connection_id === "string" &&
-              typeof row.sender_id === "string" &&
-              stringArray(row.current_tags) &&
-              stringArray(row.proposed_tags))),
+        (row, i) => row.row === i + 1 && previewKeys.includes(row.status) && (!["changed", "unchanged"].includes(row.status) || (typeof row.connection_id === "string" && typeof row.sender_id === "string" && stringArray(row.current_tags) && stringArray(row.proposed_tags))),
       ) &&
       previewKeys.every((key) => result.rows.filter((row) => row.status === key).length === counts[key]),
     );
@@ -120,24 +105,14 @@ function createContactCsvPreview({ api, node, reloadContacts, sessionSource }) {
       keys.every((key) => Number.isSafeInteger(counts[key]) && counts[key] >= 0) &&
       counts.applied + counts.unchanged === counts.total &&
       Number.isFinite(Date.parse(result.applied_at)) &&
-      result.rows.every(
-        (row, i) =>
-          row.row === i + 1 &&
-          keys.includes(row.status) &&
-          typeof row.connection_id === "string" &&
-          typeof row.sender_id === "string" &&
-          stringArray(row.previous_tags) &&
-          stringArray(row.tags),
-      ) &&
+      result.rows.every((row, i) => row.row === i + 1 && keys.includes(row.status) && typeof row.connection_id === "string" && typeof row.sender_id === "string" && stringArray(row.previous_tags) && stringArray(row.tags)) &&
       keys.every((key) => result.rows.filter((row) => row.status === key).length === counts[key]),
     );
   }
   function showPreview(result, lead) {
     const counts = result.counts;
     rows = result.rows;
-    status.textContent =
-      `${lead}전체 ${counts.total}행 · 변경 예상 ${counts.changed} · 변경 없음 ${counts.unchanged} · 오류 ${counts.invalid} · 중복 ${counts.duplicate} · 조회 불가 ${counts.not_found}. ` +
-      `저장된 변경은 없습니다. 검사 시각: ${result.checked_at}.`;
+    status.textContent = `${lead}전체 ${counts.total}행 · 변경 예상 ${counts.changed} · 변경 없음 ${counts.unchanged} · 오류 ${counts.invalid} · 중복 ${counts.duplicate} · 조회 불가 ${counts.not_found}. ` + `저장된 변경은 없습니다. 검사 시각: ${result.checked_at}.`;
     showMore();
   }
   // The apply is offered only for a clean check with changes; it sends the same CSV string and the checked rows.
@@ -146,9 +121,7 @@ function createContactCsvPreview({ api, node, reloadContacts, sessionSource }) {
     if (!counts.changed || counts.invalid + counts.duplicate + counts.not_found) return;
     held = {
       csv,
-      expected: result.rows
-        .filter((row) => row.status === "changed")
-        .map((row) => ({ row: row.row, current_tags: row.current_tags })),
+      expected: result.rows.filter((row) => row.status === "changed").map((row) => ({ row: row.row, current_tags: row.current_tags })),
     };
     acknowledgeText.textContent = `${counts.changed}행의 태그를 파일의 값으로 교체합니다. 다른 열과 동의·추가 정보·중지 상태는 바꾸지 않습니다.`;
     applyForm.hidden = false;
@@ -208,8 +181,7 @@ function createContactCsvPreview({ api, node, reloadContacts, sessionSource }) {
     try {
       const result = await api("/api/contacts/import", "POST", { csv, expected });
       if (request !== generation) return;
-      if (!isApplyResult(result))
-        throw new Error("태그 적용 결과를 확인할 수 없습니다. 연락처 목록에서 현재 태그를 확인해 주세요.");
+      if (!isApplyResult(result)) throw new Error("태그 적용 결과를 확인할 수 없습니다. 연락처 목록에서 현재 태그를 확인해 주세요.");
       invalidate();
       rows = result.rows
         .filter((row) => row.status === "applied")
@@ -224,17 +196,12 @@ function createContactCsvPreview({ api, node, reloadContacts, sessionSource }) {
       status.textContent = `태그 교체 완료 · 전체 ${result.counts.total}행 · 적용 ${result.counts.applied} · 변경 없음 ${result.counts.unchanged}. 적용 시각: ${result.applied_at}. 다시 적용하려면 파일을 다시 검사해 주세요.`;
       showMore();
       // The host skips the reload over an unsaved contact draft; say so, or the list below shows the old tags silently.
-      if (reloadContacts && reloadContacts() === false)
-        status.textContent +=
-          " 편집 중인 연락처가 있어 목록은 새로 고치지 않았습니다. 편집을 마친 뒤 목록을 다시 불러오면 바뀐 태그가 보입니다.";
+      if (reloadContacts && reloadContacts() === false) status.textContent += " 편집 중인 연락처가 있어 목록은 새로 고치지 않았습니다. 편집을 마친 뒤 목록을 다시 불러오면 바뀐 태그가 보입니다.";
     } catch (error) {
       if (request !== generation) return;
       invalidate();
       // A rejected or stale file carries the server's fresh rows; nothing was written, and a new check is required.
-      if (
-        ["contact_import_rejected", "contact_import_stale"].includes(error.code) &&
-        isPreviewResult({ counts: error.counts, rows: error.rows, checked_at: error.checked_at })
-      )
+      if (["contact_import_rejected", "contact_import_stale"].includes(error.code) && isPreviewResult({ counts: error.counts, rows: error.rows, checked_at: error.checked_at }))
         showPreview({ counts: error.counts, rows: error.rows, checked_at: error.checked_at }, `${error.message} `);
       else status.textContent = error.message;
     }

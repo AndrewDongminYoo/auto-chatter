@@ -12,11 +12,7 @@ interface DueToken {
 }
 
 // value is null when the call failed; rejected is set only when Meta rejected the token (metaTokenRejected).
-async function providerJson(
-  fetchImpl: typeof fetch,
-  url: URL | string,
-  init: RequestInit,
-): Promise<{ value: unknown; rejected: boolean }> {
+async function providerJson(fetchImpl: typeof fetch, url: URL | string, init: RequestInit): Promise<{ value: unknown; rejected: boolean }> {
   try {
     const response = await fetchImpl(url, { ...init, redirect: "manual", signal: AbortSignal.timeout(10_000) });
     if (!response.ok) {
@@ -30,13 +26,7 @@ async function providerJson(
   }
 }
 
-export async function refreshDueInstagramTokens(
-  pool: Pool,
-  key: string,
-  fetchImpl: typeof fetch = fetch,
-  now: Date = new Date(),
-  graphVersion = "v26.0",
-): Promise<number> {
+export async function refreshDueInstagramTokens(pool: Pool, key: string, fetchImpl: typeof fetch = fetch, now: Date = new Date(), graphVersion = "v26.0"): Promise<number> {
   return (await refreshDueInstagramTokensWithFailures(pool, key, fetchImpl, now, graphVersion)).refreshed;
 }
 
@@ -45,14 +35,7 @@ export async function refreshDueInstagramTokens(
 // refresh that loses to a newer token or a stopped connection is not a failure. A refresh call that Meta
 // rejects also records the reconnect marker (refresh_rejected), and a stored refresh clears it.
 // correlationId is the caller's run ID, written on the log line of a failed marker write.
-export async function refreshDueInstagramTokensWithFailures(
-  pool: Pool,
-  key: string,
-  fetchImpl: typeof fetch = fetch,
-  now: Date = new Date(),
-  graphVersion = "v26.0",
-  correlationId?: string,
-): Promise<{ refreshed: number; failed: number }> {
+export async function refreshDueInstagramTokensWithFailures(pool: Pool, key: string, fetchImpl: typeof fetch = fetch, now: Date = new Date(), graphVersion = "v26.0", correlationId?: string): Promise<{ refreshed: number; failed: number }> {
   if (!Number.isFinite(now.getTime())) throw new Error("Invalid refresh time");
   if (!/^v\d+\.\d+$/.test(graphVersion)) throw new Error("Invalid Graph API version");
   sealSecret("key-check", key, "config-check");
@@ -114,40 +97,19 @@ export async function refreshDueInstagramTokensWithFailures(
       continue;
     }
     // A rejection here concerns the returned token, which is not stored, so it is never recorded.
-    const { value: profile } = await providerJson(
-      fetchImpl,
-      `https://graph.instagram.com/${graphVersion}/me?fields=user_id`,
-      { method: "GET", headers: { Authorization: `Bearer ${value.access_token}` } },
-    );
-    const account =
-      profile && typeof profile === "object" && "data" in profile && Array.isArray(profile.data)
-        ? profile.data[0]
-        : profile;
-    if (
-      !account ||
-      typeof account !== "object" ||
-      !("user_id" in account) ||
-      account.user_id !== connection.account_id
-    ) {
+    const { value: profile } = await providerJson(fetchImpl, `https://graph.instagram.com/${graphVersion}/me?fields=user_id`, { method: "GET", headers: { Authorization: `Bearer ${value.access_token}` } });
+    const account = profile && typeof profile === "object" && "data" in profile && Array.isArray(profile.data) ? profile.data[0] : profile;
+    if (!account || typeof account !== "object" || !("user_id" in account) || account.user_id !== connection.account_id) {
       failed++;
       continue;
     }
-    const encrypted =
-      value.access_token === accessToken
-        ? connection.access_token_encrypted
-        : sealSecret(value.access_token, key, context);
+    const encrypted = value.access_token === accessToken ? connection.access_token_encrypted : sealSecret(value.access_token, key, context);
     const saved = await pool.query(
       `UPDATE instagram_connections SET access_token_encrypted=$4,token_expires_at=$5,
          token_obtained_at=$3,token_refresh_attempted_at=NULL,
          reauth_required_at=NULL,reauth_reason=NULL,reauth_token_obtained_at=NULL
        WHERE id=$1 AND active=true AND access_token_encrypted=$2 AND token_refresh_attempted_at=$3 RETURNING id`,
-      [
-        connection.id,
-        connection.access_token_encrypted,
-        now,
-        encrypted,
-        new Date(now.getTime() + value.expires_in * 1000),
-      ],
+      [connection.id, connection.access_token_encrypted, now, encrypted, new Date(now.getTime() + value.expires_in * 1000)],
     );
     if (saved.rowCount === 1) refreshed++;
   }

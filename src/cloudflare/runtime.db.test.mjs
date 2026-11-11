@@ -28,14 +28,7 @@ test("static dashboard CSP admits validated Instagram thumbnail hosts and reject
       .slice(1);
     const admits = (input) => {
       const url = new URL(input);
-      return images.some((source) =>
-        source === "'self'"
-          ? url.origin === "https://app.test"
-          : source.startsWith("https://*.") &&
-            url.protocol === "https:" &&
-            !url.port &&
-            url.hostname.endsWith(source.slice(9)),
-      );
+      return images.some((source) => (source === "'self'" ? url.origin === "https://app.test" : source.startsWith("https://*.") && url.protocol === "https:" && !url.port && url.hostname.endsWith(source.slice(9))));
     };
     assert.equal(admits("https://scontent.cdninstagram.com/post.jpg"), true);
     assert.equal(admits("https://scontent.xx.fbcdn.net/post.jpg"), true);
@@ -56,9 +49,7 @@ test("workerd auth routes call the provider with the native fetch receiver", asy
     scriptPath: ".wrangler/build/index.js",
     compatibilityDate: config.compatibility_date,
     compatibilityFlags: config.compatibility_flags,
-    durableObjects: Object.fromEntries(
-      config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }]),
-    ),
+    durableObjects: Object.fromEntries(config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }])),
     bindings: {
       SUPABASE_URL: "https://auth-test.supabase.co",
       SUPABASE_SECRET_KEY: "sb_secret_test",
@@ -99,10 +90,7 @@ test("workerd auth routes call the provider with the native fetch receiver", asy
       assert.deepEqual(await response.json(), body);
     }
     // Signup was the first mail request for this email; four recoveries reach the limit of five (#148).
-    for (const [route, status, body] of [
-      ...Array.from({ length: 4 }, () => ["recover", 200, { recovery_requested: true }]),
-      ["resend-confirmation", 429, { error: "auth_rate_limited" }],
-    ]) {
+    for (const [route, status, body] of [...Array.from({ length: 4 }, () => ["recover", 200, { recovery_requested: true }]), ["resend-confirmation", 429, { error: "auth_rate_limited" }]]) {
       const response = await runtime.dispatchFetch(`https://app.test/api/auth/${route}`, {
         method: "POST",
         headers: { Origin: "https://app.test", "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.20" },
@@ -130,8 +118,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
   const databaseUrl = process.env.TEST_DATABASE_URL;
   if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
   const url = new URL(databaseUrl);
-  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
-    throw new Error("Database tests require a local automations_test database");
+  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
   const pool = new Pool({ connectionString: databaseUrl });
   const serverUrl = new URL(databaseUrl);
   serverUrl.username = "auto_chatter_server";
@@ -162,12 +149,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
     outboundService: async (request) => {
       const graphUrl = new URL(request.url);
       // The flow webhook (#47): the DNS-over-HTTPS lookups, then the signed request to the endpoint.
-      if (graphUrl.hostname === "cloudflare-dns.com")
-        return Response.json(
-          graphUrl.searchParams.get("type") === "A"
-            ? { Status: 0, Answer: [{ name: "hooks.example.test", type: 1, data: "93.184.216.34" }] }
-            : { Status: 0 },
-        );
+      if (graphUrl.hostname === "cloudflare-dns.com") return Response.json(graphUrl.searchParams.get("type") === "A" ? { Status: 0, Answer: [{ name: "hooks.example.test", type: 1, data: "93.184.216.34" }] } : { Status: 0 });
       if (graphUrl.hostname === "hooks.example.test") {
         webhookRequests.push({
           method: request.method,
@@ -210,22 +192,15 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
   try {
     await resetTestSchema(pool);
     await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
-    await pool.query(
-      "INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES ('22222222-2222-4222-8222-222222222222','11111111-1111-4111-8111-111111111111','123',true)",
-    );
-    await pool.query(
-      "UPDATE instagram_connections SET send_enabled=true,token_expires_at=now()+interval '1 day',access_token_encrypted=$1",
-      [sealSecret("synthetic", Buffer.alloc(32, 1).toString("base64"), "11111111-1111-4111-8111-111111111111:123")],
-    );
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES ('22222222-2222-4222-8222-222222222222','11111111-1111-4111-8111-111111111111','123',true)");
+    await pool.query("UPDATE instagram_connections SET send_enabled=true,token_expires_at=now()+interval '1 day',access_token_encrypted=$1", [sealSecret("synthetic", Buffer.alloc(32, 1).toString("base64"), "11111111-1111-4111-8111-111111111111:123")]);
     await pool.query(
       "INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES ('33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','media-1','hello','reply',true)",
     );
     await pool.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8"));
     await pool.query("ALTER ROLE auto_chatter_server LOGIN PASSWORD 'runtime-test-only'");
     await runtime.ready;
-    const challenge = await runtime.dispatchFetch(
-      "https://example.test/webhooks/instagram?hub.mode=subscribe&hub.verify_token=runtime-verify&hub.challenge=verified",
-    );
+    const challenge = await runtime.dispatchFetch("https://example.test/webhooks/instagram?hub.mode=subscribe&hub.verify_token=runtime-verify&hub.challenge=verified");
     assert.equal(challenge.status, 200);
     assert.equal(await challenge.text(), "verified");
     await pool.query("UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now()-interval '1 minute'");
@@ -282,9 +257,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
       });
     assert.equal((await post(`sha256=${"0".repeat(64)}`)).status, 403);
     assert.equal((await pool.query("SELECT count(*) FROM private_reply_outbox")).rows[0].count, "0");
-    await pool.query(
-      "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','sender-1',true)",
-    );
+    await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','sender-1',true)");
     const signature = `sha256=${createHmac("sha256", "runtime-secret").update(body).digest("hex")}`;
     assert.equal((await post(signature)).status, 200);
     assert.equal((await post(signature)).status, 200);
@@ -313,14 +286,8 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
       if ((await pool.query("SELECT status FROM private_reply_outbox")).rows[0]?.status === "sent") break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    assert.deepEqual(
-      (await pool.query("SELECT status, provider_message_id FROM private_reply_outbox")).rows,
-      [{ status: "sent", provider_message_id: "runtime-message" }],
-      JSON.stringify(graphPaths),
-    );
-    await pool.query(
-      "UPDATE instagram_connections SET inbox_enabled=true; UPDATE private_reply_outbox SET recipient_id='456'",
-    );
+    assert.deepEqual((await pool.query("SELECT status, provider_message_id FROM private_reply_outbox")).rows, [{ status: "sent", provider_message_id: "runtime-message" }], JSON.stringify(graphPaths));
+    await pool.query("UPDATE instagram_connections SET inbox_enabled=true; UPDATE private_reply_outbox SET recipient_id='456'");
     const { saveInboxHandoff } = await import("../app/inbox-handoff.ts");
     const { queueManualReply } = await import("../app/manual-replies.ts");
     const operator = { id: "66666666-6666-4666-8666-666666666666", email: "operator@example.test" };
@@ -343,16 +310,12 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
       },
       true,
     );
-    await consumer.queue("auto-chatter-replies", [
-      { id: "manual", timestamp: new Date(), body: { connectionId: connection }, attempts: 1 },
-    ]);
+    await consumer.queue("auto-chatter-replies", [{ id: "manual", timestamp: new Date(), body: { connectionId: connection }, attempts: 1 }]);
     for (let attempt = 0; attempt < 100; attempt++) {
       if ((await pool.query("SELECT status FROM instagram_manual_replies")).rows[0]?.status === "sent") break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    assert.deepEqual((await pool.query("SELECT status,provider_message_id FROM instagram_manual_replies")).rows, [
-      { status: "sent", provider_message_id: "runtime-message" },
-    ]);
+    assert.deepEqual((await pool.query("SELECT status,provider_message_id FROM instagram_manual_replies")).rows, [{ status: "sent", provider_message_id: "runtime-message" }]);
     assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_reply_events")).rows[0].count, "3");
     assert.equal(sends, 2);
     // An enabled flow answers through the same outbox, ingestion and final guard as a rule.
@@ -387,26 +350,13 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
     const endpointId = "99999999-9999-4999-8999-999999999999";
     const signingKeyId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab";
     const signingSecret = "whsec_workerd-test";
-    await pool.query(
-      "INSERT INTO webhook_endpoints(id,workspace_id,name,url) VALUES($1,'11111111-1111-4111-8111-111111111111','crm','https://hooks.example.test/in')",
-      [endpointId],
-    );
-    await pool.query(
-      "INSERT INTO webhook_signing_keys(id,workspace_id,endpoint_id,slot,secret_encrypted) VALUES($1,'11111111-1111-4111-8111-111111111111',$2,1,$3)",
-      [
-        signingKeyId,
-        endpointId,
-        sealSecret(
-          signingSecret,
-          Buffer.alloc(32, 1).toString("base64"),
-          signingKeyContext("11111111-1111-4111-8111-111111111111", endpointId, signingKeyId),
-        ),
-      ],
-    );
-    await pool.query(
-      "INSERT INTO flows(id,workspace_id,name,draft) VALUES($1,'11111111-1111-4111-8111-111111111111','Flow',$2)",
-      [flowId, definition],
-    );
+    await pool.query("INSERT INTO webhook_endpoints(id,workspace_id,name,url) VALUES($1,'11111111-1111-4111-8111-111111111111','crm','https://hooks.example.test/in')", [endpointId]);
+    await pool.query("INSERT INTO webhook_signing_keys(id,workspace_id,endpoint_id,slot,secret_encrypted) VALUES($1,'11111111-1111-4111-8111-111111111111',$2,1,$3)", [
+      signingKeyId,
+      endpointId,
+      sealSecret(signingSecret, Buffer.alloc(32, 1).toString("base64"), signingKeyContext("11111111-1111-4111-8111-111111111111", endpointId, signingKeyId)),
+    ]);
+    await pool.query("INSERT INTO flows(id,workspace_id,name,draft) VALUES($1,'11111111-1111-4111-8111-111111111111','Flow',$2)", [flowId, definition]);
     await pool.query(
       `INSERT INTO flow_versions(id,flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,published_by)
        VALUES($1,$2,'11111111-1111-4111-8111-111111111111',1,0,$3,$4,'1789',$5)`,
@@ -435,15 +385,9 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
       ).status,
       200,
     );
-    await consumer.queue("auto-chatter-replies", [
-      { id: "flow", timestamp: new Date(), body: { connectionId: connection }, attempts: 1 },
-    ]);
+    await consumer.queue("auto-chatter-replies", [{ id: "flow", timestamp: new Date(), body: { connectionId: connection }, attempts: 1 }]);
     for (let attempt = 0; attempt < 100; attempt++) {
-      if (
-        (await pool.query("SELECT status FROM private_reply_outbox WHERE flow_run_id IS NOT NULL")).rows[0]?.status ===
-        "sent"
-      )
-        break;
+      if ((await pool.query("SELECT status FROM private_reply_outbox WHERE flow_run_id IS NOT NULL")).rows[0]?.status === "sent") break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     assert.deepEqual(
@@ -459,9 +403,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
     );
     assert.equal(sends, 3);
     // Ingestion queued the webhook delivery under the restricted server role; only the cron sends it.
-    assert.deepEqual((await pool.query("SELECT status,node_id FROM webhook_deliveries")).rows, [
-      { status: "pending", node_id: "notify" },
-    ]);
+    assert.deepEqual((await pool.query("SELECT status,node_id FROM webhook_deliveries")).rows, [{ status: "pending", node_id: "notify" }]);
     assert.deepEqual(webhookRequests, []);
     // The restricted server role removes an expired OAuth state through the cleanup function and keeps a live one.
     await pool.query(
@@ -514,12 +456,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
          recorded_at,id FROM channel_consent_events WHERE id=$1`,
       [grant],
     );
-    const campaignSegment = (
-      await pool.query(
-        "INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'Campaign audience') RETURNING id",
-        [campaignWorkspace],
-      )
-    ).rows[0].id;
+    const campaignSegment = (await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'Campaign audience') RETURNING id", [campaignWorkspace])).rows[0].id;
     const campaignSnapshot = (
       await pool.query(
         `INSERT INTO instagram_segment_snapshots(workspace_id,segment_id,created_by,as_of,definition,segment_name,counts,member_count)
@@ -551,60 +488,33 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
       )
     ).rows[0].id;
     await consumer.scheduled({ scheduledTime: Date.now(), cron: "* * * * *" });
-    assert.deepEqual((await pool.query("SELECT state_hash FROM instagram_oauth_states")).rows, [
-      { state_hash: "runtime-live" },
-    ]);
+    assert.deepEqual((await pool.query("SELECT state_hash FROM instagram_oauth_states")).rows, [{ state_hash: "runtime-live" }]);
     // The restricted server role started the run: the locks, the run and its one pending row, the executed approval.
-    assert.equal(
-      (await pool.query("SELECT status FROM campaign_approvals WHERE id=$1", [campaignApproval])).rows[0].status,
-      "executed",
-    );
+    assert.equal((await pool.query("SELECT status FROM campaign_approvals WHERE id=$1", [campaignApproval])).rows[0].status, "executed");
     const campaignRun = (await pool.query("SELECT id,status,start_counts FROM campaign_runs")).rows;
     assert.deepEqual(
       campaignRun.map((run) => [run.status, run.start_counts.candidate]),
       [["running", "1"]],
     );
-    assert.deepEqual(
-      (
-        await pool.query("SELECT sender_id,recipient_id,status FROM campaign_deliveries WHERE run_id=$1", [
-          campaignRun[0].id,
-        ])
-      ).rows,
-      [{ sender_id: "sender-campaign", recipient_id: "9001", status: "pending" }],
-    );
+    assert.deepEqual((await pool.query("SELECT sender_id,recipient_id,status FROM campaign_deliveries WHERE run_id=$1", [campaignRun[0].id])).rows, [{ sender_id: "sender-campaign", recipient_id: "9001", status: "pending" }]);
     assert.equal(sends, 3);
     // The restricted server role delivers that row through one queue message (#36): one account read and one POST
     // of the approval's body as plain text to the stored recipient, nothing else, and the run completes.
-    await pool.query("INSERT INTO workspace_members(user_id,workspace_id,role) VALUES($1,$2,'admin')", [
-      campaignUser,
-      campaignWorkspace,
-    ]);
+    await pool.query("INSERT INTO workspace_members(user_id,workspace_id,role) VALUES($1,$2,'admin')", [campaignUser, campaignWorkspace]);
     const pathsBeforeCampaign = graphPaths.length;
-    await consumer.queue("auto-chatter-replies", [
-      { id: "campaign", timestamp: new Date(), body: { connectionId: campaignConnection }, attempts: 1 },
-    ]);
+    await consumer.queue("auto-chatter-replies", [{ id: "campaign", timestamp: new Date(), body: { connectionId: campaignConnection }, attempts: 1 }]);
     for (let attempt = 0; attempt < 100; attempt++) {
       if ((await pool.query("SELECT status FROM campaign_deliveries")).rows[0]?.status !== "pending") break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    assert.deepEqual(
-      (
-        await pool.query(
-          "SELECT status,provider_message_id,provider_called_at IS NOT NULL AS called FROM campaign_deliveries",
-        )
-      ).rows,
-      [{ status: "sent", provider_message_id: "runtime-message", called: true }],
-      JSON.stringify(graphPaths),
-    );
+    assert.deepEqual((await pool.query("SELECT status,provider_message_id,provider_called_at IS NOT NULL AS called FROM campaign_deliveries")).rows, [{ status: "sent", provider_message_id: "runtime-message", called: true }], JSON.stringify(graphPaths));
     assert.equal(sends, 4);
     assert.deepEqual(graphPaths.slice(pathsBeforeCampaign), ["/v24.0/me", "/v24.0/123/messages"]);
     assert.deepEqual(graphPosts.at(-1), { recipient: { id: "9001" }, message: { text: "Hello" } });
     assert.deepEqual((await pool.query("SELECT status FROM campaign_runs")).rows, [{ status: "completed" }]);
     assert.equal(webhookRequests.length, 1);
     const [webhookRequest] = webhookRequests;
-    const delivered = (
-      await pool.query("SELECT event_id::text,status,payload,last_status_code FROM webhook_deliveries")
-    ).rows[0];
+    const delivered = (await pool.query("SELECT event_id::text,status,payload,last_status_code FROM webhook_deliveries")).rows[0];
     assert.deepEqual([delivered.status, delivered.payload, delivered.last_status_code], ["sent", null, 200]);
     assert.equal(webhookRequest.method, "POST");
     assert.equal(webhookRequest.url, "https://hooks.example.test/in");
@@ -622,33 +532,13 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
     const sentPayload = JSON.parse(webhookRequest.body);
     assert.equal(sentPayload.event_id, delivered.event_id);
     assert.deepEqual([sentPayload.type, sentPayload.node_id, sentPayload.tags], ["flow.webhook", "notify", []]);
-    for (const forbidden of ["sender-flow", "comment-flow", "anything", "media"])
-      assert.ok(!webhookRequest.body.includes(forbidden), forbidden);
+    for (const forbidden of ["sender-flow", "comment-flow", "anything", "media"]) assert.ok(!webhookRequest.body.includes(forbidden), forbidden);
     // The restricted server role records every step, and the one-day fixture token raises its alert.
     assert.deepEqual(
-      (
-        await pool.query(
-          "SELECT name FROM scheduled_steps WHERE last_success_at IS NOT NULL AND last_failure_at IS NULL ORDER BY name",
-        )
-      ).rows.map((row) => row.name),
-      [
-        "alerts",
-        "campaign_start",
-        "cron",
-        "early_reply_reconcile",
-        "flow_resume",
-        "kept_reply_cleanup",
-        "oauth_state_cleanup",
-        "stale_recovery",
-        "subscription_check",
-        "token_refresh",
-        "wake",
-        "webhook_delivery",
-      ],
+      (await pool.query("SELECT name FROM scheduled_steps WHERE last_success_at IS NOT NULL AND last_failure_at IS NULL ORDER BY name")).rows.map((row) => row.name),
+      ["alerts", "campaign_start", "cron", "early_reply_reconcile", "flow_resume", "kept_reply_cleanup", "oauth_state_cleanup", "stale_recovery", "subscription_check", "token_refresh", "wake", "webhook_delivery"],
     );
-    assert.deepEqual((await pool.query("SELECT name FROM scheduled_steps WHERE alert_active")).rows, [
-      { name: "alert_token_expiring" },
-    ]);
+    assert.deepEqual((await pool.query("SELECT name FROM scheduled_steps WHERE alert_active")).rows, [{ name: "alert_token_expiring" }]);
     // The restricted server role claims the connection and stores the subscription check's result.
     assert.deepEqual(
       (
@@ -668,8 +558,7 @@ test("workerd verifies signed bytes, persists via Hyperdrive, and consumes dupli
 test("workerd contact API uses restricted server privileges and verified workspace ownership", async () => {
   const databaseUrl = process.env.TEST_DATABASE_URL;
   const url = new URL(databaseUrl);
-  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
-    throw new Error("Database tests require a local automations_test database");
+  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
   const pool = new Pool({ connectionString: databaseUrl });
   const workspace = "11111111-1111-4111-8111-111111111111",
     user = "66666666-6666-4666-8666-666666666666",
@@ -688,9 +577,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     compatibilityFlags: config.compatibility_flags,
     hyperdrives: { HYPERDRIVE: serverUrl.href },
     // The workspace export spends a per-user allowance from the limiter object (#166).
-    durableObjects: Object.fromEntries(
-      config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }]),
-    ),
+    durableObjects: Object.fromEntries(config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }])),
     bindings: {
       SUPABASE_URL: "https://auth-test.supabase.co",
       SUPABASE_SECRET_KEY: "sb_secret_test",
@@ -710,29 +597,12 @@ test("workerd contact API uses restricted server privileges and verified workspa
     await pool.query("TRUNCATE workspaces CASCADE");
     await pool.query("INSERT INTO workspaces VALUES($1),($2)", [workspace, foreign]);
     await pool.query("INSERT INTO workspace_members VALUES($1,$2),($3,$3)", [user, workspace, foreign]);
-    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'123')", [
-      connection,
-      workspace,
-    ]);
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'comment','media','sender-1','private comment')",
-      [workspace, connection],
-    );
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'123')", [connection, workspace]);
+    await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'comment','media','sender-1','private comment')", [workspace, connection]);
     await pool.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8"));
     await pool.query("ALTER ROLE auto_chatter_server LOGIN PASSWORD 'runtime-test-only'");
-    assert.equal(
-      (
-        await pool.query(
-          "SELECT has_table_privilege('auto_chatter_server','instagram_contact_tags','DELETE') AS allowed",
-        )
-      ).rows[0].allowed,
-      false,
-    );
-    assert.equal(
-      (await pool.query("SELECT relrowsecurity FROM pg_class WHERE oid='instagram_contact_tags'::regclass")).rows[0]
-        .relrowsecurity,
-      true,
-    );
+    assert.equal((await pool.query("SELECT has_table_privilege('auto_chatter_server','instagram_contact_tags','DELETE') AS allowed")).rows[0].allowed, false);
+    assert.equal((await pool.query("SELECT relrowsecurity FROM pg_class WHERE oid='instagram_contact_tags'::regclass")).rows[0].relrowsecurity, true);
     const headers = {
       cookie: "__Host-ac-access=owned",
       origin: "https://app.test",
@@ -740,15 +610,8 @@ test("workerd contact API uses restricted server privileges and verified workspa
     };
     await pool.query("UPDATE instagram_connections SET active=true WHERE id=$1", [connection]);
     const inboxPath = `https://app.test/api/connections/${connection}/inbox`;
-    assert.equal(
-      (await runtime.dispatchFetch(inboxPath, { method: "PUT", headers, body: JSON.stringify({ enabled: true }) }))
-        .status,
-      200,
-    );
-    await pool.query(
-      "INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at) VALUES($1,$2,'456','owned-dm','private body','text',now())",
-      [workspace, connection],
-    );
+    assert.equal((await runtime.dispatchFetch(inboxPath, { method: "PUT", headers, body: JSON.stringify({ enabled: true }) })).status, 200);
+    await pool.query("INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at) VALUES($1,$2,'456','owned-dm','private body','text',now())", [workspace, connection]);
     const inboxPage = await runtime.dispatchFetch("https://app.test/api/inbox", { headers });
     assert.equal(inboxPage.status, 200);
     assert.equal((await inboxPage.json()).conversations[0].recipient_id, "456");
@@ -787,19 +650,9 @@ test("workerd contact API uses restricted server privileges and verified workspa
     });
     assert.equal(startHandoff.status, 200);
     assert.deepEqual(await startHandoff.json(), { active: true, version: 1 });
-    assert.equal(
-      (await (await runtime.dispatchFetch(`${inboxPath}/456/context`, { headers })).json()).automation_paused,
-      true,
-    );
-    assert.equal(
-      (await runtime.dispatchFetch(handoffPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } }))
-        .status,
-      404,
-    );
-    await pool.query(
-      "UPDATE instagram_connections SET send_enabled=true,access_token_encrypted='synthetic-encrypted',token_expires_at=now()+interval '1 day' WHERE id=$1",
-      [connection],
-    );
+    assert.equal((await (await runtime.dispatchFetch(`${inboxPath}/456/context`, { headers })).json()).automation_paused, true);
+    assert.equal((await runtime.dispatchFetch(handoffPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } })).status, 404);
+    await pool.query("UPDATE instagram_connections SET send_enabled=true,access_token_encrypted='synthetic-encrypted',token_expires_at=now()+interval '1 day' WHERE id=$1", [connection]);
     const manualPath = `${inboxPath}/456/replies`;
     const replyStatus = await runtime.dispatchFetch(`${inboxPath}/456/reply-status`, { headers });
     assert.equal(replyStatus.status, 200);
@@ -881,10 +734,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.equal(outbound.replies[0].text, "Manual runtime reply");
     assert.equal(outbound.replies[0].events[0].kind, "queued");
     assert.equal(JSON.stringify(outbound).includes("synthetic-encrypted"), false);
-    await pool.query(
-      "UPDATE instagram_manual_replies SET status='unknown',failure_code='worker_interrupted' WHERE id=$1",
-      [manual.id],
-    );
+    await pool.query("UPDATE instagram_manual_replies SET status='unknown',failure_code='worker_interrupted' WHERE id=$1", [manual.id]);
     const resolution = await runtime.dispatchFetch(`${manualPath}/${manual.id}/resolution`, {
       method: "POST",
       headers,
@@ -896,12 +746,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     });
     assert.equal(resolution.status, 200);
     assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_reply_events")).rows[0].count, "2");
-    const schedule = (
-      await pool.query(
-        `SELECT to_char((now()+interval '1 hour') AT TIME ZONE time_zone,'YYYY-MM-DD"T"HH24:MI') AS schedule_local,time_zone AS expected_time_zone FROM workspaces WHERE id=$1`,
-        [workspace],
-      )
-    ).rows[0];
+    const schedule = (await pool.query(`SELECT to_char((now()+interval '1 hour') AT TIME ZONE time_zone,'YYYY-MM-DD"T"HH24:MI') AS schedule_local,time_zone AS expected_time_zone FROM workspaces WHERE id=$1`, [workspace])).rows[0];
     const scheduledResponse = await runtime.dispatchFetch(manualPath, {
       method: "POST",
       headers,
@@ -968,11 +813,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.equal((await pool.query("SELECT count(*) FROM instagram_inbox_handoff_events")).rows[0].count, "2");
     const inboxHistory = await runtime.dispatchFetch(`${inboxPath}/456`, { headers });
     assert.equal((await inboxHistory.json()).messages[0].text, "private body");
-    assert.equal(
-      (await runtime.dispatchFetch(`${inboxPath}/456`, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } }))
-        .status,
-      404,
-    );
+    assert.equal((await runtime.dispatchFetch(`${inboxPath}/456`, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } })).status, 404);
     assert.equal(
       (
         await runtime.dispatchFetch(inboxPath, {
@@ -983,14 +824,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
       ).status,
       403,
     );
-    assert.equal(
-      (
-        await pool.query(
-          "SELECT has_table_privilege('auto_chatter_server','instagram_inbox_messages','DELETE') AS allowed",
-        )
-      ).rows[0].allowed,
-      false,
-    );
+    assert.equal((await pool.query("SELECT has_table_privilege('auto_chatter_server','instagram_inbox_messages','DELETE') AS allowed")).rows[0].allowed, false);
     const list = await runtime.dispatchFetch("https://app.test/api/contacts", { headers });
     assert.equal(list.status, 200);
     const listBody = await list.json();
@@ -1015,10 +849,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
       excluded: { tag: "1", field: "0", both: "0" },
       after: null,
     });
-    const foreignPreview = await runtime.dispatchFetch(
-      `https://app.test/api/contacts?preview=true&connection_id=${connection}`,
-      { headers: { ...headers, cookie: "__Host-ac-access=foreign" } },
-    );
+    const foreignPreview = await runtime.dispatchFetch(`https://app.test/api/contacts?preview=true&connection_id=${connection}`, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } });
     assert.equal(foreignPreview.status, 200);
     assert.deepEqual(await foreignPreview.json(), {
       contacts: [],
@@ -1027,10 +858,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
       excluded: { tag: "0", field: "0", both: "0" },
       after: null,
     });
-    assert.equal(
-      (await runtime.dispatchFetch("https://app.test/api/contacts?preview=true&after=", { headers })).status,
-      400,
-    );
+    assert.equal((await runtime.dispatchFetch("https://app.test/api/contacts?preview=true&after=", { headers })).status, 400);
     const automationPath = `https://app.test/api/connections/${connection}/contacts/sender-1/automation`;
     const pause = await runtime.dispatchFetch(automationPath, {
       method: "PUT",
@@ -1063,16 +891,10 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.deepEqual(await saved.json(), { tags: ["lead"] });
     const filtered = await runtime.dispatchFetch("https://app.test/api/contacts?tag=lead", { headers });
     assert.equal((await filtered.json()).contacts.length, 1);
-    for (const table of [
-      "instagram_contact_automation",
-      "instagram_contact_fields",
-      "instagram_contact_field_values",
-    ]) {
+    for (const table of ["instagram_contact_automation", "instagram_contact_fields", "instagram_contact_field_values"]) {
       const protectedTable = await pool.query("SELECT relrowsecurity FROM pg_class WHERE oid=$1::regclass", [table]);
       assert.equal(protectedTable.rows[0].relrowsecurity, true);
-      const privileges = await pool.query("SELECT has_table_privilege('auto_chatter_server',$1,'DELETE') AS allowed", [
-        table,
-      ]);
+      const privileges = await pool.query("SELECT has_table_privilege('auto_chatter_server',$1,'DELETE') AS allowed", [table]);
       assert.equal(privileges.rows[0].allowed, false);
     }
     const fieldResponse = await runtime.dispatchFetch("https://app.test/api/contact-fields", {
@@ -1092,10 +914,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     });
     assert.equal(fieldSaved.status, 200);
     assert.deepEqual(await fieldSaved.json(), { value: 0 });
-    const fieldFiltered = await runtime.dispatchFetch(
-      `https://app.test/api/contacts?field_id=${field.id}&field_operator=eq&field_value=0`,
-      { headers },
-    );
+    const fieldFiltered = await runtime.dispatchFetch(`https://app.test/api/contacts?field_id=${field.id}&field_operator=eq&field_value=0`, { headers });
     assert.equal((await fieldFiltered.json()).contacts[0].fields[field.id], 0);
     const orderedCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
       method: "POST",
@@ -1142,27 +961,13 @@ test("workerd contact API uses restricted server privileges and verified workspa
     const combinedSegment = await combinedCreated.json();
     assert.equal(combinedSegment.condition_operator, "or");
     const combinedPath = `https://app.test/api/contacts?segment_id=${combinedSegment.id}`;
-    assert.equal(
-      (await (await runtime.dispatchFetch(combinedPath, { headers })).json()).contacts[0].sender_id,
-      "sender-1",
-    );
-    assert.equal(
-      (await runtime.dispatchFetch(combinedPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } }))
-        .status,
-      404,
-    );
+    assert.equal((await (await runtime.dispatchFetch(combinedPath, { headers })).json()).contacts[0].sender_id, "sender-1");
+    assert.equal((await runtime.dispatchFetch(combinedPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } })).status, 404);
     const tagPath = `https://app.test/api/connections/${connection}/contacts/sender-1`;
-    assert.equal(
-      (await runtime.dispatchFetch(tagPath, { method: "PATCH", headers, body: JSON.stringify({ tags: ["lead"] }) }))
-        .status,
-      200,
-    );
+    assert.equal((await runtime.dispatchFetch(tagPath, { method: "PATCH", headers, body: JSON.stringify({ tags: ["lead"] }) })).status, 200);
     await runtime.dispatchFetch(valuePath, { method: "PUT", headers, body: JSON.stringify({ value: -1 }) });
     assert.equal((await (await runtime.dispatchFetch(combinedPath, { headers })).json()).contacts.length, 1);
-    assert.equal(
-      (await runtime.dispatchFetch(tagPath, { method: "PATCH", headers, body: JSON.stringify({ tags: [] }) })).status,
-      200,
-    );
+    assert.equal((await runtime.dispatchFetch(tagPath, { method: "PATCH", headers, body: JSON.stringify({ tags: [] }) })).status, 200);
     assert.equal((await (await runtime.dispatchFetch(combinedPath, { headers })).json()).contacts.length, 0);
     await runtime.dispatchFetch(valuePath, { method: "PUT", headers, body: JSON.stringify({ value: 0 }) });
     assert.equal(
@@ -1174,11 +979,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
       ).status,
       200,
     );
-    assert.equal(
-      (await runtime.dispatchFetch(tagPath, { method: "PATCH", headers, body: JSON.stringify({ tags: ["lead"] }) }))
-        .status,
-      200,
-    );
+    assert.equal((await runtime.dispatchFetch(tagPath, { method: "PATCH", headers, body: JSON.stringify({ tags: ["lead"] }) })).status, 200);
     // The restricted server role can read every exported table, and the export omits token ciphertext.
     const templateRoot = "https://app.test/api/inbox/reply-templates";
     const templateCreated = await runtime.dispatchFetch(templateRoot, {
@@ -1216,10 +1017,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
       ).status,
       409,
     );
-    assert.equal(
-      (await runtime.dispatchFetch(`${templateRoot}/${template.id}`, { method: "DELETE", headers })).status,
-      200,
-    );
+    assert.equal((await runtime.dispatchFetch(`${templateRoot}/${template.id}`, { method: "DELETE", headers })).status, 200);
     assert.deepEqual((await (await runtime.dispatchFetch(templateRoot, { headers })).json()).templates, []);
     const exported = await runtime.dispatchFetch("https://app.test/api/workspace/export", { headers });
     assert.equal(exported.status, 200);
@@ -1236,10 +1034,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.equal(csvBytes.subarray(0, 3).toString("hex"), "efbbbf");
     assert.ok(csvBytes.toString().includes("'sender-1"));
     assert.doesNotMatch(csvBytes.toString(), /private comment|access_token_encrypted/);
-    assert.equal(
-      (await runtime.dispatchFetch("https://app.test/api/contacts/export.csv?tag=lead", { headers })).status,
-      400,
-    );
+    assert.equal((await runtime.dispatchFetch("https://app.test/api/contacts/export.csv?tag=lead", { headers })).status, 400);
     const csvPreviewBody = JSON.stringify({ csv: csvBytes.toString() });
     const csvPreview = await runtime.dispatchFetch("https://app.test/api/contacts/import-preview", {
       method: "POST",
@@ -1264,9 +1059,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.equal(csvEditedPreview.counts.changed, 1);
     const csvApplyBody = JSON.stringify({
       csv: csvEdited,
-      expected: csvEditedPreview.rows
-        .filter((row) => row.status === "changed")
-        .map((row) => ({ row: row.row, current_tags: row.current_tags })),
+      expected: csvEditedPreview.rows.filter((row) => row.status === "changed").map((row) => ({ row: row.row, current_tags: row.current_tags })),
     });
     const csvApply = await runtime.dispatchFetch("https://app.test/api/contacts/import", {
       method: "POST",
@@ -1277,9 +1070,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     const csvApplyResult = await csvApply.json();
     assert.equal(csvApplyResult.counts.applied, 1);
     assert.deepEqual(
-      (await pool.query("SELECT tags FROM instagram_contact_tags WHERE sender_id='sender-1'")).rows.map(
-        (row) => row.tags,
-      ),
+      (await pool.query("SELECT tags FROM instagram_contact_tags WHERE sender_id='sender-1'")).rows.map((row) => row.tags),
       [["lead", "vip"]],
     );
     const csvApplyAgain = await runtime.dispatchFetch("https://app.test/api/contacts/import", {
@@ -1303,16 +1094,12 @@ test("workerd contact API uses restricted server privileges and verified workspa
       headers,
       body: JSON.stringify({
         csv: csvBytes.toString(),
-        expected: csvRestorePreview.rows
-          .filter((row) => row.status === "changed")
-          .map((row) => ({ row: row.row, current_tags: row.current_tags })),
+        expected: csvRestorePreview.rows.filter((row) => row.status === "changed").map((row) => ({ row: row.row, current_tags: row.current_tags })),
       }),
     });
     assert.equal(csvRestore.status, 200, await csvRestore.clone().text());
     assert.deepEqual(
-      (await pool.query("SELECT tags FROM instagram_contact_tags WHERE sender_id='sender-1'")).rows.map(
-        (row) => row.tags,
-      ),
+      (await pool.query("SELECT tags FROM instagram_contact_tags WHERE sender_id='sender-1'")).rows.map((row) => row.tags),
       [["lead"]],
     );
     await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [user]);
@@ -1362,11 +1149,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.equal(planResponse.status, 201);
     const plan = await planResponse.json();
     const planPath = `https://app.test/api/connections/${connection}/contacts/sender-1/fields/${plan.id}`;
-    assert.equal(
-      (await runtime.dispatchFetch(planPath, { method: "PUT", headers, body: JSON.stringify({ value: "pro" }) }))
-        .status,
-      200,
-    );
+    assert.equal((await runtime.dispatchFetch(planPath, { method: "PUT", headers, body: JSON.stringify({ value: "pro" }) })).status, 200);
     const fieldSet = [
       { field_id: field.id, field_operator: "gte", field_value: 0 },
       { field_id: plan.id, field_operator: "eq", field_value: "pro" },
@@ -1392,9 +1175,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
       field_mode: "all",
       version: 1,
     });
-    const setSelected = await (
-      await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${setSegment.id}`, { headers })
-    ).json();
+    const setSelected = await (await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${setSegment.id}`, { headers })).json();
     assert.deepEqual(
       setSelected.contacts.map((contact) => contact.sender_id),
       ["sender-1"],
@@ -1408,18 +1189,12 @@ test("workerd contact API uses restricted server privileges and verified workspa
       ]),
       field_mode: "all",
     });
-    const noneMatch = await (
-      await runtime.dispatchFetch(`https://app.test/api/contacts?${setQuery}`, { headers })
-    ).json();
+    const noneMatch = await (await runtime.dispatchFetch(`https://app.test/api/contacts?${setQuery}`, { headers })).json();
     assert.equal(noneMatch.total, "0");
     assert.equal(noneMatch.excluded.field, noneMatch.evaluated);
     // The restricted server role saves and evaluates a DM consent segment over the verified bridge: sender-1's
     // fresh sent reply to 456 above, and 456's stored DMs.
-    assert.equal(
-      (await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_messages WHERE recipient_id='456'")).rows[0]
-        .count > 0,
-      true,
-    );
+    assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_messages WHERE recipient_id='456'")).rows[0].count > 0, true);
     const dmCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
       method: "POST",
       headers,
@@ -1435,14 +1210,10 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.equal(dmSegment.dm_consent_purpose, "marketing");
     assert.equal(dmSegment.dm_consent_state, "no_record");
     assert.deepEqual(
-      (await (await runtime.dispatchFetch("https://app.test/api/contact-segments", { headers })).json()).segments.find(
-        (segment) => segment.id === dmSegment.id,
-      ),
+      (await (await runtime.dispatchFetch("https://app.test/api/contact-segments", { headers })).json()).segments.find((segment) => segment.id === dmSegment.id),
       dmSegment,
     );
-    const dmSelected = await (
-      await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${dmSegment.id}`, { headers })
-    ).json();
+    const dmSelected = await (await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${dmSegment.id}`, { headers })).json();
     assert.deepEqual(
       dmSelected.contacts.map((contact) => contact.sender_id),
       ["sender-1"],
@@ -1481,41 +1252,29 @@ test("workerd contact API uses restricted server privileges and verified workspa
     const dmActivitySegment = await dmActivityCreated.json();
     assert.equal(dmActivitySegment.last_dm_days, 1);
     assert.deepEqual(
-      (await (await runtime.dispatchFetch("https://app.test/api/contact-segments", { headers })).json()).segments.find(
-        (segment) => segment.id === dmActivitySegment.id,
-      ),
+      (await (await runtime.dispatchFetch("https://app.test/api/contact-segments", { headers })).json()).segments.find((segment) => segment.id === dmActivitySegment.id),
       dmActivitySegment,
     );
-    const dmActivityEdited = await runtime.dispatchFetch(
-      `https://app.test/api/contact-segments/${dmActivitySegment.id}`,
-      {
-        method: "PUT",
-        headers,
-        body: JSON.stringify({
-          name: "Recent DM",
-          connection_id: connection,
-          last_dm_days: 7,
-          expected_version: dmActivitySegment.version,
-        }),
-      },
-    );
+    const dmActivityEdited = await runtime.dispatchFetch(`https://app.test/api/contact-segments/${dmActivitySegment.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        name: "Recent DM",
+        connection_id: connection,
+        last_dm_days: 7,
+        expected_version: dmActivitySegment.version,
+      }),
+    });
     assert.equal(dmActivityEdited.status, 200, await dmActivityEdited.clone().text());
     assert.equal((await dmActivityEdited.json()).last_dm_days, 7);
-    const dmActivitySelected = await (
-      await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${dmActivitySegment.id}`, { headers })
-    ).json();
+    const dmActivitySelected = await (await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${dmActivitySegment.id}`, { headers })).json();
     assert.deepEqual(
       dmActivitySelected.contacts.map((contact) => contact.sender_id),
       ["sender-1"],
     );
     assert.deepEqual(Object.keys(dmActivitySelected.dm_activity_window), ["from", "before"]);
     assert.equal(JSON.stringify(dmActivitySelected).includes('"456"'), false);
-    const dmActivityPreview = await (
-      await runtime.dispatchFetch(
-        `https://app.test/api/contacts?${new URLSearchParams({ preview: "true", connection_id: connection, last_dm_days: "7" })}`,
-        { headers },
-      )
-    ).json();
+    const dmActivityPreview = await (await runtime.dispatchFetch(`https://app.test/api/contacts?${new URLSearchParams({ preview: "true", connection_id: connection, last_dm_days: "7" })}`, { headers })).json();
     assert.equal(dmActivityPreview.total, "1");
     assert.equal(dmActivityPreview.excluded.dm_activity, "0");
     assert.equal(
@@ -1554,9 +1313,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
       version: 1,
     });
     assert.deepEqual(
-      (await (await runtime.dispatchFetch("https://app.test/api/contact-segments", { headers })).json()).segments.find(
-        (segment) => segment.id === treeSegment.id,
-      ),
+      (await (await runtime.dispatchFetch("https://app.test/api/contact-segments", { headers })).json()).segments.find((segment) => segment.id === treeSegment.id),
       treeSegment,
     );
     const treeEdited = await runtime.dispatchFetch(`https://app.test/api/contact-segments/${treeSegment.id}`, {
@@ -1571,9 +1328,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     });
     assert.equal(treeEdited.status, 200, await treeEdited.clone().text());
     assert.equal((await treeEdited.json()).version, 2);
-    const treeSelected = await (
-      await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${treeSegment.id}`, { headers })
-    ).json();
+    const treeSelected = await (await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${treeSegment.id}`, { headers })).json();
     assert.deepEqual(
       treeSelected.contacts.map((contact) => contact.sender_id),
       ["sender-1"],
@@ -1615,11 +1370,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
       ).status,
       200,
     );
-    assert.equal(
-      (await runtime.dispatchFetch(`https://app.test/api/contact-fields/${plan.id}`, { method: "DELETE", headers }))
-        .status,
-      200,
-    );
+    assert.equal((await runtime.dispatchFetch(`https://app.test/api/contact-fields/${plan.id}`, { method: "DELETE", headers })).status, 200);
     const foreignField = await runtime.dispatchFetch(valuePath, {
       method: "PUT",
       headers: { ...headers, cookie: "__Host-ac-access=foreign" },
@@ -1637,19 +1388,8 @@ test("workerd contact API uses restricted server privileges and verified workspa
       body: JSON.stringify({ value: 1 }),
     });
     assert.equal(inactiveField.status, 404);
-    assert.equal(
-      (await pool.query("SELECT relrowsecurity FROM pg_class WHERE oid='instagram_contact_segments'::regclass")).rows[0]
-        .relrowsecurity,
-      true,
-    );
-    assert.equal(
-      (
-        await pool.query(
-          "SELECT has_table_privilege('auto_chatter_server','instagram_contact_segments','DELETE') AS allowed",
-        )
-      ).rows[0].allowed,
-      false,
-    );
+    assert.equal((await pool.query("SELECT relrowsecurity FROM pg_class WHERE oid='instagram_contact_segments'::regclass")).rows[0].relrowsecurity, true);
+    assert.equal((await pool.query("SELECT has_table_privilege('auto_chatter_server','instagram_contact_segments','DELETE') AS allowed")).rows[0].allowed, false);
     const created = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
       method: "POST",
       headers,
@@ -1670,14 +1410,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     });
     assert.equal(edited.status, 200, await edited.clone().text());
     assert.deepEqual(await edited.json(), { ...segment, tag: "vip", version: 2 });
-    assert.equal(
-      (
-        await (
-          await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${segment.id}`, { headers })
-        ).json()
-      ).contacts.length,
-      0,
-    );
+    assert.equal((await (await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${segment.id}`, { headers })).json()).contacts.length, 0);
     const staleEdit = await runtime.dispatchFetch(segmentPath, {
       method: "PUT",
       headers,
@@ -1710,19 +1443,12 @@ test("workerd contact API uses restricted server privileges and verified workspa
       tag_mode: "any",
       version: 1,
     });
-    const multiSelected = await (
-      await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${multiSegment.id}`, { headers })
-    ).json();
+    const multiSelected = await (await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${multiSegment.id}`, { headers })).json();
     assert.deepEqual(
       multiSelected.contacts.map((contact) => contact.sender_id),
       ["sender-1"],
     );
-    const bothTags = await (
-      await runtime.dispatchFetch(
-        `https://app.test/api/contacts?preview=true&connection_id=${connection}&tag=lead&tag=vip&tag_mode=all`,
-        { headers },
-      )
-    ).json();
+    const bothTags = await (await runtime.dispatchFetch(`https://app.test/api/contacts?preview=true&connection_id=${connection}&tag=lead&tag=vip&tag_mode=all`, { headers })).json();
     assert.equal(bothTags.total, "0");
     assert.equal(bothTags.excluded.tag, bothTags.evaluated);
     assert.equal(
@@ -1758,10 +1484,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     const removed = await runtime.dispatchFetch(`https://app.test/api/contacts?segment_id=${segment.id}`, { headers });
     assert.equal(removed.status, 404);
     const activity = { last_comment_from: "2026-10-10T00:00:00.000Z", last_comment_before: "2026-10-12T00:00:00.000Z" };
-    await pool.query("UPDATE instagram_comment_events SET created_at=$2 WHERE connection_id=$1", [
-      connection,
-      activity.last_comment_from,
-    ]);
+    await pool.query("UPDATE instagram_comment_events SET created_at=$2 WHERE connection_id=$1", [connection, activity.last_comment_from]);
     const activityCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
       method: "POST",
       headers,
@@ -1771,9 +1494,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     const activitySegment = await activityCreated.json();
     assert.equal(activitySegment.last_comment_from, activity.last_comment_from);
     assert.equal(activitySegment.last_comment_before, activity.last_comment_before);
-    const activityListed = await (
-      await runtime.dispatchFetch("https://app.test/api/contact-segments", { headers })
-    ).json();
+    const activityListed = await (await runtime.dispatchFetch("https://app.test/api/contact-segments", { headers })).json();
     assert.deepEqual(
       activityListed.segments.find((s) => s.id === activitySegment.id),
       activitySegment,
@@ -1782,10 +1503,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     const activityMatched = await (await runtime.dispatchFetch(activityPath, { headers })).json();
     assert.equal(activityMatched.total, "1");
     assert.deepEqual(activityMatched.excluded, { activity: "0", tag: "0", field: "0", both: "0" });
-    await pool.query("UPDATE instagram_comment_events SET created_at=$2 WHERE connection_id=$1", [
-      connection,
-      activity.last_comment_before,
-    ]);
+    await pool.query("UPDATE instagram_comment_events SET created_at=$2 WHERE connection_id=$1", [connection, activity.last_comment_before]);
     const activityExcluded = await (await runtime.dispatchFetch(activityPath, { headers })).json();
     assert.deepEqual(activityExcluded, {
       contacts: [],
@@ -1794,11 +1512,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
       evaluated: "1",
       excluded: { activity: "1", tag: "0", field: "0", both: "0" },
     });
-    assert.equal(
-      (await runtime.dispatchFetch(activityPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } }))
-        .status,
-      404,
-    );
+    assert.equal((await runtime.dispatchFetch(activityPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } })).status, 404);
     assert.equal(
       (
         await runtime.dispatchFetch(`https://app.test/api/contacts?last_comment_from=${activity.last_comment_from}`, {
@@ -1807,15 +1521,10 @@ test("workerd contact API uses restricted server privileges and verified workspa
       ).status,
       400,
     );
-    const activityArchived = await runtime.dispatchFetch(
-      `https://app.test/api/contact-segments/${activitySegment.id}`,
-      { method: "DELETE", headers },
-    );
+    const activityArchived = await runtime.dispatchFetch(`https://app.test/api/contact-segments/${activitySegment.id}`, { method: "DELETE", headers });
     assert.equal(activityArchived.status, 200);
     assert.equal((await runtime.dispatchFetch(activityPath, { headers })).status, 404);
-    await pool.query("UPDATE instagram_comment_events SET created_at=now()-interval '1 hour' WHERE connection_id=$1", [
-      connection,
-    ]);
+    await pool.query("UPDATE instagram_comment_events SET created_at=now()-interval '1 hour' WHERE connection_id=$1", [connection]);
     const relativeCreated = await runtime.dispatchFetch("https://app.test/api/contact-segments", {
       method: "POST",
       headers,
@@ -1829,14 +1538,8 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.equal(recent.total, "1");
     assert.deepEqual(recent.excluded, { activity: "0", tag: "0", field: "0", both: "0" });
     assert.equal(Date.parse(recent.activity_window.before) - Date.parse(recent.activity_window.from), 7 * 86400000);
-    assert.equal(
-      (await runtime.dispatchFetch(relativePath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } }))
-        .status,
-      404,
-    );
-    await pool.query("UPDATE instagram_comment_events SET created_at=now()-interval '8 days' WHERE connection_id=$1", [
-      connection,
-    ]);
+    assert.equal((await runtime.dispatchFetch(relativePath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } })).status, 404);
+    await pool.query("UPDATE instagram_comment_events SET created_at=now()-interval '8 days' WHERE connection_id=$1", [connection]);
     const old = await (await runtime.dispatchFetch(relativePath, { headers })).json();
     assert.equal(old.total, "0");
     assert.deepEqual(old.excluded, { activity: "1", tag: "0", field: "0", both: "0" });
@@ -1868,19 +1571,9 @@ test("workerd contact API uses restricted server privileges and verified workspa
     const lastMonth = await (await runtime.dispatchFetch(calendarPath, { headers })).json();
     assert.equal(lastMonth.total, "1");
     assert.deepEqual(lastMonth.excluded, { activity: "0", tag: "0", field: "0", both: "0" });
-    const zone = (
-      await pool.query(
-        "SELECT time_zone FROM workspaces WHERE id=(SELECT workspace_id FROM instagram_connections WHERE id=$1)",
-        [connection],
-      )
-    ).rows[0].time_zone;
+    const zone = (await pool.query("SELECT time_zone FROM workspaces WHERE id=(SELECT workspace_id FROM instagram_connections WHERE id=$1)", [connection])).rows[0].time_zone;
     assert.equal(lastMonth.activity_window.time_zone, zone);
-    const thisMonth = await (
-      await runtime.dispatchFetch(
-        `https://app.test/api/contacts?preview=true&connection_id=${connection}&last_comment_period=this_month`,
-        { headers },
-      )
-    ).json();
+    const thisMonth = await (await runtime.dispatchFetch(`https://app.test/api/contacts?preview=true&connection_id=${connection}&last_comment_period=this_month`, { headers })).json();
     assert.equal(thisMonth.total, "0");
     assert.deepEqual(thisMonth.excluded, { activity: "1", tag: "0", field: "0", both: "0" });
     assert.equal(thisMonth.activity_window.from, lastMonth.activity_window.before);
@@ -1907,9 +1600,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     const consentSegment = await consentCreated.json();
     assert.equal(consentSegment.consent_purpose, "marketing");
     assert.equal(consentSegment.consent_state, "granted");
-    const consentListed = await (
-      await runtime.dispatchFetch("https://app.test/api/contact-segments", { headers })
-    ).json();
+    const consentListed = await (await runtime.dispatchFetch("https://app.test/api/contact-segments", { headers })).json();
     assert.deepEqual(
       consentListed.segments.find((s) => s.id === consentSegment.id),
       consentSegment,
@@ -1939,15 +1630,8 @@ test("workerd contact API uses restricted server privileges and verified workspa
       assert.equal(page.total, decision === "grant" ? "1" : "0");
       assert.deepEqual(page.excluded, { consent: decision === "grant" ? "0" : "1", tag: "0", field: "0", both: "0" });
     }
-    assert.equal(
-      (await runtime.dispatchFetch(consentPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } }))
-        .status,
-      404,
-    );
-    assert.equal(
-      (await runtime.dispatchFetch("https://app.test/api/contacts?consent_purpose=marketing", { headers })).status,
-      400,
-    );
+    assert.equal((await runtime.dispatchFetch(consentPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } })).status, 404);
+    assert.equal((await runtime.dispatchFetch("https://app.test/api/contacts?consent_purpose=marketing", { headers })).status, 400);
     assert.equal(
       (
         await runtime.dispatchFetch(`https://app.test/api/contact-segments/${consentSegment.id}`, {
@@ -1989,8 +1673,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
 test("workerd segment CSV export uses restricted server privileges and the saved segment", async () => {
   const databaseUrl = process.env.TEST_DATABASE_URL;
   const url = new URL(databaseUrl);
-  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
-    throw new Error("Database tests require a local automations_test database");
+  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
   const pool = new Pool({ connectionString: databaseUrl });
   const workspace = "11111111-1111-4111-8111-111111111111",
     user = "66666666-6666-4666-8666-666666666666",
@@ -2006,9 +1689,7 @@ test("workerd segment CSV export uses restricted server privileges and the saved
     compatibilityDate: config.compatibility_date,
     compatibilityFlags: config.compatibility_flags,
     hyperdrives: { HYPERDRIVE: serverUrl.href },
-    durableObjects: Object.fromEntries(
-      config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }]),
-    ),
+    durableObjects: Object.fromEntries(config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }])),
     bindings: {
       SUPABASE_URL: "https://auth-test.supabase.co",
       SUPABASE_SECRET_KEY: "sb_secret_test",
@@ -2028,19 +1709,13 @@ test("workerd segment CSV export uses restricted server privileges and the saved
     await pool.query("TRUNCATE workspaces CASCADE");
     await pool.query("INSERT INTO workspaces VALUES($1),($2)", [workspace, foreign]);
     await pool.query("INSERT INTO workspace_members VALUES($1,$2),($3,$3)", [user, workspace, foreign]);
-    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'123',true)", [
-      connection,
-      workspace,
-    ]);
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'123',true)", [connection, workspace]);
     await pool.query(
       `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
        VALUES($1,$2,'comment-1','media','sender-1','private comment'),($1,$2,'comment-2','media','sender-2','other comment')`,
       [workspace, connection],
     );
-    await pool.query(
-      "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1',ARRAY['lead'])",
-      [workspace, connection],
-    );
+    await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1',ARRAY['lead'])", [workspace, connection]);
     await pool.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8"));
     await pool.query("ALTER ROLE auto_chatter_server LOGIN PASSWORD 'runtime-test-only'");
     const headers = {
@@ -2057,28 +1732,17 @@ test("workerd segment CSV export uses restricted server privileges and the saved
     const segment = await created.json();
     const segmentPath = `https://app.test/api/contacts/export.csv?segment_id=${segment.id}`;
     // A malformed segment ID is refused before the allowance is spent.
-    assert.equal(
-      (await runtime.dispatchFetch("https://app.test/api/contacts/export.csv?segment_id=not-a-uuid", { headers }))
-        .status,
-      400,
-    );
+    assert.equal((await runtime.dispatchFetch("https://app.test/api/contacts/export.csv?segment_id=not-a-uuid", { headers })).status, 400);
     const exported = await runtime.dispatchFetch(segmentPath, { headers });
     assert.equal(exported.status, 200, await exported.clone().text());
     assert.equal(exported.headers.get("content-type"), "text/csv; charset=utf-8");
-    assert.match(
-      exported.headers.get("content-disposition") ?? "",
-      new RegExp(`filename="auto-chatter-contacts-v1-segment-${segment.id}-\\d{4}-\\d{2}-\\d{2}\\.csv"`),
-    );
+    assert.match(exported.headers.get("content-disposition") ?? "", new RegExp(`filename="auto-chatter-contacts-v1-segment-${segment.id}-\\d{4}-\\d{2}-\\d{2}\\.csv"`));
     const rows = (await exported.text()).split("\r\n").slice(1, -1);
     assert.equal(rows.length, 1);
     assert.ok(rows[0].includes("'sender-1"));
     assert.ok(rows[0].includes('""lead""'));
     assert.doesNotMatch(rows.join(""), /sender-2|private comment|CSV export leads/);
-    assert.equal(
-      (await runtime.dispatchFetch(segmentPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } }))
-        .status,
-      404,
-    );
+    assert.equal((await runtime.dispatchFetch(segmentPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } })).status, 404);
     await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [user]);
     const denied = await runtime.dispatchFetch(segmentPath, { headers });
     assert.equal(denied.status, 403);
@@ -2106,8 +1770,7 @@ test("workerd segment CSV export uses restricted server privileges and the saved
 test("workerd segment snapshots use restricted server privileges and refuse an agent", async () => {
   const databaseUrl = process.env.TEST_DATABASE_URL;
   const url = new URL(databaseUrl);
-  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
-    throw new Error("Database tests require a local automations_test database");
+  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
   const pool = new Pool({ connectionString: databaseUrl });
   const workspace = "11111111-1111-4111-8111-111111111111",
     user = "66666666-6666-4666-8666-666666666666",
@@ -2123,9 +1786,7 @@ test("workerd segment snapshots use restricted server privileges and refuse an a
     compatibilityDate: config.compatibility_date,
     compatibilityFlags: config.compatibility_flags,
     hyperdrives: { HYPERDRIVE: serverUrl.href },
-    durableObjects: Object.fromEntries(
-      config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }]),
-    ),
+    durableObjects: Object.fromEntries(config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }])),
     bindings: {
       SUPABASE_URL: "https://auth-test.supabase.co",
       SUPABASE_SECRET_KEY: "sb_secret_test",
@@ -2145,19 +1806,13 @@ test("workerd segment snapshots use restricted server privileges and refuse an a
     await pool.query("TRUNCATE workspaces CASCADE");
     await pool.query("INSERT INTO workspaces VALUES($1),($2)", [workspace, foreign]);
     await pool.query("INSERT INTO workspace_members VALUES($1,$2),($3,$3)", [user, workspace, foreign]);
-    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'123',true)", [
-      connection,
-      workspace,
-    ]);
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'123',true)", [connection, workspace]);
     await pool.query(
       `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
        VALUES($1,$2,'comment-1','media','sender-1','private comment'),($1,$2,'comment-2','media','sender-2','other comment')`,
       [workspace, connection],
     );
-    await pool.query(
-      "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1',ARRAY['lead'])",
-      [workspace, connection],
-    );
+    await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1',ARRAY['lead'])", [workspace, connection]);
     await pool.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8"));
     await pool.query("ALTER ROLE auto_chatter_server LOGIN PASSWORD 'runtime-test-only'");
     for (const table of ["instagram_segment_snapshots", "instagram_segment_snapshot_members"])
@@ -2207,9 +1862,7 @@ test("workerd segment snapshots use restricted server privileges and refuse an a
       listed.snapshots.map((item) => item.id),
       [(await again.json()).id, snapshot.id],
     );
-    const detail = await (
-      await runtime.dispatchFetch(`https://app.test/api/segment-snapshots/${snapshot.id}`, { headers })
-    ).json();
+    const detail = await (await runtime.dispatchFetch(`https://app.test/api/segment-snapshots/${snapshot.id}`, { headers })).json();
     assert.deepEqual(detail.members, [{ connection_id: connection, sender_id: "sender-1" }]);
     assert.equal(detail.snapshot.stored_member_count, 1);
     const campaignInput = { id: randomUUID(), snapshot_id: snapshot.id, name: "Planned campaign", body: "Draft only" };
@@ -2234,11 +1887,7 @@ test("workerd segment snapshots use restricted server privileges and refuse an a
     });
     assert.equal(editedCampaign.status, 200, await editedCampaign.clone().text());
     assert.equal((await editedCampaign.json()).version, 2);
-    assert.equal(
-      (await runtime.dispatchFetch(campaignPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } }))
-        .status,
-      404,
-    );
+    assert.equal((await runtime.dispatchFetch(campaignPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } })).status, 404);
     // An execution approval is written, rescheduled and cancelled under the restricted role, and sends nothing. A new
     // workspace starts on free, which approves no campaign (#52).
     await pool.query("UPDATE workspaces SET plan='advanced' WHERE id=$1", [workspace]);
@@ -2313,10 +1962,7 @@ test("workerd segment snapshots use restricted server privileges and refuse an a
     });
     assert.equal(runCancel.status, 200, await runCancel.clone().text());
     const runCancelled = await runCancel.json();
-    assert.deepEqual(
-      [runCancelled.status, runCancelled.delivery_counts.cancelled, runCancelled.sending_recalled],
-      ["cancelled", "1", false],
-    );
+    assert.deepEqual([runCancelled.status, runCancelled.delivery_counts.cancelled, runCancelled.sending_recalled], ["cancelled", "1", false]);
     const archivedCampaign = await runtime.dispatchFetch(campaignPath + "/archive", {
       method: "POST",
       headers,
@@ -2329,24 +1975,15 @@ test("workerd segment snapshots use restricted server privileges and refuse an a
       headers,
     });
     assert.equal(csv.status, 200, await csv.clone().text());
-    assert.equal(
-      csv.headers.get("content-disposition"),
-      `attachment; filename="auto-chatter-segment-snapshot-${snapshot.id}-${snapshot.as_of.slice(0, 10)}.csv"`,
-    );
+    assert.equal(csv.headers.get("content-disposition"), `attachment; filename="auto-chatter-segment-snapshot-${snapshot.id}-${snapshot.as_of.slice(0, 10)}.csv"`);
     const bytes = Buffer.from(await csv.arrayBuffer());
     assert.equal(bytes.subarray(0, 3).toString("hex"), "efbbbf");
     const rows = bytes.toString().split("\r\n").slice(1, -1);
     assert.equal(rows.length, 1);
     assert.ok(rows[0].includes(`"${connection}","'sender-1"`));
     assert.doesNotMatch(bytes.toString(), /sender-2|private comment|Snapshot leads/);
-    await pool.query("UPDATE instagram_contact_tags SET tags='{}' WHERE workspace_id=$1 AND connection_id=$2", [
-      workspace,
-      connection,
-    ]);
-    await pool.query(
-      "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-2',ARRAY['lead'])",
-      [workspace, connection],
-    );
+    await pool.query("UPDATE instagram_contact_tags SET tags='{}' WHERE workspace_id=$1 AND connection_id=$2", [workspace, connection]);
+    await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-2',ARRAY['lead'])", [workspace, connection]);
     const comparisonPath = `https://app.test/api/segment-snapshots/${snapshot.id}/comparison`;
     const compared = await runtime.dispatchFetch(comparisonPath, { headers });
     assert.equal(compared.status, 200, await compared.clone().text());
@@ -2399,8 +2036,7 @@ test("workerd segment snapshots use restricted server privileges and refuse an a
 test("workerd logs no database_connection_error when a successful API request closes its pool (#319)", async () => {
   const databaseUrl = process.env.TEST_DATABASE_URL;
   const url = new URL(databaseUrl);
-  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
-    throw new Error("Database tests require a local automations_test database");
+  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
   const pool = new Pool({ connectionString: databaseUrl });
   const workspace = "11111111-1111-4111-8111-111111111111",
     user = "66666666-6666-4666-8666-666666666666";
@@ -2415,9 +2051,7 @@ test("workerd logs no database_connection_error when a successful API request cl
     compatibilityDate: config.compatibility_date,
     compatibilityFlags: config.compatibility_flags,
     hyperdrives: { HYPERDRIVE: serverUrl.href },
-    durableObjects: Object.fromEntries(
-      config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }]),
-    ),
+    durableObjects: Object.fromEntries(config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }])),
     bindings: {
       SUPABASE_URL: "https://auth-test.supabase.co",
       SUPABASE_SECRET_KEY: "sb_secret_test",

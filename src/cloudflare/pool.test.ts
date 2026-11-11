@@ -9,8 +9,7 @@ let lines: { level: string; entry: unknown }[];
 
 beforeEach(() => {
   lines = [];
-  for (const level of ["log", "warn", "error"] as const)
-    mock.method(console, level, (line: string) => lines.push({ level, entry: JSON.parse(line) }));
+  for (const level of ["log", "warn", "error"] as const) mock.method(console, level, (line: string) => lines.push({ level, entry: JSON.parse(line) }));
 });
 afterEach(() => mock.restoreAll());
 

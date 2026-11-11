@@ -53,9 +53,7 @@ function branching(): FlowDocument {
 function chain(nodes: FlowDocument["nodes"], text = "Thanks"): FlowDocument {
   const document = branching();
   document.nodes = [document.nodes[0]!, ...nodes, { id: "reply", type: "instagram_message", config: { text } }];
-  document.edges = document.nodes
-    .slice(1)
-    .map((node, index) => ({ from: document.nodes[index]!.id, port: "next", to: node.id }));
+  document.edges = document.nodes.slice(1).map((node, index) => ({ from: document.nodes[index]!.id, port: "next", to: node.id }));
   return document;
 }
 
@@ -118,10 +116,7 @@ test("an unsupported node fails the run where it was reached instead of being sk
 });
 
 test("a message with a button or a next node is not sent by this runtime", () => {
-  for (const change of [
-    (document: FlowDocument) => (document.nodes[3]!.config = { text: "Hi", button_title: "OK" }),
-    (document: FlowDocument) => document.edges.push({ from: "vip_reply", port: "next", to: "city" }),
-  ]) {
+  for (const change of [(document: FlowDocument) => (document.nodes[3]!.config = { text: "Hi", button_title: "OK" }), (document: FlowDocument) => document.edges.push({ from: "vip_reply", port: "next", to: "city" })]) {
     const document = branching();
     change(document);
     assert.equal(plan(document, { tags: new Set(["vip"]), fields: new Map() }).status, "failed");
@@ -132,11 +127,7 @@ test("a message with a button or a next node is not sent by this runtime", () =>
 test("execution errors name every node, edge or variable this runtime cannot run", () => {
   assert.deepEqual(flowExecutionErrors(branching(), types), []);
   const document = branching();
-  document.nodes.push(
-    { id: "follow", type: "follows_account", config: {} },
-    { id: "tag", type: "add_tag", config: { tag: "lead" } },
-    { id: "flag", type: "instagram_message", config: { text: "Opted in: {{field:" + flagField.toUpperCase() + "}}" } },
-  );
+  document.nodes.push({ id: "follow", type: "follows_account", config: {} }, { id: "tag", type: "add_tag", config: { tag: "lead" } }, { id: "flag", type: "instagram_message", config: { text: "Opted in: {{field:" + flagField.toUpperCase() + "}}" } });
   document.edges.push({ from: "seoul_reply", port: "next", to: "follow" });
   assert.deepEqual(flowExecutionErrors(document, types), [
     { code: "unsupported_node", node_id: "follow", path: "nodes[5].type" },
@@ -204,10 +195,7 @@ test("setting an archived or otherwise unwritable field fails the run at that no
 });
 
 test("message variables render once, so comment text is never read as a template", () => {
-  const document = chain(
-    [{ id: "set", type: "set_field", config: { field_id: fieldId, value: 7 } }],
-    "You said {{comment.text}} ({{field:" + fieldId + "}}, {{field:" + dateField + "}})",
-  );
+  const document = chain([{ id: "set", type: "set_field", config: { field_id: fieldId, value: 7 } }], "You said {{comment.text}} ({{field:" + fieldId + "}}, {{field:" + dateField + "}})");
   const facts = { tags: new Set<string>(), fields: new Map<string, unknown>([[dateField, "2026-10-01"]]) };
   const result = plan(document, facts, { commentText: "<b>{{field:" + dateField + "}}</b>" });
   assert.equal(result.status === "message" && result.text, `You said <b>{{field:${dateField}}}</b> (7, 2026-10-01)`);
@@ -216,18 +204,8 @@ test("message variables render once, so comment text is never read as a template
 test("a missing, boolean, oversized or empty rendered message fails the run", () => {
   const cases: [string, ContactFacts, string, string][] = [
     ["Hi {{field:" + textField + "}}", noFacts, "link", "variable_missing"],
-    [
-      "Hi {{field:" + textField + "}}",
-      { tags: new Set(), fields: new Map([[textField, null]]) },
-      "x",
-      "variable_missing",
-    ],
-    [
-      "Hi {{field:" + flagField + "}}",
-      { tags: new Set(), fields: new Map([[flagField, true]]) },
-      "x",
-      "unsupported_variable",
-    ],
+    ["Hi {{field:" + textField + "}}", { tags: new Set(), fields: new Map([[textField, null]]) }, "x", "variable_missing"],
+    ["Hi {{field:" + flagField + "}}", { tags: new Set(), fields: new Map([[flagField, true]]) }, "x", "unsupported_variable"],
     ["{{comment.text}}", noFacts, "a".repeat(1001), "message_too_long"],
     ["{{comment.text}}", noFacts, "   ", "message_empty"],
   ];
@@ -277,18 +255,15 @@ test("a resumed run continues after its delay with the facts read at resume time
   // The reply hangs off vip's "true" port, so only a contact tagged after the comment gets it.
   document.edges = document.edges.map((edge) => (edge.from === "vip" ? { ...edge, port: "true" } : edge));
   assert.equal(planFlowRun(document, noFacts, input, { node_id: "wait", port: "next" }).status, "ended");
-  assert.deepEqual(
-    planFlowRun(document, { tags: new Set(["vip"]), fields: new Map() }, input, { node_id: "wait", port: "next" }),
-    {
-      status: "message",
-      text: "Thanks",
-      steps: [
-        { node_id: "vip", node_type: "has_tag", outcome: "true" },
-        { node_id: "reply", node_type: "instagram_message", outcome: "queued" },
-      ],
-      changes: { tags: new Map(), fields: new Map() },
-    },
-  );
+  assert.deepEqual(planFlowRun(document, { tags: new Set(["vip"]), fields: new Map() }, input, { node_id: "wait", port: "next" }), {
+    status: "message",
+    text: "Thanks",
+    steps: [
+      { node_id: "vip", node_type: "has_tag", outcome: "true" },
+      { node_id: "reply", node_type: "instagram_message", outcome: "queued" },
+    ],
+    changes: { tags: new Map(), fields: new Map() },
+  });
 });
 
 test("a resumed run stops again at the next delay", () => {
@@ -316,16 +291,8 @@ test("resuming from a missing node or a node that is not a delay fails the run",
 // start -> reply -> wait (replied -> answered tag, timeout -> silent tag), with optional extra nodes.
 function waiting(config: Record<string, unknown> = { timeout_minutes: 60 }): FlowDocument {
   const document = chain([], "What size do you need?");
-  document.nodes.push(
-    { id: "wait", type: "wait_for_reply", config },
-    { id: "answered", type: "add_tag", config: { tag: "answered" } },
-    { id: "silent", type: "add_tag", config: { tag: "silent" } },
-  );
-  document.edges.push(
-    { from: "reply", port: "next", to: "wait" },
-    { from: "wait", port: "replied", to: "answered" },
-    { from: "wait", port: "timeout", to: "silent" },
-  );
+  document.nodes.push({ id: "wait", type: "wait_for_reply", config }, { id: "answered", type: "add_tag", config: { tag: "answered" } }, { id: "silent", type: "add_tag", config: { tag: "silent" } });
+  document.edges.push({ from: "reply", port: "next", to: "wait" }, { from: "wait", port: "replied", to: "answered" }, { from: "wait", port: "timeout", to: "silent" });
   return document;
 }
 
@@ -352,9 +319,7 @@ test("the enable check allows a message only to lead into a reply wait", () => {
     port: "next",
     to: "tag",
   };
-  assert.deepEqual(flowExecutionErrors(document, types), [
-    { code: "unsupported_after_message", edge_index: 1, path: "edges[1]" },
-  ]);
+  assert.deepEqual(flowExecutionErrors(document, types), [{ code: "unsupported_after_message", edge_index: 1, path: "edges[1]" }]);
   assert.equal(plan(document).status, "failed");
 });
 
@@ -378,12 +343,7 @@ test("a reply resumes on the replied port and saves the reply text into the fiel
     ],
     changes: { tags: new Map([["answered", true]]), fields: new Map([[textField, "XL"]]) },
   });
-  const same = planFlowRun(
-    document,
-    { tags: new Set(), fields: new Map([[textField, "XL"]]) },
-    { ...input, replyText: "XL" },
-    { node_id: "wait", port: "replied" },
-  );
+  const same = planFlowRun(document, { tags: new Set(), fields: new Map([[textField, "XL"]]) }, { ...input, replyText: "XL" }, { node_id: "wait", port: "replied" });
   assert.deepEqual(same.steps[1], { node_id: "wait", node_type: "wait_for_reply", outcome: "unchanged" });
 });
 
@@ -404,12 +364,7 @@ test("a reply that cannot be saved is recorded and the run continues on replied"
     ]);
     assert.deepEqual(resumed.changes.fields, new Map());
   }
-  const multiline = planFlowRun(
-    document,
-    noFacts,
-    { ...input, replyText: "line one\nline two" },
-    { node_id: "wait", port: "replied" },
-  );
+  const multiline = planFlowRun(document, noFacts, { ...input, replyText: "line one\nline two" }, { node_id: "wait", port: "replied" });
   assert.equal(multiline.steps[1]!.outcome, "set");
 });
 
@@ -427,10 +382,7 @@ test("a timeout resumes on the timeout port without saving anything", () => {
 
 test("after a reply wait a delay waits again, and a message is never queued", () => {
   const document = waiting();
-  document.nodes.push(
-    { id: "later", type: "delay", config: { minutes: 30 } },
-    { id: "again", type: "instagram_message", config: { text: "Still there?" } },
-  );
+  document.nodes.push({ id: "later", type: "delay", config: { minutes: 30 } }, { id: "again", type: "instagram_message", config: { text: "Still there?" } });
   document.edges = document.edges.map((edge) => (edge.port === "timeout" ? { ...edge, to: "later" } : edge));
   const timedOut = planFlowRun(document, noFacts, input, { node_id: "wait", port: "timeout" });
   assert.equal(timedOut.status, "waiting");
@@ -555,12 +507,7 @@ test("a webhook node leaves out every field that a reply wait saves a reply into
   document.nodes.push(hook("hook"));
   document.edges.push({ from: "answered", port: "next", to: "hook" });
   const facts = { tags: new Set<string>(), fields: new Map<string, unknown>([[fieldId, "Seoul"]]) };
-  const replied = planFlowRun(
-    document,
-    facts,
-    { ...input, replyText: "REPLY-TEXT" },
-    { node_id: "wait", port: "replied" },
-  );
+  const replied = planFlowRun(document, facts, { ...input, replyText: "REPLY-TEXT" }, { node_id: "wait", port: "replied" });
   // The reply was saved, and the payload holds only the other field.
   assert.deepEqual(replied.changes.fields, new Map([[textField, "REPLY-TEXT"]]));
   assert.deepEqual(replied.webhooks, [{ node_id: "hook", endpoint_id: endpointId, fields: { [fieldId]: "Seoul" } }]);
@@ -570,9 +517,7 @@ test("a webhook node leaves out every field that a reply wait saves a reply into
   before.nodes.push({ id: "wait", type: "wait_for_reply", config: { timeout_minutes: 60, save_field_id: textField } });
   before.edges.push({ from: "reply", port: "next", to: "wait" });
   const stored = { tags: new Set<string>(), fields: new Map<string, unknown>([[textField, "OLD-REPLY"]]) };
-  assert.deepEqual(plan(before, stored).webhooks, [
-    { node_id: "early", endpoint_id: endpointId, fields: { [fieldId]: null } },
-  ]);
+  assert.deepEqual(plan(before, stored).webhooks, [{ node_id: "early", endpoint_id: endpointId, fields: { [fieldId]: null } }]);
   // So is a field that another published version saves a reply into.
   const other = chain([hook("hook")]);
   assert.deepEqual(plan(other, stored).webhooks?.[0]?.fields, { [textField]: "OLD-REPLY", [fieldId]: null });

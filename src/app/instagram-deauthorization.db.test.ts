@@ -6,8 +6,7 @@ import { deauthorizeInstagramUser } from "./instagram-deauthorization.ts";
 import { disconnectConnection, ensureWorkspace, listConnections } from "./settings.ts";
 
 const url = new URL(process.env.TEST_DATABASE_URL ?? "http://invalid");
-if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: url.toString() });
 const user = { id: "11111111-1111-4111-8111-111111111111", email: "owner@example.test" };
 const other = { id: "22222222-2222-4222-8222-222222222222", email: "other@example.test" };
@@ -36,13 +35,8 @@ async function connected(id: string, workspace: string, accountId: string, insta
      VALUES($1,$2,$3,$4,true,true,true,'encrypted-test',now()+interval '30 days',now()-interval '1 day',now(),'token_rejected',now()-interval '1 day')`,
     [id, workspace, accountId, instagramUserId],
   );
-  await pool.query(
-    "INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES(gen_random_uuid(),$1,$2,'1001','hello','reply',true)",
-    [workspace, id],
-  );
-  const flow = (
-    await pool.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'flow','{}') RETURNING id", [workspace])
-  ).rows[0].id;
+  await pool.query("INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES(gen_random_uuid(),$1,$2,'1001','hello','reply',true)", [workspace, id]);
+  const flow = (await pool.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'flow','{}') RETURNING id", [workspace])).rows[0].id;
   const version = (
     await pool.query(
       `INSERT INTO flow_versions(flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,published_by)
@@ -55,14 +49,7 @@ async function connected(id: string, workspace: string, accountId: string, insta
 
 // A verified request issued now; the fixture's token was obtained a day earlier.
 const request = (userId: string, issuedAt: number | null = Math.floor(Date.now() / 1000)) => ({ userId, issuedAt });
-const epochSeconds = async (sql: string, id: string) =>
-  Number(
-    (
-      await pool.query(`SELECT floor(extract(epoch FROM ${sql}))::bigint AS s FROM instagram_connections WHERE id=$1`, [
-        id,
-      ])
-    ).rows[0].s,
-  );
+const epochSeconds = async (sql: string, id: string) => Number((await pool.query(`SELECT floor(extract(epoch FROM ${sql}))::bigint AS s FROM instagram_connections WHERE id=$1`, [id])).rows[0].s);
 
 async function state(id: string) {
   return (

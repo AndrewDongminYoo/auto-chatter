@@ -10,8 +10,7 @@ import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: databaseUrl });
 const workspace = "11111111-1111-4111-8111-111111111111";
 const foreignWorkspace = "22222222-2222-4222-8222-222222222222";
@@ -21,15 +20,7 @@ const FC = "88888888-8888-4888-8888-888888888888";
 const owner = "55555555-5555-4555-8555-555555555555";
 const agent = "66666666-6666-4666-8666-666666666666";
 const outsider = "77777777-7777-4777-8777-777777777777";
-const REASONS = [
-  "connection_unavailable",
-  "contact_paused",
-  "no_dm_identity",
-  "opted_out",
-  "marketing_consent_required",
-  "reply_window_closed",
-  "candidate",
-];
+const REASONS = ["connection_unavailable", "contact_paused", "no_dm_identity", "opted_out", "marketing_consent_required", "reply_window_closed", "candidate"];
 let sequence = 0;
 let pinnedAsOf: string | null = null;
 before(async () => pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8")));
@@ -37,10 +28,7 @@ beforeEach(async () => {
   pinnedAsOf = null;
   await pool.query("TRUNCATE workspaces,workspace_deletion_records CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspace, foreignWorkspace]);
-  await pool.query(
-    "INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'agent'),($4,$5,'owner')",
-    [workspace, owner, agent, foreignWorkspace, outsider],
-  );
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'agent'),($4,$5,'owner')", [workspace, owner, agent, foreignWorkspace, outsider]);
   await pool.query(
     `INSERT INTO instagram_connections(id,workspace_id,account_id,inbox_enabled,inbox_enabled_at,active,send_enabled,access_token_encrypted,token_expires_at)
      VALUES($1,$3,'100',true,now()-interval '1 day',true,true,'CIPHERTEXT',now()+interval '30 days'),
@@ -90,8 +78,7 @@ async function request(path: string, actor = owner, sendEnabled = "false") {
       API_WRITE_WORKSPACE_LIMIT: { limit: async () => ({ success: true }) },
     },
     clockedPool,
-    (async () =>
-      Response.json({ id: actor, email: "member@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actor, email: "member@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 async function preview(draft: string, status = 200, actor = owner, sendEnabled = "false") {
@@ -136,16 +123,8 @@ async function message(recipient: string, at: string, kind = "text", conn = C, w
     [ws, conn, recipient, `dm-${sequence}`, kind, at],
   );
 }
-const ago = async (interval: string) =>
-  (await pool.query("SELECT (now()-$1::interval)::text AS at", [interval])).rows[0].at as string;
-async function consent(
-  identityKind: "comment_sender" | "dm_recipient",
-  identityValue: string,
-  purpose: "service_reply" | "marketing" | "all",
-  decision: "grant" | "revoke",
-  evidenceKind: "explicit" | "import" = "explicit",
-  conn = C,
-) {
+const ago = async (interval: string) => (await pool.query("SELECT (now()-$1::interval)::text AS at", [interval])).rows[0].at as string;
+async function consent(identityKind: "comment_sender" | "dm_recipient", identityValue: string, purpose: "service_reply" | "marketing" | "all", decision: "grant" | "revoke", evidenceKind: "explicit" | "import" = "explicit", conn = C) {
   await recordChannelConsentEvent(pool, {
     requestKey: randomUUID(),
     workspaceId: workspace,
@@ -168,19 +147,11 @@ async function qualifying(sender: string, recipient: string, conn = C) {
   await consent("dm_recipient", recipient, "marketing", "grant", "explicit", conn);
 }
 async function paused(sender: string, conn = C, column = "paused") {
-  await pool.query(
-    `INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,${column}) VALUES($1,$2,$3,true)`,
-    [workspace, conn, sender],
-  );
+  await pool.query(`INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,${column}) VALUES($1,$2,$3,true)`, [workspace, conn, sender]);
 }
 // Freezes the given members into a snapshot and returns a draft that references it.
 async function draftFor(members: Array<[string, string]>, ws = workspace, actor = owner, archived = false) {
-  const segment = (
-    await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,$2) RETURNING id", [
-      ws,
-      `Audience ${++sequence}`,
-    ])
-  ).rows[0]!.id;
+  const segment = (await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,$2) RETURNING id", [ws, `Audience ${++sequence}`])).rows[0]!.id;
   const snapshot = (
     await pool.query(
       `INSERT INTO instagram_segment_snapshots(workspace_id,segment_id,created_by,as_of,definition,segment_name,counts,member_count)
@@ -188,11 +159,7 @@ async function draftFor(members: Array<[string, string]>, ws = workspace, actor 
       [ws, segment, actor, members.length],
     )
   ).rows[0]!.id as string;
-  for (const [conn, sender] of members)
-    await pool.query(
-      "INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,$4)",
-      [snapshot, ws, conn, sender],
-    );
+  for (const [conn, sender] of members) await pool.query("INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,$4)", [snapshot, ws, conn, sender]);
   const id = randomUUID();
   await pool.query(
     `INSERT INTO campaign_drafts(id,workspace_id,snapshot_id,name,body,create_request_hash,created_by,updated_by,archived)
@@ -247,15 +214,7 @@ test("each member gets exactly one reason, and the first applicable reason wins"
   await consent("dm_recipient", "2012", "marketing", "grant");
   // candidate.
   await qualifying("1013", "2013");
-  const draft = await draftFor(
-    ["1001"]
-      .map((sender) => [OFF, sender] as [string, string])
-      .concat(
-        ["1002", "1003", "1004", "1005", "1006", "1007", "1008", "1009", "1010", "1011", "1012", "1013"].map(
-          (sender) => [C, sender] as [string, string],
-        ),
-      ),
-  );
+  const draft = await draftFor(["1001"].map((sender) => [OFF, sender] as [string, string]).concat(["1002", "1003", "1004", "1005", "1006", "1007", "1008", "1009", "1010", "1011", "1012", "1013"].map((sender) => [C, sender] as [string, string])));
   const body = await preview(draft);
   assertCounts(body, {
     connection_unavailable: 1,
@@ -274,11 +233,7 @@ test("each member gets exactly one reason, and the first applicable reason wins"
   assert.match(body.as_of, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/);
   assert.equal(body.estimated_provider_calls, "1");
   // A new workspace is on free, which approves no campaign (#52); the month is the workspace's.
-  const month = (
-    await pool.query("SELECT to_char(now() AT TIME ZONE time_zone,'YYYY-MM') AS month FROM workspaces WHERE id=$1", [
-      workspace,
-    ])
-  ).rows[0].month;
+  const month = (await pool.query("SELECT to_char(now() AT TIME ZONE time_zone,'YYYY-MM') AS month FROM workspaces WHERE id=$1", [workspace])).rows[0].month;
   assert.deepEqual(body.plan_broadcast_limit, { month, limit: "0", used: "0", reserved: "0", remaining: "0" });
   assert.equal(body.channel_marketing_supported, true);
   assert.equal(body.global_send_enabled, false);
@@ -289,12 +244,7 @@ test("each member gets exactly one reason, and the first applicable reason wins"
 
 test("each connection condition alone makes a member's connection unavailable", async () => {
   const members: Array<[string, string]> = [];
-  for (const [index, change] of [
-    "active=false",
-    "access_token_encrypted=NULL",
-    "token_expires_at=now()-interval '1 second'",
-    "token_expires_at=NULL",
-  ].entries()) {
+  for (const [index, change] of ["active=false", "access_token_encrypted=NULL", "token_expires_at=now()-interval '1 second'", "token_expires_at=NULL"].entries()) {
     const conn = randomUUID();
     await pool.query(
       `INSERT INTO instagram_connections(id,workspace_id,account_id,inbox_enabled,inbox_enabled_at,active,send_enabled,access_token_encrypted,token_expires_at)
@@ -311,8 +261,7 @@ test("each connection condition alone makes a member's connection unavailable", 
 test("the reply window is open just inside 24 hours and closed at exactly 24 hours", async () => {
   const asOf = (await pool.query("SELECT now()::text AS at")).rows[0].at as string;
   pinnedAsOf = asOf;
-  const at = async (offset: string) =>
-    (await pool.query("SELECT ($1::timestamptz+$2::interval)::text AS at", [asOf, offset])).rows[0].at as string;
+  const at = async (offset: string) => (await pool.query("SELECT ($1::timestamptz+$2::interval)::text AS at", [asOf, offset])).rows[0].at as string;
   for (const [sender, recipient, offset] of [
     ["5001", "6001", "-24 hours"],
     ["5002", "6002", "-24 hours -1 microsecond"],
@@ -383,8 +332,7 @@ test("only active admins of the draft's workspace preview it, archived drafts in
   const draft = await draftFor([[C, "1013"]]);
   assert.equal((await preview(draft, 403, agent)).error, "role_forbidden");
   const foreign = await draftFor([[FC, "1"]], foreignWorkspace, outsider);
-  for (const id of [foreign, randomUUID(), "not-a-uuid"])
-    assert.equal((await preview(id, 404)).error, "campaign_draft_not_found");
+  for (const id of [foreign, randomUUID(), "not-a-uuid"]) assert.equal((await preview(id, 404)).error, "campaign_draft_not_found");
   assert.equal((await preview(draft, 404, outsider)).error, "campaign_draft_not_found");
   // An agent gets 403 before the ID is looked at, so a malformed ID reveals nothing either.
   assert.equal((await preview("not-a-uuid", 403, agent)).error, "role_forbidden");
@@ -404,8 +352,7 @@ test("only active admins of the draft's workspace preview it, archived drafts in
       API_WRITE_WORKSPACE_LIMIT: { limit: async () => ({ success: true }) },
     },
     clockedPool,
-    (async () =>
-      Response.json({ id: owner, email: "member@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: owner, email: "member@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
   assert.equal(posted.status, 404);
   assert.equal(posted.headers.get("cache-control"), "no-store");
@@ -421,10 +368,7 @@ test("counts sum to the remaining members after a person deletion, and the previ
   await qualifying("1014", "2014");
   await bridge("1015", "2015");
   await message("2015", await ago("1 hour"));
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'1015',false)",
-    [workspace, C],
-  );
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'1015',false)", [workspace, C]);
   await pool.query(
     `INSERT INTO instagram_inbox_handoffs(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,updated_by)
      SELECT $1,$2,'2015','1015',id,false,1,$3 FROM private_reply_outbox WHERE workspace_id=$1 AND sender_id='1015'`,
@@ -440,14 +384,7 @@ test("counts sum to the remaining members after a person deletion, and the previ
     [C, "1014"],
     [C, "1015"],
   ]);
-  const tables = [
-    "private_reply_outbox",
-    "instagram_manual_replies",
-    "channel_consent_events",
-    "channel_consent_state",
-    "instagram_segment_snapshot_members",
-    "campaign_drafts",
-  ];
+  const tables = ["private_reply_outbox", "instagram_manual_replies", "channel_consent_events", "channel_consent_state", "instagram_segment_snapshot_members", "campaign_drafts"];
   const state = async () => {
     const result: Record<string, unknown> = {};
     for (const table of tables) {

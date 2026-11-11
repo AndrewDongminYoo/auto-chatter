@@ -11,18 +11,10 @@ export interface ManualReplyScope {
   recipient_id: string;
   handoff_version: number;
 }
-export async function manualReplyEligibility(
-  pool: ConsentQueryable,
-  row: ManualReplyScope,
-  claim?: { id: string; attempt: string; encryptedToken: string | null },
-): Promise<string | null> {
+export async function manualReplyEligibility(pool: ConsentQueryable, row: ManualReplyScope, claim?: { id: string; attempt: string; encryptedToken: string | null }): Promise<string | null> {
   return (await manualReplyStatus(pool, row, claim)).failure_code;
 }
-export async function manualReplyStatus(
-  pool: ConsentQueryable,
-  row: Omit<ManualReplyScope, "handoff_version"> & { handoff_version?: number },
-  claim?: { id: string; attempt: string; encryptedToken: string | null },
-) {
+export async function manualReplyStatus(pool: ConsentQueryable, row: Omit<ManualReplyScope, "handoff_version"> & { handoff_version?: number }, claim?: { id: string; attempt: string; encryptedToken: string | null }) {
   const found = await pool.query(
     `WITH candidates AS (
       SELECT r.sender_id,r.sent_at>=c.inbox_enabled_at AS fresh FROM private_reply_outbox r
@@ -39,14 +31,7 @@ export async function manualReplyStatus(
     LEFT JOIN instagram_contact_automation a ON a.workspace_id=h.workspace_id AND a.connection_id=h.connection_id AND a.sender_id=h.sender_id
     WHERE c.workspace_id=$1 AND c.id=$2
       AND ($5::uuid IS NULL OR EXISTS(SELECT 1 FROM instagram_manual_replies claim WHERE claim.id=$5 AND claim.attempt_id=$6 AND claim.status='sending' AND claim.workspace_id=c.workspace_id AND claim.connection_id=c.id AND claim.recipient_id=$3))`,
-    [
-      row.workspace_id,
-      row.connection_id,
-      row.recipient_id,
-      claim?.encryptedToken ?? null,
-      claim?.id ?? null,
-      claim?.attempt ?? null,
-    ],
+    [row.workspace_id, row.connection_id, row.recipient_id, claim?.encryptedToken ?? null, claim?.id ?? null, claim?.attempt ?? null],
   );
   const current = found.rows[0];
   const last = current?.last_inbound instanceof Date ? current.last_inbound.getTime() : NaN;
@@ -60,21 +45,13 @@ export async function manualReplyStatus(
     blocked_by_unknown: current?.blocked_by_unknown === true,
   });
   if (!current && claim) return result("delivery_changed");
-  if (claim && current?.token_changed && current.connection_active && current.send_enabled && current.token_valid)
-    return result("token_rotated");
-  if (!current || !current.connection_active || !current.inbox_enabled || !current.send_enabled)
-    return result("connection_disabled");
+  if (claim && current?.token_changed && current.connection_active && current.send_enabled && current.token_valid) return result("token_rotated");
+  if (!current || !current.connection_active || !current.inbox_enabled || !current.send_enabled) return result("connection_disabled");
   if (!current.access_token_encrypted || !current.token_valid) return result("token_unavailable");
   if (current.cooldown) return result("connection_paused");
-  if (
-    !current.handoff_active ||
-    current.version !== (row.handoff_version ?? current.version) ||
-    !current.handoff_paused
-  )
-    return result("handoff_changed");
+  if (!current.handoff_active || current.version !== (row.handoff_version ?? current.version) || !current.handoff_paused) return result("handoff_changed");
   if (current.account_id === row.recipient_id) return result("invalid_recipient");
-  if (evaluateWindow(current.checked_at, new Date(last), 24 * 60 * 60_000) !== "open")
-    return result("reply_window_closed");
+  if (evaluateWindow(current.checked_at, new Date(last), 24 * 60 * 60_000) !== "open") return result("reply_window_closed");
   if (!current.identity_verified) return result("handoff_identity_unverified");
   try {
     if (
@@ -94,13 +71,7 @@ export interface ManualReplyTransport {
   verifyAccount(): Promise<boolean>;
   send(recipient: string, text: string, context: FollowSendContext): Promise<{ messageId: string }>;
 }
-export async function assertManualReplyAllowed(
-  pool: ConsentQueryable,
-  id: string,
-  attempt: string,
-  connection: string,
-  encryptedToken: string | null,
-): Promise<void> {
+export async function assertManualReplyAllowed(pool: ConsentQueryable, id: string, attempt: string, connection: string, encryptedToken: string | null): Promise<void> {
   const result = await pool.query(
     `SELECT r.workspace_id,r.connection_id,r.recipient_id,r.handoff_version,
       (r.scheduled_at IS NULL OR EXISTS(SELECT 1 FROM workspace_members member WHERE member.workspace_id=r.workspace_id
@@ -116,23 +87,11 @@ export async function assertManualReplyAllowed(
   if (!row) throw new PreSendVerificationError("block", "delivery_changed");
   if (!row.actor_allowed) throw new PreSendVerificationError("block", "scheduled_actor_unavailable");
   if (!row.schedule_due) throw new PreSendVerificationError("retry", "scheduled_not_due");
-  if (row.token_changed)
-    throw row.token_rotation_retryable
-      ? new PreSendVerificationError("retry", "token_rotated")
-      : new PreSendVerificationError("block", "delivery_changed");
+  if (row.token_changed) throw row.token_rotation_retryable ? new PreSendVerificationError("retry", "token_rotated") : new PreSendVerificationError("block", "delivery_changed");
   const failure = await manualReplyEligibility(pool, row, { id, attempt, encryptedToken });
-  if (failure)
-    throw new PreSendVerificationError(
-      failure === "token_rotated" || failure === "consent_unavailable" ? "retry" : "block",
-      failure,
-    );
+  if (failure) throw new PreSendVerificationError(failure === "token_rotated" || failure === "consent_unavailable" ? "retry" : "block", failure);
 }
-export async function processNextManualReply(
-  pool: Pool,
-  connection: string,
-  transport: ManualReplyTransport | null,
-  encryptedToken: string | null,
-): Promise<boolean> {
+export async function processNextManualReply(pool: Pool, connection: string, transport: ManualReplyTransport | null, encryptedToken: string | null): Promise<boolean> {
   const client = await pool.connect();
   let row;
   const attempt = randomUUID();
@@ -156,14 +115,8 @@ export async function processNextManualReply(
       await client.query("COMMIT");
       return false;
     }
-    await client.query(
-      "UPDATE instagram_manual_replies SET status='sending',attempt_id=$2,attempt_started_at=clock_timestamp(),failure_code=NULL,safe_to_retry=false WHERE id=$1",
-      [row.id, attempt],
-    );
-    await client.query(
-      "INSERT INTO instagram_manual_reply_events(workspace_id,connection_id,recipient_id,reply_id,kind,attempt_id) VALUES($1,$2,$3,$4,'sending',$5)",
-      [row.workspace_id, connection, row.recipient_id, row.id, attempt],
-    );
+    await client.query("UPDATE instagram_manual_replies SET status='sending',attempt_id=$2,attempt_started_at=clock_timestamp(),failure_code=NULL,safe_to_retry=false WHERE id=$1", [row.id, attempt]);
+    await client.query("INSERT INTO instagram_manual_reply_events(workspace_id,connection_id,recipient_id,reply_id,kind,attempt_id) VALUES($1,$2,$3,$4,'sending',$5)", [row.workspace_id, connection, row.recipient_id, row.id, attempt]);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -171,13 +124,7 @@ export async function processNextManualReply(
   } finally {
     client.release();
   }
-  const finish = async (
-    status: string,
-    code: string | null,
-    safe: boolean,
-    messageId: string | null = null,
-    cooldown: number | null = null,
-  ) => {
+  const finish = async (status: string, code: string | null, safe: boolean, messageId: string | null = null, cooldown: number | null = null) => {
     const writer = await pool.connect();
     try {
       await writer.query("BEGIN");
@@ -191,23 +138,16 @@ export async function processNextManualReply(
         [row.id, attempt, status, code, safe, messageId],
       );
       if (!changed.rowCount) throw new Error("Manual reply claim lost");
-      if (cooldown !== null)
-        await writer.query(
-          "UPDATE instagram_connections SET send_paused_until=greatest(coalesce(send_paused_until,clock_timestamp()),clock_timestamp()+$2::int*interval '1 second') WHERE id=$1",
-          [connection, cooldown],
-        );
-      await writer.query(
-        "INSERT INTO instagram_manual_reply_events(workspace_id,connection_id,recipient_id,reply_id,kind,attempt_id,failure_code) VALUES($1,$2,$3,$4,$5,$6,$7)",
-        [
-          row.workspace_id,
-          connection,
-          row.recipient_id,
-          row.id,
-          status === "pending" ? "deferred" : status,
-          attempt,
-          code,
-        ],
-      );
+      if (cooldown !== null) await writer.query("UPDATE instagram_connections SET send_paused_until=greatest(coalesce(send_paused_until,clock_timestamp()),clock_timestamp()+$2::int*interval '1 second') WHERE id=$1", [connection, cooldown]);
+      await writer.query("INSERT INTO instagram_manual_reply_events(workspace_id,connection_id,recipient_id,reply_id,kind,attempt_id,failure_code) VALUES($1,$2,$3,$4,$5,$6,$7)", [
+        row.workspace_id,
+        connection,
+        row.recipient_id,
+        row.id,
+        status === "pending" ? "deferred" : status,
+        attempt,
+        code,
+      ]);
       await writer.query("COMMIT");
     } catch (error) {
       await writer.query("ROLLBACK");
@@ -222,11 +162,7 @@ export async function processNextManualReply(
       return true;
     } catch (error) {
       if (error instanceof PreSendVerificationError) {
-        await finish(
-          error.disposition === "retry" ? "pending" : "failed",
-          error.failureCode,
-          error.failureCode === "recipient_opted_out" ? false : error.disposition !== "retry",
-        );
+        await finish(error.disposition === "retry" ? "pending" : "failed", error.failureCode, error.failureCode === "recipient_opted_out" ? false : error.disposition !== "retry");
         return false;
       }
       await finish("pending", "verification_unavailable", false);

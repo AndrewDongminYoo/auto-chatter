@@ -32,22 +32,16 @@ export interface ChannelConsentPolicyInput {
   serviceEvidence?: ServiceReplyEvidence;
 }
 
-export type ChannelConsentPolicyResult =
-  | { eligible: true }
-  | { eligible: false; reason: "recipient_opted_out" | "marketing_consent_required" | "service_reply_window_required" };
+export type ChannelConsentPolicyResult = { eligible: true } | { eligible: false; reason: "recipient_opted_out" | "marketing_consent_required" | "service_reply_window_required" };
 
 export function evaluateChannelConsent(input: ChannelConsentPolicyInput): ChannelConsentPolicyResult {
-  const exactState =
-    input.state !== null && sameScopedIdentity(input.scope, input.state) && input.scope.purpose === input.state.purpose
-      ? input.state
-      : null;
+  const exactState = input.state !== null && sameScopedIdentity(input.scope, input.state) && input.scope.purpose === input.state.purpose ? input.state : null;
   if (exactState?.decision === "revoke") return { eligible: false, reason: "recipient_opted_out" };
   if (input.scope.purpose === "marketing") {
     if (exactState?.decision === "grant" && exactState.evidenceKind === "explicit") return { eligible: true };
     return { eligible: false, reason: "marketing_consent_required" };
   }
-  if (input.serviceEvidence?.withinWindow && sameScopedIdentity(input.scope, input.serviceEvidence))
-    return { eligible: true };
+  if (input.serviceEvidence?.withinWindow && sameScopedIdentity(input.scope, input.serviceEvidence)) return { eligible: true };
   return { eligible: false, reason: "service_reply_window_required" };
 }
 
@@ -55,14 +49,6 @@ export function evaluateChannelConsent(input: ChannelConsentPolicyInput): Channe
 export function evaluateWindow(now: Date, anchor: Date | null, durationMs: number): "open" | "expired" | "unverified" {
   const time = now.getTime();
   const start = anchor?.getTime();
-  if (
-    start === undefined ||
-    !Number.isFinite(start) ||
-    !Number.isFinite(time) ||
-    start > time ||
-    !Number.isFinite(durationMs) ||
-    durationMs <= 0
-  )
-    return "unverified";
+  if (start === undefined || !Number.isFinite(start) || !Number.isFinite(time) || start > time || !Number.isFinite(durationMs) || durationMs <= 0) return "unverified";
   return time - start >= durationMs ? "expired" : "open";
 }

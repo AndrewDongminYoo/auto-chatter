@@ -15,8 +15,7 @@ import { resetTestSchema } from "../test-schema.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
 const url = new URL(databaseUrl);
-if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: databaseUrl });
 const connectionId = "22222222-2222-4222-8222-222222222222";
 let published: unknown[];
@@ -69,37 +68,23 @@ async function consume(body: unknown = { connectionId }) {
   return result;
 }
 async function rows() {
-  return (await pool.query("SELECT status, failure_code, rate_limit_retries FROM private_reply_outbox ORDER BY id"))
-    .rows;
+  return (await pool.query("SELECT status, failure_code, rate_limit_retries FROM private_reply_outbox ORDER BY id")).rows;
 }
 
 async function resetStoredFixture() {
-  await pool.query(
-    "TRUNCATE private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces, scheduled_steps CASCADE",
-  );
+  await pool.query("TRUNCATE private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces, scheduled_steps CASCADE");
   await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
-  await pool.query(
-    "INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES ($1,'11111111-1111-4111-8111-111111111111','123',true)",
-    [connectionId],
-  );
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES ($1,'11111111-1111-4111-8111-111111111111','123',true)", [connectionId]);
   await pool.query(
     // The fixture's webhook subscription check (#179) is not due, so a cron run makes no Graph call for it; the
     // subscription tests set the attempt time back themselves.
     "UPDATE instagram_connections SET send_enabled=true,token_expires_at=now()+interval '1 day',access_token_encrypted=$1,subscription_check_attempted_at=now()",
     [sealSecret("synthetic", Buffer.alloc(32, 1).toString("base64"), "11111111-1111-4111-8111-111111111111:123")],
   );
-  await pool.query(
-    "INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES ('33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111',$1,'media-1','hello','reply',true)",
-    [connectionId],
-  );
+  await pool.query("INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES ('33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111',$1,'media-1','hello','reply',true)", [connectionId]);
 }
 
-async function recordConsent(
-  identityKind: "comment_sender" | "dm_recipient",
-  identityValue: string,
-  requestKey: string,
-  decision: "grant" | "revoke" = "revoke",
-) {
+async function recordConsent(identityKind: "comment_sender" | "dm_recipient", identityValue: string, requestKey: string, decision: "grant" | "revoke" = "revoke") {
   await recordChannelConsentEvent(pool, {
     requestKey,
     workspaceId: "11111111-1111-4111-8111-111111111111",
@@ -157,8 +142,7 @@ function failConsentRead(failAt: number): () => number {
   const originalQuery = Pool.prototype.query;
   let consentReads = 0;
   mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
-    if (sql.includes("FROM channel_consent_state state") && ++consentReads === failAt)
-      throw new Error("consent database unavailable");
+    if (sql.includes("FROM channel_consent_state state") && ++consentReads === failAt) throw new Error("consent database unavailable");
     return Reflect.apply(originalQuery, this, [sql, values]);
   });
   return () => consentReads;
@@ -205,8 +189,7 @@ afterEach(() => {
     assert.ok(!(line as string).includes("\n"));
     const entry: unknown = JSON.parse(line as string);
     assert.ok(entry && typeof entry === "object" && !Array.isArray(entry));
-    for (const key of Object.keys(entry))
-      assert.ok(["event", "code", "correlation_id", "connection_id", "step", "part"].includes(key), key);
+    for (const key of Object.keys(entry)) assert.ok(["event", "code", "correlation_id", "connection_id", "step", "part"].includes(key), key);
   }
 });
 after(async () => {
@@ -215,58 +198,31 @@ after(async () => {
 });
 
 test("subscription verifies without a DB connection; invalid signatures cannot persist", async () => {
-  const response = await worker.fetch(
-    new Request(
-      "https://example.test/webhooks/instagram?hub.mode=subscribe&hub.verify_token=test-verify&hub.challenge=challenge",
-    ),
-    env,
-  );
+  const response = await worker.fetch(new Request("https://example.test/webhooks/instagram?hub.mode=subscribe&hub.verify_token=test-verify&hub.challenge=challenge"), env);
   assert.equal(response.status, 200);
   assert.equal(await response.text(), "challenge");
   assert.equal((await worker.fetch(request("comment-1", "sender-1", false), env)).status, 403);
   const signed = request();
   const body = await signed.clone().text();
-  const unsigned: Record<string, string>[] = [
-    {},
-    { "x-hub-signature-256": signed.headers.get("x-hub-signature-256")!.slice(7) },
-  ];
-  for (const headers of unsigned)
-    assert.equal(
-      (await worker.fetch(new Request(signed.url, { method: "POST", body, headers }), env)).status,
-      403,
-      JSON.stringify(headers),
-    );
+  const unsigned: Record<string, string>[] = [{}, { "x-hub-signature-256": signed.headers.get("x-hub-signature-256")!.slice(7) }];
+  for (const headers of unsigned) assert.equal((await worker.fetch(new Request(signed.url, { method: "POST", body, headers }), env)).status, 403, JSON.stringify(headers));
   assert.deepEqual(await rows(), []);
 });
 
 test("scheduled token refresh runs while global message sending is disabled", async () => {
   env.SEND_ENABLED = "false";
-  await pool.query(
-    "UPDATE instagram_connections SET token_expires_at=now()+interval '20 days',token_obtained_at=now()-interval '2 days' WHERE id=$1",
-    [connectionId],
-  );
+  await pool.query("UPDATE instagram_connections SET token_expires_at=now()+interval '20 days',token_obtained_at=now()-interval '2 days' WHERE id=$1", [connectionId]);
   restoreMocks();
   const calls: string[] = [];
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo) => {
     const graphUrl = new URL(String(input));
     calls.push(graphUrl.pathname);
-    if (graphUrl.pathname === "/refresh_access_token")
-      return Response.json({ access_token: "renewed-token", token_type: "bearer", expires_in: 5_184_000 });
+    if (graphUrl.pathname === "/refresh_access_token") return Response.json({ access_token: "renewed-token", token_type: "bearer", expires_in: 5_184_000 });
     return Response.json({ user_id: "123" });
   });
   await worker.scheduled(undefined, env);
-  const result = await pool.query(
-    "SELECT access_token_encrypted,token_expires_at FROM instagram_connections WHERE id=$1",
-    [connectionId],
-  );
-  assert.equal(
-    openSecret(
-      result.rows[0].access_token_encrypted,
-      env.TOKEN_ENCRYPTION_KEY!,
-      "11111111-1111-4111-8111-111111111111:123",
-    ),
-    "renewed-token",
-  );
+  const result = await pool.query("SELECT access_token_encrypted,token_expires_at FROM instagram_connections WHERE id=$1", [connectionId]);
+  assert.equal(openSecret(result.rows[0].access_token_encrypted, env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"), "renewed-token");
   assert.ok(result.rows[0].token_expires_at.getTime() > Date.now() + 59 * 86400_000);
   assert.deepEqual(calls, ["/refresh_access_token", "/v24.0/me"]);
   assert.equal(sends, 0);
@@ -274,48 +230,32 @@ test("scheduled token refresh runs while global message sending is disabled", as
 });
 
 test("a failed Meta token refresh fails the token_refresh step without logging the provider response", async () => {
-  await pool.query(
-    "UPDATE instagram_connections SET token_expires_at=now()+interval '20 days',token_obtained_at=now()-interval '2 days' WHERE id=$1",
-    [connectionId],
-  );
+  await pool.query("UPDATE instagram_connections SET token_expires_at=now()+interval '20 days',token_obtained_at=now()-interval '2 days' WHERE id=$1", [connectionId]);
   // A recent successful run keeps cron_stale off, so the only line is the refresh failure.
   await pool.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now())");
   restoreMocks();
-  mock.method(globalThis, "fetch", async () =>
-    Response.json({ error: { message: "token for owner@example.test", code: 190 } }, { status: 400 }),
-  );
+  mock.method(globalThis, "fetch", async () => Response.json({ error: { message: "token for owner@example.test", code: 190 } }, { status: 400 }));
   await assert.rejects(worker.scheduled({}, env), /^Error: Cloudflare scheduled recovery failed$/);
   assert.deepEqual(
     logLines.map(({ correlation_id, ...line }) => line),
     [{ event: "cron_step_failed", code: "token_refresh_failed", step: "token_refresh" }],
   );
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('token_refresh','wake','cron') ORDER BY name",
-      )
-    ).rows,
-    [
-      { name: "cron", failure_code: "step_failed", succeeded: true },
-      { name: "token_refresh", failure_code: "token_refresh_failed", succeeded: false },
-      { name: "wake", failure_code: null, succeeded: true },
-    ],
-  );
+  assert.deepEqual((await pool.query("SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('token_refresh','wake','cron') ORDER BY name")).rows, [
+    { name: "cron", failure_code: "step_failed", succeeded: true },
+    { name: "token_refresh", failure_code: "token_refresh_failed", succeeded: false },
+    { name: "wake", failure_code: null, succeeded: true },
+  ]);
 });
 
 test("a failed reconnect marker write in the cron refresh is logged with that run's correlation ID", async () => {
-  await pool.query(
-    "UPDATE instagram_connections SET token_expires_at=now()+interval '20 days',token_obtained_at=now()-interval '2 days' WHERE id=$1",
-    [connectionId],
-  );
+  await pool.query("UPDATE instagram_connections SET token_expires_at=now()+interval '20 days',token_obtained_at=now()-interval '2 days' WHERE id=$1", [connectionId]);
   // A recent successful run keeps cron_stale off, so the only lines are the marker and step failures.
   await pool.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now())");
   restoreMocks();
   mock.method(globalThis, "fetch", async () => Response.json({ error: { code: 190 } }, { status: 400 }));
   const originalQuery = Pool.prototype.query;
   mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
-    if (typeof sql === "string" && sql.includes("SET reauth_required_at=coalesce"))
-      throw new Error("token for owner@example.test");
+    if (typeof sql === "string" && sql.includes("SET reauth_required_at=coalesce")) throw new Error("token for owner@example.test");
     return Reflect.apply(originalQuery, this, [sql, values]);
   });
   await assert.rejects(worker.scheduled({}, env), /^Error: Cloudflare scheduled recovery failed$/);
@@ -332,9 +272,7 @@ test("a failed reconnect marker write in the cron refresh is logged with that ru
 
 test("the cron records a lost webhook subscription in the subscription_check step while sending is disabled", async () => {
   env.SEND_ENABLED = "false";
-  await pool.query(
-    "UPDATE instagram_connections SET token_expires_at=now()+interval '30 days',subscription_check_attempted_at=NULL",
-  );
+  await pool.query("UPDATE instagram_connections SET token_expires_at=now()+interval '30 days',subscription_check_attempted_at=NULL");
   // A recent successful run keeps cron_stale off, so the only line is the newly recorded loss.
   await pool.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now())");
   restoreMocks();
@@ -353,23 +291,12 @@ test("the cron records a lost webhook subscription in the subscription_check ste
     [{ event: "instagram_subscription_check", code: "subscription_lost", connection_id: connectionId }],
   );
   assert.equal(typeof logLines[0]?.correlation_id, "string");
-  const stored = (
-    await pool.query(
-      "SELECT subscription_missing_at IS NOT NULL AS missing,subscription_check_attempted_at IS NOT NULL AS attempted FROM instagram_connections",
-    )
-  ).rows;
+  const stored = (await pool.query("SELECT subscription_missing_at IS NOT NULL AS missing,subscription_check_attempted_at IS NOT NULL AS attempted FROM instagram_connections")).rows;
   assert.deepEqual(stored, [{ missing: true, attempted: true }]);
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('cron','subscription_check','wake') ORDER BY name",
-      )
-    ).rows,
-    [
-      { name: "cron", failure_code: null, succeeded: true },
-      { name: "subscription_check", failure_code: null, succeeded: true },
-    ],
-  );
+  assert.deepEqual((await pool.query("SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('cron','subscription_check','wake') ORDER BY name")).rows, [
+    { name: "cron", failure_code: null, succeeded: true },
+    { name: "subscription_check", failure_code: null, succeeded: true },
+  ]);
   // The next run within six hours makes no Graph call.
   await worker.scheduled({}, env);
   assert.equal(calls.length, 2);
@@ -379,9 +306,7 @@ test("the cron records a lost webhook subscription in the subscription_check ste
 
 test("a token the subscription check cannot decrypt fails its step while later steps still run", async () => {
   await longLivedToken();
-  await pool.query("UPDATE instagram_connections SET subscription_check_attempted_at=NULL,access_token_encrypted=$1", [
-    sealSecret("synthetic", env.TOKEN_ENCRYPTION_KEY!, "another-context"),
-  ]);
+  await pool.query("UPDATE instagram_connections SET subscription_check_attempted_at=NULL,access_token_encrypted=$1", [sealSecret("synthetic", env.TOKEN_ENCRYPTION_KEY!, "another-context")]);
   await pool.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now())");
   restoreMocks();
   let calls = 0;
@@ -395,18 +320,11 @@ test("a token the subscription check cannot decrypt fails its step while later s
     logLines.map(({ correlation_id, ...line }) => line),
     [{ event: "cron_step_failed", code: "subscription_check_failed", step: "subscription_check" }],
   );
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('cron','subscription_check','wake') ORDER BY name",
-      )
-    ).rows,
-    [
-      { name: "cron", failure_code: "step_failed", succeeded: true },
-      { name: "subscription_check", failure_code: "subscription_check_failed", succeeded: false },
-      { name: "wake", failure_code: null, succeeded: true },
-    ],
-  );
+  assert.deepEqual((await pool.query("SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('cron','subscription_check','wake') ORDER BY name")).rows, [
+    { name: "cron", failure_code: "step_failed", succeeded: true },
+    { name: "subscription_check", failure_code: "subscription_check_failed", succeeded: false },
+    { name: "wake", failure_code: null, succeeded: true },
+  ]);
 });
 
 test("duplicate webhook and queue delivery send one persisted reply", async () => {
@@ -429,9 +347,7 @@ test("a signed messaging_seen event stores one read of a sent reply and wakes no
       {
         id: "123",
         time: Date.now(),
-        messaging: [
-          { sender: { id: "456" }, recipient: { id: "123" }, timestamp: 1762736400000, read: { mid: "sent-mid" } },
-        ],
+        messaging: [{ sender: { id: "456" }, recipient: { id: "123" }, timestamp: 1762736400000, read: { mid: "sent-mid" } }],
       },
     ],
   });
@@ -444,10 +360,7 @@ test("a signed messaging_seen event stores one read of a sent reply and wakes no
   assert.equal((await worker.fetch(seen(), env)).status, 200);
   assert.equal((await worker.fetch(seen(), env)).status, 200);
   assert.deepEqual(published, []);
-  assert.deepEqual(
-    (await pool.query("SELECT connection_id,recipient_id,message_id,read_at FROM instagram_message_reads")).rows,
-    [{ connection_id: connectionId, recipient_id: "456", message_id: "sent-mid", read_at: new Date(1762736400000) }],
-  );
+  assert.deepEqual((await pool.query("SELECT connection_id,recipient_id,message_id,read_at FROM instagram_message_reads")).rows, [{ connection_id: connectionId, recipient_id: "456", message_id: "sent-mid", read_at: new Date(1762736400000) }]);
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_messages")).rows[0].count, 0);
   assert.equal(sends, 0);
 });
@@ -460,9 +373,7 @@ test("a read of the reply a run waits on neither answers nor ends that run (#312
       {
         id: "123",
         time: Date.now(),
-        messaging: [
-          { sender: { id: "456" }, recipient: { id: "123" }, timestamp: Date.now(), read: { mid: "m-comment-ask" } },
-        ],
+        messaging: [{ sender: { id: "456" }, recipient: { id: "123" }, timestamp: Date.now(), read: { mid: "m-comment-ask" } }],
       },
     ],
   });
@@ -476,17 +387,11 @@ test("a read of the reply a run waits on neither answers nor ends that run (#312
   );
   assert.equal(response.status, 200);
   // The same sender's DM would continue the waiting run (see the webhook DM test); its read does not.
-  assert.deepEqual(
-    (await pool.query("SELECT status,(SELECT count(*)::int FROM flow_step_runs) AS steps FROM flow_runs ORDER BY id"))
-      .rows,
-    [
-      { status: "awaiting_reply", steps: 0 },
-      { status: "awaiting_reply", steps: 0 },
-    ],
-  );
-  assert.deepEqual((await pool.query("SELECT recipient_id,message_id FROM instagram_message_reads")).rows, [
-    { recipient_id: "456", message_id: "m-comment-ask" },
+  assert.deepEqual((await pool.query("SELECT status,(SELECT count(*)::int FROM flow_step_runs) AS steps FROM flow_runs ORDER BY id")).rows, [
+    { status: "awaiting_reply", steps: 0 },
+    { status: "awaiting_reply", steps: 0 },
   ]);
+  assert.deepEqual((await pool.query("SELECT recipient_id,message_id FROM instagram_message_reads")).rows, [{ recipient_id: "456", message_id: "m-comment-ask" }]);
 });
 
 // The stored fixture token expires within the alert window; the operations tests use a longer one.
@@ -507,9 +412,7 @@ test("cron recovers a committed reply after queue publish failure", async () => 
   webhook.headers.set("cf-ray", "8c1f2e3d4b5a6978-ICN");
   assert.equal((await worker.fetch(webhook, env)).status, 200);
   assert.equal((await rows())[0].status, "pending");
-  assert.deepEqual(lines, [
-    { event: "queue_publish_failed", code: "reply_notification_failed", correlation_id: "8c1f2e3d4b5a6978-ICN" },
-  ]);
+  assert.deepEqual(lines, [{ event: "queue_publish_failed", code: "reply_notification_failed", correlation_id: "8c1f2e3d4b5a6978-ICN" }]);
   env.REPLY_QUEUE = queue;
   await worker.scheduled({}, env);
   assert.deepEqual(published, [{ connectionId }]);
@@ -517,25 +420,8 @@ test("cron recovers a committed reply after queue publish failure", async () => 
   assert.equal((await rows())[0].status, "sent");
   assert.equal(lines.length, 1);
   assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT name FROM scheduled_steps WHERE last_success_at IS NOT NULL AND last_failure_at IS NULL ORDER BY name",
-      )
-    ).rows.map((row) => row.name),
-    [
-      "alerts",
-      "campaign_start",
-      "cron",
-      "early_reply_reconcile",
-      "flow_resume",
-      "kept_reply_cleanup",
-      "oauth_state_cleanup",
-      "stale_recovery",
-      "subscription_check",
-      "token_refresh",
-      "wake",
-      "webhook_delivery",
-    ],
+    (await pool.query("SELECT name FROM scheduled_steps WHERE last_success_at IS NOT NULL AND last_failure_at IS NULL ORDER BY name")).rows.map((row) => row.name),
+    ["alerts", "campaign_start", "cron", "early_reply_reconcile", "flow_resume", "kept_reply_cleanup", "oauth_state_cleanup", "stale_recovery", "subscription_check", "token_refresh", "wake", "webhook_delivery"],
   );
 });
 
@@ -553,8 +439,7 @@ test("a database failure in one cron step is recorded and alerted once, other st
   await pool.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now()-interval '6 minutes')");
   const originalQuery = Pool.prototype.query;
   const failing = mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
-    if (typeof sql === "string" && sql.includes("FROM flow_runs") && sql.includes("resume_at<=now()"))
-      throw Object.assign(new Error("terminating connection due to administrator command"), { code: "57P01" });
+    if (typeof sql === "string" && sql.includes("FROM flow_runs") && sql.includes("resume_at<=now()")) throw Object.assign(new Error("terminating connection due to administrator command"), { code: "57P01" });
     return Reflect.apply(originalQuery, this, [sql, values]);
   });
   await assert.rejects(worker.scheduled({}, env), /scheduled recovery failed/);
@@ -576,18 +461,11 @@ test("a database failure in one cron step is recorded and alerted once, other st
     [{ event: "alert_started", code: "alert_cron_stale" }],
   );
   assert.equal(started[0]!.correlation_id, failures[0]!.correlation_id);
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('flow_resume','wake','cron') ORDER BY name",
-      )
-    ).rows,
-    [
-      { name: "cron", failure_code: "step_failed", succeeded: true },
-      { name: "flow_resume", failure_code: "database_unavailable", succeeded: false },
-      { name: "wake", failure_code: null, succeeded: true },
-    ],
-  );
+  assert.deepEqual((await pool.query("SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('flow_resume','wake','cron') ORDER BY name")).rows, [
+    { name: "cron", failure_code: "step_failed", succeeded: true },
+    { name: "flow_resume", failure_code: "database_unavailable", succeeded: false },
+    { name: "wake", failure_code: null, succeeded: true },
+  ]);
   failing.mock.restore();
   lines.length = 0;
   await worker.scheduled({}, env);
@@ -595,21 +473,12 @@ test("a database failure in one cron step is recorded and alerted once, other st
     lines.map(({ correlation_id, ...line }) => line),
     [{ event: "alert_cleared", code: "alert_cron_stale" }],
   );
-  assert.equal(
-    (
-      await pool.query(
-        "SELECT last_success_at>last_failure_at AS recovered FROM scheduled_steps WHERE name='flow_resume'",
-      )
-    ).rows[0].recovered,
-    true,
-  );
+  assert.equal((await pool.query("SELECT last_success_at>last_failure_at AS recovered FROM scheduled_steps WHERE name='flow_resume'")).rows[0].recovered, true);
 });
 
 test("a provider rate limit pauses the connection, and admins see the pause in operations health", async () => {
   await longLivedToken();
-  await pool.query(
-    "INSERT INTO workspace_members(user_id,workspace_id,role) VALUES('99999999-9999-4999-8999-999999999999','11111111-1111-4111-8111-111111111111','admin')",
-  );
+  await pool.query("INSERT INTO workspace_members(user_id,workspace_id,role) VALUES('99999999-9999-4999-8999-999999999999','11111111-1111-4111-8111-111111111111','admin')");
   const graphFetch = globalThis.fetch;
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
     if (init?.method === "POST") return Response.json({ error: { code: 4 } }, { status: 400 });
@@ -620,9 +489,7 @@ test("a provider rate limit pauses the connection, and admins see the pause in o
   assert.deepEqual(await rows(), [{ status: "pending", failure_code: "meta_error_4", rate_limit_retries: 1 }]);
   const health = await operationsHealth(pool, { id: "99999999-9999-4999-8999-999999999999", email: "" }, true);
   const [connection] = health.connections;
-  assert.ok(
-    connection && connection.send_paused_until && Date.parse(connection.send_paused_until) > Date.now() + 14 * 60_000,
-  );
+  assert.ok(connection && connection.send_paused_until && Date.parse(connection.send_paused_until) > Date.now() + 14 * 60_000);
   // The deferred reply is not due yet, so it is not counted as waiting in the queue.
   assert.equal(connection.oldest_due_pending_seconds, null);
   assert.deepEqual(connection.alerts, []);
@@ -634,8 +501,7 @@ test("a failed alerts step fails the cron row, so the run is not recorded as a s
   await longLivedToken();
   const originalQuery = Pool.prototype.query;
   mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
-    if (typeof sql === "string" && sql.includes("WITH metrics AS"))
-      throw Object.assign(new Error("metrics for owner@example.test"), { code: "42P01" });
+    if (typeof sql === "string" && sql.includes("WITH metrics AS")) throw Object.assign(new Error("metrics for owner@example.test"), { code: "42P01" });
     return Reflect.apply(originalQuery, this, [sql, values]);
   });
   await assert.rejects(worker.scheduled({}, env), (error: unknown) => {
@@ -647,18 +513,11 @@ test("a failed alerts step fails the cron row, so the run is not recorded as a s
     logLines.map(({ correlation_id, ...line }) => line),
     [{ event: "cron_step_failed", code: "database_error", step: "alerts" }],
   );
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('alerts','cron','wake') ORDER BY name",
-      )
-    ).rows,
-    [
-      { name: "alerts", failure_code: "database_error", succeeded: false },
-      { name: "cron", failure_code: "step_failed", succeeded: false },
-      { name: "wake", failure_code: null, succeeded: true },
-    ],
-  );
+  assert.deepEqual((await pool.query("SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('alerts','cron','wake') ORDER BY name")).rows, [
+    { name: "alerts", failure_code: "database_error", succeeded: false },
+    { name: "cron", failure_code: "step_failed", succeeded: false },
+    { name: "wake", failure_code: null, succeeded: true },
+  ]);
 });
 
 test("a failed step record write is logged and fails the run, also for the final cron row", async () => {
@@ -670,12 +529,7 @@ test("a failed step record write is logged and fails the run, also for the final
   // Fails every record write that carries the name: the run's batched write and the single-row retry.
   mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
     const names = values?.[0];
-    if (
-      typeof sql === "string" &&
-      sql.includes("INTO scheduled_steps(name,last_") &&
-      (Array.isArray(names) ? names.includes(failingName) : names === failingName)
-    )
-      throw Object.assign(new Error("record for owner@example.test"), { code: "08006" });
+    if (typeof sql === "string" && sql.includes("INTO scheduled_steps(name,last_") && (Array.isArray(names) ? names.includes(failingName) : names === failingName)) throw Object.assign(new Error("record for owner@example.test"), { code: "08006" });
     return Reflect.apply(originalQuery, this, [sql, values]);
   });
   await assert.rejects(worker.scheduled({}, env), /^Error: Cloudflare scheduled recovery failed$/);
@@ -684,10 +538,7 @@ test("a failed step record write is logged and fails the run, also for the final
     [{ event: "cron_step_record_failed", code: "database_unavailable", step: "wake" }],
   );
   // The step succeeded, but its outcome is not stored, so the run is not recorded as a success.
-  assert.equal(
-    (await pool.query("SELECT failure_code FROM scheduled_steps WHERE name='cron'")).rows[0].failure_code,
-    "step_failed",
-  );
+  assert.equal((await pool.query("SELECT failure_code FROM scheduled_steps WHERE name='cron'")).rows[0].failure_code, "step_failed");
   logLines.length = 0;
   failingName = "cron";
   await assert.rejects(worker.scheduled({}, env), /^Error: Cloudflare scheduled recovery failed$/);
@@ -713,35 +564,16 @@ test("a batched record write that fails once fails the run even when every row i
   await assert.rejects(worker.scheduled({}, env), /^Error: Cloudflare scheduled recovery failed$/);
   assert.equal(batches, 2);
   // Every row of the failed statement is logged once, in step order, because no row's own retry failed.
-  const steps = [
-    "kept_reply_cleanup",
-    "oauth_state_cleanup",
-    "token_refresh",
-    "subscription_check",
-    "early_reply_reconcile",
-    "flow_resume",
-    "stale_recovery",
-    "wake",
-    "webhook_delivery",
-    "campaign_start",
-  ];
+  const steps = ["kept_reply_cleanup", "oauth_state_cleanup", "token_refresh", "subscription_check", "early_reply_reconcile", "flow_resume", "stale_recovery", "wake", "webhook_delivery", "campaign_start"];
   assert.deepEqual(
     logLines.map(({ correlation_id, ...line }) => line),
     steps.map((step) => ({ event: "cron_step_record_failed", code: "database_unavailable", step })),
   );
   // The retry stored every step's success, but the run counts the failed write.
-  const rows = (
-    await pool.query<{ name: string; failure_code: string | null; succeeded: boolean }>(
-      "SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name=ANY($1)",
-      [[...steps, "alerts"]],
-    )
-  ).rows;
+  const rows = (await pool.query<{ name: string; failure_code: string | null; succeeded: boolean }>("SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name=ANY($1)", [[...steps, "alerts"]])).rows;
   assert.deepEqual(rows.map((row) => row.name).sort(), [...steps, "alerts"].sort());
   assert.ok(rows.every((row) => row.failure_code === null && row.succeeded));
-  assert.equal(
-    (await pool.query("SELECT failure_code FROM scheduled_steps WHERE name='cron'")).rows[0].failure_code,
-    "step_failed",
-  );
+  assert.equal((await pool.query("SELECT failure_code FROM scheduled_steps WHERE name='cron'")).rows[0].failure_code, "step_failed");
 });
 
 test("a pool that fails to close cannot put its raw error message into the cron failure", async () => {
@@ -896,17 +728,7 @@ async function awaitingReplyRuns(): Promise<void> {
     await pool.query(
       `INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,flow_run_id,comment_id,media_id,sender_id,private_reply_text,status,recipient_id,sent_at,provider_message_id)
        VALUES($1,$2,$3,$4,$5,'1789',$6,'Which size?','sent',$7,now()-$8::interval,$9)`,
-      [
-        workspace,
-        connectionId,
-        event.rows[0]!.id,
-        run.rows[0]!.id,
-        comment,
-        `sender-${recipient}`,
-        recipient,
-        sentAgo,
-        `m-${comment}`,
-      ],
+      [workspace, connectionId, event.rows[0]!.id, run.rows[0]!.id, comment, `sender-${recipient}`, recipient, sentAgo, `m-${comment}`],
     );
   }
 }
@@ -968,9 +790,7 @@ test("a webhook DM continues the run waiting for its reply and the cron times ou
 test("the cron links a kept reply before it times out the wait that reply answered in time", async () => {
   await awaitingReplyRuns();
   // 457 answered while the reply was being sent, two hours ago, and only the cron can link it now.
-  await pool.query(
-    "UPDATE private_reply_outbox SET attempt_started_at=sent_at-interval '1 second' WHERE comment_id='comment-quiet'",
-  );
+  await pool.query("UPDATE private_reply_outbox SET attempt_started_at=sent_at-interval '1 second' WHERE comment_id='comment-quiet'");
   await pool.query(
     `INSERT INTO instagram_unmatched_replies(workspace_id,connection_id,sender_id,message_id,message_text,message_at)
      SELECT workspace_id,connection_id,'457','early-quiet','L',sent_at-interval '500 milliseconds'
@@ -988,10 +808,7 @@ test("the cron links a kept reply before it times out the wait that reply answer
     ).rows,
     [{ status: "ended", steps: ["wait:replied", "answered:added"] }],
   );
-  assert.equal(
-    (await pool.query("SELECT matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies")).rows[0].matched,
-    true,
-  );
+  assert.equal((await pool.query("SELECT matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies")).rows[0].matched, true);
 });
 
 test("a failed flow resume still lets the cron wake pending replies, then reports the failure", async () => {
@@ -1005,8 +822,7 @@ test("a failed flow resume still lets the cron wake pending replies, then report
   env.REPLY_QUEUE = queue;
   const originalQuery = Pool.prototype.query;
   mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
-    if (typeof sql === "string" && sql.includes("FROM flow_runs") && sql.includes("resume_at<=now()"))
-      throw new Error("flow runs unavailable");
+    if (typeof sql === "string" && sql.includes("FROM flow_runs") && sql.includes("resume_at<=now()")) throw new Error("flow runs unavailable");
     return Reflect.apply(originalQuery, this, [sql, values]);
   });
   await assert.rejects(worker.scheduled({}, env), /scheduled recovery failed/);
@@ -1015,43 +831,23 @@ test("a failed flow resume still lets the cron wake pending replies, then report
 
 test("the cron links a kept DM to its sent reply and removes kept text after 15 minutes, with sending off", async () => {
   assert.equal((await worker.fetch(request(), env)).status, 200);
-  await pool.query(
-    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute'",
-  );
+  await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute'");
   const at = new Date(Date.now() - 30_000);
   await ingestMessages(pool, [
     { accountId: "123", senderId: "7890", messageId: "early-confirm", text: "확인", timestamp: at },
     { accountId: "123", senderId: "7891", messageId: "old", text: "hello", timestamp: at },
   ]);
-  await pool.query(
-    "UPDATE instagram_unmatched_replies SET received_at=now()-interval '15 minutes' WHERE message_id='old'",
-  );
+  await pool.query("UPDATE instagram_unmatched_replies SET received_at=now()-interval '15 minutes' WHERE message_id='old'");
   // The reply is recorded as sent elsewhere, without the reconcile that normally follows it.
-  const reply = (
-    await pool.query(
-      "UPDATE private_reply_outbox SET status='sent',recipient_id='7890',provider_message_id='m',sent_at=now() RETURNING id",
-    )
-  ).rows[0].id;
-  await pool.query(
-    "INSERT INTO instagram_follow_conversations(reply_id,connection_id,recipient_id,confirmation_keyword,follower_reply_text,non_follower_reply_text) VALUES($1,$2,'7890','확인','링크','팔로우 안내')",
-    [reply, connectionId],
-  );
+  const reply = (await pool.query("UPDATE private_reply_outbox SET status='sent',recipient_id='7890',provider_message_id='m',sent_at=now() RETURNING id")).rows[0].id;
+  await pool.query("INSERT INTO instagram_follow_conversations(reply_id,connection_id,recipient_id,confirmation_keyword,follower_reply_text,non_follower_reply_text) VALUES($1,$2,'7890','확인','링크','팔로우 안내')", [reply, connectionId]);
   env.SEND_ENABLED = "false";
   await worker.scheduled({}, env);
-  assert.deepEqual((await pool.query("SELECT status,confirmed_at FROM instagram_follow_conversations")).rows, [
-    { status: "pending", confirmed_at: at },
+  assert.deepEqual((await pool.query("SELECT status,confirmed_at FROM instagram_follow_conversations")).rows, [{ status: "pending", confirmed_at: at }]);
+  assert.deepEqual((await pool.query("SELECT message_id,message_text,matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies ORDER BY message_id")).rows, [
+    { message_id: "early-confirm", message_text: "확인", matched: true },
+    { message_id: "old", message_text: null, matched: false },
   ]);
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT message_id,message_text,matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies ORDER BY message_id",
-      )
-    ).rows,
-    [
-      { message_id: "early-confirm", message_text: "확인", matched: true },
-      { message_id: "old", message_text: null, matched: false },
-    ],
-  );
   assert.equal(sends, 0);
 });
 
@@ -1065,14 +861,7 @@ test("the cron removes expired OAuth states with sending off and records the ste
   env.SEND_ENABLED = "false";
   await worker.scheduled({}, env);
   assert.deepEqual((await pool.query("SELECT state_hash FROM instagram_oauth_states")).rows, [{ state_hash: "live" }]);
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT failure_code,last_success_at IS NOT NULL AS succeeded,last_failure_at IS NULL AS never_failed FROM scheduled_steps WHERE name='oauth_state_cleanup'",
-      )
-    ).rows,
-    [{ failure_code: null, succeeded: true, never_failed: true }],
-  );
+  assert.deepEqual((await pool.query("SELECT failure_code,last_success_at IS NOT NULL AS succeeded,last_failure_at IS NULL AS never_failed FROM scheduled_steps WHERE name='oauth_state_cleanup'")).rows, [{ failure_code: null, succeeded: true, never_failed: true }]);
 });
 
 test("without the cleanup function the oauth_state_cleanup step and the whole run fail while later steps still run", async () => {
@@ -1081,27 +870,18 @@ test("without the cleanup function the oauth_state_cleanup step and the whole ru
   try {
     await assert.rejects(worker.scheduled({}, env), /scheduled recovery failed/);
   } finally {
-    await pool.query(
-      "ALTER FUNCTION public.delete_expired_oauth_states_hidden() RENAME TO delete_expired_oauth_states",
-    );
+    await pool.query("ALTER FUNCTION public.delete_expired_oauth_states_hidden() RENAME TO delete_expired_oauth_states");
   }
   assert.deepEqual(
     logLines.filter((line) => line.event === "cron_step_failed").map(({ correlation_id, ...line }) => line),
     [{ event: "cron_step_failed", code: "database_error", step: "oauth_state_cleanup" }],
   );
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('cron','oauth_state_cleanup','token_refresh','wake') ORDER BY name",
-      )
-    ).rows,
-    [
-      { name: "cron", failure_code: "step_failed", succeeded: false },
-      { name: "oauth_state_cleanup", failure_code: "database_error", succeeded: false },
-      { name: "token_refresh", failure_code: null, succeeded: true },
-      { name: "wake", failure_code: null, succeeded: true },
-    ],
-  );
+  assert.deepEqual((await pool.query("SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name IN ('cron','oauth_state_cleanup','token_refresh','wake') ORDER BY name")).rows, [
+    { name: "cron", failure_code: "step_failed", succeeded: false },
+    { name: "oauth_state_cleanup", failure_code: "database_error", succeeded: false },
+    { name: "token_refresh", failure_code: null, succeeded: true },
+    { name: "wake", failure_code: null, succeeded: true },
+  ]);
 });
 
 test("disabled sending preserves pending replies and does not schedule work", async () => {
@@ -1153,12 +933,7 @@ async function recordProviderCalls(count: number, ago = "10 minutes") {
 }
 
 async function replyState(commentId: string) {
-  return (
-    await pool.query(
-      "SELECT status,failure_code,rate_limit_retries,next_attempt_at FROM private_reply_outbox WHERE comment_id=$1",
-      [commentId],
-    )
-  ).rows[0];
+  return (await pool.query("SELECT status,failure_code,rate_limit_retries,next_attempt_at FROM private_reply_outbox WHERE comment_id=$1", [commentId])).rows[0];
 }
 
 test("a connection at its private reply budget is neither claimed nor queued again until the hour frees", async () => {
@@ -1180,9 +955,7 @@ test("a connection at its private reply budget is neither claimed nor queued aga
     rate_limit_retries: 0,
     next_attempt_at: held.next_attempt_at,
   });
-  await pool.query(
-    "UPDATE private_reply_outbox SET provider_called_at=now()-interval '61 minutes' WHERE comment_id='called-1'",
-  );
+  await pool.query("UPDATE private_reply_outbox SET provider_called_at=now()-interval '61 minutes' WHERE comment_id='called-1'");
   await worker.scheduled({}, env);
   assert.deepEqual(published, [{ connectionId }]);
   assert.equal(await consume(), "ack");
@@ -1195,11 +968,7 @@ test("recent calls of deleted rows still hold the claim and the wake until their
   await recordProviderCalls(PRIVATE_REPLY_HOURLY_BUDGET);
   // Only the deletion functions delete outbox rows in production; the trigger fires on any DELETE (#189).
   await pool.query("DELETE FROM private_reply_outbox WHERE comment_id LIKE 'called-%'");
-  assert.equal(
-    (await pool.query("SELECT private_reply_carried_calls FROM instagram_connections WHERE id=$1", [connectionId]))
-      .rows[0].private_reply_carried_calls,
-    PRIVATE_REPLY_HOURLY_BUDGET,
-  );
+  assert.equal((await pool.query("SELECT private_reply_carried_calls FROM instagram_connections WHERE id=$1", [connectionId])).rows[0].private_reply_carried_calls, PRIVATE_REPLY_HOURLY_BUDGET);
   published = [];
   assert.equal(await consume(), "ack");
   assert.equal(sends, 0);
@@ -1207,10 +976,7 @@ test("recent calls of deleted rows still hold the claim and the wake until their
   await worker.scheduled({}, env);
   assert.deepEqual(published, []);
   assert.equal((await replyState("comment-1")).status, "pending");
-  await pool.query(
-    "UPDATE instagram_connections SET private_reply_carried_until=now()-interval '1 second' WHERE id=$1",
-    [connectionId],
-  );
+  await pool.query("UPDATE instagram_connections SET private_reply_carried_until=now()-interval '1 second' WHERE id=$1", [connectionId]);
   await worker.scheduled({}, env);
   assert.deepEqual(published, [{ connectionId }]);
   assert.equal(await consume(), "ack");
@@ -1247,11 +1013,7 @@ test("with more than 100 due connections the cron wake reaches every one in rota
   // A scoped webhook wake queues its connection without changing the rotation.
   await worker.fetch(request(), env);
   assert.deepEqual(published, [{ connectionId }]);
-  assert.equal(
-    (await pool.query("SELECT send_woken_at FROM instagram_connections WHERE id=$1", [connectionId])).rows[0]
-      .send_woken_at,
-    null,
-  );
+  assert.equal((await pool.query("SELECT send_woken_at FROM instagram_connections WHERE id=$1", [connectionId])).rows[0].send_woken_at, null);
   await addDueConnections(150);
   const woken = () => published.map((body) => (body as { connectionId: string }).connectionId);
   published = [];
@@ -1264,19 +1026,14 @@ test("with more than 100 due connections the cron wake reaches every one in rota
   assert.equal(second.length, 100);
   // The second run queues the 51 connections the first run left before any it already woke.
   assert.equal(new Set([...first, ...second]).size, 151);
-  const stamped = await pool.query(
-    "SELECT count(*)::int AS count FROM instagram_connections WHERE send_woken_at IS NOT NULL AND id=ANY($1::uuid[])",
-    [second],
-  );
+  const stamped = await pool.query("SELECT count(*)::int AS count FROM instagram_connections WHERE send_woken_at IS NOT NULL AND id=ANY($1::uuid[])", [second]);
   assert.equal(stamped.rows[0].count, 100);
 });
 
 test("the cron wake moves only the connections it published to the back of the rotation", async () => {
   await worker.fetch(request(), env);
   await addDueConnections(2);
-  const order = (await pool.query<{ id: string }>("SELECT id FROM instagram_connections ORDER BY id")).rows.map(
-    (row) => row.id,
-  );
+  const order = (await pool.query<{ id: string }>("SELECT id FROM instagram_connections ORDER BY id")).rows.map((row) => row.id);
   const queue = env.REPLY_QUEUE;
   env.REPLY_QUEUE = {
     async send(body) {
@@ -1289,9 +1046,7 @@ test("the cron wake moves only the connections it published to the back of the r
   await assert.rejects(worker.scheduled({}, env), /Cloudflare scheduled recovery failed/);
   env.REPLY_QUEUE = queue;
   assert.deepEqual(published, [{ connectionId: order[0] }]);
-  const stamped = await pool.query<{ id: string }>(
-    "SELECT id FROM instagram_connections WHERE send_woken_at IS NOT NULL ORDER BY id",
-  );
+  const stamped = await pool.query<{ id: string }>("SELECT id FROM instagram_connections WHERE send_woken_at IS NOT NULL ORDER BY id");
   assert.deepEqual(
     stamped.rows.map((row) => row.id),
     [order[0]],
@@ -1307,14 +1062,11 @@ test("the cron wake moves only the connections it published to the back of the r
 
 test("a backlog on one connection does not delay another connection's first send through the queue", async () => {
   const other = "44444444-4444-4444-8444-444444444444";
-  await pool.query(
-    "INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,access_token_encrypted,token_expires_at,subscription_check_attempted_at) VALUES($1,'11111111-1111-4111-8111-111111111111','999',true,true,$2,now()+interval '1 day',now())",
-    [other, sealSecret("other-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:999")],
-  );
-  await pool.query(
-    "INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES('55555555-5555-4555-8555-555555555555','11111111-1111-4111-8111-111111111111',$1,'other-media','hello','other reply',true)",
-    [other],
-  );
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,access_token_encrypted,token_expires_at,subscription_check_attempted_at) VALUES($1,'11111111-1111-4111-8111-111111111111','999',true,true,$2,now()+interval '1 day',now())", [
+    other,
+    sealSecret("other-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:999"),
+  ]);
+  await pool.query("INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES('55555555-5555-4555-8555-555555555555','11111111-1111-4111-8111-111111111111',$1,'other-media','hello','other reply',true)", [other]);
   await pool.query(
     `WITH events AS (
        INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
@@ -1346,8 +1098,7 @@ test("a backlog on one connection does not delay another connection's first send
       return Response.json({ message_id: "message-" + delivered.length });
     }
     if (path.endsWith("/me")) return Response.json({ user_id: otherToken ? "999" : "123" });
-    if (id === "media-1" || id === "other-media")
-      return Response.json({ id, owner: { id: otherToken ? "999" : "123" } });
+    if (id === "media-1" || id === "other-media") return Response.json({ id, owner: { id: otherToken ? "999" : "123" } });
     return Response.json({
       id,
       from: { id: otherToken ? "777" : id },
@@ -1367,34 +1118,17 @@ test("a backlog on one connection does not delay another connection's first send
     published = [];
   }
   assert.deepEqual(delivered, ["backlog", "other"]);
-  assert.equal(
-    (
-      await pool.query(
-        "SELECT count(*)::int AS count FROM private_reply_outbox WHERE connection_id=$1 AND status='pending'",
-        [connectionId],
-      )
-    ).rows[0].count,
-    199,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM private_reply_outbox WHERE connection_id=$1 AND status='pending'", [connectionId])).rows[0].count, 199);
 });
 
 test("interrupted sends remain unknown on queue redelivery", async () => {
   await worker.fetch(request(), env);
-  await pool.query(
-    "UPDATE private_reply_outbox SET status='sending', attempt_id='44444444-4444-4444-8444-444444444444', attempt_started_at=now()-interval '11 minutes'",
-  );
+  await pool.query("UPDATE private_reply_outbox SET status='sending', attempt_id='44444444-4444-4444-8444-444444444444', attempt_started_at=now()-interval '11 minutes'");
   published = [];
   await worker.scheduled({}, env);
   assert.equal((await rows())[0].status, "unknown");
   // The cron's recovery records its own time, which operations health dates the outcome from (#274).
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT failure_code,recovered_at>now()-interval '1 minute' AS recovered_now FROM private_reply_outbox",
-      )
-    ).rows,
-    [{ failure_code: "worker_interrupted", recovered_now: true }],
-  );
+  assert.deepEqual((await pool.query("SELECT failure_code,recovered_at>now()-interval '1 minute' AS recovered_now FROM private_reply_outbox")).rows, [{ failure_code: "worker_interrupted", recovered_now: true }]);
   assert.equal(await consume(), "ack");
   assert.equal(sends, 0);
   assert.deepEqual(published, []);
@@ -1425,10 +1159,7 @@ test("ambiguous send remains unknown, while a structured throttle defers the row
   assert.equal(await consume(), "ack");
   assert.deepEqual(await rows(), [{ status: "pending", failure_code: "meta_error_4", rate_limit_retries: 1 }]);
   assert.deepEqual(published, []);
-  assert.equal(
-    (await pool.query("SELECT send_paused_until > now() AS paused FROM instagram_connections")).rows[0].paused,
-    true,
-  );
+  assert.equal((await pool.query("SELECT send_paused_until > now() AS paused FROM instagram_connections")).rows[0].paused, true);
 });
 
 test("one notification processes only one row and wakes the remaining backlog", async () => {
@@ -1504,10 +1235,7 @@ test("the deauthorize callback answers unverified or unconfigured requests witho
   // Without the OAuth app secret or the database binding nothing can be verified or recorded.
   assert.equal((await worker.fetch(deauthorizeRequest(signed), env)).status, 503);
   env.INSTAGRAM_OAUTH_APP_SECRET = "test-oauth-secret";
-  assert.equal(
-    (await worker.fetch(deauthorizeRequest(signed), { ...env, HYPERDRIVE: { connectionString: "" } })).status,
-    503,
-  );
+  assert.equal((await worker.fetch(deauthorizeRequest(signed), { ...env, HYPERDRIVE: { connectionString: "" } })).status, 503);
   assert.equal((await worker.fetch(deauthorizeRequest(signed, "other-secret"), env)).status, 400);
   assert.equal((await worker.fetch(deauthorizeRequest({ ...signed, algorithm: "HMAC-SHA1" }), env)).status, 400);
   assert.equal((await worker.fetch(deauthorizeRequest({ ...signed, user_id: undefined }), env)).status, 400);
@@ -1554,10 +1282,7 @@ test("a verified deauthorize callback disconnects the matching connection and lo
     deauthorized: true,
     rule_enabled: false,
   });
-  const unmatched = await worker.fetch(
-    deauthorizeRequest({ ...signed, user_id: 424242 }, undefined, { headers: { "cf-ray": "ray-2" } }),
-    env,
-  );
+  const unmatched = await worker.fetch(deauthorizeRequest({ ...signed, user_id: 424242 }, undefined, { headers: { "cf-ray": "ray-2" } }), env);
   assert.equal(unmatched.status, 200);
   assert.deepEqual(logLines, [
     {
@@ -1589,9 +1314,7 @@ test("cron wakes a missed notification for an inactive connection so its reply b
 });
 
 test("signed comment and confirmation webhooks complete the conditional DM flow once", async () => {
-  await pool.query(
-    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final link',non_follower_reply_text='Follow and confirm again'",
-  );
+  await pool.query("UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final link',non_follower_reply_text='Follow and confirm again'");
   let follows = false;
   const delivered: string[] = [];
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
@@ -1652,9 +1375,7 @@ test("signed comment and confirmation webhooks complete the conditional DM flow 
 });
 
 test("a connection at its private reply budget still sends follow confirmation DMs", async () => {
-  await pool.query(
-    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final link',non_follower_reply_text='Follow and confirm again'",
-  );
+  await pool.query("UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final link',non_follower_reply_text='Follow and confirm again'");
   const delivered: string[] = [];
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -1678,9 +1399,7 @@ test("a connection at its private reply budget still sends follow confirmation D
   await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 second'");
   // The first DM was the private reply; the confirmation answer is a Send API DM outside the budget.
   await recordProviderCalls(PRIVATE_REPLY_HOURLY_BUDGET);
-  await ingestMessages(pool, [
-    { accountId: "123", senderId: "456", messageId: "budget-confirm", text: "확인", timestamp: new Date() },
-  ]);
+  await ingestMessages(pool, [{ accountId: "123", senderId: "456", messageId: "budget-confirm", text: "확인", timestamp: new Date() }]);
   published = [];
   await worker.scheduled({}, env);
   assert.deepEqual(published, [{ connectionId }]);
@@ -1691,14 +1410,11 @@ test("a connection at its private reply budget still sends follow confirmation D
 
 test("each connection uses its own encrypted token and send switch", async () => {
   const other = "44444444-4444-4444-8444-444444444444";
-  await pool.query(
-    "INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,access_token_encrypted,token_expires_at) VALUES($1,'11111111-1111-4111-8111-111111111111','999',true,true,$2,now()+interval '1 day')",
-    [other, sealSecret("other-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:999")],
-  );
-  await pool.query(
-    "INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES('55555555-5555-4555-8555-555555555555','11111111-1111-4111-8111-111111111111',$1,'other-media','hello','other reply',true)",
-    [other],
-  );
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,access_token_encrypted,token_expires_at) VALUES($1,'11111111-1111-4111-8111-111111111111','999',true,true,$2,now()+interval '1 day')", [
+    other,
+    sealSecret("other-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:999"),
+  ]);
+  await pool.query("INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES('55555555-5555-4555-8555-555555555555','11111111-1111-4111-8111-111111111111',$1,'other-media','hello','other reply',true)", [other]);
   const body = JSON.stringify({
     object: "instagram",
     entry: [
@@ -1742,9 +1458,7 @@ test("each connection uses its own encrypted token and send switch", async () =>
 });
 
 test("a successful first DM without recipient ID exposes a terminal follow failure and never resends", async () => {
-  await pool.query(
-    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,follower_reply_text='Final',non_follower_reply_text='Follow'",
-  );
+  await pool.query("UPDATE instagram_comment_rules SET follow_gate_enabled=true,follower_reply_text='Final',non_follower_reply_text='Follow'");
   await worker.fetch(request(), env);
   await consume();
   await consume();
@@ -1793,10 +1507,7 @@ test("consuming one account cannot multiply notifications for another due accoun
 });
 
 async function pauseSender(sender = "sender-1") {
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) SELECT workspace_id,id,$2,true FROM instagram_connections WHERE id=$1 ON CONFLICT(workspace_id,connection_id,sender_id) DO UPDATE SET paused=true",
-    [connectionId, sender],
-  );
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) SELECT workspace_id,id,$2,true FROM instagram_connections WHERE id=$1 ON CONFLICT(workspace_id,connection_id,sender_id) DO UPDATE SET paused=true", [connectionId, sender]);
 }
 test("Cloudflare cron and queue exclude paused contacts while another contact can send", async () => {
   await worker.fetch(request(), env);
@@ -1827,8 +1538,7 @@ test("Cloudflare private final POST guard sees a pause during second verificatio
   let mediaReads = 0;
   const providerFetch = globalThis.fetch;
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
-    if (init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/media-1") && ++mediaReads === 2)
-      await pauseSender();
+    if (init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/media-1") && ++mediaReads === 2) await pauseSender();
     return providerFetch(input, init);
   });
   await worker.fetch(request(), env);
@@ -1848,10 +1558,7 @@ test("Cloudflare private final POST guard retries after an Instagram token rotat
   const providerFetch = globalThis.fetch;
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
     if (init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/media-1") && ++mediaReads === 2)
-      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [
-        connectionId,
-        sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"),
-      ]);
+      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [connectionId, sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123")]);
     return providerFetch(input, init);
   });
   await worker.fetch(request(), env);
@@ -1869,10 +1576,7 @@ test("Cloudflare verification retries when a rotated old token is rejected by Me
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
     if (!rotated && init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/me")) {
       rotated = true;
-      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [
-        connectionId,
-        sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"),
-      ]);
+      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [connectionId, sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123")]);
       return Response.json({ error: { code: 190 } }, { status: 400 });
     }
     return providerFetch(input, init);
@@ -1889,29 +1593,21 @@ test("Cloudflare verification retries when a rotated old token is rejected by Me
 });
 
 async function reauthMarker() {
-  return (
-    await pool.query(
-      "SELECT reauth_reason,reauth_required_at IS NOT NULL AS marked FROM instagram_connections WHERE id=$1",
-      [connectionId],
-    )
-  ).rows[0];
+  return (await pool.query("SELECT reauth_reason,reauth_required_at IS NOT NULL AS marked FROM instagram_connections WHERE id=$1", [connectionId])).rows[0];
 }
 
 test("a rejected Cloudflare identity read marks the token without changing the reply outcome", async () => {
   const providerFetch = globalThis.fetch;
   let reject = true;
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
-    if (reject && init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/me"))
-      return Response.json({ error: { code: 190, message: "Invalid OAuth access token" } }, { status: 401 });
+    if (reject && init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/me")) return Response.json({ error: { code: 190, message: "Invalid OAuth access token" } }, { status: 401 });
     return providerFetch(input, init);
   });
   await worker.fetch(request(), env);
   assert.equal(await consume(), "ack");
   // The reply is blocked by the pre-send verification exactly as without the marker.
   assert.equal(sends, 0);
-  assert.deepEqual(await rows(), [
-    { status: "blocked", failure_code: "authorization_unverified", rate_limit_retries: 0 },
-  ]);
+  assert.deepEqual(await rows(), [{ status: "blocked", failure_code: "authorization_unverified", rate_limit_retries: 0 }]);
   assert.deepEqual(await reauthMarker(), { reauth_reason: "token_rejected", marked: true });
   assert.deepEqual(logLines, []);
   // The marker does not stop a claim, and a verified identity read of the same token clears it.
@@ -1933,34 +1629,22 @@ test("an accepted Cloudflare identity read keeps a refresh_rejected marker and i
   await consume();
   // The identity read accepted the token and the reply was sent, but that does not prove Meta will refresh it.
   assert.equal(sends, 1);
-  const marker = await pool.query(
-    "SELECT reauth_reason,reauth_required_at,reauth_token_obtained_at=token_obtained_at AS same_token FROM instagram_connections WHERE id=$1",
-    [connectionId],
-  );
-  assert.deepEqual(marker.rows, [
-    { reauth_reason: "refresh_rejected", reauth_required_at: new Date(markedAt), same_token: true },
-  ]);
+  const marker = await pool.query("SELECT reauth_reason,reauth_required_at,reauth_token_obtained_at=token_obtained_at AS same_token FROM instagram_connections WHERE id=$1", [connectionId]);
+  assert.deepEqual(marker.rows, [{ reauth_reason: "refresh_rejected", reauth_required_at: new Date(markedAt), same_token: true }]);
 });
 
 test("a failed reconnect marker write is logged and leaves the reply outcome unchanged", async () => {
   const providerFetch = globalThis.fetch;
-  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) =>
-    init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/me")
-      ? Response.json({ error: { code: 190 } }, { status: 400 })
-      : providerFetch(input, init),
-  );
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => (init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/me") ? Response.json({ error: { code: 190 } }, { status: 400 }) : providerFetch(input, init)));
   const originalQuery = Pool.prototype.query;
   mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
-    if (typeof sql === "string" && sql.includes("SET reauth_required_at=coalesce"))
-      throw new Error("token for owner@example.test");
+    if (typeof sql === "string" && sql.includes("SET reauth_required_at=coalesce")) throw new Error("token for owner@example.test");
     return Reflect.apply(originalQuery, this, [sql, values]);
   });
   await worker.fetch(request(), env);
   assert.equal(await consume(), "ack");
   assert.equal(sends, 0);
-  assert.deepEqual(await rows(), [
-    { status: "blocked", failure_code: "authorization_unverified", rate_limit_retries: 0 },
-  ]);
+  assert.deepEqual(await rows(), [{ status: "blocked", failure_code: "authorization_unverified", rate_limit_retries: 0 }]);
   assert.deepEqual(await reauthMarker(), { reauth_reason: null, marked: false });
   assert.deepEqual(
     logLines.map(({ correlation_id, ...line }) => line),
@@ -1975,10 +1659,7 @@ test("Cloudflare retries a definite POST rejection after token rotation", async 
     if (!rejected && init?.method === "POST") {
       rejected = true;
       sends++;
-      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [
-        connectionId,
-        sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"),
-      ]);
+      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [connectionId, sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123")]);
       return Response.json({ error: { code: 190 } }, { status: 400 });
     }
     return providerFetch(input, init);
@@ -1997,10 +1678,7 @@ test("Cloudflare preserves Meta throttle backoff when a token rotates during POS
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
     if (init?.method === "POST") {
       sends++;
-      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [
-        connectionId,
-        sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"),
-      ]);
+      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [connectionId, sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123")]);
       return Response.json({ error: { code: 4 } }, { status: 400 });
     }
     const graphUrl = new URL(String(input));
@@ -2017,14 +1695,7 @@ test("Cloudflare preserves Meta throttle backoff when a token rotates during POS
   await consume();
   assert.equal(sends, 1);
   assert.deepEqual((await rows())[0], { status: "pending", failure_code: "meta_error_4", rate_limit_retries: 1 });
-  assert.equal(
-    (
-      await pool.query("SELECT send_paused_until>now() AS paused FROM instagram_connections WHERE id=$1", [
-        connectionId,
-      ])
-    ).rows[0].paused,
-    true,
-  );
+  assert.equal((await pool.query("SELECT send_paused_until>now() AS paused FROM instagram_connections WHERE id=$1", [connectionId])).rows[0].paused, true);
 });
 
 test("Cloudflare does not retry an ambiguous POST failure after token rotation", async () => {
@@ -2032,15 +1703,11 @@ test("Cloudflare does not retry an ambiguous POST failure after token rotation",
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
     if (init?.method === "POST") {
       postCount++;
-      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [
-        connectionId,
-        sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"),
-      ]);
+      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [connectionId, sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123")]);
       return Response.json({ error: { code: 190 } }, { status: 503 });
     }
     if (new URL(String(input)).pathname.endsWith("/me")) return Response.json({ user_id: "123" });
-    if (new URL(String(input)).pathname.endsWith("/media-1"))
-      return Response.json({ id: "media-1", owner: { id: "123" } });
+    if (new URL(String(input)).pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
     return Response.json({
       id: "comment-1",
       from: { id: "sender-1" },
@@ -2059,10 +1726,7 @@ test("Cloudflare keeps a transient 4xx POST outcome unknown after token rotation
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
     if (init?.method === "POST") {
       postCount++;
-      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [
-        connectionId,
-        sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"),
-      ]);
+      await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [connectionId, sealSecret("rotated-token", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123")]);
       return Response.json({ error: { code: 2, is_transient: true } }, { status: 400 });
     }
     const graphUrl = new URL(String(input));
@@ -2082,9 +1746,7 @@ test("Cloudflare keeps a transient 4xx POST outcome unknown after token rotation
 });
 
 test("Cloudflare follow final guard defers a pause after worker permissions", async () => {
-  await pool.query(
-    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final',non_follower_reply_text='Follow'",
-  );
+  await pool.query("UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final',non_follower_reply_text='Follow'");
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
     const path = new URL(String(input)).pathname;
     if (init?.method === "POST") {
@@ -2106,9 +1768,7 @@ test("Cloudflare follow final guard defers a pause after worker permissions", as
   assert.equal(sends, 1);
   // Keep the arrival after the PostgreSQL send timestamp despite JS millisecond precision.
   await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 second'");
-  await ingestMessages(pool, [
-    { accountId: "123", senderId: "456", messageId: "confirm", text: "확인", timestamp: new Date() },
-  ]);
+  await ingestMessages(pool, [{ accountId: "123", senderId: "456", messageId: "confirm", text: "확인", timestamp: new Date() }]);
   assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "pending");
   let finalChecks = 0;
   const originalQuery = Pool.prototype.query;
@@ -2130,10 +1790,7 @@ test("Cloudflare follow final guard defers a pause after worker permissions", as
 });
 
 async function handoffSender(sender = "sender-1") {
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,handoff_paused) SELECT workspace_id,id,$2,true FROM instagram_connections WHERE id=$1",
-    [connectionId, sender],
-  );
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,handoff_paused) SELECT workspace_id,id,$2,true FROM instagram_connections WHERE id=$1", [connectionId, sender]);
 }
 test("Cloudflare handoff excludes cron wake and queue claims", async () => {
   await worker.fetch(request(), env);
@@ -2149,8 +1806,7 @@ test("Cloudflare handoff committed during verification prevents private final PO
   let mediaReads = 0;
   const providerFetch = globalThis.fetch;
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
-    if (init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/media-1") && ++mediaReads === 2)
-      await handoffSender();
+    if (init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/media-1") && ++mediaReads === 2) await handoffSender();
     return providerFetch(input, init);
   });
   await worker.fetch(request(), env);
@@ -2160,9 +1816,7 @@ test("Cloudflare handoff committed during verification prevents private final PO
   assert.equal((await rows())[0].failure_code, "contact_paused");
 });
 test("Cloudflare handoff committed after follow permissions prevents final POST", async () => {
-  await pool.query(
-    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final',non_follower_reply_text='Follow'",
-  );
+  await pool.query("UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final',non_follower_reply_text='Follow'");
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
     const path = new URL(String(input)).pathname;
     if (init?.method === "POST") {
@@ -2183,9 +1837,7 @@ test("Cloudflare handoff committed after follow permissions prevents final POST"
   await consume();
   assert.equal(sends, 1);
   await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 second'");
-  await ingestMessages(pool, [
-    { accountId: "123", senderId: "456", messageId: "handoff-confirm", text: "확인", timestamp: new Date() },
-  ]);
+  await ingestMessages(pool, [{ accountId: "123", senderId: "456", messageId: "handoff-confirm", text: "확인", timestamp: new Date() }]);
   assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "pending");
   const originalQuery = Pool.prototype.query;
   let finalChecks = 0;
@@ -2199,22 +1851,14 @@ test("Cloudflare handoff committed after follow permissions prevents final POST"
   await consume();
   assert.equal(finalChecks, 1);
   assert.equal(sends, 1);
-  assert.equal(
-    (await pool.query("SELECT failure_code FROM instagram_follow_conversations")).rows[0].failure_code,
-    "contact_paused",
-  );
+  assert.equal((await pool.query("SELECT failure_code FROM instagram_follow_conversations")).rows[0].failure_code, "contact_paused");
 });
 
 async function manualFixture(scheduled = false) {
   const user = { id: "44444444-4444-4444-8444-444444444444", email: "operator@example.test" };
-  await pool.query(
-    "INSERT INTO workspace_members(user_id,workspace_id) VALUES($1,'11111111-1111-4111-8111-111111111111')",
-    [user.id],
-  );
+  await pool.query("INSERT INTO workspace_members(user_id,workspace_id) VALUES($1,'11111111-1111-4111-8111-111111111111')", [user.id]);
   assert.equal((await worker.fetch(request("manual-comment", "888"), env)).status, 200);
-  await pool.query(
-    "UPDATE private_reply_outbox SET status='sent',recipient_id='456',provider_message_id='bridge',sent_at=now()-interval '1 second'; UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now()-interval '1 hour'",
-  );
+  await pool.query("UPDATE private_reply_outbox SET status='sent',recipient_id='456',provider_message_id='bridge',sent_at=now()-interval '1 second'; UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now()-interval '1 hour'");
   await ingestMessages(pool, [
     {
       accountId: "123",
@@ -2227,13 +1871,7 @@ async function manualFixture(scheduled = false) {
   const { saveInboxHandoff } = await import("../app/inbox-handoff.ts");
   await saveInboxHandoff(pool, user, connectionId, "456", new URLSearchParams(), { active: true, expected_version: 0 });
   const { queueManualReply } = await import("../app/manual-replies.ts");
-  const schedule = scheduled
-    ? (
-        await pool.query(
-          `SELECT to_char((now()+interval '1 hour') AT TIME ZONE time_zone,'YYYY-MM-DD"T"HH24:MI') AS schedule_local,time_zone AS expected_time_zone FROM workspaces WHERE id='11111111-1111-4111-8111-111111111111'`,
-        )
-      ).rows[0]
-    : {};
+  const schedule = scheduled ? (await pool.query(`SELECT to_char((now()+interval '1 hour') AT TIME ZONE time_zone,'YYYY-MM-DD"T"HH24:MI') AS schedule_local,time_zone AS expected_time_zone FROM workspaces WHERE id='11111111-1111-4111-8111-111111111111'`)).rows[0] : {};
   const reply = await queueManualReply(
     pool,
     user,
@@ -2269,21 +1907,10 @@ test("Cloudflare opt-out final guards block private follow and manual POST", asy
   assert.equal(await consume(), "ack");
   assert.equal(manualRevokeRecorded, true);
   assert.equal(manualPosts, 0);
-  assert.deepEqual(
-    (await pool.query("SELECT status,failure_code,safe_to_retry FROM instagram_manual_replies")).rows[0],
-    { status: "failed", failure_code: "recipient_opted_out", safe_to_retry: false },
-  );
+  assert.deepEqual((await pool.query("SELECT status,failure_code,safe_to_retry FROM instagram_manual_replies")).rows[0], { status: "failed", failure_code: "recipient_opted_out", safe_to_retry: false });
   const { queueManualReply } = await import("../app/manual-replies.ts");
   await assert.rejects(
-    queueManualReply(
-      pool,
-      user,
-      connectionId,
-      "456",
-      new URLSearchParams(),
-      { request_key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", text: "Blocked", expected_handoff_version: 1 },
-      true,
-    ),
+    queueManualReply(pool, user, connectionId, "456", new URLSearchParams(), { request_key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", text: "Blocked", expected_handoff_version: 1 }, true),
     (error: unknown) => error instanceof Error && error.message === "recipient_opted_out",
   );
 
@@ -2291,12 +1918,8 @@ test("Cloudflare opt-out final guards block private follow and manual POST", asy
   published = [];
   sends = 0;
   await resetStoredFixture();
-  const bridgeEvent = (
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES('11111111-1111-4111-8111-111111111111',$1,'prior-bridge','prior-media','sender-1','hello') RETURNING id",
-      [connectionId],
-    )
-  ).rows[0].id;
+  const bridgeEvent = (await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES('11111111-1111-4111-8111-111111111111',$1,'prior-bridge','prior-media','sender-1','hello') RETURNING id", [connectionId]))
+    .rows[0].id;
   await pool.query(
     "INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text,status,recipient_id,provider_message_id,sent_at) VALUES('11111111-1111-4111-8111-111111111111',$1,$2,'33333333-3333-4333-8333-333333333333','prior-bridge','prior-media','sender-1','reply','sent','777','prior-ack',now()-interval '1 minute')",
     [connectionId, bridgeEvent],
@@ -2326,22 +1949,13 @@ test("Cloudflare opt-out final guards block private follow and manual POST", asy
   assert.equal(await consume(), "ack");
   assert.equal(privateMediaReads, 2);
   assert.equal(privatePosts, 0);
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT status,failure_code,rate_limit_retries FROM private_reply_outbox WHERE comment_id='comment-1'",
-      )
-    ).rows[0],
-    { status: "blocked", failure_code: "recipient_opted_out", rate_limit_retries: 0 },
-  );
+  assert.deepEqual((await pool.query("SELECT status,failure_code,rate_limit_retries FROM private_reply_outbox WHERE comment_id='comment-1'")).rows[0], { status: "blocked", failure_code: "recipient_opted_out", rate_limit_retries: 0 });
 
   restoreMocks();
   published = [];
   sends = 0;
   await resetStoredFixture();
-  await pool.query(
-    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final',non_follower_reply_text='Follow'",
-  );
+  await pool.query("UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final',non_follower_reply_text='Follow'");
   let followPosts = 0;
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
     const graphUrl = new URL(String(input));
@@ -2363,17 +1977,11 @@ test("Cloudflare opt-out final guards block private follow and manual POST", asy
   assert.equal(await consume(), "ack");
   assert.equal(followPosts, 1);
   await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 second'");
-  await ingestMessages(pool, [
-    { accountId: "123", senderId: "456", messageId: "follow-confirm", text: "확인", timestamp: new Date() },
-  ]);
+  await ingestMessages(pool, [{ accountId: "123", senderId: "456", messageId: "follow-confirm", text: "확인", timestamp: new Date() }]);
   const originalQuery = Pool.prototype.query;
   let followRevokeRecorded = false;
   mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
-    if (
-      !followRevokeRecorded &&
-      sql.includes("flow.confirmed_at>now()-interval '24 hours'") &&
-      sql.includes("c.access_token_encrypted=$4")
-    ) {
+    if (!followRevokeRecorded && sql.includes("flow.confirmed_at>now()-interval '24 hours'") && sql.includes("c.access_token_encrypted=$4")) {
       await recordConsent("dm_recipient", "456", "dddddddd-dddd-4ddd-8ddd-dddddddddddd");
       followRevokeRecorded = true;
     }
@@ -2405,9 +2013,7 @@ test("Cloudflare consent read failures defer private follow and manual before PO
   published = [];
   sends = 0;
   await resetStoredFixture();
-  await pool.query(
-    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final',non_follower_reply_text='Follow'",
-  );
+  await pool.query("UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final',non_follower_reply_text='Follow'");
   let followPosts = 0;
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
     const graphUrl = new URL(String(input));
@@ -2429,18 +2035,13 @@ test("Cloudflare consent read failures defer private follow and manual before PO
   assert.equal(await consume(), "ack");
   assert.equal(followPosts, 1);
   await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 second'");
-  await ingestMessages(pool, [
-    { accountId: "123", senderId: "456", messageId: "follow-fault-confirm", text: "확인", timestamp: new Date() },
-  ]);
+  await ingestMessages(pool, [{ accountId: "123", senderId: "456", messageId: "follow-fault-confirm", text: "확인", timestamp: new Date() }]);
   followPosts = 0;
   const followConsentReads = failConsentRead(3);
   assert.equal(await consume(), "ack");
   assert.equal(followConsentReads(), 3);
   assert.equal(followPosts, 0);
-  assert.deepEqual(
-    (await pool.query("SELECT status,failure_code,attempt_id FROM instagram_follow_conversations")).rows[0],
-    { status: "pending", failure_code: "consent_unavailable", attempt_id: null },
-  );
+  assert.deepEqual((await pool.query("SELECT status,failure_code,attempt_id FROM instagram_follow_conversations")).rows[0], { status: "pending", failure_code: "consent_unavailable", attempt_id: null });
 
   restoreMocks();
   published = [];
@@ -2460,10 +2061,7 @@ test("Cloudflare consent read failures defer private follow and manual before PO
   assert.equal(await consume(), "ack");
   assert.equal(manualConsentReads(), 3);
   assert.equal(manualPosts, 0);
-  assert.deepEqual(
-    (await pool.query("SELECT status,failure_code,safe_to_retry FROM instagram_manual_replies")).rows[0],
-    { status: "pending", failure_code: "consent_unavailable", safe_to_retry: false },
-  );
+  assert.deepEqual((await pool.query("SELECT status,failure_code,safe_to_retry FROM instagram_manual_replies")).rows[0], { status: "pending", failure_code: "consent_unavailable", safe_to_retry: false });
 });
 
 test("scheduled manual replies wake only when due and leave later immediate replies runnable", async () => {
@@ -2474,32 +2072,15 @@ test("scheduled manual replies wake only when due and leave later immediate repl
   assert.equal(await consume(), "ack");
   assert.equal(sends, 0);
   const { queueManualReply } = await import("../app/manual-replies.ts");
-  const immediate = await queueManualReply(
-    pool,
-    user,
-    connectionId,
-    "456",
-    new URLSearchParams(),
-    { request_key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", text: "Immediate response", expected_handoff_version: 1 },
-    true,
-  );
+  const immediate = await queueManualReply(pool, user, connectionId, "456", new URLSearchParams(), { request_key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", text: "Immediate response", expected_handoff_version: 1 }, true);
   published = [];
   await worker.scheduled(null, env);
   assert.deepEqual(published, [{ connectionId }]);
   assert.equal(await consume(), "ack");
   assert.equal(sends, 1);
-  assert.equal(
-    (await pool.query("SELECT status FROM instagram_manual_replies WHERE id=$1", [immediate.id])).rows[0].status,
-    "sent",
-  );
-  assert.equal(
-    (await pool.query("SELECT status FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0].status,
-    "pending",
-  );
-  await pool.query(
-    "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
-    [reply.id],
-  );
+  assert.equal((await pool.query("SELECT status FROM instagram_manual_replies WHERE id=$1", [immediate.id])).rows[0].status, "sent");
+  assert.equal((await pool.query("SELECT status FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0].status, "pending");
+  await pool.query("UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1", [reply.id]);
   published = [];
   await worker.scheduled(null, env);
   assert.deepEqual(published, [{ connectionId }]);
@@ -2510,15 +2091,7 @@ test("scheduled manual replies wake only when due and leave later immediate repl
 test("scheduled manual replies wait behind later sending or unknown replies across cron and queue", async () => {
   const { user, reply } = await manualFixture(true);
   const { queueManualReply, resolveManualReply } = await import("../app/manual-replies.ts");
-  const immediate = await queueManualReply(
-    pool,
-    user,
-    connectionId,
-    "456",
-    new URLSearchParams(),
-    { request_key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", text: "Immediate response", expected_handoff_version: 1 },
-    true,
-  );
+  const immediate = await queueManualReply(pool, user, connectionId, "456", new URLSearchParams(), { request_key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", text: "Immediate response", expected_handoff_version: 1 }, true);
   let posts = 0;
   mock.method(globalThis, "fetch", async (_input: URL | RequestInfo, init?: RequestInit) => {
     if (init?.method !== "POST") return Response.json({ user_id: "123" });
@@ -2528,14 +2101,8 @@ test("scheduled manual replies wait behind later sending or unknown replies acro
   });
   assert.equal(await consume(), "ack");
   assert.equal(posts, 1);
-  assert.equal(
-    (await pool.query("SELECT status FROM instagram_manual_replies WHERE id=$1", [immediate.id])).rows[0].status,
-    "unknown",
-  );
-  await pool.query(
-    "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
-    [reply.id],
-  );
+  assert.equal((await pool.query("SELECT status FROM instagram_manual_replies WHERE id=$1", [immediate.id])).rows[0].status, "unknown");
+  await pool.query("UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1", [reply.id]);
   for (const status of ["sending", "unknown"]) {
     await pool.query("UPDATE instagram_manual_replies SET status=$2 WHERE id=$1", [immediate.id, status]);
     published = [];
@@ -2559,28 +2126,19 @@ test("scheduled manual replies wait behind later sending or unknown replies acro
 test("scheduled manual reply rejects a removed creator in the Cloudflare provider guard", async () => {
   const { user, reply } = await manualFixture(true);
   await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [user.id]);
-  await pool.query(
-    "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
-    [reply.id],
-  );
+  await pool.query("UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1", [reply.id]);
   let posts = 0;
   mock.method(globalThis, "fetch", async (_input: URL | RequestInfo, init?: RequestInit) => {
     if (init?.method === "POST") {
       posts++;
       return Response.json({ message_id: "must-not-send" });
     }
-    await pool.query(
-      "UPDATE workspace_members SET removed_at=now(),removed_by='99999999-9999-4999-8999-999999999999' WHERE user_id=$1",
-      [user.id],
-    );
+    await pool.query("UPDATE workspace_members SET removed_at=now(),removed_by='99999999-9999-4999-8999-999999999999' WHERE user_id=$1", [user.id]);
     return Response.json({ user_id: "123" });
   });
   assert.equal(await consume(), "ack");
   assert.equal(posts, 0);
-  assert.deepEqual(
-    (await pool.query("SELECT status,failure_code FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0],
-    { status: "failed", failure_code: "scheduled_actor_unavailable" },
-  );
+  assert.deepEqual((await pool.query("SELECT status,failure_code FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0], { status: "failed", failure_code: "scheduled_actor_unavailable" });
 });
 
 test("manual queued reply wakes on cron and duplicate queue messages send once", async () => {
@@ -2591,9 +2149,7 @@ test("manual queued reply wakes on cron and duplicate queue messages send once",
   assert.equal(await consume(), "ack");
   assert.equal(await consume(), "ack");
   assert.equal(sends, 1);
-  assert.deepEqual((await pool.query("SELECT status,provider_message_id FROM instagram_manual_replies")).rows, [
-    { status: "sent", provider_message_id: "message-1" },
-  ]);
+  assert.deepEqual((await pool.query("SELECT status,provider_message_id FROM instagram_manual_replies")).rows, [{ status: "sent", provider_message_id: "message-1" }]);
 });
 
 test("a connection at its private reply budget still sends manual replies", async () => {
@@ -2613,20 +2169,12 @@ test("a connection at its private reply budget still sends manual replies", asyn
 });
 
 test("manual POST guard rejects token rotation handoff resume expiry and receive stop after verification", async () => {
-  for (const change of [
-    "access_token_encrypted='rotated'",
-    "active=false",
-    "inbox_enabled=false",
-    "token_expires_at=now()-interval '1 second'",
-    "handoff",
-  ]) {
+  for (const change of ["access_token_encrypted='rotated'", "active=false", "inbox_enabled=false", "token_expires_at=now()-interval '1 second'", "handoff"]) {
     await pool.query("TRUNCATE workspaces CASCADE");
     await pool.query(
       "INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111'); INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,token_expires_at,access_token_encrypted) VALUES('22222222-2222-4222-8222-222222222222','11111111-1111-4111-8111-111111111111','123',true,true,now()+interval '1 day','unused'); INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES('33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','media-1','hello','reply',true)",
     );
-    await pool.query("UPDATE instagram_connections SET access_token_encrypted=$1", [
-      sealSecret("synthetic", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123"),
-    ]);
+    await pool.query("UPDATE instagram_connections SET access_token_encrypted=$1", [sealSecret("synthetic", env.TOKEN_ENCRYPTION_KEY!, "11111111-1111-4111-8111-111111111111:123")]);
     await manualFixture();
     let posts = 0;
     mock.method(globalThis, "fetch", async (_input: URL | RequestInfo, init?: RequestInit) => {
@@ -2634,19 +2182,12 @@ test("manual POST guard rejects token rotation handoff resume expiry and receive
         posts++;
         return Response.json({ message_id: "forbidden" });
       }
-      await pool.query(
-        change === "handoff"
-          ? "UPDATE instagram_inbox_handoffs SET active=false"
-          : `UPDATE instagram_connections SET ${change}`,
-      );
+      await pool.query(change === "handoff" ? "UPDATE instagram_inbox_handoffs SET active=false" : `UPDATE instagram_connections SET ${change}`);
       return Response.json({ user_id: "123" });
     });
     assert.equal(await consume(), "ack");
     assert.equal(posts, 0);
-    assert.equal(
-      (await pool.query("SELECT status FROM instagram_manual_replies")).rows[0].status,
-      change === "access_token_encrypted='rotated'" ? "pending" : "failed",
-    );
+    assert.equal((await pool.query("SELECT status FROM instagram_manual_replies")).rows[0].status, change === "access_token_encrypted='rotated'" ? "pending" : "failed");
   }
 });
 
@@ -2662,13 +2203,8 @@ test("manual Meta throttle refusal is audited failed without retry and shares co
   assert.equal(await consume(), "ack");
   assert.equal(await consume(), "ack");
   assert.equal(sends, 1);
-  assert.deepEqual((await pool.query("SELECT status,safe_to_retry,failure_code FROM instagram_manual_replies")).rows, [
-    { status: "failed", safe_to_retry: true, failure_code: "meta_error_4" },
-  ]);
-  assert.equal(
-    (await pool.query("SELECT send_paused_until>now() AS paused FROM instagram_connections")).rows[0].paused,
-    true,
-  );
+  assert.deepEqual((await pool.query("SELECT status,safe_to_retry,failure_code FROM instagram_manual_replies")).rows, [{ status: "failed", safe_to_retry: true, failure_code: "meta_error_4" }]);
+  assert.equal((await pool.query("SELECT send_paused_until>now() AS paused FROM instagram_connections")).rows[0].paused, true);
 });
 
 for (const [label, change] of [
@@ -2691,10 +2227,7 @@ for (const [label, change] of [
     assert.equal(await consume(), "ack");
     assert.equal(graphRequests, 0);
     assert.equal((await pool.query("SELECT status FROM instagram_manual_replies")).rows[0].status, "failed");
-    assert.equal(
-      (await pool.query("SELECT count(*) FROM instagram_manual_reply_events WHERE kind='failed'")).rows[0].count,
-      "1",
-    );
+    assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_reply_events WHERE kind='failed'")).rows[0].count, "1");
   });
 
 // A flow run that reached a webhook node: one delivery is queued for an active endpoint with one signing key.
@@ -2722,31 +2255,12 @@ async function queuedWebhook(): Promise<{ eventId: string; keyId: string; secret
      VALUES($1,$2,$3,$4,$5,'ended') RETURNING id`,
     [workspace, connectionId, flow, version, event.rows[0]!.id],
   );
-  await pool.query(
-    "INSERT INTO webhook_endpoints(id,workspace_id,name,url) VALUES($1,$2,'crm','https://hooks.example.test/in')",
-    [endpoint, workspace],
-  );
-  await pool.query(
-    "INSERT INTO webhook_signing_keys(id,workspace_id,endpoint_id,slot,secret_encrypted) VALUES($1,$2,$3,1,$4)",
-    [
-      keyId,
-      workspace,
-      endpoint,
-      sealSecret(secret, env.TOKEN_ENCRYPTION_KEY!, signingKeyContext(workspace, endpoint, keyId)),
-    ],
-  );
+  await pool.query("INSERT INTO webhook_endpoints(id,workspace_id,name,url) VALUES($1,$2,'crm','https://hooks.example.test/in')", [endpoint, workspace]);
+  await pool.query("INSERT INTO webhook_signing_keys(id,workspace_id,endpoint_id,slot,secret_encrypted) VALUES($1,$2,$3,1,$4)", [keyId, workspace, endpoint, sealSecret(secret, env.TOKEN_ENCRYPTION_KEY!, signingKeyContext(workspace, endpoint, keyId))]);
   await pool.query(
     `INSERT INTO webhook_deliveries(event_id,workspace_id,endpoint_id,connection_id,flow_id,flow_run_id,node_id,sender_id,payload)
      VALUES($1,$2,$3,$4,$5,$6,'notify','sender-hook',$7)`,
-    [
-      eventId,
-      workspace,
-      endpoint,
-      connectionId,
-      flow,
-      run.rows[0]!.id,
-      JSON.stringify({ event_id: eventId, fields: {} }),
-    ],
+    [eventId, workspace, endpoint, connectionId, flow, run.rows[0]!.id, JSON.stringify({ event_id: eventId, fields: {} })],
   );
   return { eventId, keyId, secret };
 }
@@ -2759,12 +2273,7 @@ function mockWebhookFetch(answer: (init: RequestInit) => Response | Promise<Resp
     const target = new URL(String(input));
     if (target.hostname === "graph.instagram.com") return graphFetch(input, init);
     hosts.push(target.hostname);
-    if (target.hostname === "cloudflare-dns.com")
-      return Response.json(
-        target.searchParams.get("type") === "A"
-          ? { Status: 0, Answer: [{ name: "hooks.example.test", type: 1, data: "93.184.216.34" }] }
-          : { Status: 0 },
-      );
+    if (target.hostname === "cloudflare-dns.com") return Response.json(target.searchParams.get("type") === "A" ? { Status: 0, Answer: [{ name: "hooks.example.test", type: 1, data: "93.184.216.34" }] } : { Status: 0 });
     assert.equal(target.href, "https://hooks.example.test/in");
     return answer(init ?? {});
   });
@@ -2789,10 +2298,7 @@ test("the cron delivers a queued flow webhook after the message steps, and only 
   await worker.scheduled({}, env);
   assert.deepEqual(hosts, []);
   assert.equal((await pool.query("SELECT status FROM webhook_deliveries")).rows[0].status, "pending");
-  assert.equal(
-    (await pool.query("SELECT count(*) FROM scheduled_steps WHERE name='webhook_delivery'")).rows[0].count,
-    "0",
-  );
+  assert.equal((await pool.query("SELECT count(*) FROM scheduled_steps WHERE name='webhook_delivery'")).rows[0].count, "0");
 
   env.SEND_ENABLED = "true";
   await worker.scheduled({}, env);
@@ -2811,17 +2317,8 @@ test("the cron delivers a queued flow webhook after the message steps, and only 
       .update(`${timestamp!.slice(2)}.${String(received!.body)}`)
       .digest("hex")}`,
   );
-  assert.deepEqual((await pool.query("SELECT status,payload,last_status_code FROM webhook_deliveries")).rows, [
-    { status: "sent", payload: null, last_status_code: 200 },
-  ]);
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name='webhook_delivery'",
-      )
-    ).rows,
-    [{ failure_code: null, succeeded: true }],
-  );
+  assert.deepEqual((await pool.query("SELECT status,payload,last_status_code FROM webhook_deliveries")).rows, [{ status: "sent", payload: null, last_status_code: 200 }]);
+  assert.deepEqual((await pool.query("SELECT failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name='webhook_delivery'")).rows, [{ failure_code: null, succeeded: true }]);
   assert.equal(sends, 0);
   assert.deepEqual(logLines, []);
 });
@@ -2830,11 +2327,7 @@ test("campaign_start executes a due approval only while sending is on, and sends
   await longLivedToken();
   const workspace = "11111111-1111-4111-8111-111111111111";
   const user = "44444444-4444-4444-8444-444444444444";
-  const segment = (
-    await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'Audience') RETURNING id", [
-      workspace,
-    ])
-  ).rows[0].id;
+  const segment = (await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'Audience') RETURNING id", [workspace])).rows[0].id;
   const snapshot = (
     await pool.query(
       `INSERT INTO instagram_segment_snapshots(workspace_id,segment_id,created_by,as_of,definition,segment_name,counts,member_count)
@@ -2842,10 +2335,7 @@ test("campaign_start executes a due approval only while sending is on, and sends
       [workspace, segment, user],
     )
   ).rows[0].id;
-  await pool.query(
-    "INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,'sender-campaign')",
-    [snapshot, workspace, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,'sender-campaign')", [snapshot, workspace, connectionId]);
   const draft = (
     await pool.query(
       `INSERT INTO campaign_drafts(id,workspace_id,snapshot_id,name,body,create_request_hash,created_by,updated_by)
@@ -2864,17 +2354,13 @@ test("campaign_start executes a due approval only while sending is on, and sends
       [workspace, draft, snapshot, user],
     )
   ).rows[0].id;
-  const approvalStatus = async () =>
-    (await pool.query("SELECT status FROM campaign_approvals WHERE id=$1", [approval])).rows[0].status;
+  const approvalStatus = async () => (await pool.query("SELECT status FROM campaign_approvals WHERE id=$1", [approval])).rows[0].status;
 
   env.SEND_ENABLED = "false";
   await worker.scheduled({}, env);
   assert.equal(await approvalStatus(), "approved");
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM campaign_runs")).rows[0].n, 0);
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS n FROM scheduled_steps WHERE name='campaign_start'")).rows[0].n,
-    0,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM scheduled_steps WHERE name='campaign_start'")).rows[0].n, 0);
 
   env.SEND_ENABLED = "true";
   await worker.scheduled({}, env);
@@ -2886,14 +2372,7 @@ test("campaign_start executes a due approval only while sending is on, and sends
   assert.equal(runs[0].status, "completed");
   assert.equal(runs[0].start_counts.no_dm_identity, "1");
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM campaign_deliveries")).rows[0].n, 0);
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name='campaign_start'",
-      )
-    ).rows,
-    [{ failure_code: null, succeeded: true }],
-  );
+  assert.deepEqual((await pool.query("SELECT failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name='campaign_start'")).rows, [{ failure_code: null, succeeded: true }]);
   assert.equal(sends, 0);
   assert.deepEqual(logLines, []);
 });
@@ -2905,13 +2384,8 @@ async function campaignFixture(members: Array<[string, string]>) {
   const workspace = "11111111-1111-4111-8111-111111111111";
   // A new workspace starts on free, which sends no campaign (#52).
   await pool.query("UPDATE workspaces SET plan='advanced' WHERE id=$1", [workspace]);
-  await pool.query(
-    "UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=least(coalesce(inbox_enabled_at,now()),now()-interval '1 hour')",
-  );
-  await pool.query(
-    "INSERT INTO workspace_members(user_id,workspace_id,role) VALUES($1,$2,'admin') ON CONFLICT DO NOTHING",
-    [campaignApprover, workspace],
-  );
+  await pool.query("UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=least(coalesce(inbox_enabled_at,now()),now()-interval '1 hour')");
+  await pool.query("INSERT INTO workspace_members(user_id,workspace_id,role) VALUES($1,$2,'admin') ON CONFLICT DO NOTHING", [campaignApprover, workspace]);
   for (const [sender, recipient] of members) {
     const event = (
       await pool.query(
@@ -2946,12 +2420,7 @@ async function campaignFixture(members: Array<[string, string]>) {
       actorId: campaignApprover,
     });
   }
-  const segment = (
-    await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,$2) RETURNING id", [
-      workspace,
-      `Campaign ${crypto.randomUUID()}`,
-    ])
-  ).rows[0].id;
+  const segment = (await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,$2) RETURNING id", [workspace, `Campaign ${crypto.randomUUID()}`])).rows[0].id;
   const snapshot = (
     await pool.query(
       `INSERT INTO instagram_segment_snapshots(workspace_id,segment_id,created_by,as_of,definition,segment_name,counts,member_count)
@@ -2959,11 +2428,7 @@ async function campaignFixture(members: Array<[string, string]>) {
       [workspace, segment, campaignApprover, members.length],
     )
   ).rows[0].id;
-  for (const [sender] of members)
-    await pool.query(
-      "INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,$4)",
-      [snapshot, workspace, connectionId, sender],
-    );
+  for (const [sender] of members) await pool.query("INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,$4)", [snapshot, workspace, connectionId, sender]);
   const draft = (
     await pool.query(
       `INSERT INTO campaign_drafts(id,workspace_id,snapshot_id,name,body,create_request_hash,created_by,updated_by)
@@ -2984,19 +2449,11 @@ async function campaignFixture(members: Array<[string, string]>) {
   ).rows[0].id;
   await startDueCampaignRuns(pool);
   const run = (await pool.query("SELECT id FROM campaign_runs WHERE approval_id=$1", [approval])).rows[0].id as string;
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS n FROM campaign_deliveries WHERE run_id=$1", [run])).rows[0].n,
-    members.length,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM campaign_deliveries WHERE run_id=$1", [run])).rows[0].n, members.length);
   return run;
 }
 async function campaignRows(run: string) {
-  return (
-    await pool.query(
-      "SELECT sender_id,status,failure_code,provider_message_id FROM campaign_deliveries WHERE run_id=$1 ORDER BY sender_id",
-      [run],
-    )
-  ).rows;
+  return (await pool.query("SELECT sender_id,status,failure_code,provider_message_id FROM campaign_deliveries WHERE run_id=$1 ORDER BY sender_id", [run])).rows;
 }
 // The default Graph mock, also recording each POST's body.
 function recordPosts(): unknown[] {
@@ -3025,18 +2482,14 @@ test("a queue message sends a campaign row only when no automation of the connec
     { recipient: { comment_id: "comment-1" }, message: { text: "reply" } },
     { recipient: { id: "9101" }, message: { text: "Campaign hello" } },
   ]);
-  assert.deepEqual(await campaignRows(run), [
-    { sender_id: "campaign-sender", status: "sent", failure_code: null, provider_message_id: "message-1" },
-  ]);
+  assert.deepEqual(await campaignRows(run), [{ sender_id: "campaign-sender", status: "sent", failure_code: null, provider_message_id: "message-1" }]);
   assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [run])).rows[0].status, "completed");
   assert.equal(await consume(), "ack");
   assert.equal(posts.length, 3);
 });
 
 test("a pending follow confirmation DM is sent before a campaign row", async () => {
-  await pool.query(
-    "UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final link',non_follower_reply_text='Follow and confirm again'",
-  );
+  await pool.query("UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final link',non_follower_reply_text='Follow and confirm again'");
   const delivered: string[] = [];
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -3059,9 +2512,7 @@ test("a pending follow confirmation DM is sent before a campaign row", async () 
   assert.deepEqual(delivered, ["reply"]);
   await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 second'");
   const run = await campaignFixture([["campaign-sender", "9101"]]);
-  await ingestMessages(pool, [
-    { accountId: "123", senderId: "456", messageId: "campaign-confirm", text: "확인", timestamp: new Date() },
-  ]);
+  await ingestMessages(pool, [{ accountId: "123", senderId: "456", messageId: "campaign-confirm", text: "확인", timestamp: new Date() }]);
   assert.equal(await consume(), "ack");
   assert.deepEqual(delivered, ["reply", "Final link"]);
   assert.equal((await campaignRows(run))[0].status, "pending");
@@ -3104,9 +2555,7 @@ test("a connection at its campaign budget is neither claimed nor woken, while it
   assert.equal(sends, 2);
   assert.equal((await campaignRows(run))[0].status, "pending");
   // Once a call leaves the hour the cron wakes it and the queue sends it.
-  await pool.query(
-    "UPDATE campaign_deliveries SET provider_called_at=now()-interval '61 minutes' WHERE sender_id='budget-1'",
-  );
+  await pool.query("UPDATE campaign_deliveries SET provider_called_at=now()-interval '61 minutes' WHERE sender_id='budget-1'");
   await worker.scheduled({}, env);
   assert.deepEqual(published, [{ connectionId }]);
   assert.equal(await consume(), "ack");
@@ -3120,26 +2569,16 @@ test("a connection paused after the campaign guard and before the POST defers th
   let paused = 0;
   mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
     // graphFetch's own connection check, the last read before the POST; a rate limit elsewhere pauses it first.
-    if (
-      paused === 0 &&
-      typeof sql === "string" &&
-      sql.startsWith("SELECT 1 FROM instagram_connections WHERE id=$1 AND active AND send_enabled") &&
-      sql.includes("access_token_encrypted=$2")
-    ) {
+    if (paused === 0 && typeof sql === "string" && sql.startsWith("SELECT 1 FROM instagram_connections WHERE id=$1 AND active AND send_enabled") && sql.includes("access_token_encrypted=$2")) {
       paused++;
-      await Reflect.apply(originalQuery, this, [
-        "UPDATE instagram_connections SET send_paused_until=now()+interval '15 minutes' WHERE id=$1",
-        [connectionId],
-      ]);
+      await Reflect.apply(originalQuery, this, ["UPDATE instagram_connections SET send_paused_until=now()+interval '15 minutes' WHERE id=$1", [connectionId]]);
     }
     return Reflect.apply(originalQuery, this, [sql, values]);
   });
   assert.equal(await consume(), "ack");
   assert.equal(paused, 1);
   assert.equal(sends, 0);
-  assert.deepEqual(await campaignRows(run), [
-    { sender_id: "campaign-sender", status: "pending", failure_code: "connection_paused", provider_message_id: null },
-  ]);
+  assert.deepEqual(await campaignRows(run), [{ sender_id: "campaign-sender", status: "pending", failure_code: "connection_paused", provider_message_id: null }]);
   assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [run])).rows[0].status, "running");
 });
 
@@ -3151,9 +2590,7 @@ test("with sending off a campaign row is neither woken nor sent", async () => {
   assert.deepEqual(published, []);
   assert.equal(await consume(), "ack");
   assert.equal(sends, 0);
-  assert.deepEqual(await campaignRows(run), [
-    { sender_id: "campaign-sender", status: "pending", failure_code: null, provider_message_id: null },
-  ]);
+  assert.deepEqual(await campaignRows(run), [{ sender_id: "campaign-sender", status: "pending", failure_code: null, provider_message_id: null }]);
   env.SEND_ENABLED = "true";
   await worker.scheduled({}, env);
   assert.deepEqual(published, [{ connectionId }]);
@@ -3167,9 +2604,7 @@ test("the cron turns a stale sending campaign row unknown and completes its run 
     [run],
   );
   await worker.scheduled({}, env);
-  assert.deepEqual(await campaignRows(run), [
-    { sender_id: "campaign-sender", status: "unknown", failure_code: "worker_interrupted", provider_message_id: null },
-  ]);
+  assert.deepEqual(await campaignRows(run), [{ sender_id: "campaign-sender", status: "unknown", failure_code: "worker_interrupted", provider_message_id: null }]);
   assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [run])).rows[0].status, "completed");
   assert.equal(sends, 0);
 });
@@ -3181,27 +2616,13 @@ test("the cron ends a paused contact's campaign row whose window closed and comp
      VALUES('11111111-1111-4111-8111-111111111111',$1,'campaign-sender',true)`,
     [connectionId],
   );
-  await pool.query(
-    "UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours' WHERE recipient_id='9101'",
-  );
+  await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours' WHERE recipient_id='9101'");
   published = [];
   await worker.scheduled({}, env);
-  assert.deepEqual(await campaignRows(run), [
-    { sender_id: "campaign-sender", status: "blocked", failure_code: "reply_window_closed", provider_message_id: null },
-  ]);
-  assert.equal(
-    (await pool.query("SELECT attempt_id FROM campaign_deliveries WHERE run_id=$1", [run])).rows[0].attempt_id,
-    null,
-  );
+  assert.deepEqual(await campaignRows(run), [{ sender_id: "campaign-sender", status: "blocked", failure_code: "reply_window_closed", provider_message_id: null }]);
+  assert.equal((await pool.query("SELECT attempt_id FROM campaign_deliveries WHERE run_id=$1", [run])).rows[0].attempt_id, null);
   assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [run])).rows[0].status, "completed");
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT failure_code FROM scheduled_steps WHERE name='campaign_start' AND last_success_at IS NOT NULL",
-      )
-    ).rows,
-    [{ failure_code: null }],
-  );
+  assert.deepEqual((await pool.query("SELECT failure_code FROM scheduled_steps WHERE name='campaign_start' AND last_success_at IS NOT NULL")).rows, [{ failure_code: null }]);
   assert.equal(sends, 0);
   assert.deepEqual(published, []);
 });
@@ -3215,9 +2636,7 @@ test("a failed campaign start still runs the sweep and the completion, and the c
      VALUES('11111111-1111-4111-8111-111111111111',$1,'campaign-sender',true)`,
     [connectionId],
   );
-  await pool.query(
-    "UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours' WHERE recipient_id='9101'",
-  );
+  await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours' WHERE recipient_id='9101'");
   const originalQuery = Pool.prototype.query;
   let startQueries = 0;
   mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
@@ -3231,19 +2650,9 @@ test("a failed campaign start still runs the sweep and the completion, and the c
   published = [];
   await assert.rejects(worker.scheduled({}, env), /scheduled recovery failed/);
   assert.equal(startQueries, 1);
-  assert.deepEqual(await campaignRows(swept), [
-    { sender_id: "campaign-sender", status: "blocked", failure_code: "reply_window_closed", provider_message_id: null },
-  ]);
-  for (const run of [swept, empty])
-    assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [run])).rows[0].status, "completed");
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT failure_code,last_failure_at IS NOT NULL AS failed FROM scheduled_steps WHERE name='campaign_start'",
-      )
-    ).rows,
-    [{ failure_code: "database_unavailable", failed: true }],
-  );
+  assert.deepEqual(await campaignRows(swept), [{ sender_id: "campaign-sender", status: "blocked", failure_code: "reply_window_closed", provider_message_id: null }]);
+  for (const run of [swept, empty]) assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [run])).rows[0].status, "completed");
+  assert.deepEqual((await pool.query("SELECT failure_code,last_failure_at IS NOT NULL AS failed FROM scheduled_steps WHERE name='campaign_start'")).rows, [{ failure_code: "database_unavailable", failed: true }]);
   assert.deepEqual(
     logLines.filter((line) => line.event === "cron_step_failed").map(({ correlation_id, ...line }) => line),
     [{ event: "cron_step_failed", code: "database_unavailable", step: "campaign_start" }],
@@ -3266,9 +2675,7 @@ test("when the campaign start and the sweep both fail, the sweep's failure gets 
      VALUES('11111111-1111-4111-8111-111111111111',$1,'campaign-sender',true)`,
     [connectionId],
   );
-  await pool.query(
-    "UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours' WHERE recipient_id='9101'",
-  );
+  await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours' WHERE recipient_id='9101'");
   const originalQuery = Pool.prototype.query;
   let startQueries = 0;
   let sweepQueries = 0;
@@ -3279,10 +2686,7 @@ test("when the campaign start and the sweep both fail, the sweep's failure gets 
       throw Object.assign(new Error("terminating connection due to administrator command"), { code: "57P01" });
     }
     // endUnreachableCampaignDeliveries' statement, the second part, fails with a different code.
-    if (
-      typeof sql === "string" &&
-      sql.includes("UPDATE campaign_deliveries d SET status='blocked',failure_code=ended.code")
-    ) {
+    if (typeof sql === "string" && sql.includes("UPDATE campaign_deliveries d SET status='blocked',failure_code=ended.code")) {
       sweepQueries++;
       throw Object.assign(new Error("duplicate key value (secret text)"), { code: "23505" });
     }
@@ -3293,19 +2697,10 @@ test("when the campaign start and the sweep both fail, the sweep's failure gets 
   assert.equal(startQueries, 1);
   assert.equal(sweepQueries, 1);
   // The sweep ended nothing, so its run keeps a pending row; the completion still completed the empty run.
-  assert.deepEqual(await campaignRows(swept), [
-    { sender_id: "campaign-sender", status: "pending", failure_code: null, provider_message_id: null },
-  ]);
+  assert.deepEqual(await campaignRows(swept), [{ sender_id: "campaign-sender", status: "pending", failure_code: null, provider_message_id: null }]);
   assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [swept])).rows[0].status, "running");
   assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [empty])).rows[0].status, "completed");
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT failure_code,last_failure_at IS NOT NULL AS failed FROM scheduled_steps WHERE name='campaign_start'",
-      )
-    ).rows,
-    [{ failure_code: "database_unavailable", failed: true }],
-  );
+  assert.deepEqual((await pool.query("SELECT failure_code,last_failure_at IS NOT NULL AS failed FROM scheduled_steps WHERE name='campaign_start'")).rows, [{ failure_code: "database_unavailable", failed: true }]);
   const stepFailures = logLines.filter((line) => line.event === "cron_step_failed");
   const partFailures = logLines.filter((line) => line.event === "cron_step_part_failed");
   assert.deepEqual(
@@ -3331,11 +2726,7 @@ test("token refresh, the subscription check and webhook delivery share one subre
     await pool.query(
       `INSERT INTO instagram_connections(id,workspace_id,account_id,active,access_token_encrypted,token_expires_at,token_obtained_at)
        VALUES($1,'11111111-1111-4111-8111-111111111111',$2,true,$3,now()+interval '20 days',now()-interval '2 days')`,
-      [
-        crypto.randomUUID(),
-        account,
-        sealSecret(`token-${account}`, env.TOKEN_ENCRYPTION_KEY!, `11111111-1111-4111-8111-111111111111:${account}`),
-      ],
+      [crypto.randomUUID(), account, sealSecret(`token-${account}`, env.TOKEN_ENCRYPTION_KEY!, `11111111-1111-4111-8111-111111111111:${account}`)],
     );
   }
   await queuedWebhook();
@@ -3349,51 +2740,24 @@ test("token refresh, the subscription check and webhook delivery share one subre
   mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
     calls++;
     const target = new URL(String(input));
-    if (target.pathname === "/refresh_access_token")
-      return Response.json({ access_token: target.searchParams.get("access_token"), expires_in: 5_184_000 });
+    if (target.pathname === "/refresh_access_token") return Response.json({ access_token: target.searchParams.get("access_token"), expires_in: 5_184_000 });
     if (target.hostname === "graph.instagram.com")
       return Response.json({
         user_id: new Headers(init?.headers).get("authorization")!.replace("Bearer token-", ""),
       });
-    if (target.hostname === "cloudflare-dns.com")
-      return Response.json(
-        target.searchParams.get("type") === "A"
-          ? { Status: 0, Answer: [{ name: "hooks.example.test", type: 1, data: "93.184.216.34" }] }
-          : { Status: 0 },
-      );
+    if (target.hostname === "cloudflare-dns.com") return Response.json(target.searchParams.get("type") === "A" ? { Status: 0, Answer: [{ name: "hooks.example.test", type: 1, data: "93.184.216.34" }] } : { Status: 0 });
     return new Response("ok");
   });
   await worker.scheduled({}, env);
   // 20 refresh calls and two subscription checks of two calls leave 21 of the 45: seven attempts of three
   // subrequests, and no claim for the eighth.
   assert.equal(calls, 20 + 2 * 2 + 7 * 3);
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT status,attempt_count,count(*)::int AS count FROM webhook_deliveries GROUP BY status,attempt_count ORDER BY status",
-      )
-    ).rows,
-    [
-      { status: "pending", attempt_count: 0, count: 3 },
-      { status: "sent", attempt_count: 1, count: 7 },
-    ],
-  );
-  assert.equal(
-    (
-      await pool.query(
-        "SELECT count(*)::int AS count FROM instagram_connections WHERE account_id LIKE 'refresh-%' AND subscription_check_attempted_at IS NOT NULL",
-      )
-    ).rows[0].count,
-    2,
-  );
-  assert.equal(
-    (
-      await pool.query(
-        "SELECT count(*)::int AS count FROM instagram_connections WHERE account_id LIKE 'refresh-%' AND token_obtained_at>now()-interval '1 minute'",
-      )
-    ).rows[0].count,
-    10,
-  );
+  assert.deepEqual((await pool.query("SELECT status,attempt_count,count(*)::int AS count FROM webhook_deliveries GROUP BY status,attempt_count ORDER BY status")).rows, [
+    { status: "pending", attempt_count: 0, count: 3 },
+    { status: "sent", attempt_count: 1, count: 7 },
+  ]);
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_connections WHERE account_id LIKE 'refresh-%' AND subscription_check_attempted_at IS NOT NULL")).rows[0].count, 2);
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_connections WHERE account_id LIKE 'refresh-%' AND token_obtained_at>now()-interval '1 minute'")).rows[0].count, 10);
 });
 
 test("a failing webhook endpoint or delivery step neither stops nor fails the message steps", async () => {
@@ -3408,9 +2772,7 @@ test("a failing webhook endpoint or delivery step neither stops nor fails the me
   // An endpoint failure is a delivery outcome, not a step failure: the run succeeds and the reply is woken.
   await worker.scheduled({}, env);
   assert.deepEqual(published, [{ connectionId }]);
-  assert.deepEqual((await pool.query("SELECT status,failure_code,attempt_count FROM webhook_deliveries")).rows, [
-    { status: "retry", failure_code: "request_failed", attempt_count: 1 },
-  ]);
+  assert.deepEqual((await pool.query("SELECT status,failure_code,attempt_count FROM webhook_deliveries")).rows, [{ status: "retry", failure_code: "request_failed", attempt_count: 1 }]);
   assert.deepEqual(
     logLines.map(({ correlation_id, ...line }) => line),
     [{ event: "webhook_delivery_failed", code: "request_failed", connection_id: connectionId }],
@@ -3423,8 +2785,7 @@ test("a failing webhook endpoint or delivery step neither stops nor fails the me
   await pool.query("UPDATE webhook_deliveries SET next_attempt_at=now()-interval '1 second'");
   const originalQuery = Pool.prototype.query;
   mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
-    if (typeof sql === "string" && sql.includes("UPDATE webhook_deliveries"))
-      throw Object.assign(new Error("deliveries for https://hooks.example.test/in"), { code: "42P01" });
+    if (typeof sql === "string" && sql.includes("UPDATE webhook_deliveries")) throw Object.assign(new Error("deliveries for https://hooks.example.test/in"), { code: "42P01" });
     return Reflect.apply(originalQuery, this, [sql, values]);
   });
   await assert.rejects(worker.scheduled({}, env), /^Error: Cloudflare scheduled recovery failed$/);
@@ -3433,17 +2794,10 @@ test("a failing webhook endpoint or delivery step neither stops nor fails the me
     logLines.map(({ correlation_id, ...line }) => line),
     [{ event: "cron_step_failed", code: "database_error", step: "webhook_delivery" }],
   );
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT name,failure_code,last_success_at>last_failure_at AS recovered FROM scheduled_steps WHERE name IN ('wake','webhook_delivery') ORDER BY name",
-      )
-    ).rows,
-    [
-      { name: "wake", failure_code: null, recovered: null },
-      { name: "webhook_delivery", failure_code: "database_error", recovered: false },
-    ],
-  );
+  assert.deepEqual((await pool.query("SELECT name,failure_code,last_success_at>last_failure_at AS recovered FROM scheduled_steps WHERE name IN ('wake','webhook_delivery') ORDER BY name")).rows, [
+    { name: "wake", failure_code: null, recovered: null },
+    { name: "webhook_delivery", failure_code: "database_error", recovered: false },
+  ]);
   assert.equal(await consume(), "ack");
   assert.equal((await rows())[0].status, "sent");
 });
@@ -3451,11 +2805,7 @@ test("a failing webhook endpoint or delivery step neither stops nor fails the me
 // A published, enabled DM default-reply flow on the fixture connection (#33).
 async function dmDefaultFlow() {
   const workspace = "11111111-1111-4111-8111-111111111111";
-  const flow = (
-    await pool.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'DM default','{}') RETURNING id", [
-      workspace,
-    ])
-  ).rows[0].id;
+  const flow = (await pool.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'DM default','{}') RETURNING id", [workspace])).rows[0].id;
   const definition = {
     schema_version: 1,
     nodes: [
@@ -3497,8 +2847,7 @@ function dmRequest(mid = "dm-start-1"): Request {
     headers: { "x-hub-signature-256": "sha256=" + createHmac("sha256", "test-secret").update(body).digest("hex") },
   });
 }
-const dmDeliveries = async () =>
-  (await pool.query("SELECT recipient_id,message_text,status,failure_code FROM flow_dm_deliveries")).rows;
+const dmDeliveries = async () => (await pool.query("SELECT recipient_id,message_text,status,failure_code FROM flow_dm_deliveries")).rows;
 // The default Graph mock that also records each POST body.
 function recordGraphPosts(): unknown[] {
   const posts: unknown[] = [];
@@ -3528,9 +2877,7 @@ test("a webhook DM starts a DM trigger flow, and the wake, the cron and the queu
   const posts = recordGraphPosts();
   assert.equal((await worker.fetch(dmRequest(), env)).status, 200);
   assert.equal((await worker.fetch(dmRequest(), env)).status, 200);
-  assert.deepEqual(await dmDeliveries(), [
-    { recipient_id: "456", message_text: "Thanks, we will reply soon", status: "pending", failure_code: null },
-  ]);
+  assert.deepEqual(await dmDeliveries(), [{ recipient_id: "456", message_text: "Thanks, we will reply soon", status: "pending", failure_code: null }]);
   // The webhook wakes the connection, and so does the cron while the row is due: it has no other work.
   assert.deepEqual(published, [{ connectionId }, { connectionId }]);
   published = [];
@@ -3539,9 +2886,7 @@ test("a webhook DM starts a DM trigger flow, and the wake, the cron and the queu
   assert.equal(sends, 0);
   assert.equal(await consume(), "ack");
   assert.deepEqual(posts, [{ recipient: { id: "456" }, message: { text: "Thanks, we will reply soon" } }]);
-  assert.deepEqual(await dmDeliveries(), [
-    { recipient_id: "456", message_text: "Thanks, we will reply soon", status: "sent", failure_code: null },
-  ]);
+  assert.deepEqual(await dmDeliveries(), [{ recipient_id: "456", message_text: "Thanks, we will reply soon", status: "sent", failure_code: null }]);
   // Nothing is left: a later queue message and cron run send nothing.
   published = [];
   assert.equal(await consume(), "ack");
@@ -3584,9 +2929,7 @@ test("with sending off a webhook DM wakes nothing and neither the cron nor the q
   await worker.scheduled({}, env);
   assert.equal(await consume(), "ack");
   assert.equal(await consume({ connectionId }), "ack");
-  assert.deepEqual(await dmDeliveries(), [
-    { recipient_id: "456", message_text: "Thanks, we will reply soon", status: "pending", failure_code: null },
-  ]);
+  assert.deepEqual(await dmDeliveries(), [{ recipient_id: "456", message_text: "Thanks, we will reply soon", status: "pending", failure_code: null }]);
   assert.deepEqual(published, []);
   assert.equal(sends, 0);
   assert.deepEqual(await rows(), []);

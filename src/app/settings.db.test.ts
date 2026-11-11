@@ -3,23 +3,9 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
-import {
-  disconnectConnection,
-  ensureWorkspace,
-  listConnections,
-  listRules,
-  saveRule,
-  updateConnection,
-} from "./settings.ts";
+import { disconnectConnection, ensureWorkspace, listConnections, listRules, saveRule, updateConnection } from "./settings.ts";
 import { ApiError } from "./auth.ts";
-import {
-  archiveContactSegment,
-  createContactSegment,
-  listContactSegments,
-  listContacts,
-  saveContactTags,
-  updateContactSegment,
-} from "./contacts.ts";
+import { archiveContactSegment, createContactSegment, listContactSegments, listContacts, saveContactTags, updateContactSegment } from "./contacts.ts";
 import { connectionMedia } from "./instagram-media.ts";
 import { connectionHealth } from "./instagram-connection-health.ts";
 import { sealSecret } from "./secrets.ts";
@@ -29,8 +15,7 @@ import { parseMessageEvents } from "../instagram/message-events.ts";
 import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 
 const url = new URL(process.env.TEST_DATABASE_URL ?? "http://invalid");
-if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: url.toString() });
 const a = { id: "11111111-1111-4111-8111-111111111111", email: "a@example.test" };
 const b = { id: "22222222-2222-4222-8222-222222222222", email: "b@example.test" };
@@ -47,10 +32,7 @@ const input = {
 };
 
 async function identityInbox(recipient = "456", connection = connectionId, account = "123") {
-  await pool.query(
-    "UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now()-interval '1 hour' WHERE id=$1",
-    [connection],
-  );
+  await pool.query("UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now()-interval '1 hour' WHERE id=$1", [connection]);
   await ingestMessages(pool, [
     {
       accountId: account,
@@ -62,11 +44,7 @@ async function identityInbox(recipient = "456", connection = connectionId, accou
   ]);
 }
 
-async function identityReply(
-  sender: string,
-  media: string,
-  options: { recipient?: string; status?: string; connection?: string; account?: string; user?: typeof a } = {},
-) {
+async function identityReply(sender: string, media: string, options: { recipient?: string; status?: string; connection?: string; account?: string; user?: typeof a } = {}) {
   const connection = options.connection ?? connectionId;
   await saveRule(pool, options.user ?? a, { ...input, connection_id: connection, media_id: media });
   const { ingestComments } = await import("../instagram/store.ts");
@@ -88,8 +66,7 @@ async function identityReply(
   return result.rows[0].id as string;
 }
 
-const identityPath = (recipient = "456", connection = connectionId) =>
-  `/api/connections/${connection}/inbox/${recipient}/context`;
+const identityPath = (recipient = "456", connection = connectionId) => `/api/connections/${connection}/inbox/${recipient}/context`;
 
 test("inbox context derives a comment identity only from a successful provider bridge", async () => {
   await identityInbox();
@@ -109,10 +86,7 @@ test("inbox context derives a comment identity only from a successful provider b
 test("inbox context never equates equal numeric comment and DM identities", async () => {
   await identityInbox();
   const workspace = await ensureWorkspace(pool, a);
-  await pool.query(
-    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'same-numeric-id','12345','456','private comment')",
-    [workspace, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'same-numeric-id','12345','456','private comment')", [workspace, connectionId]);
   const response = await fieldRequest("GET", identityPath());
   assert.equal(response.status, 200);
   const context = await response.json();
@@ -127,9 +101,7 @@ test("inbox context distinguishes old evidence and refuses conflicting senders",
   await identityReply("888", "12345");
   await pool.query("UPDATE instagram_connections SET inbox_enabled_at=NULL WHERE id=$1", [connectionId]);
   assert.equal((await (await fieldRequest("GET", identityPath())).json()).mapping_status, "stale");
-  await pool.query("UPDATE instagram_connections SET inbox_enabled_at=now()-interval '5 minutes' WHERE id=$1", [
-    connectionId,
-  ]);
+  await pool.query("UPDATE instagram_connections SET inbox_enabled_at=now()-interval '5 minutes' WHERE id=$1", [connectionId]);
   const stale = await fieldRequest("GET", identityPath());
   assert.equal(stale.status, 200);
   assert.equal((await stale.json()).mapping_status, "stale");
@@ -154,17 +126,13 @@ test("inbox context deduplicates evidence and reads current pause without changi
   const context = await (await fieldRequest("GET", identityPath())).json();
   assert.equal(context.mapping_status, "verified");
   assert.equal(context.automation_paused, true);
-  assert.equal(
-    (await pool.query("SELECT paused FROM instagram_contact_automation WHERE sender_id='888'")).rows[0].paused,
-    true,
-  );
+  assert.equal((await pool.query("SELECT paused FROM instagram_contact_automation WHERE sender_id='888'")).rows[0].paused, true);
   assert.equal((await pool.query("SELECT count(*) FROM private_reply_outbox")).rows[0].count, "2");
 });
 
 test("inbox context rejects failed unknown future and mismatched original identities as evidence", async () => {
   await identityInbox();
-  for (const [index, status] of ["pending", "failed", "unknown"].entries())
-    await identityReply(`8${index}`, `1234${index}`, { status });
+  for (const [index, status] of ["pending", "failed", "unknown"].entries()) await identityReply(`8${index}`, `1234${index}`, { status });
   const future = await identityReply("900", "90000");
   await pool.query("UPDATE private_reply_outbox SET sent_at=now()+interval '1 hour' WHERE id=$1", [future]);
   const mismatch = await identityReply("901", "90001");
@@ -181,17 +149,12 @@ test("inbox context rejects failed unknown future and mismatched original identi
 test("inbox context accepts provider identity when inbound arrives before local send completion", async () => {
   await identityInbox();
   const evidence = await identityReply("903", "90003");
-  await pool.query(
-    "UPDATE instagram_inbox_messages SET message_at=date_trunc('milliseconds',now()-interval '2 minutes')",
-  );
+  await pool.query("UPDATE instagram_inbox_messages SET message_at=date_trunc('milliseconds',now()-interval '2 minutes')");
   await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 minute' WHERE id=$1", [evidence]);
   const context = await (await fieldRequest("GET", identityPath())).json();
   assert.equal(context.mapping_status, "verified");
   assert.equal(context.evidence_reply_id, evidence);
-  await pool.query(
-    `UPDATE private_reply_outbox SET sent_at=(SELECT message_at+interval '500 microseconds' FROM instagram_inbox_messages LIMIT 1) WHERE id=$1`,
-    [evidence],
-  );
+  await pool.query(`UPDATE private_reply_outbox SET sent_at=(SELECT message_at+interval '500 microseconds' FROM instagram_inbox_messages LIMIT 1) WHERE id=$1`, [evidence]);
   assert.equal((await (await fieldRequest("GET", identityPath())).json()).mapping_status, "verified");
 });
 
@@ -199,10 +162,7 @@ test("inbox context scopes identical recipients by account and workspace", async
   await identityInbox();
   const other = "44444444-4444-4444-8444-444444444444";
   const workspace = await ensureWorkspace(pool, a);
-  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'999',true)", [
-    other,
-    workspace,
-  ]);
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'999',true)", [other, workspace]);
   await identityInbox("456", other, "999");
   await identityReply("777", "54321", { connection: other, account: "999" });
   const response = await fieldRequest("GET", identityPath());
@@ -234,8 +194,7 @@ test("inbox opt-in gates body storage and owns settings and readers", async () =
   await ingestMessages(pool, [message]);
   assert.equal((await fieldRequest("GET", "/api/inbox")).status, 200);
   assert.deepEqual((await (await fieldRequest("GET", "/api/inbox")).json()).conversations, []);
-  for (const body of [{ enabled: "true" }, {}, { enabled: true, extra: true }])
-    assert.equal((await fieldRequest("PUT", path, body)).status, 400);
+  for (const body of [{ enabled: "true" }, {}, { enabled: true, extra: true }]) assert.equal((await fieldRequest("PUT", path, body)).status, 400);
   assert.equal((await fieldRequest("PUT", path, { enabled: true }, b)).status, 404);
   assert.equal((await fieldRequest("PUT", path, { enabled: true })).status, 200);
   await ingestMessages(pool, [message]); // occurred before activation
@@ -269,15 +228,9 @@ test("inbox pagination preserves arrivals and settings activation cutoff", async
   await pool.query(migration);
   const path = `/api/connections/${connectionId}/inbox`;
   await fieldRequest("PUT", path, { enabled: true });
-  const cutoff = (await pool.query("SELECT inbox_enabled_at FROM instagram_connections WHERE id=$1", [connectionId]))
-    .rows[0].inbox_enabled_at;
+  const cutoff = (await pool.query("SELECT inbox_enabled_at FROM instagram_connections WHERE id=$1", [connectionId])).rows[0].inbox_enabled_at;
   await fieldRequest("PUT", path, { enabled: true });
-  assert.equal(
-    (
-      await pool.query("SELECT inbox_enabled_at FROM instagram_connections WHERE id=$1", [connectionId])
-    ).rows[0].inbox_enabled_at.getTime(),
-    cutoff.getTime(),
-  );
+  assert.equal((await pool.query("SELECT inbox_enabled_at FROM instagram_connections WHERE id=$1", [connectionId])).rows[0].inbox_enabled_at.getTime(), cutoff.getTime());
   const timestamp = new Date(Date.now() + 1000);
   const messages = Array.from({ length: 55 }, (_, i) => ({
     accountId: "123",
@@ -305,10 +258,7 @@ test("inbox pagination preserves arrivals and settings activation cutoff", async
   assert.equal(new Set([...page.conversations, ...next.conversations].map((row) => row.recipient_id)).size, 56);
   await pool.query("UPDATE instagram_connections SET active=false WHERE id=$1", [connectionId]);
   await ingestMessages(pool, [{ ...messages[0]!, messageId: "stopped" }]);
-  assert.equal(
-    (await pool.query("SELECT count(*) FROM instagram_inbox_messages WHERE message_id='stopped'")).rows[0].count,
-    "0",
-  );
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_inbox_messages WHERE message_id='stopped'")).rows[0].count, "0");
 });
 
 test("inbox stores parsed postbacks without inventing confirmation eligibility", async () => {
@@ -339,10 +289,7 @@ test("inbox stores parsed postbacks without inventing confirmation eligibility",
 });
 
 test("resuming receiving excludes delayed messages from the stopped interval and keeps stored history", async () => {
-  await pool.query(
-    "UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now()-interval '2 hours' WHERE id=$1",
-    [connectionId],
-  );
+  await pool.query("UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now()-interval '2 hours' WHERE id=$1", [connectionId]);
   const message = {
     accountId: "123",
     senderId: "456",
@@ -355,30 +302,20 @@ test("resuming receiving excludes delayed messages from the stopped interval and
   const stoppedAt = (await pool.query("SELECT clock_timestamp() AS stopped_at")).rows[0].stopped_at;
   await pool.query("SELECT pg_sleep(0.02)");
   await updateConnection(pool, a, connectionId, { active: true, send_enabled: false });
-  const cutoff = (await pool.query("SELECT inbox_enabled_at FROM instagram_connections WHERE id=$1", [connectionId]))
-    .rows[0].inbox_enabled_at;
+  const cutoff = (await pool.query("SELECT inbox_enabled_at FROM instagram_connections WHERE id=$1", [connectionId])).rows[0].inbox_enabled_at;
   assert.ok(cutoff.getTime() > stoppedAt.getTime(), "resume advances the opt-in cutoff");
   await ingestMessages(pool, [
     { ...message, messageId: "delayed-stopped", timestamp: stoppedAt },
     { ...message, messageId: "after-resume", timestamp: new Date(cutoff.getTime() + 1000) },
   ]);
-  const history = (await pool.query("SELECT message_id FROM instagram_inbox_messages ORDER BY id")).rows.map(
-    (row) => row.message_id,
-  );
+  const history = (await pool.query("SELECT message_id FROM instagram_inbox_messages ORDER BY id")).rows.map((row) => row.message_id);
   assert.deepEqual(history, ["before-stop", "after-resume"]);
   await updateConnection(pool, a, connectionId, { active: true, send_enabled: true });
-  assert.equal(
-    (
-      await pool.query("SELECT inbox_enabled_at FROM instagram_connections WHERE id=$1", [connectionId])
-    ).rows[0].inbox_enabled_at.getTime(),
-    cutoff.getTime(),
-  );
+  assert.equal((await pool.query("SELECT inbox_enabled_at FROM instagram_connections WHERE id=$1", [connectionId])).rows[0].inbox_enabled_at.getTime(), cutoff.getTime());
 });
 
-const handoffPath = (recipient = "456", connection = connectionId) =>
-  `/api/connections/${connection}/inbox/${recipient}/handoff`;
-const setHandoff = (active: boolean, expected_version: number, recipient = "456") =>
-  fieldRequest("PUT", handoffPath(recipient), { active, expected_version });
+const handoffPath = (recipient = "456", connection = connectionId) => `/api/connections/${connection}/inbox/${recipient}/handoff`;
+const setHandoff = (active: boolean, expected_version: number, recipient = "456") => fieldRequest("PUT", handoffPath(recipient), { active, expected_version });
 
 async function readyHandoff() {
   await identityInbox();
@@ -424,19 +361,12 @@ test("handoff refuses unverified identity foreign sessions and invalid request v
   await identityReply("888", "12345");
   await pool.query("UPDATE instagram_connections SET inbox_enabled_at=now() WHERE id=$1", [connectionId]);
   assert.equal((await setHandoff(true, 0)).status, 409);
-  await pool.query("UPDATE instagram_connections SET inbox_enabled_at=now()-interval '1 hour' WHERE id=$1", [
-    connectionId,
-  ]);
+  await pool.query("UPDATE instagram_connections SET inbox_enabled_at=now()-interval '1 hour' WHERE id=$1", [connectionId]);
   await identityReply("999", "54321");
   assert.equal((await setHandoff(true, 0)).status, 409);
   assert.equal((await fieldRequest("GET", handoffPath(), undefined, b)).status, 404);
   assert.equal((await fieldRequest("PUT", handoffPath(), { active: true, expected_version: 0 }, b)).status, 404);
-  for (const body of [
-    { active: true },
-    { active: true, expected_version: -1 },
-    { active: true, expected_version: 0, extra: true },
-  ])
-    assert.equal((await fieldRequest("PUT", handoffPath(), body)).status, 400);
+  for (const body of [{ active: true }, { active: true, expected_version: -1 }, { active: true, expected_version: 0, extra: true }]) assert.equal((await fieldRequest("PUT", handoffPath(), body)).status, 400);
   assert.equal((await fieldRequest("GET", `${handoffPath()}?extra=1`)).status, 400);
 });
 
@@ -476,32 +406,22 @@ test("handoff serializes duplicate starts and rejects stale opposite transitions
 });
 
 test("handoff migration replays with active state and resume survives deleted DM history", async () => {
-  await pool.query(
-    "DROP TABLE instagram_manual_reply_events,instagram_manual_replies,instagram_inbox_handoff_events,instagram_inbox_handoffs; DROP INDEX private_reply_outbox_identity_idx; ALTER TABLE instagram_contact_automation DROP COLUMN handoff_paused",
-  );
+  await pool.query("DROP TABLE instagram_manual_reply_events,instagram_manual_replies,instagram_inbox_handoff_events,instagram_inbox_handoffs; DROP INDEX private_reply_outbox_identity_idx; ALTER TABLE instagram_contact_automation DROP COLUMN handoff_paused");
   const migration = await readFile(new URL("../../db/migrations/013_inbox_handoffs.sql", import.meta.url), "utf8");
   await pool.query(migration);
   await pool.query(await readFile(new URL("../../db/migrations/014_manual_replies.sql", import.meta.url), "utf8"));
-  await pool.query(
-    await readFile(new URL("../../db/migrations/049_inbox_scheduled_replies.sql", import.meta.url), "utf8"),
-  );
+  await pool.query(await readFile(new URL("../../db/migrations/049_inbox_scheduled_replies.sql", import.meta.url), "utf8"));
   await readyHandoff();
   assert.equal((await setHandoff(true, 0)).status, 200);
   await pool.query(migration);
   await pool.query(migration);
   assert.deepEqual(await (await fieldRequest("GET", handoffPath())).json(), { active: true, version: 1 });
-  assert.equal(
-    (await pool.query("SELECT handoff_paused FROM instagram_contact_automation")).rows[0].handoff_paused,
-    true,
-  );
+  assert.equal((await pool.query("SELECT handoff_paused FROM instagram_contact_automation")).rows[0].handoff_paused, true);
   await pool.query("DELETE FROM instagram_inbox_messages");
   assert.equal((await fieldRequest("GET", identityPath())).status, 404);
   assert.equal((await setHandoff(false, 1)).status, 200);
   assert.deepEqual(await (await fieldRequest("GET", handoffPath())).json(), { active: false, version: 2 });
-  assert.equal(
-    (await pool.query("SELECT handoff_paused FROM instagram_contact_automation")).rows[0].handoff_paused,
-    false,
-  );
+  assert.equal((await pool.query("SELECT handoff_paused FROM instagram_contact_automation")).rows[0].handoff_paused, false);
 });
 
 test("handoff audit failure rolls back state and contact pause together", async () => {
@@ -514,19 +434,14 @@ test("handoff audit failure rolls back state and contact pause together", async 
     assert.equal((await pool.query("SELECT count(*) FROM instagram_contact_automation")).rows[0].count, "0");
     assert.equal((await pool.query("SELECT count(*) FROM instagram_inbox_handoff_events")).rows[0].count, "0");
   } finally {
-    await pool.query(
-      "DROP TRIGGER reject_handoff_audit ON instagram_inbox_handoff_events; DROP FUNCTION reject_handoff_audit()",
-    );
+    await pool.query("DROP TRIGGER reject_handoff_audit ON instagram_inbox_handoff_events; DROP FUNCTION reject_handoff_audit()");
   }
   assert.equal((await setHandoff(true, 0)).status, 200);
 });
 
 test("handoff restart captures changed evidence without clearing a concurrent manual pause", async () => {
   await readyHandoff();
-  const changes = await Promise.all([
-    setHandoff(true, 0),
-    fieldRequest("PUT", `/api/connections/${connectionId}/contacts/888/automation`, { paused: true }),
-  ]);
+  const changes = await Promise.all([setHandoff(true, 0), fieldRequest("PUT", `/api/connections/${connectionId}/contacts/888/automation`, { paused: true })]);
   assert.deepEqual(
     changes.map((response) => response.status),
     [200, 200],
@@ -535,18 +450,11 @@ test("handoff restart captures changed evidence without clearing a concurrent ma
   await pool.query("UPDATE private_reply_outbox SET status='failed'");
   const evidence = await identityReply("999", "54321");
   assert.equal((await setHandoff(true, 2)).status, 200);
-  assert.deepEqual(
-    (await pool.query("SELECT sender_id,paused,handoff_paused FROM instagram_contact_automation ORDER BY sender_id"))
-      .rows,
-    [
-      { sender_id: "888", paused: true, handoff_paused: false },
-      { sender_id: "999", paused: false, handoff_paused: true },
-    ],
-  );
-  assert.equal(
-    (await pool.query("SELECT evidence_reply_id::text FROM instagram_inbox_handoffs")).rows[0].evidence_reply_id,
-    evidence,
-  );
+  assert.deepEqual((await pool.query("SELECT sender_id,paused,handoff_paused FROM instagram_contact_automation ORDER BY sender_id")).rows, [
+    { sender_id: "888", paused: true, handoff_paused: false },
+    { sender_id: "999", paused: false, handoff_paused: true },
+  ]);
+  assert.equal((await pool.query("SELECT evidence_reply_id::text FROM instagram_inbox_handoffs")).rows[0].evidence_reply_id, evidence);
 });
 
 before(async () => {
@@ -559,23 +467,13 @@ beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
   const workspace = await ensureWorkspace(pool, a);
   await ensureWorkspace(pool, b);
-  await pool.query(
-    "INSERT INTO instagram_connections(id,workspace_id,account_id,active,access_token_encrypted,token_expires_at) VALUES($1,$2,'123',true,'encrypted-test',now()+interval '1 day')",
-    [connectionId, workspace],
-  );
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active,access_token_encrypted,token_expires_at) VALUES($1,$2,'123',true,'encrypted-test',now()+interval '1 day')", [connectionId, workspace]);
 });
 after(async () => {
   await pool.end();
 });
 
-async function fieldRequest(
-  method: string,
-  path: string,
-  body?: unknown,
-  user = a,
-  sendEnabled?: string,
-  notifyReply?: (connectionId: string) => Promise<void>,
-) {
+async function fieldRequest(method: string, path: string, body?: unknown, user = a, sendEnabled?: string, notifyReply?: (connectionId: string) => Promise<void>) {
   return appApi(
     new Request(`https://app.test${path}`, {
       method,
@@ -595,13 +493,9 @@ async function createField(name: string, type: string) {
 }
 async function fieldContact() {
   const workspace = await ensureWorkspace(pool, a);
-  await pool.query(
-    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'field-comment','media','sender','private')",
-    [workspace, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'field-comment','media','sender','private')", [workspace, connectionId]);
 }
-const fieldValuePath = (id: string, sender = "sender", connection = connectionId) =>
-  `/api/connections/${connection}/contacts/${encodeURIComponent(sender)}/fields/${id}`;
+const fieldValuePath = (id: string, sender = "sender", connection = connectionId) => `/api/connections/${connection}/contacts/${encodeURIComponent(sender)}/fields/${id}`;
 
 test("custom fields persist typed zero false and empty text separately from unset", async () => {
   await fieldContact();
@@ -618,18 +512,10 @@ test("custom fields persist typed zero false and empty text separately from unse
     assert.equal((await listContacts(pool, a)).contacts[0]!.fields[field.id], value);
     const query = new URLSearchParams({ field_id: field.id, field_operator: "eq", field_value: JSON.stringify(value) });
     assert.equal((await listContacts(pool, a, query)).contacts.length, 1);
-    assert.equal(
-      (await listContacts(pool, a, new URLSearchParams({ field_id: field.id, field_operator: "is_set" }))).contacts
-        .length,
-      1,
-    );
+    assert.equal((await listContacts(pool, a, new URLSearchParams({ field_id: field.id, field_operator: "is_set" }))).contacts.length, 1);
     assert.equal((await fieldRequest("PUT", fieldValuePath(field.id), { value: null })).status, 200);
     assert.equal((await listContacts(pool, a, query)).contacts.length, 0);
-    assert.equal(
-      (await listContacts(pool, a, new URLSearchParams({ field_id: field.id, field_operator: "is_unset" }))).contacts
-        .length,
-      1,
-    );
+    assert.equal((await listContacts(pool, a, new URLSearchParams({ field_id: field.id, field_operator: "is_unset" }))).contacts.length, 1);
     assert.equal(Object.hasOwn((await listContacts(pool, a)).contacts[0]!.fields, field.id), false);
   }
 });
@@ -671,14 +557,8 @@ test("field values and saved conditions remain account scoped and current", asyn
   await fieldContact();
   const workspace = await ensureWorkspace(pool, a);
   const other = "77777777-7777-4777-8777-777777777777";
-  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'other')", [
-    other,
-    workspace,
-  ]);
-  await pool.query(
-    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'other-field-comment','media','sender','private')",
-    [workspace, other],
-  );
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'other')", [other, workspace]);
+  await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'other-field-comment','media','sender','private')", [workspace, other]);
   const field = await createField("Interest", "text");
   await fieldRequest("PUT", fieldValuePath(field.id), { value: "guide" });
   const query = new URLSearchParams({ field_id: field.id, field_operator: "eq", field_value: '"guide"' });
@@ -718,10 +598,7 @@ test("field filters reject malformed mixed and foreign conditions", async () => 
     `field_id=${field.id}&field_id=${field.id}&field_operator=is_set`,
   ])
     assert.equal((await fieldRequest("GET", `/api/contacts?${query}`)).status, 400);
-  assert.equal(
-    (await fieldRequest("GET", `/api/contacts?field_id=${field.id}&field_operator=is_set`, undefined, b)).status,
-    404,
-  );
+  assert.equal((await fieldRequest("GET", `/api/contacts?field_id=${field.id}&field_operator=is_set`, undefined, b)).status, 404);
   assert.equal(
     (
       await fieldRequest("POST", "/api/contact-segments", {
@@ -745,10 +622,7 @@ test("combined tag and field filters honor AND OR truth tables without widening 
     ["unset-bare", null, []],
     ["unset-tagged", null, ["lead"]],
   ] as const) {
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,$3,'media',$3,'private')",
-      [workspace, connectionId, sender],
-    );
+    await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,$3,'media',$3,'private')", [workspace, connectionId, sender]);
     await fieldRequest("PUT", fieldValuePath(field.id, sender), { value });
     await saveContactTags(pool, a, connectionId, sender, { tags });
   }
@@ -758,18 +632,9 @@ test("combined tag and field filters honor AND OR truth tables without widening 
     [other, workspace],
     [foreign, await ensureWorkspace(pool, b)],
   ]) {
-    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,$1::uuid::text)", [
-      id,
-      owner,
-    ]);
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'scope','media','both','private')",
-      [owner, id],
-    );
-    await pool.query(
-      "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'both','{lead}')",
-      [owner, id],
-    );
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,$1::uuid::text)", [id, owner]);
+    await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'scope','media','both','private')", [owner, id]);
+    await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'both','{lead}')", [owner, id]);
   }
   const query = new URLSearchParams({
     connection_id: connectionId,
@@ -876,32 +741,15 @@ test("combined filters reject meaningless or malformed OR even when the tag matc
   ])
     assert.equal((await fieldRequest("GET", `/api/contacts?${query}`)).status, 400);
   assert.equal((await fieldRequest("DELETE", `/api/contact-fields/${field.id}`)).status, 200);
-  assert.equal(
-    (
-      await fieldRequest(
-        "GET",
-        `/api/contacts?tag=lead&field_id=${field.id}&field_operator=is_set&condition_operator=or`,
-      )
-    ).status,
-    404,
-  );
+  assert.equal((await fieldRequest("GET", `/api/contacts?tag=lead&field_id=${field.id}&field_operator=is_set&condition_operator=or`)).status, 404);
 });
 
 test("combined OR contacts retain the stable cursor and never duplicate dual matches", async () => {
   const workspace = await ensureWorkspace(pool, a);
   const field = await createField("Combined page", "number");
-  await pool.query(
-    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,'combined-'||n,'media',lpad(n::text,3,'0'),'private' FROM generate_series(1,55) n",
-    [workspace, connectionId],
-  );
-  await pool.query(
-    "INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) SELECT $1,$2,lpad(n::text,3,'0'),$3,to_jsonb(CASE WHEN n%2=0 THEN -1 ELSE 0 END) FROM generate_series(1,55) n",
-    [workspace, connectionId, field.id],
-  );
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) SELECT $1,$2,lpad(n::text,3,'0'),'{lead}' FROM generate_series(1,55) n WHERE n%2=0 OR n=1",
-    [workspace, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,'combined-'||n,'media',lpad(n::text,3,'0'),'private' FROM generate_series(1,55) n", [workspace, connectionId]);
+  await pool.query("INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) SELECT $1,$2,lpad(n::text,3,'0'),$3,to_jsonb(CASE WHEN n%2=0 THEN -1 ELSE 0 END) FROM generate_series(1,55) n", [workspace, connectionId, field.id]);
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) SELECT $1,$2,lpad(n::text,3,'0'),'{lead}' FROM generate_series(1,55) n WHERE n%2=0 OR n=1", [workspace, connectionId]);
   const query = new URLSearchParams({
     tag: "lead",
     field_id: field.id,
@@ -926,10 +774,12 @@ test("contact preview counts all matches at zero and either side of the page bou
   let previous = 0;
   for (const count of [0, 1, 50, 51, 55]) {
     if (count > previous)
-      await pool.query(
-        "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,'preview-'||n,'media',lpad(n::text,3,'0'),'private' FROM generate_series($3::int,$4::int) n",
-        [workspace, connectionId, previous + 1, count],
-      );
+      await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,'preview-'||n,'media',lpad(n::text,3,'0'),'private' FROM generate_series($3::int,$4::int) n", [
+        workspace,
+        connectionId,
+        previous + 1,
+        count,
+      ]);
     const response = await fieldRequest("GET", "/api/contacts?preview=true");
     assert.equal(response.status, 200);
     const preview = await response.json();
@@ -945,8 +795,7 @@ test("contact preview counts all matches at zero and either side of the page bou
     const ordinary = await (await fieldRequest("GET", "/api/contacts")).json();
     assert.equal(Object.hasOwn(ordinary, "total"), false);
     assert.deepEqual(preview.contacts, ordinary.contacts);
-    if (preview.after)
-      assert.equal((await fieldRequest("GET", `/api/contacts?preview=true&after=${preview.after}`)).status, 400);
+    if (preview.after) assert.equal((await fieldRequest("GET", `/api/contacts?preview=true&after=${preview.after}`)).status, 400);
     previous = count;
   }
 });
@@ -962,10 +811,7 @@ test("contact preview counts grouped identities with current filters and workspa
     ["tag-only", -1, ["lead"]],
   ] as const) {
     // Repeated comments still describe one contact in this connection.
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,$3||n,'media',$3,'private' FROM generate_series(1,3) n",
-      [workspace, connectionId, sender],
-    );
+    await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,$3||n,'media',$3,'private' FROM generate_series(1,3) n", [workspace, connectionId, sender]);
     await fieldRequest("PUT", fieldValuePath(field.id, sender), { value });
     await saveContactTags(pool, a, connectionId, sender, { tags });
   }
@@ -975,18 +821,9 @@ test("contact preview counts grouped identities with current filters and workspa
     [other, workspace],
     [foreign, foreignWorkspace],
   ]) {
-    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,$1::uuid::text)", [
-      id,
-      owner,
-    ]);
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'preview-scope','media','both','private')",
-      [owner, id],
-    );
-    await pool.query(
-      "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'both','{lead}')",
-      [owner, id],
-    );
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,$1::uuid::text)", [id, owner]);
+    await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'preview-scope','media','both','private')", [owner, id]);
+    await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'both','{lead}')", [owner, id]);
   }
   const query = new URLSearchParams({
     preview: "true",
@@ -996,11 +833,7 @@ test("contact preview counts grouped identities with current filters and workspa
     field_operator: "gte",
     field_value: "0",
   });
-  const preview = async (
-    expected: string,
-    evaluated: string,
-    excluded: { tag: string; field: string; both: string },
-  ) => {
+  const preview = async (expected: string, evaluated: string, excluded: { tag: string; field: string; both: string }) => {
     const response = await fieldRequest("GET", `/api/contacts?${query}`);
     assert.equal(response.status, 200);
     const body = await response.json();
@@ -1021,14 +854,8 @@ test("contact preview counts grouped identities with current filters and workspa
   for (const [filters, expected] of [
     ["", { total: "5", evaluated: "5", excluded: { tag: "0", field: "0", both: "0" } }],
     ["&tag=lead", { total: "3", evaluated: "5", excluded: { tag: "2", field: "0", both: "0" } }],
-    [
-      `&field_id=${field.id}&field_operator=gte&field_value=0`,
-      { total: "2", evaluated: "5", excluded: { tag: "0", field: "3", both: "0" } },
-    ],
-    [
-      `&tag=absent&field_id=${field.id}&field_operator=gte&field_value=100`,
-      { total: "0", evaluated: "5", excluded: { tag: "0", field: "0", both: "5" } },
-    ],
+    [`&field_id=${field.id}&field_operator=gte&field_value=0`, { total: "2", evaluated: "5", excluded: { tag: "0", field: "3", both: "0" } }],
+    [`&tag=absent&field_id=${field.id}&field_operator=gte&field_value=100`, { total: "0", evaluated: "5", excluded: { tag: "0", field: "0", both: "5" } }],
   ] as const) {
     const response = await fieldRequest("GET", `/api/contacts?preview=true${filters}`);
     assert.equal(response.status, 200);
@@ -1074,10 +901,7 @@ test("contact activity uses the latest stored comment and partitions exclusions 
     ["latest-outside", before, -1, []],
   ] as const;
   for (const [sender, time, value, tags] of rows) {
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$3,'private',$4)",
-      [workspace, connectionId, sender, time],
-    );
+    await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$3,'private',$4)", [workspace, connectionId, sender, time]);
     await fieldRequest("PUT", fieldValuePath(field.id, sender), { value });
     await saveContactTags(pool, a, connectionId, sender, { tags });
   }
@@ -1086,24 +910,15 @@ test("contact activity uses the latest stored comment and partitions exclusions 
     ["latest-outside", from],
     ["tag-only", "2026-10-01T00:00:00.000Z"],
   ])
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3||'-old','media',$3,'private',$4)",
-      [workspace, connectionId, sender, time],
-    );
+    await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3||'-old','media',$3,'private',$4)", [workspace, connectionId, sender, time]);
   const other = "77777777-7777-4777-8777-777777777777",
     foreign = "88888888-8888-4888-8888-888888888888";
   for (const [id, owner] of [
     [other, workspace],
     [foreign, foreignWorkspace],
   ]) {
-    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,$1::uuid::text)", [
-      id,
-      owner,
-    ]);
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,'other','media','both','private',$3)",
-      [owner, id, from],
-    );
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,$1::uuid::text)", [id, owner]);
+    await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,'other','media','both','private',$3)", [owner, id, from]);
   }
   const range = { last_comment_from: from, last_comment_before: before };
   const query = new URLSearchParams({ ...range, connection_id: connectionId });
@@ -1161,10 +976,7 @@ test("contact activity uses the latest stored comment and partitions exclusions 
   );
   const savedPath = `/api/contacts?preview=true&segment_id=${saved.id}`;
   assert.equal((await (await fieldRequest("GET", savedPath)).json()).total, "3");
-  await pool.query(
-    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,'later','media','both','private',$3)",
-    [workspace, connectionId, before],
-  );
+  await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,'later','media','both','private',$3)", [workspace, connectionId, before]);
   const updated = await (await fieldRequest("GET", savedPath)).json();
   assert.equal(updated.total, "2");
   assert.deepEqual(updated.excluded, { activity: "5", tag: "0", field: "0", both: "1" });
@@ -1194,11 +1006,7 @@ test("contact activity retains stable pagination and does not trim comment count
     Array.from({ length: 55 }, (_, i) => String(i + 1).padStart(3, "0")),
   );
   assert.ok([...first.contacts, ...second.contacts].every((c) => c.comment_count === "2"));
-  assert.ok(
-    [...first.contacts, ...second.contacts].every(
-      (c) => c.first_comment_at.toISOString() === "2026-10-01T00:00:00.000Z",
-    ),
-  );
+  assert.ok([...first.contacts, ...second.contacts].every((c) => c.first_comment_at.toISOString() === "2026-10-01T00:00:00.000Z"));
   query.delete("after");
   query.set("preview", "true");
   const preview = await listContacts(pool, a, query);
@@ -1224,10 +1032,7 @@ test("saved activity ranges reject invalid bounds and preserve the shape of lega
     { last_comment_from: before, last_comment_before: before },
     { last_comment_from: "2027-01-01T00:00:00.000Z", last_comment_before: before },
   ])
-    await assert.rejects(
-      createContactSegment(pool, a, { name: "Invalid", ...invalid }),
-      (error: unknown) => error instanceof ApiError && error.status === 400,
-    );
+    await assert.rejects(createContactSegment(pool, a, { name: "Invalid", ...invalid }), (error: unknown) => error instanceof ApiError && error.status === 400);
   assert.equal((await listContactSegments(pool, a)).length, 1);
 });
 
@@ -1236,43 +1041,18 @@ test("activity migration preserves legacy segments and enforces paired finite or
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query(
-      "ALTER TABLE instagram_contact_segments DROP COLUMN last_comment_from, DROP COLUMN last_comment_before",
-    );
+    await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN last_comment_from, DROP COLUMN last_comment_before");
     await client.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'Legacy')", [workspace]);
-    const migration = await readFile(
-      new URL("../../db/migrations/046_contact_segment_activity.sql", import.meta.url),
-      "utf8",
-    );
+    const migration = await readFile(new URL("../../db/migrations/046_contact_segment_activity.sql", import.meta.url), "utf8");
     await client.query(migration);
     await client.query(migration);
-    assert.deepEqual(
-      (await client.query("SELECT last_comment_from,last_comment_before FROM instagram_contact_segments")).rows,
-      [{ last_comment_from: null, last_comment_before: null }],
-    );
-    await client.query(
-      "UPDATE instagram_contact_segments SET last_comment_from='2026-10-10T00:00:00Z',last_comment_before='2026-10-12T00:00:00Z'",
-    );
+    assert.deepEqual((await client.query("SELECT last_comment_from,last_comment_before FROM instagram_contact_segments")).rows, [{ last_comment_from: null, last_comment_before: null }]);
+    await client.query("UPDATE instagram_contact_segments SET last_comment_from='2026-10-10T00:00:00Z',last_comment_before='2026-10-12T00:00:00Z'");
     await client.query(migration);
-    assert.equal(
-      (
-        await client.query("SELECT last_comment_from FROM instagram_contact_segments")
-      ).rows[0].last_comment_from.toISOString(),
-      "2026-10-10T00:00:00.000Z",
-    );
-    for (const change of [
-      "last_comment_from=NULL",
-      "last_comment_before=NULL",
-      "last_comment_before=last_comment_from",
-      "last_comment_from='2026-10-13T00:00:00Z'",
-      "last_comment_from='-infinity'",
-      "last_comment_before='infinity'",
-    ]) {
+    assert.equal((await client.query("SELECT last_comment_from FROM instagram_contact_segments")).rows[0].last_comment_from.toISOString(), "2026-10-10T00:00:00.000Z");
+    for (const change of ["last_comment_from=NULL", "last_comment_before=NULL", "last_comment_before=last_comment_from", "last_comment_from='2026-10-13T00:00:00Z'", "last_comment_from='-infinity'", "last_comment_before='infinity'"]) {
       await client.query("SAVEPOINT invalid_activity");
-      await assert.rejects(
-        client.query(`UPDATE instagram_contact_segments SET ${change}`),
-        (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "23514",
-      );
+      await assert.rejects(client.query(`UPDATE instagram_contact_segments SET ${change}`), (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "23514");
       await client.query("ROLLBACK TO SAVEPOINT invalid_activity");
     }
   } finally {
@@ -1299,10 +1079,7 @@ test("contact consent filters keep identity scope and classify after activity be
     ["outside", -1, []],
   ] as const;
   for (const [sender, value, tags] of rows) {
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$3,'private',$4)",
-      [workspace, connectionId, sender, sender === "outside" ? before : from],
-    );
+    await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$3,'private',$4)", [workspace, connectionId, sender, sender === "outside" ? before : from]);
     await fieldRequest("PUT", fieldValuePath(field.id, sender), { value });
     await saveContactTags(pool, a, connectionId, sender, { tags });
   }
@@ -1341,14 +1118,8 @@ test("contact consent filters keep identity scope and classify after activity be
     [other, workspace],
     [foreign, foreignWorkspace],
   ]) {
-    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,$1::uuid::text)", [
-      id,
-      owner,
-    ]);
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,'other','media','grant-both','private',$3)",
-      [owner, id, from],
-    );
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,$1::uuid::text)", [id, owner]);
+    await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,'other','media','grant-both','private',$3)", [owner, id, from]);
     await consent("grant-both", id === other ? "revoke" : "grant", "marketing", "comment_sender", id, owner);
   }
   const query = new URLSearchParams({
@@ -1371,10 +1142,7 @@ test("contact consent filters keep identity scope and classify after activity be
     assert.equal(page.contacts.length, Number(total));
     return page;
   };
-  assert.deepEqual(
-    (await check("4", "9", { consent: "5", tag: "0", field: "0", both: "0" })).contacts,
-    ordinary.contacts,
-  );
+  assert.deepEqual((await check("4", "9", { consent: "5", tag: "0", field: "0", both: "0" })).contacts, ordinary.contacts);
   query.delete("connection_id");
   await check("4", "10", { consent: "6", tag: "0", field: "0", both: "0" });
   query.set("connection_id", foreign);
@@ -1387,17 +1155,13 @@ test("contact consent filters keep identity scope and classify after activity be
   await check("1", "9", { activity: "1", consent: "7", tag: "0", field: "0", both: "0" });
   query.set("consent_state", "no_record");
   assert.deepEqual(
-    (await check("3", "9", { activity: "1", consent: "5", tag: "0", field: "0", both: "0" })).contacts.map(
-      (c) => c.sender_id,
-    ),
+    (await check("3", "9", { activity: "1", consent: "5", tag: "0", field: "0", both: "0" })).contacts.map((c) => c.sender_id),
     ["dm-only", "none", "other-purpose"],
   );
   query.set("consent_purpose", "service_reply");
   query.set("consent_state", "granted");
   assert.deepEqual(
-    (await check("1", "9", { activity: "1", consent: "7", tag: "0", field: "0", both: "0" })).contacts.map(
-      (c) => c.sender_id,
-    ),
+    (await check("1", "9", { activity: "1", consent: "7", tag: "0", field: "0", both: "0" })).contacts.map((c) => c.sender_id),
     ["other-purpose"],
   );
   query.set("consent_purpose", "marketing");
@@ -1434,33 +1198,22 @@ test("contact consent filters keep identity scope and classify after activity be
   assert.equal((await listContacts(pool, a, savedQuery)).total, "3");
   await consent("grant-both", "revoke", "all");
   assert.equal((await listContacts(pool, a, savedQuery)).total, "2");
-  await consent(
-    "grant-both",
-    "grant",
-    "marketing",
-    "comment_sender",
-    connectionId,
-    workspace,
-    new Date("2020-01-01T00:00:00Z"),
-  );
+  await consent("grant-both", "grant", "marketing", "comment_sender", connectionId, workspace, new Date("2020-01-01T00:00:00Z"));
   assert.equal((await listContacts(pool, a, savedQuery)).total, "3", "newest server projection wins over occurred_at");
   await assert.rejects(listContacts(pool, b, savedQuery), (e: unknown) => e instanceof ApiError && e.status === 404);
   const eventsBefore = (await pool.query("SELECT count(*)::text AS count FROM channel_consent_events")).rows[0].count;
   await listContacts(pool, a, savedQuery);
-  assert.equal(
-    (await pool.query("SELECT count(*)::text AS count FROM channel_consent_events")).rows[0].count,
-    eventsBefore,
-  );
+  assert.equal((await pool.query("SELECT count(*)::text AS count FROM channel_consent_events")).rows[0].count, eventsBefore);
   await archiveContactSegment(pool, a, saved.id);
   await assert.rejects(listContacts(pool, a, savedQuery), (e: unknown) => e instanceof ApiError && e.status === 404);
 });
 
 test("contact consent no-record filters retain stable pages for all matching contacts", async () => {
   const workspace = await ensureWorkspace(pool, a);
-  await pool.query(
-    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,n::text||'-'||r,'media',lpad(n::text,3,'0'),'private' FROM generate_series(1,55)n CROSS JOIN generate_series(1,2)r",
-    [workspace, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,n::text||'-'||r,'media',lpad(n::text,3,'0'),'private' FROM generate_series(1,55)n CROSS JOIN generate_series(1,2)r", [
+    workspace,
+    connectionId,
+  ]);
   const query = new URLSearchParams({ consent_purpose: "marketing", consent_state: "no_record" });
   const first = await listContacts(pool, a, query);
   assert.equal(first.contacts.length, 50);
@@ -1497,10 +1250,7 @@ test("saved consent filters reject invalid pairs and omit legacy response keys",
     { consent_purpose: "service_reply", consent_state: "eligible" },
     { consent_purpose: false, consent_state: "granted" },
   ])
-    await assert.rejects(
-      createContactSegment(pool, a, { name: "Invalid consent", ...invalid }),
-      (e: unknown) => e instanceof ApiError && e.status === 400,
-    );
+    await assert.rejects(createContactSegment(pool, a, { name: "Invalid consent", ...invalid }), (e: unknown) => e instanceof ApiError && e.status === 400);
   assert.equal((await listContactSegments(pool, a)).length, 1);
 });
 
@@ -1511,35 +1261,16 @@ test("consent segment migration preserves legacy rows and validates paired enums
     await client.query("BEGIN");
     await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN consent_purpose, DROP COLUMN consent_state");
     await client.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'Legacy')", [workspace]);
-    const migration = await readFile(
-      new URL("../../db/migrations/047_contact_segment_consent.sql", import.meta.url),
-      "utf8",
-    );
+    const migration = await readFile(new URL("../../db/migrations/047_contact_segment_consent.sql", import.meta.url), "utf8");
     await client.query(migration);
     await client.query(migration);
-    assert.deepEqual(
-      (await client.query("SELECT consent_purpose,consent_state FROM instagram_contact_segments")).rows,
-      [{ consent_purpose: null, consent_state: null }],
-    );
+    assert.deepEqual((await client.query("SELECT consent_purpose,consent_state FROM instagram_contact_segments")).rows, [{ consent_purpose: null, consent_state: null }]);
     await client.query("UPDATE instagram_contact_segments SET consent_purpose='marketing',consent_state='no_record'");
     await client.query(migration);
-    assert.deepEqual(
-      (await client.query("SELECT consent_purpose,consent_state FROM instagram_contact_segments")).rows,
-      [{ consent_purpose: "marketing", consent_state: "no_record" }],
-    );
-    for (const change of [
-      "consent_purpose=NULL",
-      "consent_state=NULL",
-      "consent_purpose='all'",
-      "consent_state='eligible'",
-      "consent_purpose=''",
-      "consent_state=''",
-    ]) {
+    assert.deepEqual((await client.query("SELECT consent_purpose,consent_state FROM instagram_contact_segments")).rows, [{ consent_purpose: "marketing", consent_state: "no_record" }]);
+    for (const change of ["consent_purpose=NULL", "consent_state=NULL", "consent_purpose='all'", "consent_state='eligible'", "consent_purpose=''", "consent_state=''"]) {
       await client.query("SAVEPOINT invalid_consent");
-      await assert.rejects(
-        client.query(`UPDATE instagram_contact_segments SET ${change}`),
-        (e: unknown) => typeof e === "object" && e !== null && "code" in e && e.code === "23514",
-      );
+      await assert.rejects(client.query(`UPDATE instagram_contact_segments SET ${change}`), (e: unknown) => typeof e === "object" && e !== null && "code" in e && e.code === "23514");
       await client.query("ROLLBACK TO SAVEPOINT invalid_consent");
     }
   } finally {
@@ -1604,14 +1335,8 @@ test("ordered saved segments preserve values and re-evaluate scoped current data
   await saveContactTags(pool, a, connectionId, "sender", { tags: ["lead"] });
   assert.equal((await listContacts(pool, a, query)).contacts.length, 1);
   const other = "77777777-7777-4777-8777-777777777777";
-  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'ordered-other')", [
-    other,
-    workspace,
-  ]);
-  await pool.query(
-    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'ordered-other','media','sender','private')",
-    [workspace, other],
-  );
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'ordered-other')", [other, workspace]);
+  await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'ordered-other','media','sender','private')", [workspace, other]);
   await fieldRequest("PUT", fieldValuePath(field.id, "sender", other), { value: 20 });
   await saveContactTags(pool, a, other, "sender", { tags: ["lead"] });
   assert.deepEqual(
@@ -1643,10 +1368,7 @@ test("ordered conditions reject unsupported types missing values and foreign fie
   }
   const field = await createField("Required threshold", "number");
   for (const operator of ["gt", "gte", "lt", "lte"]) {
-    assert.equal(
-      (await fieldRequest("GET", `/api/contacts?field_id=${field.id}&field_operator=${operator}`)).status,
-      400,
-    );
+    assert.equal((await fieldRequest("GET", `/api/contacts?field_id=${field.id}&field_operator=${operator}`)).status, 400);
     const query = new URLSearchParams({ field_id: field.id, field_operator: operator, field_value: "0" });
     assert.equal((await fieldRequest("GET", `/api/contacts?${query}`, undefined, b)).status, 404);
     assert.equal(
@@ -1697,25 +1419,12 @@ test("ordered contact pages use the existing stable cursor without duplicates", 
 test("concurrent field creation enforces the active cap and field archive serializes segment creation", async () => {
   const workspace = await ensureWorkspace(pool, a);
   for (let n = 0; n < 49; n++) await createField(`field-${n}`, "text");
-  const results = await Promise.all([
-    fieldRequest("POST", "/api/contact-fields", { name: "A", type: "text" }),
-    fieldRequest("POST", "/api/contact-fields", { name: "B", type: "text" }),
-  ]);
+  const results = await Promise.all([fieldRequest("POST", "/api/contact-fields", { name: "A", type: "text" }), fieldRequest("POST", "/api/contact-fields", { name: "B", type: "text" })]);
   assert.deepEqual(results.map((response) => response.status).sort(), [201, 409]);
   assert.deepEqual(await results.find((response) => response.status === 409)!.json(), { error: "field_limit_reached" });
-  assert.equal(
-    (
-      await pool.query("SELECT count(*) FROM instagram_contact_fields WHERE workspace_id=$1 AND NOT archived", [
-        workspace,
-      ])
-    ).rows[0].count,
-    "50",
-  );
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_contact_fields WHERE workspace_id=$1 AND NOT archived", [workspace])).rows[0].count, "50");
   const field = await results.find((response) => response.status === 201)!.json();
-  const [archive, segment] = await Promise.all([
-    fieldRequest("DELETE", `/api/contact-fields/${field.id}`),
-    fieldRequest("POST", "/api/contact-segments", { name: "Race", field_id: field.id, field_operator: "is_set" }),
-  ]);
+  const [archive, segment] = await Promise.all([fieldRequest("DELETE", `/api/contact-fields/${field.id}`), fieldRequest("POST", "/api/contact-segments", { name: "Race", field_id: field.id, field_operator: "is_set" })]);
   assert.ok((archive.status === 200 && segment.status === 404) || (archive.status === 409 && segment.status === 201));
 });
 
@@ -1737,16 +1446,9 @@ test("connection listings omit credentials and cannot cross workspaces", async (
 test("media retrieval uses real workspace predicates before accessing an encrypted credential", async () => {
   const workspace = await ensureWorkspace(pool, a);
   const key = Buffer.alloc(32, 2).toString("base64");
-  await pool.query("UPDATE instagram_connections SET access_token_encrypted=$1 WHERE id=$2", [
-    sealSecret("media-test-token", key, `${workspace}:123`),
-    connectionId,
-  ]);
+  await pool.query("UPDATE instagram_connections SET access_token_encrypted=$1 WHERE id=$2", [sealSecret("media-test-token", key, `${workspace}:123`), connectionId]);
   const fetchImpl = (async (input: string | URL | Request) => {
-    return Response.json(
-      new URL(String(input)).pathname.endsWith("/me")
-        ? { id: "999", user_id: "123" }
-        : { data: [{ id: "12345", owner: { id: "999" }, media_type: "IMAGE", caption: "Owned post" }] },
-    );
+    return Response.json(new URL(String(input)).pathname.endsWith("/me") ? { id: "999", user_id: "123" } : { data: [{ id: "12345", owner: { id: "999" }, media_type: "IMAGE", caption: "Owned post" }] });
   }) as typeof fetch;
   const env = { TOKEN_ENCRYPTION_KEY: key, META_GRAPH_VERSION: "v26.0" };
   assert.equal((await connectionMedia(pool, a, connectionId, env, {}, fetchImpl)).media[0]?.caption, "Owned post");
@@ -1756,13 +1458,8 @@ test("media retrieval uses real workspace predicates before accessing an encrypt
     }) as typeof fetch),
     (error: unknown) => error instanceof ApiError && error.status === 404,
   );
-  await pool.query("UPDATE instagram_connections SET token_expires_at=now()-interval '1 minute' WHERE id=$1", [
-    connectionId,
-  ]);
-  await assert.rejects(
-    connectionMedia(pool, a, connectionId, env, {}, fetchImpl),
-    (error: unknown) => error instanceof ApiError && error.message === "media_reconnect_required",
-  );
+  await pool.query("UPDATE instagram_connections SET token_expires_at=now()-interval '1 minute' WHERE id=$1", [connectionId]);
+  await assert.rejects(connectionMedia(pool, a, connectionId, env, {}, fetchImpl), (error: unknown) => error instanceof ApiError && error.message === "media_reconnect_required");
 });
 
 test("rules are created and updated only within the verified user's workspace", async () => {
@@ -1788,14 +1485,7 @@ test("connection activation rejects another user's ID and unavailable tokens", a
 test("invalid keyword and follow settings are rejected without changing the stored rule", async () => {
   await saveRule(pool, a, input);
   const original = await listRules(pool, a);
-  for (const changes of [
-    { keywords: [] },
-    { keywords: [""] },
-    { keywords: Array(21).fill("a") },
-    { follow_gate_enabled: true },
-    { media_id: "../other" },
-    { private_reply_text: " " },
-  ]) {
+  for (const changes of [{ keywords: [] }, { keywords: [""] }, { keywords: Array(21).fill("a") }, { follow_gate_enabled: true }, { media_id: "../other" }, { private_reply_text: " " }]) {
     await assert.rejects(saveRule(pool, a, { ...input, ...changes }), ApiError);
     assert.deepEqual(await listRules(pool, a), original);
   }
@@ -1819,10 +1509,7 @@ test("disconnect clears only owned credentials and disables its rules", async ()
     [b, connectionId],
     [a, "99999999-9999-4999-8999-999999999999"],
   ] as const)
-    await assert.rejects(
-      disconnectConnection(pool, user, id),
-      (e: unknown) => e instanceof ApiError && e.status === 404 && e.message === "connection_not_found",
-    );
+    await assert.rejects(disconnectConnection(pool, user, id), (e: unknown) => e instanceof ApiError && e.status === 404 && e.message === "connection_not_found");
   assert.equal((await listConnections(pool, a))[0].token_registered, true);
   assert.equal((await listRules(pool, a))[0].enabled, true);
   await disconnectConnection(pool, a, connectionId);
@@ -1837,15 +1524,11 @@ test("disconnect clears only owned credentials and disables its rules", async ()
 test("connection list distinguishes valid, expired, and missing local credentials within one workspace", async () => {
   assert.equal((await listConnections(pool, a))[0].credential_status, "valid");
   assert.deepEqual(await listConnections(pool, b), []);
-  await pool.query("UPDATE instagram_connections SET token_expires_at=now()-interval '1 second' WHERE id=$1", [
-    connectionId,
-  ]);
+  await pool.query("UPDATE instagram_connections SET token_expires_at=now()-interval '1 second' WHERE id=$1", [connectionId]);
   assert.equal((await listConnections(pool, a))[0].credential_status, "expired");
   await pool.query("UPDATE instagram_connections SET token_expires_at=NULL WHERE id=$1", [connectionId]);
   assert.equal((await listConnections(pool, a))[0].credential_status, "expired");
-  await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL WHERE id=$1", [
-    connectionId,
-  ]);
+  await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL WHERE id=$1", [connectionId]);
   assert.equal((await listConnections(pool, a))[0].credential_status, "missing");
 });
 
@@ -1865,26 +1548,18 @@ test("administrator ownership assignment requires confirmation and preserves exi
   const client = await pool.connect();
   try {
     const script = await readFile(new URL("../../deploy/assign-workspace-owner.sql", import.meta.url), "utf8");
-    const functionSql = script
-      .slice(script.indexOf("CREATE FUNCTION"), script.indexOf("SELECT pg_temp.assign_workspace_owner"))
-      .replace("auth.users", "pg_temp.verified_users");
+    const functionSql = script.slice(script.indexOf("CREATE FUNCTION"), script.indexOf("SELECT pg_temp.assign_workspace_owner")).replace("auth.users", "pg_temp.verified_users");
     await client.query("CREATE TEMP TABLE verified_users(id uuid,email_confirmed_at timestamptz)");
     await client.query(functionSql);
     const legacy = "55555555-5555-4555-8555-555555555555";
     await client.query("INSERT INTO workspaces VALUES($1)", [legacy]);
-    await assert.rejects(
-      client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [b.id, legacy]),
-      /Confirmed Supabase user/,
-    );
+    await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [b.id, legacy]), /Confirmed Supabase user/);
     await client.query("INSERT INTO verified_users VALUES($1,now()),($2,now())", [a.id, b.id]);
     await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [a.id, legacy]), /not empty/);
     await client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [b.id, legacy]);
     await client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [b.id, legacy]);
     await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [a.id, legacy]), /already owned/);
-    assert.equal(
-      (await client.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [b.id])).rows[0].workspace_id,
-      legacy,
-    );
+    assert.equal((await client.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [b.id])).rows[0].workspace_id, legacy);
   } finally {
     await client.query("DROP TABLE IF EXISTS pg_temp.verified_users");
     client.release();
@@ -1917,10 +1592,7 @@ test("administrator ownership assignment refuses to leave a workspace holding in
     await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
     await client.query("TRUNCATE workspace_invites");
     // An archived inbox label is still workspace data.
-    await client.query(
-      "INSERT INTO instagram_inbox_labels(workspace_id,name,archived,created_by) VALUES($1,'kept',true,$2)",
-      [own, mover],
-    );
+    await client.query("INSERT INTO instagram_inbox_labels(workspace_id,name,archived,created_by) VALUES($1,'kept',true,$2)", [own, mover]);
     await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
     // A keyword label rule is workspace data on its own too; its label is skipped here (replica mode skips foreign
     // key checks) so that the rule alone is left.
@@ -1935,33 +1607,20 @@ test("administrator ownership assignment refuses to leave a workspace holding in
     await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
     await client.query("TRUNCATE instagram_inbox_label_rules CASCADE");
     // Even an inactive endpoint keeps workspace data (including its signing keys and delivery history).
-    await client.query(
-      "INSERT INTO webhook_endpoints(workspace_id,name,url) VALUES($1,'kept','https://hooks.example.test/in')",
-      [own],
-    );
+    await client.query("INSERT INTO webhook_endpoints(workspace_id,name,url) VALUES($1,'kept','https://hooks.example.test/in')", [own]);
     for (const active of [true, false]) {
       await client.query("UPDATE webhook_endpoints SET active=$2 WHERE workspace_id=$1", [own, active]);
       await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
-      assert.equal(
-        (await client.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [mover])).rows[0]
-          .workspace_id,
-        own,
-      );
+      assert.equal((await client.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [mover])).rows[0].workspace_id, own);
     }
     await client.query("TRUNCATE webhook_endpoints CASCADE");
     await client.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'kept','{}')", [own]);
     await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
     await client.query("TRUNCATE flows CASCADE");
     // An archived reply template is still workspace data that only a member can read, export or delete.
-    await client.query(
-      "INSERT INTO workspace_reply_templates(workspace_id,name,body,archived,created_by,updated_by) VALUES($1,'kept','text',true,$2,$2)",
-      [own, mover],
-    );
+    await client.query("INSERT INTO workspace_reply_templates(workspace_id,name,body,archived,created_by,updated_by) VALUES($1,'kept','text',true,$2,$2)", [own, mover]);
     await assert.rejects(client.query("SELECT pg_temp.assign_workspace_owner($1,$2)", [mover, target]), /not empty/);
-    assert.equal(
-      (await client.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [mover])).rows[0].workspace_id,
-      own,
-    );
+    assert.equal((await client.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [mover])).rows[0].workspace_id, own);
   } finally {
     await client.query("RESET session_replication_role");
     await client.query("DROP TABLE IF EXISTS pg_temp.verified_users");
@@ -2012,17 +1671,10 @@ test("button migration upgrades existing rows with no button and is repeatable",
     await client.query("BEGIN");
     await client.query("ALTER TABLE instagram_comment_rules DROP COLUMN confirmation_button_title");
     await client.query("ALTER TABLE instagram_follow_conversations DROP COLUMN confirmation_button_title");
-    const migration = await readFile(
-      new URL("../../db/migrations/007_confirmation_button.sql", import.meta.url),
-      "utf8",
-    );
+    const migration = await readFile(new URL("../../db/migrations/007_confirmation_button.sql", import.meta.url), "utf8");
     await client.query(migration);
     await client.query(migration);
-    assert.equal(
-      (await client.query("SELECT confirmation_button_title FROM instagram_comment_rules")).rows[0]
-        .confirmation_button_title,
-      "",
-    );
+    assert.equal((await client.query("SELECT confirmation_button_title FROM instagram_comment_rules")).rows[0].confirmation_button_title, "");
   } finally {
     await client.query("ROLLBACK");
     client.release();
@@ -2053,19 +1705,9 @@ test("contact tags normalize, filter, clear and cannot target foreign or nonexis
   assert.deepEqual((await listContacts(pool, a)).contacts[0].tags, ["lead", "관심"]);
   assert.equal((await listContacts(pool, a, new URLSearchParams({ tag: " LEAD " }))).contacts.length, 1);
   assert.equal((await listContacts(pool, a, new URLSearchParams({ tag: "customer" }))).contacts.length, 0);
-  await assert.rejects(
-    saveContactTags(pool, b, connectionId, "888", { tags: ["foreign"] }),
-    (e: unknown) => e instanceof ApiError && e.status === 404,
-  );
-  await assert.rejects(
-    saveContactTags(pool, a, connectionId, "999", { tags: ["new"] }),
-    (e: unknown) => e instanceof ApiError && e.status === 404,
-  );
-  for (const tags of [[""], ["x".repeat(41)], Array(21).fill("tag"), [null], "lead"])
-    await assert.rejects(
-      saveContactTags(pool, a, connectionId, "888", { tags }),
-      (e: unknown) => e instanceof ApiError && e.status === 400,
-    );
+  await assert.rejects(saveContactTags(pool, b, connectionId, "888", { tags: ["foreign"] }), (e: unknown) => e instanceof ApiError && e.status === 404);
+  await assert.rejects(saveContactTags(pool, a, connectionId, "999", { tags: ["new"] }), (e: unknown) => e instanceof ApiError && e.status === 404);
+  for (const tags of [[""], ["x".repeat(41)], Array(21).fill("tag"), [null], "lead"]) await assert.rejects(saveContactTags(pool, a, connectionId, "888", { tags }), (e: unknown) => e instanceof ApiError && e.status === 400);
   assert.deepEqual((await listContacts(pool, a)).contacts[0].tags, ["lead", "관심"]);
   await saveContactTags(pool, a, connectionId, "888", { tags: [] });
   assert.deepEqual((await listContacts(pool, a)).contacts[0].tags, []);
@@ -2077,10 +1719,7 @@ test("contact identity and tag filters stay separate for each account", async ()
     wb = await ensureWorkspace(pool, b);
   const other = "44444444-4444-4444-8444-444444444444",
     foreign = "55555555-5555-4555-8555-555555555555";
-  await pool.query(
-    "INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'124',true),($3,$4,'125',true)",
-    [other, wa, foreign, wb],
-  );
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'124',true),($3,$4,'125',true)", [other, wa, foreign, wb]);
   const { ingestComments } = await import("../instagram/store.ts");
   await ingestComments(pool, [
     { accountId: "124", commentId: "other", postId: "12345", senderId: "888", text: "other account" },
@@ -2096,10 +1735,7 @@ test("contact identity and tag filters stay separate for each account", async ()
 });
 test("contact keyset pages visit every stable identity once and reject malformed requests", async () => {
   const workspace = await ensureWorkspace(pool, a);
-  await pool.query(
-    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,'page-'||n,'12345',(900000+n)::text,'private' FROM generate_series(1,51) n",
-    [workspace, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,'page-'||n,'12345',(900000+n)::text,'private' FROM generate_series(1,51) n", [workspace, connectionId]);
   const first = await listContacts(pool, a);
   assert.equal(first.contacts.length, 50);
   assert.ok(first.after);
@@ -2116,10 +1752,7 @@ test("contact keyset pages visit every stable identity once and reject malformed
     "connection_id=wrong",
     "extra=1",
   ])
-    await assert.rejects(
-      listContacts(pool, a, new URLSearchParams(query)),
-      (e: unknown) => e instanceof ApiError && e.status === 400,
-    );
+    await assert.rejects(listContacts(pool, a, new URLSearchParams(query)), (e: unknown) => e instanceof ApiError && e.status === 400);
 });
 test("contact migration is repeatable and creates a table when upgrading", async () => {
   const client = await pool.connect();
@@ -2127,22 +1760,12 @@ test("contact migration is repeatable and creates a table when upgrading", async
     await client.query("BEGIN");
     await client.query("DROP TABLE instagram_contact_tags");
     await client.query("DROP INDEX IF EXISTS instagram_comment_events_contact_lookup_idx");
-    const migration = await readFile(
-      new URL("../../db/migrations/008_instagram_contact_tags.sql", import.meta.url),
-      "utf8",
-    );
+    const migration = await readFile(new URL("../../db/migrations/008_instagram_contact_tags.sql", import.meta.url), "utf8");
     await client.query(migration);
     await client.query(migration);
-    await client.query(
-      "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id) SELECT workspace_id,id,'888' FROM instagram_connections WHERE id=$1",
-      [connectionId],
-    );
+    await client.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id) SELECT workspace_id,id,'888' FROM instagram_connections WHERE id=$1", [connectionId]);
     assert.deepEqual((await client.query("SELECT tags FROM instagram_contact_tags")).rows[0].tags, []);
-    assert.equal(
-      (await client.query("SELECT to_regclass('instagram_comment_events_contact_lookup_idx')::text AS name")).rows[0]
-        .name,
-      "instagram_comment_events_contact_lookup_idx",
-    );
+    assert.equal((await client.query("SELECT to_regclass('instagram_comment_events_contact_lookup_idx')::text AS name")).rows[0].name, "instagram_comment_events_contact_lookup_idx");
   } finally {
     await client.query("ROLLBACK");
     client.release();
@@ -2156,10 +1779,7 @@ test("contact existence lookups can use the workspace/account/sender index", asy
     await client.query("BEGIN");
     // Prove index eligibility, not a planner choice or production latency bound.
     await client.query("SET LOCAL enable_seqscan=off");
-    const result = await client.query(
-      "EXPLAIN (FORMAT JSON) SELECT 1 FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3",
-      [workspace, connectionId, "sender-1"],
-    );
+    const result = await client.query("EXPLAIN (FORMAT JSON) SELECT 1 FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3", [workspace, connectionId, "sender-1"]);
     assert.ok(JSON.stringify(result.rows).includes("instagram_comment_events_contact_lookup_idx"));
   } finally {
     await client.query("ROLLBACK");
@@ -2169,10 +1789,7 @@ test("contact existence lookups can use the workspace/account/sender index", asy
 
 test("existing string sender identities can be tagged and used at a page boundary", async () => {
   const workspace = await ensureWorkspace(pool, a);
-  await pool.query(
-    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,'string-'||n,'12345','sender-'||lpad(n::text,3,'0'),'private' FROM generate_series(1,51) n",
-    [workspace, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,'string-'||n,'12345','sender-'||lpad(n::text,3,'0'),'private' FROM generate_series(1,51) n", [workspace, connectionId]);
   const page = await listContacts(pool, a);
   assert.equal(page.contacts.length, 50);
   assert.ok(page.after);
@@ -2184,10 +1801,7 @@ test("existing string sender identities can be tagged and used at a page boundar
 
 test("saved segments isolate workspace and evaluate current tags", async () => {
   const workspace = await ensureWorkspace(pool, a);
-  await pool.query(
-    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'segment-comment','media','sender','private')",
-    [workspace, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'segment-comment','media','sender','private')", [workspace, connectionId]);
   const segment = await createContactSegment(pool, a, { name: " Leads ", connection_id: connectionId, tag: " Lead " });
   assert.deepEqual(segment, { id: segment.id, name: "Leads", connection_id: connectionId, tag: "lead", version: 1 });
   assert.equal((await listContactSegments(pool, a)).length, 1);
@@ -2198,11 +1812,7 @@ test("saved segments isolate workspace and evaluate current tags", async () => {
   assert.equal((await listContacts(pool, a, query)).contacts[0]?.sender_id, "sender");
   await saveContactTags(pool, a, connectionId, "sender", { tags: [] });
   assert.equal((await listContacts(pool, a, query)).contacts.length, 0);
-  for (const action of [
-    () => createContactSegment(pool, b, { name: "Foreign", connection_id: connectionId }),
-    () => listContacts(pool, b, query),
-    () => archiveContactSegment(pool, b, segment.id),
-  ])
+  for (const action of [() => createContactSegment(pool, b, { name: "Foreign", connection_id: connectionId }), () => listContacts(pool, b, query), () => archiveContactSegment(pool, b, segment.id)])
     await assert.rejects(action, (e: unknown) => e instanceof ApiError && e.status === 404);
   await archiveContactSegment(pool, a, segment.id);
   await archiveContactSegment(pool, a, segment.id);
@@ -2224,45 +1834,21 @@ test("segments reject invalid names, duplicate normalized names and mixed filter
     { name: "Lead", connection_id: "bad" },
     { name: "Lead", tag: "x".repeat(41) },
   ]) {
-    await assert.rejects(
-      createContactSegment(pool, a, input),
-      (e: unknown) => e instanceof ApiError && e.status === 400,
-    );
+    await assert.rejects(createContactSegment(pool, a, input), (e: unknown) => e instanceof ApiError && e.status === 400);
   }
   const segment = await createContactSegment(pool, a, { name: " Cafe\u0301 " });
-  await assert.rejects(
-    createContactSegment(pool, a, { name: "Café" }),
-    (e: unknown) => e instanceof ApiError && e.status === 409,
-  );
-  for (const query of [
-    `segment_id=${segment.id}&tag=lead`,
-    `segment_id=${segment.id}&connection_id=${connectionId}`,
-    "segment_id=bad",
-    `segment_id=${segment.id}&segment_id=${segment.id}`,
-  ])
-    await assert.rejects(
-      listContacts(pool, a, new URLSearchParams(query)),
-      (e: unknown) => e instanceof ApiError && e.status === 400,
-    );
+  await assert.rejects(createContactSegment(pool, a, { name: "Café" }), (e: unknown) => e instanceof ApiError && e.status === 409);
+  for (const query of [`segment_id=${segment.id}&tag=lead`, `segment_id=${segment.id}&connection_id=${connectionId}`, "segment_id=bad", `segment_id=${segment.id}&segment_id=${segment.id}`])
+    await assert.rejects(listContacts(pool, a, new URLSearchParams(query)), (e: unknown) => e instanceof ApiError && e.status === 400);
 });
 
 test("concurrent segment creations cannot exceed fifty active records", async () => {
   const workspace = await ensureWorkspace(pool, a);
-  await pool.query(
-    "INSERT INTO instagram_contact_segments(workspace_id,name) SELECT $1,'segment-'||n FROM generate_series(1,49) n",
-    [workspace],
-  );
-  const results = await Promise.allSettled([
-    createContactSegment(pool, a, { name: "one" }),
-    createContactSegment(pool, a, { name: "two" }),
-  ]);
+  await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) SELECT $1,'segment-'||n FROM generate_series(1,49) n", [workspace]);
+  const results = await Promise.allSettled([createContactSegment(pool, a, { name: "one" }), createContactSegment(pool, a, { name: "two" })]);
   assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
   const rejected = results.find((r) => r.status === "rejected");
-  assert.ok(
-    rejected?.status === "rejected" &&
-      rejected.reason instanceof ApiError &&
-      rejected.reason.message === "segment_limit_reached",
-  );
+  assert.ok(rejected?.status === "rejected" && rejected.reason instanceof ApiError && rejected.reason.message === "segment_limit_reached");
   assert.equal((await listContactSegments(pool, a)).length, 50);
   const [first] = await listContactSegments(pool, a);
   await archiveContactSegment(pool, a, first.id);
@@ -2278,13 +1864,7 @@ async function segmentRows() {
 async function lockWaiters(count: number, settled: () => boolean = () => false) {
   const deadline = Date.now() + 5000;
   for (;;) {
-    const waiting = Number(
-      (
-        await pool.query(
-          "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'",
-        )
-      ).rows[0].count,
-    );
+    const waiting = Number((await pool.query("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'")).rows[0].count);
     if (waiting >= count || settled()) return;
     if (Date.now() > deadline) throw new Error(`expected ${count} lock waiters, saw ${waiting}`);
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -2359,11 +1939,7 @@ test("segment edits replace the whole definition, increment the version and chan
     // The next contact read uses the stored definition.
     assert.equal((await listContacts(pool, a, query)).contacts.length, 1);
   }
-  const stored = (
-    await pool.query(
-      "SELECT connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,consent_purpose,consent_state,version,archived FROM instagram_contact_segments",
-    )
-  ).rows;
+  const stored = (await pool.query("SELECT connection_id,tag,field_id,field_operator,field_value,condition_operator,last_comment_from,last_comment_before,last_comment_days,consent_purpose,consent_state,version,archived FROM instagram_contact_segments")).rows;
   assert.deepEqual(stored, [
     {
       connection_id: null,
@@ -2449,9 +2025,7 @@ test("segment edits replace the whole definition, increment the version and chan
 
 test("stale, archived, missing and foreign segment edits write nothing", async () => {
   const segment = await createContactSegment(pool, a, { name: "Original" });
-  const edited = await (
-    await fieldRequest("PUT", segmentPath(segment.id), { name: "Edited", tag: "vip", expected_version: 1 })
-  ).json();
+  const edited = await (await fieldRequest("PUT", segmentPath(segment.id), { name: "Edited", tag: "vip", expected_version: 1 })).json();
   assert.equal(edited.version, 2);
   const before = await segmentRows();
   const stale = await fieldRequest("PUT", segmentPath(segment.id), { name: "Overwrite", expected_version: 1 });
@@ -2486,10 +2060,7 @@ test("segment edits keep active names unique, need an active admin and refuse fo
   assert.equal((await reused.json()).name, "Old");
   const agent = { id: "55555555-5555-4555-8555-555555555555", email: "agent@example.test" };
   const removed = { id: "66666666-6666-4666-8666-666666666666", email: "removed@example.test" };
-  await pool.query(
-    "INSERT INTO workspace_members(workspace_id,user_id,role,removed_at,removed_by) VALUES($1,$2,'agent',NULL,NULL),($1,$3,'admin',now(),$4)",
-    [workspace, agent.id, removed.id, a.id],
-  );
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role,removed_at,removed_by) VALUES($1,$2,'agent',NULL,NULL),($1,$3,'admin',now(),$4)", [workspace, agent.id, removed.id, a.id]);
   const before = await segmentRows();
   for (const [user, code] of [
     [agent, "role_forbidden"],
@@ -2502,17 +2073,11 @@ test("segment edits keep active names unique, need an active admin and refuse fo
   const archivedField = await createField("Archived edit field", "text");
   assert.equal((await fieldRequest("DELETE", `/api/contact-fields/${archivedField.id}`)).status, 200);
   const foreignField = await createField("Foreign edit field", "text").then(async (field) => {
-    await pool.query("UPDATE instagram_contact_fields SET workspace_id=$1 WHERE id=$2", [
-      await ensureWorkspace(pool, b),
-      field.id,
-    ]);
+    await pool.query("UPDATE instagram_contact_fields SET workspace_id=$1 WHERE id=$2", [await ensureWorkspace(pool, b), field.id]);
     return field;
   });
   const foreignConnection = "88888888-8888-4888-8888-888888888888";
-  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'foreign-edit')", [
-    foreignConnection,
-    await ensureWorkspace(pool, b),
-  ]);
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'foreign-edit')", [foreignConnection, await ensureWorkspace(pool, b)]);
   for (const [body, code] of [
     [{ field_id: archivedField.id, field_operator: "is_set" }, "field_not_found"],
     [{ field_id: foreignField.id, field_operator: "is_set" }, "field_not_found"],
@@ -2530,10 +2095,7 @@ test("an edit that adds a field holds it, so a concurrent field archive waits an
   const field = await createField("Race edit field", "text");
   const segment = await createContactSegment(pool, a, { name: "Race edit" });
   const other = "99999999-9999-4999-8999-999999999999";
-  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'race-edit')", [
-    other,
-    workspace,
-  ]);
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'race-edit')", [other, workspace]);
   // The blocker holds the new connection, so the edit's foreign-key check waits after it locked the field.
   const blocker = await pool.connect();
   try {
@@ -2561,10 +2123,7 @@ test("an edit that adds a field holds it, so a concurrent field archive waits an
     await blocker.query("ROLLBACK").catch(() => undefined);
     blocker.release();
   }
-  assert.equal(
-    (await pool.query("SELECT archived FROM instagram_contact_fields WHERE id=$1", [field.id])).rows[0].archived,
-    false,
-  );
+  assert.equal((await pool.query("SELECT archived FROM instagram_contact_fields WHERE id=$1", [field.id])).rows[0].archived, false);
   assert.equal((await listContactSegments(pool, a))[0]?.field_id, field.id);
 });
 
@@ -2599,9 +2158,7 @@ test("a field archive that commits before the edit reads the field makes the edi
 
 test("two edits of the same version store exactly one and refuse the other with the current segment", async () => {
   const segment = await createContactSegment(pool, a, { name: "Contested" });
-  const responses = await Promise.all(
-    ["One", "Two"].map((name) => fieldRequest("PUT", segmentPath(segment.id), { name, expected_version: 1 })),
-  );
+  const responses = await Promise.all(["One", "Two"].map((name) => fieldRequest("PUT", segmentPath(segment.id), { name, expected_version: 1 })));
   assert.deepEqual(responses.map((response) => response.status).sort(), [200, 409]);
   const winner = await responses.find((response) => response.status === 200)!.json();
   assert.equal(winner.version, 2);
@@ -2625,22 +2182,13 @@ test("segment version migration starts existing rows at 1 and enforces a positiv
     const migration = await readFile(new URL("../../db/migrations/054_segment_version.sql", import.meta.url), "utf8");
     await client.query(migration);
     await client.query(migration);
-    assert.deepEqual((await client.query("SELECT name,version FROM instagram_contact_segments")).rows, [
-      { name: "Legacy", version: 1 },
-    ]);
+    assert.deepEqual((await client.query("SELECT name,version FROM instagram_contact_segments")).rows, [{ name: "Legacy", version: 1 }]);
     await client.query("UPDATE instagram_contact_segments SET version=3");
     await client.query(migration);
     assert.equal((await client.query("SELECT version FROM instagram_contact_segments")).rows[0].version, 3);
     for (const change of ["version=0", "version=NULL"]) {
       await client.query("SAVEPOINT invalid_version");
-      await assert.rejects(
-        client.query(`UPDATE instagram_contact_segments SET ${change}`),
-        (error: unknown) =>
-          typeof error === "object" &&
-          error !== null &&
-          "code" in error &&
-          ["23514", "23502"].includes(String(error.code)),
-      );
+      await assert.rejects(client.query(`UPDATE instagram_contact_segments SET ${change}`), (error: unknown) => typeof error === "object" && error !== null && "code" in error && ["23514", "23502"].includes(String(error.code)));
       await client.query("ROLLBACK TO SAVEPOINT invalid_version");
     }
   } finally {
@@ -2656,36 +2204,17 @@ test("tag field operator migration defaults existing filters to AND and preserve
   try {
     await client.query("BEGIN");
     await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN condition_operator");
-    await client.query(
-      "INSERT INTO instagram_contact_segments(workspace_id,name,tag,field_id,field_operator,field_value) VALUES($1,'Legacy','lead',$2,'gte','0'::jsonb)",
-      [workspace, field.id],
-    );
-    const migration = await readFile(
-      new URL("../../db/migrations/037_tag_field_condition_operator.sql", import.meta.url),
-      "utf8",
-    );
+    await client.query("INSERT INTO instagram_contact_segments(workspace_id,name,tag,field_id,field_operator,field_value) VALUES($1,'Legacy','lead',$2,'gte','0'::jsonb)", [workspace, field.id]);
+    const migration = await readFile(new URL("../../db/migrations/037_tag_field_condition_operator.sql", import.meta.url), "utf8");
     await client.query(migration);
     await client.query(migration);
-    assert.deepEqual(
-      (await client.query("SELECT name,tag,field_value,condition_operator FROM instagram_contact_segments")).rows,
-      [{ name: "Legacy", tag: "lead", field_value: 0, condition_operator: "and" }],
-    );
+    assert.deepEqual((await client.query("SELECT name,tag,field_value,condition_operator FROM instagram_contact_segments")).rows, [{ name: "Legacy", tag: "lead", field_value: 0, condition_operator: "and" }]);
     await client.query("UPDATE instagram_contact_segments SET condition_operator='or'");
     await client.query(migration);
-    assert.equal(
-      (await client.query("SELECT condition_operator FROM instagram_contact_segments")).rows[0].condition_operator,
-      "or",
-    );
-    for (const change of [
-      "condition_operator='xor'",
-      "tag=NULL",
-      "field_id=NULL,field_operator=NULL,field_value=NULL",
-    ]) {
+    assert.equal((await client.query("SELECT condition_operator FROM instagram_contact_segments")).rows[0].condition_operator, "or");
+    for (const change of ["condition_operator='xor'", "tag=NULL", "field_id=NULL,field_operator=NULL,field_value=NULL"]) {
       await client.query("SAVEPOINT invalid_operator");
-      await assert.rejects(
-        client.query(`UPDATE instagram_contact_segments SET ${change}`),
-        (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "23514",
-      );
+      await assert.rejects(client.query(`UPDATE instagram_contact_segments SET ${change}`), (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "23514");
       await client.query("ROLLBACK TO SAVEPOINT invalid_operator");
     }
   } finally {
@@ -2699,19 +2228,12 @@ test("segment migration upgrades and replays while retaining saved filters", asy
   try {
     await client.query("BEGIN");
     // Snapshots (061), campaign drafts (063), approvals (064) and runs (065) depend on segments; remove them only in this rolled-back migration fixture.
-    await client.query(
-      "DROP TABLE campaign_deliveries,campaign_runs,campaign_approval_events,campaign_approvals,campaign_drafts,instagram_segment_snapshot_members,instagram_segment_snapshots,instagram_contact_segments",
-    );
+    await client.query("DROP TABLE campaign_deliveries,campaign_runs,campaign_approval_events,campaign_approvals,campaign_drafts,instagram_segment_snapshot_members,instagram_segment_snapshots,instagram_contact_segments");
     const migration = await readFile(new URL("../../db/migrations/009_contact_segments.sql", import.meta.url), "utf8");
     await client.query(migration);
-    await client.query(
-      "INSERT INTO instagram_contact_segments(workspace_id,name,tag) SELECT workspace_id,'saved','lead' FROM instagram_connections WHERE id=$1",
-      [connectionId],
-    );
+    await client.query("INSERT INTO instagram_contact_segments(workspace_id,name,tag) SELECT workspace_id,'saved','lead' FROM instagram_connections WHERE id=$1", [connectionId]);
     await client.query(migration);
-    assert.deepEqual((await client.query("SELECT name,tag,archived FROM instagram_contact_segments")).rows, [
-      { name: "saved", tag: "lead", archived: false },
-    ]);
+    assert.deepEqual((await client.query("SELECT name,tag,archived FROM instagram_contact_segments")).rows, [{ name: "saved", tag: "lead", archived: false }]);
   } finally {
     await client.query("ROLLBACK");
     client.release();
@@ -2735,23 +2257,18 @@ test("field migration upgrades and replays without losing typed values and condi
   ).json();
   await pool.query(migration);
   await pool.query(migration);
-  assert.equal(
-    (await listContacts(pool, a, new URLSearchParams({ segment_id: segment.id }))).contacts[0]!.fields[field.id],
-    false,
-  );
+  assert.equal((await listContacts(pool, a, new URLSearchParams({ segment_id: segment.id }))).contacts[0]!.fields[field.id], false);
 });
 
 test("typed field conditions retain keyset pagination across fifty matching contacts", async () => {
   const workspace = await ensureWorkspace(pool, a);
   const field = await createField("Confirmed", "boolean");
-  await pool.query(
-    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,'field-'||n,'media','field-sender-'||lpad(n::text,3,'0'),'private' FROM generate_series(1,51) n",
-    [workspace, connectionId],
-  );
-  await pool.query(
-    "INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) SELECT workspace_id,connection_id,sender_id,$3,'false'::jsonb FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2",
-    [workspace, connectionId, field.id],
-  );
+  await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,'field-'||n,'media','field-sender-'||lpad(n::text,3,'0'),'private' FROM generate_series(1,51) n", [workspace, connectionId]);
+  await pool.query("INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) SELECT workspace_id,connection_id,sender_id,$3,'false'::jsonb FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2", [
+    workspace,
+    connectionId,
+    field.id,
+  ]);
   const query = new URLSearchParams({ field_id: field.id, field_operator: "eq", field_value: "false" });
   const first = await listContacts(pool, a, query);
   assert.equal(first.contacts.length, 50);
@@ -2765,12 +2282,8 @@ test("typed field conditions retain keyset pagination across fifty matching cont
 });
 
 test("contact automation API stores only exact booleans for existing owned contacts", async () => {
-  const workspace = (await pool.query("SELECT workspace_id FROM instagram_connections WHERE id=$1", [connectionId]))
-    .rows[0].workspace_id;
-  await pool.query(
-    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'automation-comment','media','sender/one% test','hello')",
-    [workspace, connectionId],
-  );
+  const workspace = (await pool.query("SELECT workspace_id FROM instagram_connections WHERE id=$1", [connectionId])).rows[0].workspace_id;
+  await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'automation-comment','media','sender/one% test','hello')", [workspace, connectionId]);
   const path = `/api/connections/${connectionId}/contacts/${encodeURIComponent("sender/one% test")}/automation`;
   const paused = await fieldRequest("PUT", path, { paused: true });
   assert.equal(paused.status, 200);
@@ -2780,11 +2293,7 @@ test("contact automation API stores only exact booleans for existing owned conta
     assert.equal((await fieldRequest("PUT", path, body)).status, 400);
   }
   assert.equal((await fieldRequest("PUT", path, { paused: false }, b)).status, 404);
-  assert.equal(
-    (await fieldRequest("PUT", `/api/connections/${connectionId}/contacts/missing/automation`, { paused: true }))
-      .status,
-    404,
-  );
+  assert.equal((await fieldRequest("PUT", `/api/connections/${connectionId}/contacts/missing/automation`, { paused: true })).status, 404);
   const resumed = await fieldRequest("PUT", path, { paused: false });
   assert.equal(resumed.status, 200);
   assert.deepEqual(await resumed.json(), { automation_paused: false });
@@ -2795,15 +2304,13 @@ test("contact automation API stores only exact booleans for existing owned conta
   assert.equal((await listContacts(pool, a)).contacts[0]!.automation_paused, false);
 });
 
-const manualPath = (suffix = "", recipient = "456", connection = connectionId) =>
-  `/api/connections/${connection}/inbox/${recipient}/replies${suffix}`;
+const manualPath = (suffix = "", recipient = "456", connection = connectionId) => `/api/connections/${connection}/inbox/${recipient}/replies${suffix}`;
 const manualBody = {
   request_key: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   text: "Manual answer",
   expected_handoff_version: 1,
 };
-const manualRequest = (method: string, suffix = "", body?: unknown, user = a, sendEnabled = "true") =>
-  fieldRequest(method, manualPath(suffix), body, user, sendEnabled);
+const manualRequest = (method: string, suffix = "", body?: unknown, user = a, sendEnabled = "true") => fieldRequest(method, manualPath(suffix), body, user, sendEnabled);
 async function readyManual() {
   await readyHandoff();
   assert.equal((await setHandoff(true, 0)).status, 200);
@@ -2834,10 +2341,7 @@ test("scheduled manual reply preserves its instant and does not block a later im
   assert.equal(first.schedule_time_zone, "Asia/Seoul");
   assert.equal(first.schedule_version, 1);
   assert.ok(Date.parse(first.scheduled_at) > Date.now());
-  await pool.query(
-    "UPDATE workspaces SET time_zone='America/New_York' WHERE id=(SELECT workspace_id FROM instagram_connections WHERE id=$1)",
-    [connectionId],
-  );
+  await pool.query("UPDATE workspaces SET time_zone='America/New_York' WHERE id=(SELECT workspace_id FROM instagram_connections WHERE id=$1)", [connectionId]);
   assert.equal((await (await manualRequest("POST", "", body)).json()).scheduled_at, first.scheduled_at);
   const changedZone = await manualRequest("POST", "", { ...body, request_key: randomUUID() });
   assert.equal(changedZone.status, 409);
@@ -2851,23 +2355,12 @@ test("scheduled manual reply preserves its instant and does not block a later im
     },
   };
   assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), false);
-  assert.equal(
-    (await manualRequest("POST", "", { ...manualBody, request_key: randomUUID(), text: "Immediate" })).status,
-    202,
-  );
+  assert.equal((await manualRequest("POST", "", { ...manualBody, request_key: randomUUID(), text: "Immediate" })).status, 202);
   assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), true);
   assert.deepEqual(sent, ["Immediate"]);
-  await pool.query("UPDATE instagram_manual_replies SET next_attempt_at=now()-interval '1 minute' WHERE id=$1", [
-    first.id,
-  ]);
-  assert.equal(
-    await processNextManualReply(pool, connectionId, transport, "encrypted-test"),
-    false,
-    "retry time cannot bypass the scheduled instant",
-  );
-  await pool.query("UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute' WHERE id=$1", [
-    first.id,
-  ]);
+  await pool.query("UPDATE instagram_manual_replies SET next_attempt_at=now()-interval '1 minute' WHERE id=$1", [first.id]);
+  assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), false, "retry time cannot bypass the scheduled instant");
+  await pool.query("UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute' WHERE id=$1", [first.id]);
   assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), true);
   assert.deepEqual(sent, ["Immediate", manualBody.text]);
 });
@@ -2882,9 +2375,7 @@ test("scheduled manual reply waits for a later bypassing unknown reply to be res
       schedule_local: await scheduleLocal(),
     })
   ).json();
-  const immediate = await (
-    await manualRequest("POST", "", { ...manualBody, request_key: randomUUID(), text: "Immediate" })
-  ).json();
+  const immediate = await (await manualRequest("POST", "", { ...manualBody, request_key: randomUUID(), text: "Immediate" })).json();
   const attempted: string[] = [];
   const transport = {
     verifyAccount: async () => true,
@@ -2895,14 +2386,8 @@ test("scheduled manual reply waits for a later bypassing unknown reply to be res
     },
   };
   assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), true);
-  assert.equal(
-    (await pool.query("SELECT status FROM instagram_manual_replies WHERE id=$1", [immediate.id])).rows[0].status,
-    "unknown",
-  );
-  await pool.query(
-    "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
-    [scheduled.id],
-  );
+  assert.equal((await pool.query("SELECT status FROM instagram_manual_replies WHERE id=$1", [immediate.id])).rows[0].status, "unknown");
+  await pool.query("UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1", [scheduled.id]);
   assert.equal(await processNextManualReply(pool, connectionId, transport, "encrypted-test"), false);
   assert.deepEqual(attempted, ["Immediate"]);
   assert.equal(
@@ -2921,21 +2406,8 @@ test("scheduled manual reply waits for a later bypassing unknown reply to be res
 
 test("scheduled manual reply rejects invalid wall times and times outside the current reply window", async () => {
   await readyManual();
-  for (const schedule_local of [
-    null,
-    42,
-    "",
-    "2026-02-30T12:00",
-    "2026-10-16T24:00",
-    "2026-10-16T12:00Z",
-    await scheduleLocal(0),
-    await scheduleLocal(1441),
-  ]) {
-    assert.equal(
-      (await manualRequest("POST", "", { ...manualBody, schedule_local, expected_time_zone: "Asia/Seoul" })).status,
-      400,
-      String(schedule_local),
-    );
+  for (const schedule_local of [null, 42, "", "2026-02-30T12:00", "2026-10-16T24:00", "2026-10-16T12:00Z", await scheduleLocal(0), await scheduleLocal(1441)]) {
+    assert.equal((await manualRequest("POST", "", { ...manualBody, schedule_local, expected_time_zone: "Asia/Seoul" })).status, 400, String(schedule_local));
   }
   assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_replies")).rows[0].count, "0");
   const body = { ...manualBody, expected_time_zone: "Asia/Seoul", schedule_local: await scheduleLocal() };
@@ -2963,10 +2435,7 @@ test("scheduled manual reply changes are versioned idempotent scoped and cancell
     schedule_local: await scheduleLocal(90),
   };
   const agent = { id: "44444444-4444-4444-8444-444444444444", email: "agent@example.test" };
-  await pool.query(
-    "INSERT INTO workspace_members(user_id,workspace_id,role) SELECT $1,workspace_id,'agent' FROM instagram_connections WHERE id=$2",
-    [agent.id, connectionId],
-  );
+  await pool.query("INSERT INTO workspace_members(user_id,workspace_id,role) SELECT $1,workspace_id,'agent' FROM instagram_connections WHERE id=$2", [agent.id, connectionId]);
   assert.equal((await manualRequest("PATCH", `/${reply.id}/schedule`, edit, agent)).status, 403);
   assert.equal((await manualRequest("PATCH", `/${reply.id}/schedule`, edit, b)).status, 404);
   // Security audit #62, fourth pass: cancel is refused the same way, and neither refusal changes the row, so the
@@ -2979,21 +2448,14 @@ test("scheduled manual reply changes are versioned idempotent scoped and cancell
   assert.equal((await edited.json()).schedule_version, 2);
   assert.equal((await manualRequest("PATCH", `/${reply.id}/schedule`, edit)).status, 200);
   assert.equal((await manualRequest("PATCH", `/${reply.id}/schedule`, { ...edit, text: "Key reuse" })).status, 409);
-  assert.equal(
-    (await manualRequest("PATCH", `/${reply.id}/schedule`, { ...edit, request_key: randomUUID() })).status,
-    409,
-  );
+  assert.equal((await manualRequest("PATCH", `/${reply.id}/schedule`, { ...edit, request_key: randomUUID() })).status, 409);
   const cancel = { request_key: randomUUID(), expected_version: 2 };
   await pool.query("UPDATE instagram_connections SET send_enabled=false WHERE id=$1", [connectionId]);
   const cancelled = await manualRequest("POST", `/${reply.id}/cancel`, cancel, a, "false");
   assert.equal(cancelled.status, 200);
   assert.equal((await cancelled.json()).status, "cancelled");
   assert.equal((await manualRequest("POST", `/${reply.id}/cancel`, cancel)).status, 200);
-  assert.equal(
-    (await manualRequest("PATCH", `/${reply.id}/schedule`, { ...edit, request_key: randomUUID(), expected_version: 3 }))
-      .status,
-    409,
-  );
+  assert.equal((await manualRequest("PATCH", `/${reply.id}/schedule`, { ...edit, request_key: randomUUID(), expected_version: 3 })).status, 409);
   assert.deepEqual(
     (await pool.query("SELECT kind FROM instagram_manual_reply_events ORDER BY created_at,id")).rows.map((r) => r.kind),
     ["queued", "rescheduled", "cancelled"],
@@ -3039,14 +2501,8 @@ test("scheduled manual reply creation replay survives a later edit and cancellat
   assert.equal(replay.status, 202);
   assert.equal((await replay.json()).text, "Changed after acceptance");
   assert.equal((await manualRequest("POST", "", { ...original, text: "Changed after acceptance" })).status, 409);
-  assert.equal(
-    (await manualRequest("POST", `/${created.id}/cancel`, { request_key: randomUUID(), expected_version: 2 })).status,
-    200,
-  );
-  await pool.query(
-    "UPDATE workspaces SET time_zone='UTC' WHERE id=(SELECT workspace_id FROM instagram_connections WHERE id=$1)",
-    [connectionId],
-  );
+  assert.equal((await manualRequest("POST", `/${created.id}/cancel`, { request_key: randomUUID(), expected_version: 2 })).status, 200);
+  await pool.query("UPDATE workspaces SET time_zone='UTC' WHERE id=(SELECT workspace_id FROM instagram_connections WHERE id=$1)", [connectionId]);
   const cancelledReplay = await manualRequest("POST", "", original);
   assert.equal(cancelledReplay.status, 202);
   assert.equal((await cancelledReplay.json()).status, "cancelled");
@@ -3057,22 +2513,11 @@ test("scheduled manual reply rechecks removed creators at the final provider gua
   const { processNextManualReply, assertManualReplyAllowed } = await import("../instagram/manual-reply-worker.ts");
   await readyManual();
   const creator = { id: "44444444-4444-4444-8444-444444444444", email: "creator@example.test" };
-  await pool.query(
-    "INSERT INTO workspace_members(user_id,workspace_id,role) SELECT $1,workspace_id,'agent' FROM instagram_connections WHERE id=$2",
-    [creator.id, connectionId],
-  );
-  const response = await manualRequest(
-    "POST",
-    "",
-    { ...manualBody, expected_time_zone: "Asia/Seoul", schedule_local: await scheduleLocal() },
-    creator,
-  );
+  await pool.query("INSERT INTO workspace_members(user_id,workspace_id,role) SELECT $1,workspace_id,'agent' FROM instagram_connections WHERE id=$2", [creator.id, connectionId]);
+  const response = await manualRequest("POST", "", { ...manualBody, expected_time_zone: "Asia/Seoul", schedule_local: await scheduleLocal() }, creator);
   assert.equal(response.status, 202);
   const reply = await response.json();
-  await pool.query(
-    "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
-    [reply.id],
-  );
+  await pool.query("UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1", [reply.id]);
   let posts = 0;
   assert.equal(
     await processNextManualReply(
@@ -3081,10 +2526,7 @@ test("scheduled manual reply rechecks removed creators at the final provider gua
       {
         verifyAccount: async () => true,
         async send(_recipient, _text, context) {
-          await pool.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [
-            creator.id,
-            a.id,
-          ]);
+          await pool.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [creator.id, a.id]);
           await assertManualReplyAllowed(pool, context!.replyId, context!.attemptId, connectionId, "encrypted-test");
           posts++;
           return { messageId: "must-not-send" };
@@ -3095,10 +2537,7 @@ test("scheduled manual reply rechecks removed creators at the final provider gua
     true,
   );
   assert.equal(posts, 0);
-  assert.deepEqual(
-    (await pool.query("SELECT status,failure_code FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0],
-    { status: "failed", failure_code: "scheduled_actor_unavailable" },
-  );
+  assert.deepEqual((await pool.query("SELECT status,failure_code FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0], { status: "failed", failure_code: "scheduled_actor_unavailable" });
   assert.equal(await processNextManualReply(pool, connectionId, null, "encrypted-test"), false);
 });
 
@@ -3112,10 +2551,7 @@ test("scheduled manual reply claim prevents edit or cancellation while provider 
       schedule_local: await scheduleLocal(),
     })
   ).json();
-  await pool.query(
-    "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
-    [reply.id],
-  );
+  await pool.query("UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1", [reply.id]);
   let entered!: () => void, release!: () => void;
   const admission = new Promise<void>((resolve) => {
     entered = resolve;
@@ -3142,10 +2578,7 @@ test("scheduled manual reply claim prevents edit or cancellation while provider 
   );
   try {
     assert.equal(await Promise.race([admission.then(() => true), worker.then(() => false)]), true);
-    assert.equal(
-      (await manualRequest("POST", `/${reply.id}/cancel`, { request_key: randomUUID(), expected_version: 1 })).status,
-      409,
-    );
+    assert.equal((await manualRequest("POST", `/${reply.id}/cancel`, { request_key: randomUUID(), expected_version: 1 })).status, 409);
     assert.equal(
       (
         await manualRequest("PATCH", `/${reply.id}/schedule`, {
@@ -3163,10 +2596,7 @@ test("scheduled manual reply claim prevents edit or cancellation while provider 
     await worker;
   }
   assert.equal(posts, 1);
-  assert.equal(
-    (await pool.query("SELECT text FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0].text,
-    manualBody.text,
-  );
+  assert.equal((await pool.query("SELECT text FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0].text, manualBody.text);
 });
 
 for (const failureCode of ["reply_window_closed", "handoff_changed", "recipient_opted_out"]) {
@@ -3180,18 +2610,14 @@ for (const failureCode of ["reply_window_closed", "handoff_changed", "recipient_
     });
     assert.equal(response.status, 202);
     const reply = await response.json();
-    await pool.query(
-      "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
-      [reply.id],
-    );
+    await pool.query("UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1", [reply.id]);
     let posts = 0;
     await processNextManualReply(
       pool,
       connectionId,
       {
         async verifyAccount() {
-          if (failureCode === "reply_window_closed")
-            await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours'");
+          if (failureCode === "reply_window_closed") await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours'");
           else if (failureCode === "handoff_changed") assert.equal((await setHandoff(false, 1)).status, 200);
           else
             await recordChannelConsentEvent(pool, {
@@ -3218,10 +2644,7 @@ for (const failureCode of ["reply_window_closed", "handoff_changed", "recipient_
       "encrypted-test",
     );
     assert.equal(posts, 0);
-    assert.deepEqual(
-      (await pool.query("SELECT status,failure_code FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0],
-      { status: "failed", failure_code: failureCode },
-    );
+    assert.deepEqual((await pool.query("SELECT status,failure_code FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0], { status: "failed", failure_code: failureCode });
     assert.equal(await processNextManualReply(pool, connectionId, null, "encrypted-test"), false);
   });
 }
@@ -3230,18 +2653,8 @@ test("scheduled manual reply permits its creator and administrators and keeps va
   const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
   await readyManual();
   const creator = { id: "44444444-4444-4444-8444-444444444444", email: "creator@example.test" };
-  await pool.query(
-    "INSERT INTO workspace_members(user_id,workspace_id,role) SELECT $1,workspace_id,'admin' FROM instagram_connections WHERE id=$2",
-    [creator.id, connectionId],
-  );
-  const reply = await (
-    await manualRequest(
-      "POST",
-      "",
-      { ...manualBody, expected_time_zone: "Asia/Seoul", schedule_local: await scheduleLocal() },
-      creator,
-    )
-  ).json();
+  await pool.query("INSERT INTO workspace_members(user_id,workspace_id,role) SELECT $1,workspace_id,'admin' FROM instagram_connections WHERE id=$2", [creator.id, connectionId]);
+  const reply = await (await manualRequest("POST", "", { ...manualBody, expected_time_zone: "Asia/Seoul", schedule_local: await scheduleLocal() }, creator)).json();
   const body = {
     request_key: randomUUID(),
     expected_version: 1,
@@ -3252,10 +2665,7 @@ test("scheduled manual reply permits its creator and administrators and keeps va
   assert.equal((await manualRequest("PATCH", `/${reply.id}/schedule`, body, creator)).status, 200);
   // Security audit #62, fourth pass: another member cannot replay the creator's operation key, even unchanged.
   const replayed = await manualRequest("PATCH", `/${reply.id}/schedule`, body);
-  assert.deepEqual(
-    [replayed.status, ((await replayed.json()) as { error: string }).error],
-    [409, "idempotency_conflict"],
-  );
+  assert.deepEqual([replayed.status, ((await replayed.json()) as { error: string }).error], [409, "idempotency_conflict"]);
   assert.equal(
     (
       await manualRequest("PATCH", `/${reply.id}/schedule`, {
@@ -3268,10 +2678,7 @@ test("scheduled manual reply permits its creator and administrators and keeps va
     200,
   );
   await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [creator.id]);
-  await pool.query(
-    "UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1",
-    [reply.id],
-  );
+  await pool.query("UPDATE instagram_manual_replies SET scheduled_at=now()-interval '1 minute',next_attempt_at=now()-interval '1 minute' WHERE id=$1", [reply.id]);
   let posts = 0;
   assert.equal(
     await processNextManualReply(
@@ -3308,21 +2715,10 @@ test("scheduled manual reply edit and cancel race has one version winner", async
     expected_time_zone: "Asia/Seoul",
     schedule_local: await scheduleLocal(90),
   };
-  const results = await Promise.all([
-    manualRequest("PATCH", `/${reply.id}/schedule`, edit),
-    manualRequest("POST", `/${reply.id}/cancel`, { request_key: randomUUID(), expected_version: 1 }),
-  ]);
+  const results = await Promise.all([manualRequest("PATCH", `/${reply.id}/schedule`, edit), manualRequest("POST", `/${reply.id}/cancel`, { request_key: randomUUID(), expected_version: 1 })]);
   assert.deepEqual(results.map((r) => r.status).sort(), [200, 409]);
-  assert.equal(
-    (await pool.query("SELECT schedule_version FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0]
-      .schedule_version,
-    2,
-  );
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS count FROM instagram_manual_reply_events WHERE reply_id=$1", [reply.id]))
-      .rows[0].count,
-    2,
-  );
+  assert.equal((await pool.query("SELECT schedule_version FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0].schedule_version, 2);
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_manual_reply_events WHERE reply_id=$1", [reply.id])).rows[0].count, 2);
 });
 
 test("scheduled manual reply migration export and workspace deletion preserve the complete lifecycle", async () => {
@@ -3335,43 +2731,21 @@ test("scheduled manual reply migration export and workspace deletion preserve th
       schedule_local: await scheduleLocal(),
     })
   ).json();
-  assert.equal(
-    (await manualRequest("POST", `/${reply.id}/cancel`, { request_key: randomUUID(), expected_version: 1 })).status,
-    200,
-  );
+  assert.equal((await manualRequest("POST", `/${reply.id}/cancel`, { request_key: randomUUID(), expected_version: 1 })).status, 200);
   const before = (await pool.query("SELECT * FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0];
-  const migration = await readFile(
-    new URL("../../db/migrations/049_inbox_scheduled_replies.sql", import.meta.url),
-    "utf8",
-  );
+  const migration = await readFile(new URL("../../db/migrations/049_inbox_scheduled_replies.sql", import.meta.url), "utf8");
   await pool.query(migration);
   await pool.query(migration);
-  assert.deepEqual(
-    (await pool.query("SELECT * FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0],
-    before,
-  );
+  assert.deepEqual((await pool.query("SELECT * FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0], before);
   const exported = JSON.parse((await exportWorkspace(pool, a)).body);
   assert.equal(exported.tables.instagram_manual_replies[0].status, "cancelled");
   assert.equal(exported.tables.instagram_manual_replies[0].schedule_time_zone, "Asia/Seoul");
-  assert.ok(
-    exported.tables.instagram_manual_reply_events.some((event: { kind: string }) => event.kind === "cancelled"),
-  );
+  assert.ok(exported.tables.instagram_manual_reply_events.some((event: { kind: string }) => event.kind === "cancelled"));
   const workspace = await ensureWorkspace(pool, a);
-  await pool.query(
-    "UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1",
-    [connectionId],
-  );
-  const deleted = (await pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [workspace, a.id])).rows[0]
-    .result;
+  await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1", [connectionId]);
+  const deleted = (await pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [workspace, a.id])).rows[0].result;
   assert.equal(deleted.deleted_counts.instagram_manual_replies, 1);
-  assert.equal(
-    (
-      await pool.query("SELECT count(*)::int AS count FROM instagram_manual_reply_events WHERE workspace_id=$1", [
-        workspace,
-      ])
-    ).rows[0].count,
-    0,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_manual_reply_events WHERE workspace_id=$1", [workspace])).rows[0].count, 0);
 });
 
 test("manual reply capabilities describe support without overriding current eligibility", async () => {
@@ -3455,10 +2829,7 @@ test("manual reply status reports the server window and current handoff without 
 test("manual reply status rejects disabled sending and expired windows without mutating delivery", async () => {
   await readyManual();
   const path = `/api/connections/${connectionId}/inbox/456/reply-status`;
-  assert.equal(
-    (await (await fieldRequest("GET", path, undefined, a, "false")).json()).failure_code,
-    "global_send_disabled",
-  );
+  assert.equal((await (await fieldRequest("GET", path, undefined, a, "false")).json()).failure_code, "global_send_disabled");
   await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '24 hours'");
   const result = await (await fieldRequest("GET", path)).json();
   assert.equal(result.allowed, false);
@@ -3542,10 +2913,7 @@ test("manual reply retry is explicit audited idempotent and forbids unknown outc
   const initial = await manualRequest("POST", "", manualBody);
   assert.equal(initial.status, 202);
   const reply = await initial.json();
-  await pool.query(
-    "UPDATE instagram_manual_replies SET status='unknown',failure_code='worker_interrupted' WHERE id=$1",
-    [reply.id],
-  );
+  await pool.query("UPDATE instagram_manual_replies SET status='unknown',failure_code='worker_interrupted' WHERE id=$1", [reply.id]);
   const retry = {
     request_key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
     expected_handoff_version: 1,
@@ -3559,14 +2927,8 @@ test("manual reply retry is explicit audited idempotent and forbids unknown outc
   };
   assert.equal((await manualRequest("POST", `/${reply.id}/resolution`, decision)).status, 200);
   assert.equal((await manualRequest("POST", `/${reply.id}/resolution`, decision)).status, 200);
-  await pool.query(
-    "UPDATE instagram_manual_replies SET status='failed',safe_to_retry=true,resolved_at=NULL,failure_code='meta_error_10' WHERE id=$1",
-    [reply.id],
-  );
-  const responses = await Promise.all([
-    manualRequest("POST", `/${reply.id}/retry`, retry),
-    manualRequest("POST", `/${reply.id}/retry`, retry),
-  ]);
+  await pool.query("UPDATE instagram_manual_replies SET status='failed',safe_to_retry=true,resolved_at=NULL,failure_code='meta_error_10' WHERE id=$1", [reply.id]);
+  const responses = await Promise.all([manualRequest("POST", `/${reply.id}/retry`, retry), manualRequest("POST", `/${reply.id}/retry`, retry)]);
   for (const response of responses) assert.equal(response.status, 202);
   const rows = await Promise.all(responses.map((r) => r.json()));
   assert.equal(rows[0].id, rows[1].id);
@@ -3579,14 +2941,8 @@ test("manual reply retry is explicit audited idempotent and forbids unknown outc
     ).status,
     409,
   );
-  assert.equal(
-    (await pool.query("SELECT count(*) FROM instagram_manual_reply_events WHERE kind='no_retry'")).rows[0].count,
-    "1",
-  );
-  assert.equal(
-    (await pool.query("SELECT count(*) FROM instagram_manual_reply_events WHERE kind='retry_requested'")).rows[0].count,
-    "1",
-  );
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_reply_events WHERE kind='no_retry'")).rows[0].count, "1");
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_reply_events WHERE kind='retry_requested'")).rows[0].count, "1");
 });
 
 test("another workspace cannot retry, resolve or read the delivery state of a manual reply", async () => {
@@ -3602,17 +2958,11 @@ test("another workspace cannot retry, resolve or read the delivery state of a ma
     decision: "no_retry",
     reason: "Foreign resolution",
   };
-  await pool.query(
-    "UPDATE instagram_manual_replies SET status='failed',safe_to_retry=true,failure_code='meta_error_10' WHERE id=$1",
-    [reply.id],
-  );
+  await pool.query("UPDATE instagram_manual_replies SET status='failed',safe_to_retry=true,failure_code='meta_error_10' WHERE id=$1", [reply.id]);
   assert.equal((await manualRequest("POST", `/${reply.id}/retry`, retry, b)).status, 404);
   await pool.query("UPDATE instagram_manual_replies SET status='unknown',safe_to_retry=false WHERE id=$1", [reply.id]);
   assert.equal((await manualRequest("POST", `/${reply.id}/resolution`, decision, b)).status, 404);
-  assert.equal(
-    (await fieldRequest("GET", `/api/connections/${connectionId}/inbox/456/reply-status`, undefined, b)).status,
-    404,
-  );
+  assert.equal((await fieldRequest("GET", `/api/connections/${connectionId}/inbox/456/reply-status`, undefined, b)).status, 404);
   const rows = await pool.query("SELECT status, resolved_at FROM instagram_manual_replies ORDER BY created_at");
   assert.deepEqual(rows.rows, [{ status: "unknown", resolved_at: null }]);
   assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_reply_events")).rows[0].count, "1");
@@ -3621,8 +2971,7 @@ test("another workspace cannot retry, resolve or read the delivery state of a ma
 test("manual reply worker serializes a conversation and preserves ambiguous outcomes until resolution", async () => {
   const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
   await readyManual();
-  for (const request_key of [manualBody.request_key, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"])
-    assert.equal((await manualRequest("POST", "", { ...manualBody, request_key })).status, 202);
+  for (const request_key of [manualBody.request_key, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"]) assert.equal((await manualRequest("POST", "", { ...manualBody, request_key })).status, 202);
   let entered!: () => void, release!: () => void;
   const admission = new Promise<void>((r) => (entered = r)),
     finish = new Promise<void>((r) => (release = r));
@@ -3673,10 +3022,7 @@ test("manual reply worker serializes a conversation and preserves ambiguous outc
     ),
     true,
   );
-  assert.equal(
-    (await pool.query("SELECT count(*) FROM instagram_manual_replies WHERE status='sent'")).rows[0].count,
-    "1",
-  );
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_replies WHERE status='sent'")).rows[0].count, "1");
 });
 
 test("manual reply worker records definite refusals safely and interrupted sends as unknown", async () => {
@@ -3702,18 +3048,11 @@ test("manual reply worker records definite refusals safely and interrupted sends
     ),
     true,
   );
-  let row = (
-    await pool.query("SELECT status,safe_to_retry,failure_code FROM instagram_manual_replies WHERE id=$1", [reply.id])
-  ).rows[0];
+  let row = (await pool.query("SELECT status,safe_to_retry,failure_code FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0];
   assert.deepEqual(row, { status: "failed", safe_to_retry: true, failure_code: "meta_error_10" });
-  await pool.query(
-    "UPDATE instagram_manual_replies SET status='sending',safe_to_retry=false,attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '11 minutes' WHERE id=$1",
-    [reply.id],
-  );
+  await pool.query("UPDATE instagram_manual_replies SET status='sending',safe_to_retry=false,attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '11 minutes' WHERE id=$1", [reply.id]);
   await recoverStaleManualReplies(pool);
-  row = (
-    await pool.query("SELECT status,safe_to_retry,failure_code FROM instagram_manual_replies WHERE id=$1", [reply.id])
-  ).rows[0];
+  row = (await pool.query("SELECT status,safe_to_retry,failure_code FROM instagram_manual_replies WHERE id=$1", [reply.id])).rows[0];
   assert.deepEqual(row, { status: "unknown", safe_to_retry: false, failure_code: "worker_interrupted" });
 });
 
@@ -3770,8 +3109,7 @@ test("manual reply final guard refuses handoff resume token change expired windo
         : {
             status: "failed",
             safe_to_retry: true,
-            failure_code:
-              index === 0 ? "handoff_changed" : index === 2 ? "reply_window_closed" : "handoff_identity_unverified",
+            failure_code: index === 0 ? "handoff_changed" : index === 2 ? "reply_window_closed" : "handoff_identity_unverified",
           },
     );
   }
@@ -3786,9 +3124,7 @@ test("manual reply audit failure rolls back queue and delivery outcome together"
     assert.equal((await manualRequest("POST", "", manualBody)).status, 503);
     assert.equal((await pool.query("SELECT count(*) FROM instagram_manual_replies")).rows[0].count, "0");
   } finally {
-    await pool.query(
-      "DROP TRIGGER reject_manual_audit ON instagram_manual_reply_events; DROP FUNCTION reject_manual_audit()",
-    );
+    await pool.query("DROP TRIGGER reject_manual_audit ON instagram_manual_reply_events; DROP FUNCTION reject_manual_audit()");
   }
 });
 
@@ -3840,9 +3176,7 @@ test("manual reply verification failure defers without POST and nonfinite inboun
     true,
   );
   assert.equal(sends, 0);
-  const row = (
-    await pool.query("SELECT status,failure_code,next_attempt_at>now() AS delayed FROM instagram_manual_replies")
-  ).rows[0];
+  const row = (await pool.query("SELECT status,failure_code,next_attempt_at>now() AS delayed FROM instagram_manual_replies")).rows[0];
   assert.deepEqual(row, { status: "pending", failure_code: "verification_unavailable", delayed: true });
 });
 
@@ -3865,9 +3199,7 @@ test("manual reply account read: a 200 without a usable user_id defers, another 
         return Response.json(me);
       },
     });
-  const state = async () =>
-    (await pool.query("SELECT status,failure_code,next_attempt_at>now() AS delayed FROM instagram_manual_replies"))
-      .rows[0];
+  const state = async () => (await pool.query("SELECT status,failure_code,next_attempt_at>now() AS delayed FROM instagram_manual_replies")).rows[0];
   assert.equal(await processNextManualReply(pool, connectionId, transport({}), "encrypted-test"), true);
   assert.deepEqual(await state(), { status: "pending", failure_code: "verification_unavailable", delayed: true });
   await pool.query("UPDATE instagram_manual_replies SET next_attempt_at=now()-interval '1 minute'");
@@ -3926,17 +3258,14 @@ test("manual reply sent audit failure preserves claim for unknown recovery inste
     await recoverStaleManualReplies(pool);
     assert.equal((await pool.query("SELECT status FROM instagram_manual_replies")).rows[0].status, "unknown");
   } finally {
-    await pool.query(
-      "DROP TRIGGER reject_sent_audit ON instagram_manual_reply_events; DROP FUNCTION reject_sent_audit()",
-    );
+    await pool.query("DROP TRIGGER reject_sent_audit ON instagram_manual_reply_events; DROP FUNCTION reject_sent_audit()");
   }
 });
 
 test("manual reply skips a locked oldest row without claiming the next conversation row", async () => {
   const { processNextManualReply } = await import("../instagram/manual-reply-worker.ts");
   await readyManual();
-  for (const request_key of [manualBody.request_key, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"])
-    assert.equal((await manualRequest("POST", "", { ...manualBody, request_key })).status, 202);
+  for (const request_key of [manualBody.request_key, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"]) assert.equal((await manualRequest("POST", "", { ...manualBody, request_key })).status, 202);
   const locker = await pool.connect();
   let sends = 0;
   try {
@@ -4008,11 +3337,7 @@ test("manual reply defers a transient final guard refusal with no provider POST"
     },
     "encrypted-test",
   );
-  assert.deepEqual(
-    (await pool.query("SELECT status,failure_code,next_attempt_at>now() AS delayed FROM instagram_manual_replies"))
-      .rows[0],
-    { status: "pending", failure_code: "verification_unavailable", delayed: true },
-  );
+  assert.deepEqual((await pool.query("SELECT status,failure_code,next_attempt_at>now() AS delayed FROM instagram_manual_replies")).rows[0], { status: "pending", failure_code: "verification_unavailable", delayed: true });
 });
 
 test("manual reply transient DB guard failure defers before even verifying the account", async () => {
@@ -4052,11 +3377,7 @@ test("manual reply transient DB guard failure defers before even verifying the a
   );
   assert.equal(reads, 0);
   assert.equal(sends, 0);
-  assert.deepEqual(
-    (await pool.query("SELECT status,failure_code,next_attempt_at>now() AS delayed FROM instagram_manual_replies"))
-      .rows[0],
-    { status: "pending", failure_code: "verification_unavailable", delayed: true },
-  );
+  assert.deepEqual((await pool.query("SELECT status,failure_code,next_attempt_at>now() AS delayed FROM instagram_manual_replies")).rows[0], { status: "pending", failure_code: "verification_unavailable", delayed: true });
 });
 
 // Freeze only the database clock in the real aggregate for exact microsecond boundaries.
@@ -4065,10 +3386,7 @@ function relativeClock(asOf: string, source = pool): Pool {
     query: async (sql: string, values: unknown[] = []) => {
       if (sql.includes("statement_timestamp()")) {
         assert.equal(sql.match(/statement_timestamp\(\)/g)?.length, 1, "one evaluation clock per lookup");
-        return source.query(sql.replace("statement_timestamp()", `$${values.length + 1}::timestamptz`), [
-          ...values,
-          asOf,
-        ]);
+        return source.query(sql.replace("statement_timestamp()", `$${values.length + 1}::timestamptz`), [...values, asOf]);
       }
       return source.query(sql, values);
     },
@@ -4088,10 +3406,7 @@ test("relative comment activity uses one half-open 24-hour window for counts, sa
     ["latest-outside", "2026-03-08T12:00:00.000000Z"],
   ];
   for (const [i, [sender, at]] of rows.entries())
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$4,'private',$5)",
-      [workspace, connectionId, `relative-${i}`, sender, at],
-    );
+    await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$4,'private',$5)", [workspace, connectionId, `relative-${i}`, sender, at]);
   const q = new URLSearchParams({ last_comment_days: "1", preview: "true" });
   const clock = relativeClock(asOf);
   const result = await listContacts(clock, a, q);
@@ -4120,10 +3435,7 @@ test("relative comment activity uses one half-open 24-hour window for counts, sa
     await client.query("SET LOCAL TIME ZONE 'America/New_York'");
     const dst = await listContacts(relativeClock(asOf, { query: client.query.bind(client) } as unknown as Pool), a, q);
     assert.deepEqual(dst.contacts, result.contacts);
-    assert.deepEqual(
-      (dst as unknown as { activity_window: unknown }).activity_window,
-      (result as unknown as { activity_window: unknown }).activity_window,
-    );
+    assert.deepEqual((dst as unknown as { activity_window: unknown }).activity_window, (result as unknown as { activity_window: unknown }).activity_window);
   } finally {
     await client.query("ROLLBACK");
     client.release();
@@ -4146,34 +3458,18 @@ test("relative comment activity saves days, preserves old shapes, validates inpu
   const body = await response.json();
   assert.equal(body.total, "0");
   assert.match(body.activity_window.before, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/);
-  assert.ok(
-    Date.parse(body.activity_window.before) >= liveBefore && Date.parse(body.activity_window.before) <= Date.now(),
-  );
+  assert.ok(Date.parse(body.activity_window.before) >= liveBefore && Date.parse(body.activity_window.before) <= Date.now());
   assert.equal(Date.parse(body.activity_window.before) - Date.parse(body.activity_window.from), 7 * 86400000);
   const next = await (await fieldRequest("GET", `/api/contacts?segment_id=${saved.id}`)).json();
   assert.ok(next.activity_window.before > body.activity_window.before, "each request evaluates a new clock");
   assert.equal(Date.parse(next.activity_window.before) - Date.parse(next.activity_window.from), 7 * 86400000);
   assert.equal((await fieldRequest("GET", `/api/contacts?segment_id=${saved.id}&last_comment_days=7`)).status, 400);
   assert.equal((await fieldRequest("GET", `/api/contacts?segment_id=${saved.id}`, undefined, b)).status, 404);
-  for (const days of [0, -1, 367, 1.5, "7", true, {}, []])
-    assert.equal(
-      (await fieldRequest("POST", "/api/contact-segments", { name: "Bad", last_comment_days: days })).status,
-      400,
-    );
-  for (const days of ["", "0", "-1", "367", "1.5", "1e1", "01", " 1", "NaN", "true"])
-    assert.equal(
-      (await fieldRequest("GET", `/api/contacts?last_comment_days=${encodeURIComponent(days)}`)).status,
-      400,
-    );
+  for (const days of [0, -1, 367, 1.5, "7", true, {}, []]) assert.equal((await fieldRequest("POST", "/api/contact-segments", { name: "Bad", last_comment_days: days })).status, 400);
+  for (const days of ["", "0", "-1", "367", "1.5", "1e1", "01", " 1", "NaN", "true"]) assert.equal((await fieldRequest("GET", `/api/contacts?last_comment_days=${encodeURIComponent(days)}`)).status, 400);
   const fixed = { last_comment_from: "2026-10-01T00:00:00.000Z", last_comment_before: "2026-10-02T00:00:00.000Z" };
-  assert.equal(
-    (await fieldRequest("POST", "/api/contact-segments", { name: "Mixed", last_comment_days: 7, ...fixed })).status,
-    400,
-  );
-  assert.equal(
-    (await fieldRequest("GET", `/api/contacts?${new URLSearchParams({ last_comment_days: "7", ...fixed })}`)).status,
-    400,
-  );
+  assert.equal((await fieldRequest("POST", "/api/contact-segments", { name: "Mixed", last_comment_days: 7, ...fixed })).status, 400);
+  assert.equal((await fieldRequest("GET", `/api/contacts?${new URLSearchParams({ last_comment_days: "7", ...fixed })}`)).status, 400);
   assert.equal((await fieldRequest("GET", "/api/contacts?last_comment_days=7&last_comment_days=8")).status, 400);
   const legacy = await createContactSegment(pool, a, { name: "Legacy", last_comment_days: null });
   assert.equal("last_comment_days" in legacy, false);
@@ -4181,18 +3477,8 @@ test("relative comment activity saves days, preserves old shapes, validates inpu
   assert.equal("activity_window" in ordinary, false);
   const bounded = await createContactSegment(pool, a, { name: "Fixed", ...fixed });
   assert.equal("last_comment_days" in bounded, false);
-  for (const value of ["0", "367", "-1"])
-    await assert.rejects(
-      pool.query(`UPDATE instagram_contact_segments SET last_comment_days=${value} WHERE id=$1`, [saved.id]),
-      { code: "23514" },
-    );
-  await assert.rejects(
-    pool.query(
-      "UPDATE instagram_contact_segments SET last_comment_from=now(),last_comment_before=now()+interval '1 hour' WHERE id=$1",
-      [saved.id],
-    ),
-    { code: "23514" },
-  );
+  for (const value of ["0", "367", "-1"]) await assert.rejects(pool.query(`UPDATE instagram_contact_segments SET last_comment_days=${value} WHERE id=$1`, [saved.id]), { code: "23514" });
+  await assert.rejects(pool.query("UPDATE instagram_contact_segments SET last_comment_from=now(),last_comment_before=now()+interval '1 hour' WHERE id=$1", [saved.id]), { code: "23514" });
   await archiveContactSegment(pool, a, saved.id);
   assert.equal((await fieldRequest("GET", `/api/contacts?segment_id=${saved.id}`)).status, 404);
 });
@@ -4214,11 +3500,7 @@ test("relative comment activity combines with tag OR field and consent, and pagi
   assert.equal(second.contacts.length, 5);
   assert.equal(second.after, null);
   assert.equal(new Set([...first.contacts, ...second.contacts].map((c) => c.sender_id)).size, 55);
-  assert.ok(
-    [...first.contacts, ...second.contacts].every(
-      (c) => c.comment_count === "2" && c.first_comment_at.toISOString() === "2020-01-01T00:00:00.000Z",
-    ),
-  );
+  assert.ok([...first.contacts, ...second.contacts].every((c) => c.comment_count === "2" && c.first_comment_at.toISOString() === "2020-01-01T00:00:00.000Z"));
   await saveContactTags(pool, a, connectionId, "001", { tags: ["lead"] });
   await fieldRequest("PUT", fieldValuePath(field.id, "002"), { value: 1 });
   q.delete("after");
@@ -4250,26 +3532,12 @@ test("relative comment activity migration preserves legacy windows and can be ap
   try {
     await client.query("BEGIN");
     await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN last_comment_days");
-    const migration = await readFile(
-      new URL("../../db/migrations/053_segment_relative_activity.sql", import.meta.url),
-      "utf8",
-    );
+    const migration = await readFile(new URL("../../db/migrations/053_segment_relative_activity.sql", import.meta.url), "utf8");
     await client.query(migration);
-    assert.equal(
-      (await client.query("SELECT last_comment_days FROM instagram_contact_segments WHERE id=$1", [fixed.id])).rows[0]
-        .last_comment_days,
-      null,
-    );
-    await client.query(
-      "UPDATE instagram_contact_segments SET last_comment_from=NULL,last_comment_before=NULL,last_comment_days=366 WHERE id=$1",
-      [fixed.id],
-    );
+    assert.equal((await client.query("SELECT last_comment_days FROM instagram_contact_segments WHERE id=$1", [fixed.id])).rows[0].last_comment_days, null);
+    await client.query("UPDATE instagram_contact_segments SET last_comment_from=NULL,last_comment_before=NULL,last_comment_days=366 WHERE id=$1", [fixed.id]);
     await client.query(migration);
-    assert.equal(
-      (await client.query("SELECT last_comment_days FROM instagram_contact_segments WHERE id=$1", [fixed.id])).rows[0]
-        .last_comment_days,
-      366,
-    );
+    assert.equal((await client.query("SELECT last_comment_days FROM instagram_contact_segments WHERE id=$1", [fixed.id])).rows[0].last_comment_days, 366);
   } finally {
     await client.query("ROLLBACK");
     client.release();
@@ -4281,10 +3549,7 @@ const calendarWindowOf = (result: unknown) => (result as { activity_window?: Cal
 async function replaceComments(workspace: string, rows: [string, string][], connection = connectionId) {
   await pool.query("DELETE FROM instagram_comment_events WHERE workspace_id=$1", [workspace]);
   for (const [i, [sender, at]] of rows.entries())
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$4,'private',$5)",
-      [workspace, connection, `calendar-${i}`, sender, at],
-    );
+    await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$4,'private',$5)", [workspace, connection, `calendar-${i}`, sender, at]);
 }
 // The microsecond before an exact UTC instant written as YYYY-MM-DDTHH:MM:SS.000000Z.
 function microBefore(at: string) {
@@ -4292,13 +3557,7 @@ function microBefore(at: string) {
   return new Date(ms).toISOString().slice(0, -1) + "999Z";
 }
 // Checks the four edge contacts of one period: at from and just before before are in; just before from and at before are out.
-async function assertCalendarEdges(
-  workspace: string,
-  asOf: string,
-  period: string,
-  expected: CalendarWindow,
-  db: Pool = pool,
-) {
+async function assertCalendarEdges(workspace: string, asOf: string, period: string, expected: CalendarWindow, db: Pool = pool) {
   await replaceComments(workspace, [
     ["a-from", expected.from],
     ["b-before-from", microBefore(expected.from)],
@@ -4332,16 +3591,14 @@ test("calendar comment activity uses half-open periods of the workspace time zon
     ["this_month", "2026-09-30T15:00:00.000000Z", "2026-10-31T15:00:00.000000Z"],
     ["last_month", "2026-08-31T15:00:00.000000Z", "2026-09-30T15:00:00.000000Z"],
   ];
-  for (const [period, from, before] of periods)
-    await assertCalendarEdges(workspace, asOf, period, { from, before, time_zone: "Asia/Seoul" });
+  for (const [period, from, before] of periods) await assertCalendarEdges(workspace, asOf, period, { from, before, time_zone: "Asia/Seoul" });
   // The session time zone takes no part: the local date comes from the workspace time zone only.
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await client.query("SET LOCAL TIME ZONE 'America/New_York'");
     const session = { query: client.query.bind(client) } as unknown as Pool;
-    for (const [period, from, before] of periods)
-      await assertCalendarEdges(workspace, asOf, period, { from, before, time_zone: "Asia/Seoul" }, session);
+    for (const [period, from, before] of periods) await assertCalendarEdges(workspace, asOf, period, { from, before, time_zone: "Asia/Seoul" }, session);
   } finally {
     await client.query("ROLLBACK");
     client.release();
@@ -4356,24 +3613,13 @@ test("calendar comment activity uses half-open periods of the workspace time zon
     time_zone: "Asia/Seoul",
   });
   await replaceComments(workspace, [["sender", "2026-10-17T01:00:00.000000Z"]]);
-  const foreign = await listContacts(
-    relativeClock(asOf),
-    b,
-    new URLSearchParams({ last_comment_period: "today", preview: "true" }),
-  );
+  const foreign = await listContacts(relativeClock(asOf), b, new URLSearchParams({ last_comment_period: "today", preview: "true" }));
   assert.equal(foreign.evaluated, "0");
   assert.equal(foreign.total, "0");
   // An agent of the workspace reads the same result.
   const agent = { id: randomUUID(), email: "agent@example.test" };
-  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'agent')", [
-    workspace,
-    agent.id,
-  ]);
-  const read = await listContacts(
-    relativeClock(asOf),
-    agent,
-    new URLSearchParams({ last_comment_period: "today", preview: "true" }),
-  );
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'agent')", [workspace, agent.id]);
+  const read = await listContacts(relativeClock(asOf), agent, new URLSearchParams({ last_comment_period: "today", preview: "true" }));
   assert.equal(read.total, "1");
   assert.deepEqual(
     read.contacts.map((c) => c.sender_id),
@@ -4545,9 +3791,7 @@ test("calendar comment activity saves, edits and evaluates segments and enforces
   const live = await (await fieldRequest("GET", path)).json();
   const liveAfter = Date.now();
   // Near Seoul midnight the comment can fall into the previous day; the count follows the returned window.
-  const inside =
-    commented.getTime() >= Date.parse(live.activity_window.from) &&
-    commented.getTime() < Date.parse(live.activity_window.before);
+  const inside = commented.getTime() >= Date.parse(live.activity_window.from) && commented.getTime() < Date.parse(live.activity_window.before);
   assert.equal(live.total, inside ? "1" : "0");
   assert.equal(live.activity_window.time_zone, "Asia/Seoul");
   assert.match(live.activity_window.from, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/);
@@ -4620,10 +3864,7 @@ test("calendar comment activity saves, edits and evaluates segments and enforces
     "UPDATE instagram_contact_segments SET last_comment_from=now(),last_comment_before=now()+interval '1 hour' WHERE id=$1",
   ])
     await assert.rejects(pool.query(sql, [saved.id]), { code: "23514", constraint: "contact_segment_calendar_period" });
-  await assert.rejects(
-    pool.query("UPDATE instagram_contact_segments SET last_comment_period='today' WHERE id=$1", [bounded.id]),
-    { code: "23514", constraint: "contact_segment_calendar_period" },
-  );
+  await assert.rejects(pool.query("UPDATE instagram_contact_segments SET last_comment_period='today' WHERE id=$1", [bounded.id]), { code: "23514", constraint: "contact_segment_calendar_period" });
   await archiveContactSegment(pool, a, saved.id);
   assert.equal((await fieldRequest("GET", path)).status, 404);
 });
@@ -4634,30 +3875,13 @@ test("calendar period migration adds the column and its check and can be applied
   try {
     await client.query("BEGIN");
     await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN last_comment_period");
-    const migration = await readFile(
-      new URL("../../db/migrations/055_segment_calendar_period.sql", import.meta.url),
-      "utf8",
-    );
+    const migration = await readFile(new URL("../../db/migrations/055_segment_calendar_period.sql", import.meta.url), "utf8");
     await client.query(migration);
-    assert.equal(
-      (await client.query("SELECT last_comment_period FROM instagram_contact_segments WHERE id=$1", [relative.id]))
-        .rows[0].last_comment_period,
-      null,
-    );
-    await client.query(
-      "UPDATE instagram_contact_segments SET last_comment_days=NULL,last_comment_period='last_month' WHERE id=$1",
-      [relative.id],
-    );
+    assert.equal((await client.query("SELECT last_comment_period FROM instagram_contact_segments WHERE id=$1", [relative.id])).rows[0].last_comment_period, null);
+    await client.query("UPDATE instagram_contact_segments SET last_comment_days=NULL,last_comment_period='last_month' WHERE id=$1", [relative.id]);
     await client.query(migration);
-    assert.equal(
-      (await client.query("SELECT last_comment_period FROM instagram_contact_segments WHERE id=$1", [relative.id]))
-        .rows[0].last_comment_period,
-      "last_month",
-    );
-    await assert.rejects(
-      client.query("UPDATE instagram_contact_segments SET last_comment_days=1 WHERE id=$1", [relative.id]),
-      { code: "23514", constraint: "contact_segment_calendar_period" },
-    );
+    assert.equal((await client.query("SELECT last_comment_period FROM instagram_contact_segments WHERE id=$1", [relative.id])).rows[0].last_comment_period, "last_month");
+    await assert.rejects(client.query("UPDATE instagram_contact_segments SET last_comment_days=1 WHERE id=$1", [relative.id]), { code: "23514", constraint: "contact_segment_calendar_period" });
   } finally {
     await client.query("ROLLBACK");
     client.release();
@@ -4676,27 +3900,15 @@ async function multiTagContacts() {
     ["other", ["x"], null],
     ["some", ["b", "c"], -1],
   ] as const) {
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,$3,'media',$3,'private')",
-      [workspace, connectionId, sender],
-    );
+    await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,$3,'media',$3,'private')", [workspace, connectionId, sender]);
     if (tags) await saveContactTags(pool, a, connectionId, sender, { tags });
-    if (value !== null)
-      assert.equal((await fieldRequest("PUT", fieldValuePath(field.id, sender), { value })).status, 200);
+    if (value !== null) assert.equal((await fieldRequest("PUT", fieldValuePath(field.id, sender), { value })).status, 200);
   }
-  assert.equal(
-    (await pool.query("SELECT count(*) FROM instagram_contact_tags WHERE sender_id='none'")).rows[0].count,
-    "0",
-  );
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_contact_tags WHERE sender_id='none'")).rows[0].count, "0");
   return { workspace, field };
 }
 // The list and the preview of one query select the same contacts, and the preview partitions the rest.
-async function assertTagSet(
-  query: URLSearchParams,
-  expected: string[],
-  excluded: { tag: string; field: string; both: string },
-  user = a,
-) {
+async function assertTagSet(query: URLSearchParams, expected: string[], excluded: { tag: string; field: string; both: string }, user = a) {
   const label = query.toString();
   const list = await listContacts(pool, user, query);
   assert.deepEqual(
@@ -4785,14 +3997,10 @@ test("multi-tag segments store sorted sets, keep legacy single tags and evaluate
     (await listContactSegments(pool, a)).find((s) => s.id === segment.id),
     segment,
   );
-  assert.deepEqual(
-    (await pool.query("SELECT tag,tags,tag_mode FROM instagram_contact_segments WHERE id=$1", [segment.id])).rows[0],
-    { tag: null, tags: ["a", "b", "c"], tag_mode: "any" },
-  );
+  assert.deepEqual((await pool.query("SELECT tag,tags,tag_mode FROM instagram_contact_segments WHERE id=$1", [segment.id])).rows[0], { tag: null, tags: ["a", "b", "c"], tag_mode: "any" });
   const bySegment = new URLSearchParams({ segment_id: segment.id });
   await assertTagSet(bySegment, ["all", "one", "some"], { tag: "3", field: "0", both: "0" });
-  for (const mixed of ["tag=a", "tag_mode=any", "tag=a&tag=b"])
-    assert.equal((await fieldRequest("GET", `/api/contacts?${bySegment}&${mixed}`)).status, 400, mixed);
+  for (const mixed of ["tag=a", "tag_mode=any", "tag=a&tag=b"]) assert.equal((await fieldRequest("GET", `/api/contacts?${bySegment}&${mixed}`)).status, 400, mixed);
   assert.equal((await fieldRequest("GET", `/api/contacts?${bySegment}`, undefined, b)).status, 404);
   // The same set in another order and spelling is an unchanged definition and keeps the version.
   const same = await updateContactSegment(pool, a, segment.id, {
@@ -4825,10 +4033,7 @@ test("multi-tag segments store sorted sets, keep legacy single tags and evaluate
     tag: "a",
     version: 3,
   });
-  assert.deepEqual(
-    (await pool.query("SELECT tag,tags,tag_mode FROM instagram_contact_segments WHERE id=$1", [segment.id])).rows[0],
-    { tag: "a", tags: null, tag_mode: null },
-  );
+  assert.deepEqual((await pool.query("SELECT tag,tags,tag_mode FROM instagram_contact_segments WHERE id=$1", [segment.id])).rows[0], { tag: "a", tags: null, tag_mode: null });
   // The legacy tag form of the same single tag is unchanged too.
   const legacySame = await updateContactSegment(pool, a, segment.id, {
     name: "Any of three",
@@ -4865,15 +4070,9 @@ test("multi-tag segments store sorted sets, keep legacy single tags and evaluate
   assert.deepEqual(legacy, { id: legacy.id, name: "Legacy", connection_id: null, tag: "a", version: 1 });
   const collapsed = await createContactSegment(pool, a, { name: "Collapsed", tags: ["a", "A"], tag_mode: "any" });
   assert.deepEqual(collapsed, { id: collapsed.id, name: "Collapsed", connection_id: null, tag: "a", version: 1 });
-  assert.equal(
-    (await fieldRequest("POST", "/api/contact-segments", { name: "Both", tag: "a", tags: ["b", "c"] })).status,
-    400,
-  );
+  assert.equal((await fieldRequest("POST", "/api/contact-segments", { name: "Both", tag: "a", tags: ["b", "c"] })).status, 400);
   // The other workspace can neither read nor edit the segment.
-  await assert.rejects(
-    updateContactSegment(pool, b, segment.id, { name: "Foreign", tags: ["a", "b"], expected_version: 4 }),
-    (e: unknown) => e instanceof ApiError && e.status === 404,
-  );
+  await assert.rejects(updateContactSegment(pool, b, segment.id, { name: "Foreign", tags: ["a", "b"], expected_version: 4 }), (e: unknown) => e instanceof ApiError && e.status === 404);
   assert.equal(
     (await listContactSegments(pool, b)).some((s) => s.id === segment.id),
     false,
@@ -4885,11 +4084,7 @@ test("multi-tag segments store sorted sets, keep legacy single tags and evaluate
 test("the multi-tag CHECK refuses malformed sets written directly", async () => {
   const workspace = await ensureWorkspace(pool, a);
   const field = await createField("Check score", "number");
-  const insert = (columns: string) =>
-    pool.query(
-      `INSERT INTO instagram_contact_segments(workspace_id,name,tag,tags,tag_mode) SELECT $1,'Direct',${columns}`,
-      [workspace],
-    );
+  const insert = (columns: string) => pool.query(`INSERT INTO instagram_contact_segments(workspace_id,name,tag,tags,tag_mode) SELECT $1,'Direct',${columns}`, [workspace]);
   const valid = await insert("NULL,ARRAY['a','b','c','d','e'],'any' RETURNING id");
   await pool.query("UPDATE instagram_contact_segments SET archived=true WHERE id=$1", [valid.rows[0].id]);
   for (const columns of [
@@ -4908,19 +4103,8 @@ test("the multi-tag CHECK refuses malformed sets written directly", async () => 
   ])
     await assert.rejects(insert(columns), { code: "23514", constraint: "contact_segment_multi_tag" }, columns);
   // OR still needs a tag condition and a field condition, and a tag set counts as one.
-  await assert.rejects(
-    pool.query(
-      "INSERT INTO instagram_contact_segments(workspace_id,name,field_id,field_operator,condition_operator) VALUES($1,'No tag','" +
-        field.id +
-        "','is_set','or')",
-      [workspace],
-    ),
-    { code: "23514", constraint: "contact_segment_condition_operator" },
-  );
-  await pool.query(
-    "INSERT INTO instagram_contact_segments(workspace_id,name,tags,tag_mode,field_id,field_operator,condition_operator) VALUES($1,'Set or field',ARRAY['a','b'],'any',$2,'is_set','or')",
-    [workspace, field.id],
-  );
+  await assert.rejects(pool.query("INSERT INTO instagram_contact_segments(workspace_id,name,field_id,field_operator,condition_operator) VALUES($1,'No tag','" + field.id + "','is_set','or')", [workspace]), { code: "23514", constraint: "contact_segment_condition_operator" });
+  await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name,tags,tag_mode,field_id,field_operator,condition_operator) VALUES($1,'Set or field',ARRAY['a','b'],'any',$2,'is_set','or')", [workspace, field.id]);
 });
 
 test("multi-tag migration adds the columns and checks, keeps legacy rows and can be applied repeatedly", async () => {
@@ -4938,42 +4122,18 @@ test("multi-tag migration adds the columns and checks, keeps legacy rows and can
     await client.query("BEGIN");
     await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN tags, DROP COLUMN tag_mode");
     // Dropping tags also dropped the condition_operator CHECK that reads it; the migration restores both.
-    assert.deepEqual(
-      (
-        await client.query(
-          "SELECT conname FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname IN ('contact_segment_multi_tag','contact_segment_condition_operator')",
-        )
-      ).rows,
-      [],
-    );
+    assert.deepEqual((await client.query("SELECT conname FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname IN ('contact_segment_multi_tag','contact_segment_condition_operator')")).rows, []);
     const migration = await readFile(new URL("../../db/migrations/056_segment_multi_tag.sql", import.meta.url), "utf8");
     await client.query(migration);
     await client.query(migration);
     assert.deepEqual(
-      (
-        await client.query(
-          "SELECT conname FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname IN ('contact_segment_multi_tag','contact_segment_condition_operator') ORDER BY conname",
-        )
-      ).rows.map((row) => row.conname),
+      (await client.query("SELECT conname FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname IN ('contact_segment_multi_tag','contact_segment_condition_operator') ORDER BY conname")).rows.map((row) => row.conname),
       ["contact_segment_condition_operator", "contact_segment_multi_tag"],
     );
-    assert.deepEqual(
-      (
-        await client.query("SELECT tag,tags,tag_mode,condition_operator FROM instagram_contact_segments WHERE id=$1", [
-          legacy.id,
-        ])
-      ).rows[0],
-      { tag: "lead", tags: null, tag_mode: null, condition_operator: "or" },
-    );
-    await client.query(
-      "UPDATE instagram_contact_segments SET tag=NULL,tags=ARRAY['a','b'],tag_mode='all' WHERE id=$1",
-      [legacy.id],
-    );
+    assert.deepEqual((await client.query("SELECT tag,tags,tag_mode,condition_operator FROM instagram_contact_segments WHERE id=$1", [legacy.id])).rows[0], { tag: "lead", tags: null, tag_mode: null, condition_operator: "or" });
+    await client.query("UPDATE instagram_contact_segments SET tag=NULL,tags=ARRAY['a','b'],tag_mode='all' WHERE id=$1", [legacy.id]);
     await client.query(migration);
-    assert.deepEqual(
-      (await client.query("SELECT tag,tags,tag_mode FROM instagram_contact_segments WHERE id=$1", [legacy.id])).rows[0],
-      { tag: null, tags: ["a", "b"], tag_mode: "all" },
-    );
+    assert.deepEqual((await client.query("SELECT tag,tags,tag_mode FROM instagram_contact_segments WHERE id=$1", [legacy.id])).rows[0], { tag: null, tags: ["a", "b"], tag_mode: "all" });
     for (const [change, constraint] of [
       ["tags=ARRAY['a']", "contact_segment_multi_tag"],
       ["tag='lead'", "contact_segment_multi_tag"],
@@ -5006,13 +4166,9 @@ async function multiFieldContacts() {
     ["none", null, { [plan.id]: "free", [score.id]: 1, [joined.id]: "2026-12-31" }],
     ["some", ["vip"], { [plan.id]: "pro", [score.id]: 1, [vip.id]: false }],
   ] as const) {
-    await pool.query(
-      "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,$3,'media',$3,'private')",
-      [workspace, connectionId, sender],
-    );
+    await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,$3,'media',$3,'private')", [workspace, connectionId, sender]);
     if (tags) await saveContactTags(pool, a, connectionId, sender, { tags });
-    for (const [id, value] of Object.entries(values))
-      assert.equal((await fieldRequest("PUT", fieldValuePath(id, sender), { value })).status, 200);
+    for (const [id, value] of Object.entries(values)) assert.equal((await fieldRequest("PUT", fieldValuePath(id, sender), { value })).status, 200);
   }
   // T: all, some. N: all. D: all. B: all. S: all, none. U: none, empty.
   const conditions = {
@@ -5031,11 +4187,7 @@ const fieldSetQuery = (conditions: object[], mode: string | null, extra: [string
   return query;
 };
 // The list and the preview of one query select the same contacts, and the preview partitions the other four.
-async function assertFieldSet(
-  query: URLSearchParams,
-  expected: string[],
-  excluded: { tag: string; field: string; both: string },
-) {
+async function assertFieldSet(query: URLSearchParams, expected: string[], excluded: { tag: string; field: string; both: string }) {
   const label = query.toString();
   const list = await listContacts(pool, a, query);
   assert.deepEqual(
@@ -5100,10 +4252,7 @@ test("field sets match all or any of two or three conditions of every type", asy
     assert.deepEqual(await refused.json(), { error: "invalid_field_condition" });
   }
   // validateFieldCondition still checks each condition against its field type.
-  const ordered = await fieldRequest(
-    "GET",
-    `/api/contacts?${fieldSetQuery([c.N, { ...c.T, field_operator: "gt" }], null)}`,
-  );
+  const ordered = await fieldRequest("GET", `/api/contacts?${fieldSetQuery([c.N, { ...c.T, field_operator: "gt" }], null)}`);
   assert.equal(ordered.status, 400);
   assert.deepEqual(await ordered.json(), { error: "invalid_field_condition" });
   const typed = await fieldRequest("GET", `/api/contacts?${fieldSetQuery([c.T, { ...c.N, field_value: "5" }], null)}`);
@@ -5114,12 +4263,7 @@ test("field sets match all or any of two or three conditions of every type", asy
 test("field sets are one side of the tag set AND/OR and the preview partitions like the list", async () => {
   const { conditions: c } = await multiFieldContacts();
   // Tag set any(lead, vip): all, empty, some.
-  const tags = (operator?: string): [string, string][] => [
-    ["tag", "lead"],
-    ["tag", "vip"],
-    ["tag_mode", "any"],
-    ...(operator ? [["condition_operator", operator] as [string, string]] : []),
-  ];
+  const tags = (operator?: string): [string, string][] => [["tag", "lead"], ["tag", "vip"], ["tag_mode", "any"], ...(operator ? [["condition_operator", operator] as [string, string]] : [])];
   await assertFieldSet(fieldSetQuery([c.T, c.U], "any", tags()), ["all", "empty", "some"], {
     tag: "1",
     field: "0",
@@ -5178,13 +4322,7 @@ test("multi-field segments store sorted sets, keep legacy single conditions and 
     (await listContactSegments(pool, a)).find((s) => s.id === segment.id),
     segment,
   );
-  const row = async () =>
-    (
-      await pool.query(
-        "SELECT field_id,field_operator,field_value,field_conditions,field_mode FROM instagram_contact_segments WHERE id=$1",
-        [segment.id],
-      )
-    ).rows[0];
+  const row = async () => (await pool.query("SELECT field_id,field_operator,field_value,field_conditions,field_mode FROM instagram_contact_segments WHERE id=$1", [segment.id])).rows[0];
   assert.deepEqual(await row(), {
     field_id: null,
     field_operator: null,
@@ -5194,8 +4332,7 @@ test("multi-field segments store sorted sets, keep legacy single conditions and 
   });
   const bySegment = new URLSearchParams({ segment_id: segment.id });
   await assertFieldSet(bySegment, ["all", "some"], onlyField(2));
-  for (const mixed of [`field_conditions=${encodeURIComponent(JSON.stringify([c.T]))}`, "field_mode=any"])
-    assert.equal((await fieldRequest("GET", `/api/contacts?${bySegment}&${mixed}`)).status, 400, mixed);
+  for (const mixed of [`field_conditions=${encodeURIComponent(JSON.stringify([c.T]))}`, "field_mode=any"]) assert.equal((await fieldRequest("GET", `/api/contacts?${bySegment}&${mixed}`)).status, 400, mixed);
   assert.equal((await fieldRequest("GET", `/api/contacts?${bySegment}`, undefined, b)).status, 404);
   // A field referenced only inside field_conditions cannot be archived.
   for (const id of [fields.plan.id, fields.score.id]) {
@@ -5323,10 +4460,7 @@ test("multi-field segments store sorted sets, keep legacy single conditions and 
   }
   assert.deepEqual(await segmentRows(), before);
   // The other workspace can neither read nor edit the segment.
-  await assert.rejects(
-    updateContactSegment(pool, b, segment.id, { name: "Foreign", field_conditions: [c.T, c.N], expected_version: 5 }),
-    (e: unknown) => e instanceof ApiError && e.status === 404,
-  );
+  await assert.rejects(updateContactSegment(pool, b, segment.id, { name: "Foreign", field_conditions: [c.T, c.N], expected_version: 5 }), (e: unknown) => e instanceof ApiError && e.status === 404);
   assert.equal(
     (await listContactSegments(pool, b)).some((s) => s.id === segment.id),
     false,
@@ -5345,10 +4479,7 @@ test("a multi-field segment write holds every field, so a concurrent archive wai
   const first = await createField("Race set first", "text");
   const second = await createField("Race set second", "number");
   const other = "99999999-9999-4999-8999-999999999998";
-  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'race-set')", [
-    other,
-    workspace,
-  ]);
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'race-set')", [other, workspace]);
   // The archived field is the one that sorts last, so it is held only by the field_conditions lock loop.
   const [, last] = [first, second].sort((x, y) => (x.id < y.id ? -1 : 1));
   // The blocker holds the new connection, so the create's foreign-key check waits after it locked the fields.
@@ -5380,10 +4511,7 @@ test("a multi-field segment write holds every field, so a concurrent archive wai
     await blocker.query("ROLLBACK").catch(() => undefined);
     blocker.release();
   }
-  assert.equal(
-    (await pool.query("SELECT archived FROM instagram_contact_fields WHERE id=$1", [last.id])).rows[0].archived,
-    false,
-  );
+  assert.equal((await pool.query("SELECT archived FROM instagram_contact_fields WHERE id=$1", [last.id])).rows[0].archived, false);
 });
 
 test("a field archive that commits before a multi-field edit reads the field makes the edit answer field_not_found", async () => {
@@ -5421,19 +4549,10 @@ test("a field archive that commits before a multi-field edit reads the field mak
 test("the multi-field CHECK refuses malformed sets written directly", async () => {
   const workspace = await ensureWorkspace(pool, a);
   const field = await createField("Set check", "number");
-  const [x, y, z, w] = [
-    "a1111111-1111-4111-8111-111111111111",
-    "b2222222-2222-4222-8222-222222222222",
-    "c3333333-3333-4333-8333-333333333333",
-    "d4444444-4444-4444-8444-444444444444",
-  ];
+  const [x, y, z, w] = ["a1111111-1111-4111-8111-111111111111", "b2222222-2222-4222-8222-222222222222", "c3333333-3333-4333-8333-333333333333", "d4444444-4444-4444-8444-444444444444"];
   const set = (...items: unknown[]) => `'${JSON.stringify(items)}'::jsonb`;
   const isSet = (id: string) => ({ field_id: id, field_operator: "is_set" });
-  const insert = (columns: string) =>
-    pool.query(
-      `INSERT INTO instagram_contact_segments(workspace_id,name,field_id,field_operator,field_conditions,field_mode) SELECT $1,'Direct',${columns}`,
-      [workspace],
-    );
+  const insert = (columns: string) => pool.query(`INSERT INTO instagram_contact_segments(workspace_id,name,field_id,field_operator,field_conditions,field_mode) SELECT $1,'Direct',${columns}`, [workspace]);
   for (const columns of [
     `NULL,NULL,${set(isSet(x), { field_id: y, field_operator: "eq", field_value: true })},'all' RETURNING id`,
     `NULL,NULL,${set(isSet(x), { field_id: y, field_operator: "gt", field_value: 1 }, { field_id: z, field_operator: "lte", field_value: "2026-01-01" })},'any' RETURNING id`,
@@ -5466,17 +4585,11 @@ test("the multi-field CHECK refuses malformed sets written directly", async () =
   ])
     await assert.rejects(insert(columns), { code: "23514", constraint: "contact_segment_multi_field" }, columns);
   // OR still needs a tag condition and a field condition, and a field set counts as one.
-  await assert.rejects(
-    pool.query(
-      `INSERT INTO instagram_contact_segments(workspace_id,name,field_conditions,field_mode,condition_operator) VALUES($1,'No tag',${set(isSet(x), isSet(y))},'any','or')`,
-      [workspace],
-    ),
-    { code: "23514", constraint: "contact_segment_condition_operator" },
-  );
-  await pool.query(
-    `INSERT INTO instagram_contact_segments(workspace_id,name,tag,field_conditions,field_mode,condition_operator) VALUES($1,'Tag or set','lead',${set(isSet(x), isSet(y))},'any','or')`,
-    [workspace],
-  );
+  await assert.rejects(pool.query(`INSERT INTO instagram_contact_segments(workspace_id,name,field_conditions,field_mode,condition_operator) VALUES($1,'No tag',${set(isSet(x), isSet(y))},'any','or')`, [workspace]), {
+    code: "23514",
+    constraint: "contact_segment_condition_operator",
+  });
+  await pool.query(`INSERT INTO instagram_contact_segments(workspace_id,name,tag,field_conditions,field_mode,condition_operator) VALUES($1,'Tag or set','lead',${set(isSet(x), isSet(y))},'any','or')`, [workspace]);
 });
 
 test("multi-field migration adds the columns and checks, keeps legacy rows and can be applied repeatedly", async () => {
@@ -5489,31 +4602,18 @@ test("multi-field migration adds the columns and checks, keeps legacy rows and c
     condition_operator: "or",
   });
   const constraints = (client: { query: typeof pool.query }) =>
-    client
-      .query(
-        "SELECT conname FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname IN ('contact_segment_multi_field','contact_segment_condition_operator') ORDER BY conname",
-      )
-      .then((result) => result.rows.map((row) => row.conname));
+    client.query("SELECT conname FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname IN ('contact_segment_multi_field','contact_segment_condition_operator') ORDER BY conname").then((result) => result.rows.map((row) => row.conname));
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await client.query("ALTER TABLE instagram_contact_segments DROP COLUMN field_conditions, DROP COLUMN field_mode");
     // Dropping field_conditions also dropped the condition_operator CHECK that reads it; the migration restores both.
     assert.deepEqual(await constraints(client), []);
-    const migration = await readFile(
-      new URL("../../db/migrations/057_segment_multi_field.sql", import.meta.url),
-      "utf8",
-    );
+    const migration = await readFile(new URL("../../db/migrations/057_segment_multi_field.sql", import.meta.url), "utf8");
     await client.query(migration);
     await client.query(migration);
     assert.deepEqual(await constraints(client), ["contact_segment_condition_operator", "contact_segment_multi_field"]);
-    const read = async () =>
-      (
-        await client.query(
-          "SELECT tag,field_id,field_operator,field_conditions,field_mode,condition_operator FROM instagram_contact_segments WHERE id=$1",
-          [legacy.id],
-        )
-      ).rows[0];
+    const read = async () => (await client.query("SELECT tag,field_id,field_operator,field_conditions,field_mode,condition_operator FROM instagram_contact_segments WHERE id=$1", [legacy.id])).rows[0];
     assert.deepEqual(await read(), {
       tag: "lead",
       field_id: field.id,
@@ -5526,10 +4626,7 @@ test("multi-field migration adds the columns and checks, keeps legacy rows and c
       { field_id: "a1111111-1111-4111-8111-111111111111", field_operator: "is_set" },
       { field_id: "b2222222-2222-4222-8222-222222222222", field_operator: "is_unset" },
     ];
-    await client.query(
-      "UPDATE instagram_contact_segments SET field_id=NULL,field_operator=NULL,field_conditions=$2::jsonb,field_mode='any' WHERE id=$1",
-      [legacy.id, JSON.stringify(set)],
-    );
+    await client.query("UPDATE instagram_contact_segments SET field_id=NULL,field_operator=NULL,field_conditions=$2::jsonb,field_mode='any' WHERE id=$1", [legacy.id, JSON.stringify(set)]);
     await client.query(migration);
     assert.deepEqual(await read(), {
       tag: "lead",
@@ -5579,27 +4676,13 @@ test("re-running migrations 056 and 057 and the schema keeps OR segments that us
     field_mode: "all",
     condition_operator: "or",
   });
-  const read = (client: { query: typeof pool.query }) =>
-    client
-      .query(
-        "SELECT id,tag,tags,field_id,field_conditions,field_mode,condition_operator FROM instagram_contact_segments WHERE id=ANY($1::uuid[]) ORDER BY name",
-        [[withTag.id, withTags.id]],
-      )
-      .then((result) => result.rows);
+  const read = (client: { query: typeof pool.query }) => client.query("SELECT id,tag,tags,field_id,field_conditions,field_mode,condition_operator FROM instagram_contact_segments WHERE id=ANY($1::uuid[]) ORDER BY name", [[withTag.id, withTags.id]]).then((result) => result.rows);
   const rule = (client: { query: typeof pool.query }) =>
-    client
-      .query(
-        "SELECT pg_get_constraintdef(oid) AS rule FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname='contact_segment_condition_operator'",
-      )
-      .then((result) => result.rows[0]?.rule as string | undefined);
+    client.query("SELECT pg_get_constraintdef(oid) AS rule FROM pg_constraint WHERE conrelid='instagram_contact_segments'::regclass AND conname='contact_segment_condition_operator'").then((result) => result.rows[0]?.rule as string | undefined);
   const before = await read(pool);
   assert.equal(before.length, 2);
   const file = (path: string) => readFile(new URL(path, import.meta.url), "utf8");
-  const [multiTag, multiField, schema] = await Promise.all([
-    file("../../db/migrations/056_segment_multi_tag.sql"),
-    file("../../db/migrations/057_segment_multi_field.sql"),
-    file("../../db/schema.sql"),
-  ]);
+  const [multiTag, multiField, schema] = await Promise.all([file("../../db/migrations/056_segment_multi_tag.sql"), file("../../db/migrations/057_segment_multi_field.sql"), file("../../db/schema.sql")]);
   const client = await pool.connect();
   try {
     // deploy/migrate-multi-user.sql runs 056 and then 057 in one transaction on a database that already has both.

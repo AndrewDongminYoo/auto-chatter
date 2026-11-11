@@ -12,8 +12,7 @@ import { seedCampaignSends } from "./workspace-fixture.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 type Actor = { id: string; email: string };
@@ -45,10 +44,7 @@ before(async () => {
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspaceId, otherWorkspaceId]);
-  await pool.query(
-    "INSERT INTO workspace_members(workspace_id,user_id,role,email) VALUES($1,$2,'owner',$3),($4,$5,'owner',$6)",
-    [workspaceId, owner.id, owner.email, otherWorkspaceId, outsider.id, outsider.email],
-  );
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role,email) VALUES($1,$2,'owner',$3),($4,$5,'owner',$6)", [workspaceId, owner.id, owner.email, otherWorkspaceId, outsider.id, outsider.email]);
 });
 
 after(async () => pool.end());
@@ -63,12 +59,7 @@ async function invite(email: string) {
 }
 
 async function memberCount(id = workspaceId): Promise<number> {
-  return (
-    await pool.query<{ n: number }>(
-      "SELECT count(*)::int AS n FROM workspace_members WHERE workspace_id=$1 AND removed_at IS NULL",
-      [id],
-    )
-  ).rows[0]!.n;
+  return (await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM workspace_members WHERE workspace_id=$1 AND removed_at IS NULL", [id])).rows[0]!.n;
 }
 
 const seatRefusal = { status: 409, message: "seat_limit_reached" };
@@ -79,9 +70,7 @@ const connectionRefusal = { status: 409, message: "connection_limit_reached" };
 async function lockWaiters(count: number, settled: () => boolean = () => false) {
   for (let attempt = 0; attempt < 100; attempt++) {
     if (settled()) return;
-    const waiting = await pool.query<{ n: number }>(
-      "SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()",
-    );
+    const waiting = await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()");
     if (waiting.rows[0]!.n >= count) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -99,11 +88,7 @@ function outcome(promise: Promise<unknown>) {
 }
 
 test("the plan CHECK lists exactly the catalog keys, and a new workspace starts on free", async () => {
-  const definition = (
-    await pool.query<{ def: string }>(
-      "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid='workspaces'::regclass AND conname='workspaces_plan'",
-    )
-  ).rows[0]!.def;
+  const definition = (await pool.query<{ def: string }>("SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid='workspaces'::regclass AND conname='workspaces_plan'")).rows[0]!.def;
   const keys = [...definition.matchAll(/'([a-z]+)'::text/g)].map((match) => match[1]).sort();
   assert.deepEqual(keys, Object.keys(PLANS).sort());
   await assert.rejects(setPlan("gold"), { code: "23514" });
@@ -146,10 +131,7 @@ test("an invite needs a free seat; replacing, revoking or expiring an invite and
   await assert.rejects(acceptInvite(pool, first, { token: firstInvite.token }), { message: "invite_revoked" });
   await revokeInvite(pool, owner, replaced.id);
   const expiring = await invite("second@example.test");
-  await pool.query(
-    "UPDATE workspace_invites SET created_at=now()-interval '8 days',expires_at=now()-interval '1 day' WHERE id=$1",
-    [expiring.id],
-  );
+  await pool.query("UPDATE workspace_invites SET created_at=now()-interval '8 days',expires_at=now()-interval '1 day' WHERE id=$1", [expiring.id]);
   const accepted = await invite("first@example.test");
   assert.deepEqual(await acceptInvite(pool, first, { token: accepted.token }), {
     workspace_id: workspaceId,
@@ -200,10 +182,7 @@ test("an invite creation that started after another one counted waits for it and
     await blocker.query("ROLLBACK").catch(() => undefined);
     blocker.release();
   }
-  const open = await pool.query(
-    "SELECT email FROM workspace_invites WHERE workspace_id=$1 AND revoked_at IS NULL AND accepted_at IS NULL ORDER BY email",
-    [workspaceId],
-  );
+  const open = await pool.query("SELECT email FROM workspace_invites WHERE workspace_id=$1 AND revoked_at IS NULL AND accepted_at IS NULL ORDER BY email", [workspaceId]);
   assert.deepEqual(
     open.rows.map((row) => row.email),
     ["first@example.test", "third@example.test"],
@@ -220,10 +199,7 @@ test("an acceptance that started after another one counted waits for it and then
   const blocker = await pool.connect();
   try {
     await blocker.query("BEGIN");
-    await blocker.query("INSERT INTO workspace_members(user_id,workspace_id,role) VALUES($1,$2,'agent')", [
-      first.id,
-      otherWorkspaceId,
-    ]);
+    await blocker.query("INSERT INTO workspace_members(user_id,workspace_id,role) VALUES($1,$2,'agent')", [first.id, otherWorkspaceId]);
     const firstAccept = outcome(acceptInvite(pool, first, { token: a.token }));
     await lockWaiters(1, firstAccept.settled);
     const secondAccept = outcome(acceptInvite(pool, second, { token: b.token }));
@@ -240,19 +216,13 @@ test("an acceptance that started after another one counted waits for it and then
 function provider(account: string): typeof fetch {
   return (async (input: string | URL | Request) => {
     const url = input instanceof Request ? input.url : String(input);
-    if (url.startsWith("https://project.supabase.co/"))
-      return Response.json({ id: owner.id, email: owner.email, email_confirmed_at: "2026-10-12" });
+    if (url.startsWith("https://project.supabase.co/")) return Response.json({ id: owner.id, email: owner.email, email_confirmed_at: "2026-10-12" });
     if (url.startsWith("https://api.instagram.com/oauth/access_token"))
       return Response.json({
         access_token: `short-${account}`,
-        permissions: [
-          "instagram_business_basic",
-          "instagram_business_manage_comments",
-          "instagram_business_manage_messages",
-        ],
+        permissions: ["instagram_business_basic", "instagram_business_manage_comments", "instagram_business_manage_messages"],
       });
-    if (url.startsWith("https://graph.instagram.com/access_token"))
-      return Response.json({ access_token: `long-${account}`, expires_in: 5_184_000 });
+    if (url.startsWith("https://graph.instagram.com/access_token")) return Response.json({ access_token: `long-${account}`, expires_in: 5_184_000 });
     if (url.includes("/me?")) return Response.json({ user_id: account, username: `user${account}` });
     if (url.endsWith("/subscribed_apps")) return Response.json({ success: true });
     throw new Error(`unexpected provider call ${url}`);
@@ -284,13 +254,11 @@ async function connectedAccounts(id = workspaceId): Promise<string[]> {
 
 test("a new account is refused at the connection limit, and re-authorizing a connected one is not", async () => {
   await connect("1001");
-  const before = (await pool.query("SELECT token_obtained_at FROM instagram_connections WHERE account_id='1001'"))
-    .rows[0].token_obtained_at;
+  const before = (await pool.query("SELECT token_obtained_at FROM instagram_connections WHERE account_id='1001'")).rows[0].token_obtained_at;
   await assert.rejects(connect("1002"), connectionRefusal);
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM instagram_connections")).rows[0].n, 1);
   await connect("1001");
-  const after = (await pool.query("SELECT token_obtained_at FROM instagram_connections WHERE account_id='1001'"))
-    .rows[0].token_obtained_at;
+  const after = (await pool.query("SELECT token_obtained_at FROM instagram_connections WHERE account_id='1001'")).rows[0].token_obtained_at;
   assert.ok(after > before, "the re-authorization stores a new token");
   assert.deepEqual(await connectedAccounts(), ["1001"]);
 });
@@ -320,10 +288,7 @@ test("neither the connection switch nor the settings route raises the plan or re
   });
   assert.deepEqual(await connectedAccounts(), ["1002"]);
   // The settings route writes only the time zone, whatever else the body carries.
-  assert.deepEqual(
-    await saveWorkspaceSettings(pool, owner, { time_zone: "Asia/Tokyo", plan: "advanced", limits: { seats: 99 } }),
-    { time_zone: "Asia/Tokyo" },
-  );
+  assert.deepEqual(await saveWorkspaceSettings(pool, owner, { time_zone: "Asia/Tokyo", plan: "advanced", limits: { seats: 99 } }), { time_zone: "Asia/Tokyo" });
   assert.equal((await pool.query("SELECT plan FROM workspaces WHERE id=$1", [workspaceId])).rows[0].plan, "free");
 });
 
@@ -351,10 +316,7 @@ test("a completion that started after another one counted waits for it and then 
   const blocker = await pool.connect();
   try {
     await blocker.query("BEGIN");
-    await blocker.query(
-      "INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES(gen_random_uuid(),$1,'1001')",
-      [otherWorkspaceId],
-    );
+    await blocker.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES(gen_random_uuid(),$1,'1001')", [otherWorkspaceId]);
     const firstCompletion = outcome(finishInstagramOAuth(pool, owner, firstCallback, oauthEnv, provider("1001")));
     await lockWaiters(1, firstCompletion.settled);
     const secondCompletion = outcome(finishInstagramOAuth(pool, owner, secondCallback, oauthEnv, provider("1002")));
@@ -407,10 +369,7 @@ test("every role reads the plan, its limits and the usage; the owner's member li
   await acceptInvite(pool, first, { token: a.token });
   await invite("second@example.test");
   const expired = await invite("third@example.test");
-  await pool.query(
-    "UPDATE workspace_invites SET created_at=now()-interval '8 days',expires_at=now()-interval '1 day' WHERE id=$1",
-    [expired.id],
-  );
+  await pool.query("UPDATE workspace_invites SET created_at=now()-interval '8 days',expires_at=now()-interval '1 day' WHERE id=$1", [expired.id]);
   await revokeInvite(pool, owner, (await invite("revoked@example.test")).id);
   await connect("1001");
   await connect("1002");
@@ -433,12 +392,7 @@ test("every role reads the plan, its limits and the usage; the owner's member li
 
 test("the callback sends a refused connection back to the dashboard with the limit code", async () => {
   await connect("1001");
-  const response = await appApi(
-    await callback(),
-    apiEnv,
-    () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
-    provider("1002"),
-  );
+  const response = await appApi(await callback(), apiEnv, () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool, provider("1002"));
   assert.equal(response.status, 303);
   assert.equal(response.headers.get("location"), "https://app.test/app/?instagram=connection_limit_reached");
   assert.match(response.headers.get("set-cookie") ?? "", /__Host-ac-oauth=; .*Max-Age=0/);
@@ -447,12 +401,7 @@ test("the callback sends a refused connection back to the dashboard with the lim
 
 test("the campaign usage counts this month's delivery rows except those cancelled before a provider call", async () => {
   await setPlan("essential");
-  const connection = (
-    await pool.query(
-      "INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES(gen_random_uuid(),$1,'9001') RETURNING id",
-      [workspaceId],
-    )
-  ).rows[0].id as string;
+  const connection = (await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES(gen_random_uuid(),$1,'9001') RETURNING id", [workspaceId])).rows[0].id as string;
   await seedCampaignSends(pool, workspaceId, connection, owner.id, 4, "now()");
   await seedCampaignSends(pool, workspaceId, connection, owner.id, 2, "now()", { status: "cancelled" });
   await seedCampaignSends(pool, workspaceId, connection, owner.id, 1, "now()", {
@@ -476,28 +425,11 @@ test("the campaign usage counts this month's delivery rows except those cancelle
 // transaction start: the reference clock places the month, this month's rows and the immediate approvals in force.
 test("the campaign allowance places the month and immediate approvals by the post-lock reference clock", async () => {
   await setPlan("essential");
-  const connection = (
-    await pool.query(
-      "INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES(gen_random_uuid(),$1,'9001') RETURNING id",
-      [workspaceId],
-    )
-  ).rows[0].id as string;
+  const connection = (await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES(gen_random_uuid(),$1,'9001') RETURNING id", [workspaceId])).rows[0].id as string;
   await seedCampaignSends(pool, workspaceId, connection, owner.id, 3, "now()");
-  const { draft_id, snapshot_id } = (
-    await pool.query("SELECT draft_id,snapshot_id FROM campaign_approvals WHERE workspace_id=$1", [workspaceId])
-  ).rows[0];
+  const { draft_id, snapshot_id } = (await pool.query("SELECT draft_id,snapshot_id FROM campaign_approvals WHERE workspace_id=$1", [workspaceId])).rows[0];
   const counts = Object.fromEntries(
-    [
-      "original_member_count",
-      "remaining_member_count",
-      "connection_unavailable",
-      "contact_paused",
-      "no_dm_identity",
-      "opted_out",
-      "marketing_consent_required",
-      "reply_window_closed",
-      "candidate",
-    ].map((key) => [key, key === "candidate" ? "7" : "0"]),
+    ["original_member_count", "remaining_member_count", "connection_unavailable", "contact_paused", "no_dm_identity", "opted_out", "marketing_consent_required", "reply_window_closed", "candidate"].map((key) => [key, key === "candidate" ? "7" : "0"]),
   );
   await pool.query(
     `INSERT INTO campaign_approvals(workspace_id,id,draft_id,draft_version,snapshot_id,name,body,schedule_kind,

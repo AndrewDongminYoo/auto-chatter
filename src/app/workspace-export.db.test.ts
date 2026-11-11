@@ -4,20 +4,13 @@ import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { appApi } from "./api.ts";
 import { ApiError } from "./auth.ts";
-import {
-  EXCLUDED_ITEMS,
-  EXCLUDED_TABLES,
-  EXPORTED_TABLES,
-  WORKSPACE_EXPORT_LIMITS,
-  exportWorkspace,
-} from "./workspace-export.ts";
+import { EXCLUDED_ITEMS, EXCLUDED_TABLES, EXPORTED_TABLES, WORKSPACE_EXPORT_LIMITS, exportWorkspace } from "./workspace-export.ts";
 import { seedWorkspace } from "./workspace-fixture.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const userId = "11111111-1111-4111-8111-111111111111";
@@ -33,13 +26,7 @@ const apiEnv = {
   WORKSPACE_EXPORT_LIMIT: { limit: async () => ({ success: true }) },
 };
 // Columns whose names look secret but hold only timestamps.
-const benignSecretLikeColumns = new Set([
-  "token_expires_at",
-  "token_obtained_at",
-  "token_refresh_attempted_at",
-  "reauth_token_obtained_at",
-  "subscription_token_obtained_at",
-]);
+const benignSecretLikeColumns = new Set(["token_expires_at", "token_obtained_at", "token_refresh_attempted_at", "reauth_token_obtained_at", "subscription_token_obtained_at"]);
 
 before(async () => {
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
@@ -63,8 +50,7 @@ function request(actorId = userId) {
     }),
     apiEnv,
     () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: actorId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actorId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 
@@ -72,10 +58,7 @@ test("exports every table of the caller's workspace and nothing from another wor
   const response = await request();
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "no-store");
-  assert.match(
-    response.headers.get("content-disposition") ?? "",
-    /^attachment; filename="auto-chatter-export-\d{4}-\d{2}-\d{2}\.json"$/,
-  );
+  assert.match(response.headers.get("content-disposition") ?? "", /^attachment; filename="auto-chatter-export-\d{4}-\d{2}-\d{2}\.json"$/);
   const body = await response.json();
   assert.equal(body.format, "auto-chatter-workspace-export");
   assert.equal(body.version, 1);
@@ -102,14 +85,7 @@ test("exports every table of the caller's workspace and nothing from another wor
   assert.ok(body.tables.instagram_connections[0].token_expires_at);
   // A webhook signing key is exported by ID and dates only; its sealed secret is left out.
   assert.ok(body.excluded.includes("webhook_signing_keys.secret_encrypted"));
-  assert.deepEqual(Object.keys(body.tables.webhook_signing_keys[0]).sort(), [
-    "created_at",
-    "endpoint_id",
-    "id",
-    "retired_at",
-    "slot",
-    "workspace_id",
-  ]);
+  assert.deepEqual(Object.keys(body.tables.webhook_signing_keys[0]).sort(), ["created_at", "endpoint_id", "id", "retired_at", "slot", "workspace_id"]);
   assert.equal(body.tables.webhook_endpoints[0].url, "https://hooks.example.test/account-own");
   assert.equal(body.tables.webhook_deliveries[0].status, "dead");
   assert.equal(body.tables.webhook_redelivery_events[0].actor_id, userId);
@@ -134,22 +110,14 @@ test("the export carries the caller's workspace row with its time zone and plan 
 });
 
 test("every public table is exported or explicitly excluded, and secret-like columns are omitted", async () => {
-  const tables = (
-    await pool.query<{ table_name: string }>(
-      "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'",
-    )
-  ).rows.map((row) => row.table_name);
+  const tables = (await pool.query<{ table_name: string }>("SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'")).rows.map((row) => row.table_name);
   const classified = new Set([...Object.keys(EXPORTED_TABLES), ...EXCLUDED_TABLES]);
   assert.deepEqual(
     tables.filter((table) => !classified.has(table)),
     [],
     "a new table must be added to EXPORTED_TABLES or EXCLUDED_TABLES",
   );
-  const columns = (
-    await pool.query<{ table_name: string; column_name: string }>(
-      "SELECT table_name,column_name FROM information_schema.columns WHERE table_schema='public'",
-    )
-  ).rows;
+  const columns = (await pool.query<{ table_name: string; column_name: string }>("SELECT table_name,column_name FROM information_schema.columns WHERE table_schema='public'")).rows;
   for (const { table_name: table, column_name: column } of columns) {
     const config = EXPORTED_TABLES[table];
     if (!config || benignSecretLikeColumns.has(column) || !/token|secret|encrypt|password|hash/i.test(column)) continue;
@@ -168,8 +136,7 @@ test("bigint identifiers above 2^53 are exported exactly", async () => {
 });
 
 const owner = { id: userId, email: "a@example.test" };
-const tooLarge = (error: unknown) =>
-  error instanceof ApiError && error.status === 422 && error.message === "workspace_export_too_large";
+const tooLarge = (error: unknown) => error instanceof ApiError && error.status === 422 && error.message === "workspace_export_too_large";
 // Two exports differ only in their export time.
 const withoutTime = (body: string) => body.replace(/"exported_at":"[^"]*"/, "");
 
@@ -188,10 +155,7 @@ test("a workspace over the row cap is refused whole, and one at the cap exports 
 
 test("the byte cap counts the exported row text, not the omitted ciphertext (#166)", async () => {
   const ciphertext = 1024 * 1024;
-  await pool.query("UPDATE instagram_connections SET access_token_encrypted=repeat('x',$2) WHERE id=$1", [
-    connectionId,
-    ciphertext,
-  ]);
+  await pool.query("UPDATE instagram_connections SET access_token_encrypted=repeat('x',$2) WHERE id=$1", [connectionId, ciphertext]);
   const full = await exportWorkspace(pool, owner);
   const bytes = Buffer.byteLength(full.body);
   assert.ok(bytes < ciphertext);

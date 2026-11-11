@@ -9,8 +9,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
   const databaseUrl = process.env.TEST_DATABASE_URL;
   if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
   const url = new URL(databaseUrl);
-  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
-    throw new Error("Database tests require a local automations_test database");
+  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
   const pool = new Pool({ connectionString: databaseUrl });
   const client = await pool.connect();
   try {
@@ -18,28 +17,17 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await client.query(
       "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF; IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='auto_chatter_server') THEN CREATE ROLE auto_chatter_server; END IF; END $$",
     );
-    await client.query(
-      "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role BYPASSRLS; END IF; END $$",
-    );
-    await client.query(
-      "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='automations_app') THEN CREATE ROLE automations_app; END IF; END $$",
-    );
+    await client.query("DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role BYPASSRLS; END IF; END $$");
+    await client.query("DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='automations_app') THEN CREATE ROLE automations_app; END IF; END $$");
     const bootstrap = await readFile(new URL("../../deploy/init-app-user.sh", import.meta.url), "utf8");
-    const grants = bootstrap.match(
-      /GRANT SELECT, INSERT, UPDATE ON ALL TABLES[\s\S]*?GRANT USAGE, SELECT ON ALL SEQUENCES[^;]*;/,
-    );
+    const grants = bootstrap.match(/GRANT SELECT, INSERT, UPDATE ON ALL TABLES[\s\S]*?GRANT USAGE, SELECT ON ALL SEQUENCES[^;]*;/);
     assert.ok(grants, "Compose initializer must declare application table grants");
     await client.query(grants[0]);
     await client.query("SET ROLE automations_app");
     await assert.rejects(client.query("UPDATE workspaces SET plan='advanced'"), { code: "42501" });
     await client.query("UPDATE workspaces SET time_zone=time_zone");
     await assert.rejects(client.query("UPDATE data_deletion_records SET id=id"), { code: "42501" });
-    await assert.rejects(
-      client.query(
-        "INSERT INTO data_deletion_records(workspace_id,connection_id,requested_by,deleted_counts,retained_counts) VALUES(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'{}','{}')",
-      ),
-      { code: "42501" },
-    );
+    await assert.rejects(client.query("INSERT INTO data_deletion_records(workspace_id,connection_id,requested_by,deleted_counts,retained_counts) VALUES(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'{}','{}')"), { code: "42501" });
     await assert.rejects(client.query("UPDATE instagram_manual_reply_events SET kind=kind"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_manual_reply_events"), { code: "42501" });
     await assert.rejects(client.query("UPDATE instagram_inbox_handoff_events SET active=active"), { code: "42501" });
@@ -83,17 +71,8 @@ test("Supabase roles cannot read product data; the server role has DML without D
       await assert.rejects(client.query(`UPDATE ${table} SET workspace_id=workspace_id`), { code: "42501" });
       await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
     }
-    for (const table of [
-      "webhook_endpoints",
-      "webhook_signing_keys",
-      "webhook_deliveries",
-      "webhook_redelivery_events",
-    ])
-      await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
-    for (let run = 0; run < 2; run++)
-      await client.query(
-        "INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now()) ON CONFLICT(name) DO UPDATE SET last_success_at=now()",
-      );
+    for (const table of ["webhook_endpoints", "webhook_signing_keys", "webhook_deliveries", "webhook_redelivery_events"]) await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
+    for (let run = 0; run < 2; run++) await client.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now()) ON CONFLICT(name) DO UPDATE SET last_success_at=now()");
     await assert.rejects(client.query("DELETE FROM scheduled_steps"), { code: "42501" });
     await client.query("RESET ROLE");
     await client.query("GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role");
@@ -160,16 +139,8 @@ test("Supabase roles cannot read product data; the server role has DML without D
         "instagram_message_receipts",
       ])
         await assert.rejects(client.query(`SELECT * FROM ${table}`), { code: "42501" });
-      await assert.rejects(
-        client.query("SELECT public.delete_connection_data(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'x')"),
-        { code: "42501" },
-      );
-      await assert.rejects(
-        client.query(
-          "SELECT public.delete_person_data(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'comment_sender','1')",
-        ),
-        { code: "42501" },
-      );
+      await assert.rejects(client.query("SELECT public.delete_connection_data(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'x')"), { code: "42501" });
+      await assert.rejects(client.query("SELECT public.delete_person_data(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'comment_sender','1')"), { code: "42501" });
       await assert.rejects(client.query("SELECT public.delete_workspace_data(gen_random_uuid(),gen_random_uuid())"), {
         code: "42501",
       });
@@ -181,42 +152,23 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await client.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
     // The server role writes a workspace's ID and time zone and locks its row, but never sets or changes its plan.
     await client.query("UPDATE workspaces SET time_zone=time_zone");
-    for (const lock of ["UPDATE", "NO KEY UPDATE", "SHARE"])
-      assert.equal((await client.query(`SELECT id FROM workspaces FOR ${lock}`)).rowCount, 1, lock);
+    for (const lock of ["UPDATE", "NO KEY UPDATE", "SHARE"]) assert.equal((await client.query(`SELECT id FROM workspaces FOR ${lock}`)).rowCount, 1, lock);
     await assert.rejects(client.query("UPDATE workspaces SET plan='advanced'"), { code: "42501" });
     await assert.rejects(client.query("UPDATE workspaces SET id=id"), { code: "42501" });
-    await assert.rejects(
-      client.query("INSERT INTO workspaces(id,plan) VALUES ('22222222-2222-4222-8222-222222222229','advanced')"),
-      { code: "42501" },
-    );
-    await client.query(
-      "INSERT INTO workspace_members VALUES ('33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111')",
-    );
-    await client.query(
-      "INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES('44444444-4444-4444-8444-444444444444','11111111-1111-4111-8111-111111111111','access-account')",
-    );
-    await client.query(
-      "INSERT INTO flows(id,workspace_id,name,draft) VALUES('77777777-7777-4777-8777-777777777777','11111111-1111-4111-8111-111111111111','access','{}')",
-    );
+    await assert.rejects(client.query("INSERT INTO workspaces(id,plan) VALUES ('22222222-2222-4222-8222-222222222229','advanced')"), { code: "42501" });
+    await client.query("INSERT INTO workspace_members VALUES ('33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111')");
+    await client.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES('44444444-4444-4444-8444-444444444444','11111111-1111-4111-8111-111111111111','access-account')");
+    await client.query("INSERT INTO flows(id,workspace_id,name,draft) VALUES('77777777-7777-4777-8777-777777777777','11111111-1111-4111-8111-111111111111','access','{}')");
     await client.query(
       `INSERT INTO flow_versions(id,flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,published_by)
        VALUES('88888888-8888-4888-8888-888888888888','77777777-7777-4777-8777-777777777777','11111111-1111-4111-8111-111111111111',1,0,'{}','44444444-4444-4444-8444-444444444444','1789','33333333-3333-4333-8333-333333333333')`,
     );
-    await client.query(
-      "UPDATE flows SET published_version_id='88888888-8888-4888-8888-888888888888' WHERE id='77777777-7777-4777-8777-777777777777'",
-    );
+    await client.query("UPDATE flows SET published_version_id='88888888-8888-4888-8888-888888888888' WHERE id='77777777-7777-4777-8777-777777777777'");
     // The server role stores and changes webhook endpoints and their keys.
-    await client.query(
-      "INSERT INTO webhook_endpoints(id,workspace_id,name,url) VALUES('99999999-9999-4999-8999-999999999999','11111111-1111-4111-8111-111111111111','access','https://hooks.example.test/in')",
-    );
-    await client.query(
-      "INSERT INTO webhook_signing_keys(id,workspace_id,endpoint_id,slot,secret_encrypted) VALUES(gen_random_uuid(),'11111111-1111-4111-8111-111111111111','99999999-9999-4999-8999-999999999999',1,'sealed')",
-    );
+    await client.query("INSERT INTO webhook_endpoints(id,workspace_id,name,url) VALUES('99999999-9999-4999-8999-999999999999','11111111-1111-4111-8111-111111111111','access','https://hooks.example.test/in')");
+    await client.query("INSERT INTO webhook_signing_keys(id,workspace_id,endpoint_id,slot,secret_encrypted) VALUES(gen_random_uuid(),'11111111-1111-4111-8111-111111111111','99999999-9999-4999-8999-999999999999',1,'sealed')");
     assert.equal((await client.query("UPDATE webhook_endpoints SET active=false")).rowCount, 1);
-    assert.equal(
-      (await client.query("UPDATE webhook_signing_keys SET retired_at=now(),secret_encrypted=NULL")).rowCount,
-      1,
-    );
+    assert.equal((await client.query("UPDATE webhook_signing_keys SET retired_at=now(),secret_encrypted=NULL")).rowCount, 1);
     const consentEventId = (
       await client.query(
         `INSERT INTO channel_consent_events(request_key,workspace_id,connection_id,channel,identity_kind,identity_value,purpose,decision,evidence_kind,evidence_reference,occurred_at,actor_id)
@@ -250,28 +202,17 @@ test("Supabase roles cannot read product data; the server role has DML without D
       1,
     );
     assert.equal((await client.query("SELECT count(*) FROM channel_consent_state")).rows[0].count, "1");
-    await client.query(
-      "INSERT INTO workspace_reply_templates(workspace_id,name,body,created_by,updated_by) VALUES('11111111-1111-4111-8111-111111111111','Greeting','Hi {{name}}','33333333-3333-4333-8333-333333333333','33333333-3333-4333-8333-333333333333')",
-    );
-    assert.equal(
-      (await client.query("UPDATE workspace_reply_templates SET archived=true,version=version+1")).rowCount,
-      1,
-    );
+    await client.query("INSERT INTO workspace_reply_templates(workspace_id,name,body,created_by,updated_by) VALUES('11111111-1111-4111-8111-111111111111','Greeting','Hi {{name}}','33333333-3333-4333-8333-333333333333','33333333-3333-4333-8333-333333333333')");
+    assert.equal((await client.query("UPDATE workspace_reply_templates SET archived=true,version=version+1")).rowCount, 1);
     assert.equal((await client.query("SELECT body FROM workspace_reply_templates")).rows[0].body, "Hi {{name}}");
     // The server role writes labels, a label set (whose CHECK calls inbox_label_ids_valid), its audit and a note,
     // and updates the label and the set; the audit and the note stay append-only (checked below).
-    await client.query(
-      "INSERT INTO instagram_inbox_labels(id,workspace_id,name,created_by) VALUES('66666666-6666-4666-8666-666666666661','11111111-1111-4111-8111-111111111111','vip','33333333-3333-4333-8333-333333333333')",
-    );
-    await client.query(
-      "INSERT INTO instagram_inbox_conversation_labels(workspace_id,connection_id,recipient_id,label_ids,version) VALUES('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','900','{66666666-6666-4666-8666-666666666661}',1)",
-    );
+    await client.query("INSERT INTO instagram_inbox_labels(id,workspace_id,name,created_by) VALUES('66666666-6666-4666-8666-666666666661','11111111-1111-4111-8111-111111111111','vip','33333333-3333-4333-8333-333333333333')");
+    await client.query("INSERT INTO instagram_inbox_conversation_labels(workspace_id,connection_id,recipient_id,label_ids,version) VALUES('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','900','{66666666-6666-4666-8666-666666666661}',1)");
     await client.query(
       "INSERT INTO instagram_inbox_label_events(workspace_id,connection_id,recipient_id,version,added,removed,actor_id) VALUES('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','900',1,'{66666666-6666-4666-8666-666666666661}','{}','33333333-3333-4333-8333-333333333333')",
     );
-    await client.query(
-      "INSERT INTO instagram_inbox_notes(workspace_id,connection_id,recipient_id,author_id,body) VALUES('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','900','33333333-3333-4333-8333-333333333333','memo')",
-    );
+    await client.query("INSERT INTO instagram_inbox_notes(workspace_id,connection_id,recipient_id,author_id,body) VALUES('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','900','33333333-3333-4333-8333-333333333333','memo')");
     // A keyword rule (whose CHECKs call inbox_label_rule_keywords_valid) and an audit row that names the rule and no
     // member; the server role updates the rule but cannot delete it (checked below).
     await client.query(
@@ -280,15 +221,9 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await client.query(
       "INSERT INTO instagram_inbox_label_events(workspace_id,connection_id,recipient_id,version,added,removed,actor_id,rule_id) VALUES('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','900',2,'{66666666-6666-4666-8666-666666666661}','{}',NULL,'66666666-6666-4666-8666-666666666662')",
     );
-    assert.equal(
-      (await client.query("UPDATE instagram_inbox_label_rules SET archived=true,version=version+1")).rowCount,
-      1,
-    );
+    assert.equal((await client.query("UPDATE instagram_inbox_label_rules SET archived=true,version=version+1")).rowCount, 1);
     assert.equal((await client.query("UPDATE instagram_inbox_labels SET archived=true")).rowCount, 1);
-    assert.equal(
-      (await client.query("UPDATE instagram_inbox_conversation_labels SET label_ids='{}',version=2")).rowCount,
-      1,
-    );
+    assert.equal((await client.query("UPDATE instagram_inbox_conversation_labels SET label_ids='{}',version=2")).rowCount, 1);
     // The server role writes a reminder and its audit and updates the reminder; the audit stays append-only.
     await client.query(
       "INSERT INTO instagram_inbox_reminders(id,workspace_id,connection_id,recipient_id,creator_id,due_at) VALUES('77777777-7777-4777-8777-777777777771','11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','900','33333333-3333-4333-8333-333333333333',now()+interval '1 day')",
@@ -344,41 +279,23 @@ test("Supabase roles cannot read product data; the server role has DML without D
       await assert.rejects(client.query(`UPDATE ${table} SET workspace_id=workspace_id`), { code: "42501" });
       await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
     }
-    for (const table of [
-      "webhook_endpoints",
-      "webhook_signing_keys",
-      "webhook_deliveries",
-      "webhook_redelivery_events",
-    ])
-      await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
+    for (const table of ["webhook_endpoints", "webhook_signing_keys", "webhook_deliveries", "webhook_redelivery_events"]) await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM channel_consent_events"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM channel_consent_state"), { code: "42501" });
-    for (let run = 0; run < 2; run++)
-      await client.query(
-        "INSERT INTO scheduled_steps(name,last_failure_at,failure_code) VALUES('wake',now(),'database_error') ON CONFLICT(name) DO UPDATE SET last_failure_at=now(),failure_code='database_error'",
-      );
+    for (let run = 0; run < 2; run++) await client.query("INSERT INTO scheduled_steps(name,last_failure_at,failure_code) VALUES('wake',now(),'database_error') ON CONFLICT(name) DO UPDATE SET last_failure_at=now(),failure_code='database_error'");
     // The cron's batched record write runs as this role; the second run takes the conflict path.
     for (let run = 0; run < 2; run++)
       await recordSteps(client as unknown as Pool, [
         { name: "wake", failure: null, at: new Date() },
         { name: "token_refresh", failure: "token_refresh_failed", at: new Date() },
       ]);
-    assert.deepEqual(
-      (
-        await client.query(
-          "SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded,last_failure_at IS NOT NULL AS failed FROM scheduled_steps WHERE name IN ('token_refresh','wake') ORDER BY name",
-        )
-      ).rows,
-      [
-        { name: "token_refresh", failure_code: "token_refresh_failed", succeeded: false, failed: true },
-        { name: "wake", failure_code: "database_error", succeeded: true, failed: true },
-      ],
-    );
+    assert.deepEqual((await client.query("SELECT name,failure_code,last_success_at IS NOT NULL AS succeeded,last_failure_at IS NOT NULL AS failed FROM scheduled_steps WHERE name IN ('token_refresh','wake') ORDER BY name")).rows, [
+      { name: "token_refresh", failure_code: "token_refresh_failed", succeeded: false, failed: true },
+      { name: "wake", failure_code: "database_error", succeeded: true, failed: true },
+    ]);
     await assert.rejects(client.query("DELETE FROM scheduled_steps"), { code: "42501" });
     await assert.rejects(client.query("CREATE TABLE public.forbidden(id int)"), { code: "42501" });
-    const deletion = await client.query(
-      "SELECT public.delete_connection_data('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','33333333-3333-4333-8333-333333333333','access-account') AS result",
-    );
+    const deletion = await client.query("SELECT public.delete_connection_data('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','33333333-3333-4333-8333-333333333333','access-account') AS result");
     assert.equal(deletion.rows[0].result.deleted_counts.channel_consent_events, 1);
     assert.deepEqual(deletion.rows[0].result.retained_counts, {
       carried_comment_sender_revokes: 0,
@@ -389,35 +306,22 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("UPDATE data_deletion_records SET id=id"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM data_deletion_records"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_comment_events"), { code: "42501" });
-    await assert.rejects(
-      client.query(
-        "SELECT public.delete_person_data('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','33333333-3333-4333-8333-333333333333','comment_sender','1')",
-      ),
-      { code: "42501" },
-    );
+    await assert.rejects(client.query("SELECT public.delete_person_data('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','33333333-3333-4333-8333-333333333333','comment_sender','1')"), { code: "42501" });
     await assert.rejects(client.query("SELECT public.delete_workspace_data(gen_random_uuid(),gen_random_uuid())"), {
       code: "42501",
     });
     await assert.rejects(client.query("SELECT * FROM workspace_deletion_records"), { code: "42501" });
     // Expired OAuth states are removed only through the definer function; the table DELETE stays denied.
-    await client.query(
-      "INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES ('server-expired','33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111',now()-interval '1 second')",
-    );
+    await client.query("INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES ('server-expired','33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111',now()-interval '1 second')");
     await assert.rejects(client.query("DELETE FROM instagram_oauth_states"), { code: "42501" });
     assert.equal((await client.query("SELECT public.delete_expired_oauth_states() AS deleted")).rows[0].deleted, 1);
     await client.query("RESET ROLE");
     await client.query("SET ROLE automations_app");
     assert.equal((await client.query("SELECT count(*) FROM workspace_members")).rows[0].count, "1");
-    await client.query(
-      "INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES ('compose-test','33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111',now()+interval '1 hour')",
-    );
+    await client.query("INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES ('compose-test','33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111',now()+interval '1 hour')");
     await assert.rejects(client.query("DELETE FROM instagram_oauth_states"), { code: "42501" });
     assert.equal((await client.query("SELECT public.delete_expired_oauth_states() AS deleted")).rows[0].deleted, 0);
-    assert.equal(
-      (await client.query("UPDATE instagram_oauth_states SET consumed_at=now() WHERE state_hash='compose-test'"))
-        .rowCount,
-      1,
-    );
+    assert.equal((await client.query("UPDATE instagram_oauth_states SET consumed_at=now() WHERE state_hash='compose-test'")).rowCount, 1);
     assert.equal((await client.query("SELECT count(*) FROM workspaces")).rows[0].count, "1");
     await client.query("INSERT INTO workspaces VALUES ('22222222-2222-4222-8222-222222222222')");
     await client.query("UPDATE workspaces SET time_zone=time_zone");
@@ -435,10 +339,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
        FROM channel_consent_events WHERE id=$1`,
       [composeConsentEventId],
     );
-    await assert.rejects(
-      client.query("UPDATE channel_consent_state SET decision='grant' WHERE identity_value='compose-recipient'"),
-      { code: "23514" },
-    );
+    await assert.rejects(client.query("UPDATE channel_consent_state SET decision='grant' WHERE identity_value='compose-recipient'"), { code: "23514" });
     const composeGrantEventId = (
       await client.query(
         `INSERT INTO channel_consent_events(request_key,workspace_id,connection_id,channel,identity_kind,identity_value,purpose,decision,evidence_kind,evidence_reference,occurred_at,actor_id)
@@ -504,26 +405,12 @@ test("Supabase roles cannot read product data; the server role has DML without D
       await assert.rejects(client.query(`UPDATE ${table} SET workspace_id=workspace_id`), { code: "42501" });
       await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
     }
-    for (const table of [
-      "webhook_endpoints",
-      "webhook_signing_keys",
-      "webhook_deliveries",
-      "webhook_redelivery_events",
-    ])
-      await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
-    for (let run = 0; run < 2; run++)
-      await client.query(
-        "INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now()) ON CONFLICT(name) DO UPDATE SET last_success_at=now()",
-      );
+    for (const table of ["webhook_endpoints", "webhook_signing_keys", "webhook_deliveries", "webhook_redelivery_events"]) await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
+    for (let run = 0; run < 2; run++) await client.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now()) ON CONFLICT(name) DO UPDATE SET last_success_at=now()");
     await assert.rejects(client.query("DELETE FROM scheduled_steps"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM channel_consent_events"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM channel_consent_state"), { code: "42501" });
-    await assert.rejects(
-      client.query(
-        "SELECT public.delete_person_data('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','33333333-3333-4333-8333-333333333333','comment_sender','1')",
-      ),
-      { code: "42501" },
-    );
+    await assert.rejects(client.query("SELECT public.delete_person_data('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','33333333-3333-4333-8333-333333333333','comment_sender','1')"), { code: "42501" });
     await assert.rejects(client.query("SELECT public.delete_workspace_data(gen_random_uuid(),gen_random_uuid())"), {
       code: "42501",
     });
@@ -625,10 +512,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
         "search_path=public, pg_temp",
         `${row.name} must pin search_path to public, pg_temp`,
       );
-      assert.ok(
-        !["auto_chatter_server", "automations_app", "anon", "authenticated", "service_role"].includes(row.owner),
-        `${row.name} must not be owned by a server or API role`,
-      );
+      assert.ok(!["auto_chatter_server", "automations_app", "anon", "authenticated", "service_role"].includes(row.owner), `${row.name} must not be owned by a server or API role`);
       assert.deepEqual(row.executors, [], `${row.name} must not be executable by PUBLIC or an API role`);
     }
     // Exercise RLS independently of table grants: an accidental future grant must not expose rows.
@@ -637,10 +521,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
     assert.equal((await client.query("SELECT count(*) FROM workspaces")).rows[0].count, "0");
     await client.query("RESET ROLE");
     await client.query("ALTER TABLE workspaces OWNER TO auto_chatter_server");
-    await assert.rejects(
-      client.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8")),
-      /must not own database objects/,
-    );
+    await assert.rejects(client.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8")), /must not own database objects/);
   } finally {
     await client.query("RESET ROLE");
     client.release();

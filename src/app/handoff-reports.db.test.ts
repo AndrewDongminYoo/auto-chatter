@@ -7,8 +7,7 @@ import { appApi } from "./api.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: databaseUrl });
 const workspace = "11111111-1111-4111-8111-111111111111";
 const otherWorkspace = "22222222-2222-4222-8222-222222222222";
@@ -23,20 +22,13 @@ before(async () => pool.query(await readFile(new URL("../../db/schema.sql", impo
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspace, otherWorkspace]);
-  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'agent')", [
-    workspace,
-    owner,
-    agent,
-  ]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'agent')", [workspace, owner, agent]);
   for (const [ws, id] of [
     [workspace, connection],
     [otherWorkspace, otherConnection],
     [workspace, secondConnection],
   ]) {
-    await pool.query(
-      "INSERT INTO instagram_connections(id,workspace_id,account_id,username) VALUES($1::uuid,$2,$1::text,'SECRET-USERNAME')",
-      [id, ws],
-    );
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,username) VALUES($1::uuid,$2,$1::text,'SECRET-USERNAME')", [id, ws]);
     const rule = (
       await pool.query(
         `INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text)
@@ -58,10 +50,7 @@ beforeEach(async () => {
         [ws, id, rule, event],
       )
     ).rows[0].id;
-    await pool.query(
-      "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id) VALUES($1,$2,'456')",
-      [ws, id],
-    );
+    await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id) VALUES($1,$2,'456')", [ws, id]);
     await pool.query(
       `INSERT INTO instagram_inbox_handoffs(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,updated_by)
        VALUES($1,$2,'123','456',$3,true,1,$4)`,
@@ -71,12 +60,7 @@ beforeEach(async () => {
 });
 after(async () => pool.end());
 
-async function seed(
-  reason: "handoff_started" | "handoff_resumed",
-  version: number,
-  at = "2026-09-30T15:00:00Z",
-  conn = connection,
-) {
+async function seed(reason: "handoff_started" | "handoff_resumed", version: number, at = "2026-09-30T15:00:00Z", conn = connection) {
   return (
     await pool.query(
       `INSERT INTO instagram_inbox_handoff_events(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,
@@ -95,17 +79,13 @@ function request(query = params, actor = owner, plans?: Record<string, unknown>[
     () =>
       ({
         query: async (sql: string, values: unknown[]) => {
-          if (plans && sql.startsWith("WITH context"))
-            plans.push(
-              (await pool.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${sql}`, values)).rows[0]["QUERY PLAN"][0].Plan,
-            );
+          if (plans && sql.startsWith("WITH context")) plans.push((await pool.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${sql}`, values)).rows[0]["QUERY PLAN"][0].Plan);
           return pool.query(sql, values);
         },
         connect: pool.connect.bind(pool),
         end: async () => {},
       }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: actor, email: "owner@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actor, email: "owner@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 async function report(query = params) {
@@ -144,10 +124,7 @@ test("handoff report counts real cycles and distinct account/conversation pairs 
   });
   assert.equal(JSON.stringify(body).includes("SECRET"), false);
   assert.equal(JSON.stringify(body).includes(first), false);
-  assert.deepEqual(
-    Object.keys(body).sort(),
-    ["from", "before", "time_zone", "connection_id", "period_from", "period_before", "checked_at", "counts"].sort(),
-  );
+  assert.deepEqual(Object.keys(body).sort(), ["from", "before", "time_zone", "connection_id", "period_from", "period_before", "checked_at", "counts"].sort());
   // Administrative privacy deletion removes retained events, not a permanent statistics snapshot.
   await pool.query("DELETE FROM instagram_inbox_handoff_events WHERE id=$1", [first]);
   assert.deepEqual((await report()).counts, { total: "3", started: "1", cleared: "2", conversations: "2" });
@@ -155,9 +132,7 @@ test("handoff report counts real cycles and distinct account/conversation pairs 
 
 test("handoff report includes one event for an idempotent clear and does not imply automation resumed", async () => {
   await seed("handoff_started", 1);
-  await pool.query("UPDATE instagram_contact_automation SET paused=true,handoff_paused=true WHERE connection_id=$1", [
-    connection,
-  ]);
+  await pool.query("UPDATE instagram_contact_automation SET paused=true,handoff_paused=true WHERE connection_id=$1", [connection]);
   async function clear() {
     return appApi(
       new Request(`https://app.test/api/connections/${connection}/inbox/123/handoff`, {
@@ -166,21 +141,15 @@ test("handoff report includes one event for an idempotent clear and does not imp
         body: JSON.stringify({ active: false, expected_version: 1 }),
       }),
       { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" },
-      () =>
-        ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
-      (async () =>
-        Response.json({ id: owner, email: "owner@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+      () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
+      (async () => Response.json({ id: owner, email: "owner@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
     );
   }
   assert.equal((await clear()).status, 200);
   assert.equal((await clear()).status, 200);
   await pool.query("UPDATE instagram_inbox_handoff_events SET created_at='2026-09-30T15:00:00Z'");
   assert.deepEqual((await report()).counts, { total: "2", started: "1", cleared: "1", conversations: "1" });
-  assert.equal(
-    (await pool.query("SELECT paused FROM instagram_contact_automation WHERE connection_id=$1", [connection])).rows[0]
-      .paused,
-    true,
-  );
+  assert.equal((await pool.query("SELECT paused FROM instagram_contact_automation WHERE connection_id=$1", [connection])).rows[0].paused, true);
 });
 
 test("handoff report selects event timestamps at exact half-open boundaries and returns zero for no events", async () => {

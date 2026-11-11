@@ -21,17 +21,9 @@ function conversationPath(connection: string, recipient: string): void {
   if (!isUuid(connection) || !/^\d{1,40}$/.test(recipient)) throw new ApiError(400, "invalid_note_request");
 }
 
-export async function addInboxNote(
-  pool: Pool,
-  user: User,
-  connection: string,
-  recipient: string,
-  query: URLSearchParams,
-  input: unknown,
-) {
+export async function addInboxNote(pool: Pool, user: User, connection: string, recipient: string, query: URLSearchParams, input: unknown) {
   conversationPath(connection, recipient);
-  if (query.size || !isRecord(input) || Object.keys(input).length !== 1 || typeof input.body !== "string")
-    throw new ApiError(400, "invalid_note_request");
+  if (query.size || !isRecord(input) || Object.keys(input).length !== 1 || typeof input.body !== "string") throw new ApiError(400, "invalid_note_request");
   const body = input.body.trim();
   if (!body || [...body].length > NOTE_BODY_MAX || body.includes("\u0000")) throw new ApiError(400, "invalid_note");
   const { workspace_id: workspace } = await membershipFor(pool, user, "agent");
@@ -41,20 +33,11 @@ export async function addInboxNote(
     // The lock order of the other conversation writes: the workspace row, the caller's membership row, then the
     // connection, so a note queues behind the deletion functions instead of outliving the conversation.
     await client.query("SELECT 1 FROM workspaces WHERE id=$1 FOR SHARE", [workspace]);
-    const member = await client.query(
-      "SELECT 1 FROM workspace_members WHERE workspace_id=$1 AND user_id=$2 AND removed_at IS NULL FOR SHARE",
-      [workspace, user.id],
-    );
+    const member = await client.query("SELECT 1 FROM workspace_members WHERE workspace_id=$1 AND user_id=$2 AND removed_at IS NULL FOR SHARE", [workspace, user.id]);
     if (!member.rowCount) throw new ApiError(403, "workspace_required");
-    const owned = await client.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR SHARE", [
-      connection,
-      workspace,
-    ]);
+    const owned = await client.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR SHARE", [connection, workspace]);
     if (!owned.rowCount) throw new ApiError(404, "connection_not_found");
-    const exists = await client.query(
-      "SELECT 1 FROM instagram_inbox_messages WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 LIMIT 1",
-      [workspace, connection, recipient],
-    );
+    const exists = await client.query("SELECT 1 FROM instagram_inbox_messages WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 LIMIT 1", [workspace, connection, recipient]);
     if (!exists.rowCount) throw new ApiError(404, "conversation_not_found");
     const result = await client.query<NoteRow>(
       `WITH note AS (
@@ -75,24 +58,11 @@ export async function addInboxNote(
 }
 
 // Newest first, 50 per page; `before` is the oldest note ID of the previous page.
-export async function listInboxNotes(
-  pool: Pool,
-  user: User,
-  connection: string,
-  recipient: string,
-  query: URLSearchParams,
-) {
+export async function listInboxNotes(pool: Pool, user: User, connection: string, recipient: string, query: URLSearchParams) {
   conversationPath(connection, recipient);
-  if (
-    [...query.keys()].some((key) => key !== "before" || query.getAll(key).length !== 1) ||
-    (query.has("before") && !/^[1-9]\d{0,18}$/.test(query.get("before")!))
-  )
-    throw new ApiError(400, "invalid_note_request");
+  if ([...query.keys()].some((key) => key !== "before" || query.getAll(key).length !== 1) || (query.has("before") && !/^[1-9]\d{0,18}$/.test(query.get("before")!))) throw new ApiError(400, "invalid_note_request");
   const workspace = await workspaceFor(pool, user, "agent");
-  const owned = await pool.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [
-    connection,
-    workspace,
-  ]);
+  const owned = await pool.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [connection, workspace]);
   if (!owned.rowCount) throw new ApiError(404, "connection_not_found");
   const result = await pool.query<NoteRow>(
     `SELECT ${NOTE_COLUMNS} FROM instagram_inbox_notes note ${NOTE_JOINS}

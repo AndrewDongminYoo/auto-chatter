@@ -10,8 +10,7 @@ import { processNextPrivateReply, type PrivateReplyTransport } from "../instagra
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const userId = "11111111-1111-4111-8111-111111111111";
@@ -35,10 +34,7 @@ before(async () => {
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspaceId, otherWorkspaceId]);
-  await pool.query(
-    "INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'agent'),($4,$5,'owner')",
-    [workspaceId, userId, agentId, otherWorkspaceId, otherUserId],
-  );
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'agent'),($4,$5,'owner')", [workspaceId, userId, agentId, otherWorkspaceId, otherUserId]);
   await pool.query(
     `INSERT INTO instagram_connections(id,workspace_id,account_id,active,access_token_encrypted)
      VALUES($1,$2,'owned-account',true,'token')`,
@@ -50,21 +46,13 @@ beforeEach(async () => {
      ($4,$6,'flag','boolean',false),($5,$6,'old','text',true)`,
     [cityField, countField, sizeField, flagField, archivedField, workspaceId],
   );
-  await pool.query(
-    "INSERT INTO webhook_endpoints(id,workspace_id,name,url) VALUES($1,$2,'crm','https://hooks.test/a')",
-    [endpointId, workspaceId],
-  );
+  await pool.query("INSERT INTO webhook_endpoints(id,workspace_id,name,url) VALUES($1,$2,'crm','https://hooks.test/a')", [endpointId, workspaceId]);
 });
 
 after(async () => pool.end());
 
 // Calls the API and records every fetch the auth client makes and every queue notification.
-async function call(
-  method: string,
-  path: string,
-  body?: unknown,
-  options: { actor?: string; origin?: string } = {},
-): Promise<{ response: Response; fetched: string[]; notified: string[] }> {
+async function call(method: string, path: string, body?: unknown, options: { actor?: string; origin?: string } = {}): Promise<{ response: Response; fetched: string[]; notified: string[] }> {
   const fetched: string[] = [];
   const notified: string[] = [];
   const response = await appApi(
@@ -104,11 +92,7 @@ async function snapshot(): Promise<Record<string, string>> {
   ).rows;
   const result: Record<string, string> = {};
   for (const { name } of tables) {
-    const row = (
-      await pool.query(
-        `SELECT count(*)::text AS n,md5(coalesce(string_agg(t::text,',' ORDER BY t::text),'')) AS h FROM "${name}" t`,
-      )
-    ).rows[0];
+    const row = (await pool.query(`SELECT count(*)::text AS n,md5(coalesce(string_agg(t::text,',' ORDER BY t::text),'')) AS h FROM "${name}" t`)).rows[0];
     result[name] = `${row.n}:${row.h}`;
   }
   return result;
@@ -242,21 +226,7 @@ test("a draft test run walks the whole path through delays, time waits and a sav
     reply_branch: "replied",
   });
   assert.equal(status, 200);
-  assert.deepEqual(outcomes(body.steps), [
-    "start:next",
-    "vip:true",
-    "buyer:added",
-    "count:set",
-    "notify:queued",
-    "pause:waiting",
-    "morning:waiting",
-    "city:true",
-    "ask:queued",
-    "wait:replied",
-    "wait:set",
-    "answered:added",
-    "report:queued",
-  ]);
+  assert.deepEqual(outcomes(body.steps), ["start:next", "vip:true", "buyer:added", "count:set", "notify:queued", "pause:waiting", "morning:waiting", "city:true", "ask:queued", "wait:replied", "wait:set", "answered:added", "report:queued"]);
   assert.deepEqual([body.source, body.version_no, body.status, body.failure_code], ["draft", null, "ended", null]);
   assert.deepEqual(body.messages, [{ node_id: "ask", text: "Hi Seoul: size please" }]);
   assert.deepEqual(body.waits, [
@@ -320,21 +290,14 @@ test("conditions, the reply branch and the save field each change the path", asy
   assert.deepEqual(timeout.changes, { tags: { vip: false, buyer: true }, fields: { [countField]: 3 } });
 
   const replied = (await testRun(plain, { ...base, ...contact })).body;
-  assert.deepEqual(outcomes(replied.steps).slice(-4), [
-    "ask:queued",
-    "wait:replied",
-    "answered:added",
-    "report:queued",
-  ]);
+  assert.deepEqual(outcomes(replied.steps).slice(-4), ["ask:queued", "wait:replied", "answered:added", "report:queued"]);
   assert.equal(replied.changes.fields[sizeField], undefined);
 
   const plainTimeout = (await testRun(plain, { ...base, ...contact, reply_branch: "timeout" })).body;
   assert.deepEqual(outcomes(plainTimeout.steps).slice(-2), ["wait:timeout", "silent:removed"]);
 
   // Facts the walk already holds: the stored value and tag are reported as unchanged.
-  const same = (
-    await testRun(saving, { ...base, tags: ["vip", "buyer"], fields: { ...contact.fields, [countField]: 3 } })
-  ).body;
+  const same = (await testRun(saving, { ...base, tags: ["vip", "buyer"], fields: { ...contact.fields, [countField]: 3 } })).body;
   assert.deepEqual(outcomes(same.steps).slice(2, 4), ["buyer:already_present", "count:unchanged"]);
 
   const unmatched = (await testRun(saving, { ...base, comment_text: "hello" })).body;
@@ -351,9 +314,7 @@ test("a tag named __proto__ is reported in the changes like any other tag", asyn
   const added = (await testRun(await flow("add_tag"), { source: "draft", comment_text: "size" })).body;
   assert.deepEqual(outcomes(added.steps), ["start:next", "tag:added"]);
   assert.deepEqual(added.changes.tags, Object.fromEntries([["__proto__", true]]));
-  const removed = (
-    await testRun(await flow("remove_tag"), { source: "draft", comment_text: "size", tags: ["__proto__"] })
-  ).body;
+  const removed = (await testRun(await flow("remove_tag"), { source: "draft", comment_text: "size", tags: ["__proto__"] })).body;
   assert.deepEqual(outcomes(removed.steps), ["start:next", "tag:removed"]);
   assert.deepEqual(removed.changes.tags, Object.fromEntries([["__proto__", false]]));
 });
@@ -361,10 +322,7 @@ test("a tag named __proto__ is reported in the changes like any other tag", asyn
 test("a message that cannot render fails the run with its code and no message", async () => {
   const direct = await createdFlow({
     schema_version: 1,
-    nodes: [
-      fullDocument().nodes[0],
-      { id: "ask", type: "instagram_message", config: { text: `Hi {{field:${cityField}}}` } },
-    ],
+    nodes: [fullDocument().nodes[0], { id: "ask", type: "instagram_message", config: { text: `Hi {{field:${cityField}}}` } }],
     edges: [{ from: "start", port: "next", to: "ask" }],
   });
   const missing = (await testRun(direct, { source: "draft", comment_text: "size" })).body;
@@ -378,18 +336,13 @@ for (const branch of ["replied", "timeout"] as const)
   test(`a published test run records the same steps, changes and payloads as a real ${branch} run`, async () => {
     const id = await published(fullDocument());
     assert.equal((await request("POST", `/api/flows/${id}/enable`)).status, 200);
-    await pool.query(
-      "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1','{vip}')",
-      [workspaceId, connectionId],
-    );
+    await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1','{vip}')", [workspaceId, connectionId]);
     await pool.query(
       `INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value)
        VALUES($1,$2,'sender-1',$3,'"Seoul"')`,
       [workspaceId, connectionId, cityField],
     );
-    await ingestComments(pool, [
-      { accountId: "owned-account", commentId: "comment-1", postId: "1789", senderId: "sender-1", text: "size please" },
-    ]);
+    await ingestComments(pool, [{ accountId: "owned-account", commentId: "comment-1", postId: "1789", senderId: "sender-1", text: "size please" }]);
     for (let resumes = 0; resumes < 2; resumes++) {
       await pool.query("UPDATE flow_runs SET resume_at=now()-interval '1 second' WHERE status='waiting'");
       assert.equal(await resumeDueFlowRuns(pool), 1);
@@ -438,15 +391,9 @@ for (const branch of ["replied", "timeout"] as const)
          (SELECT jsonb_object_agg(field_id::text,value) FROM instagram_contact_field_values WHERE sender_id='sender-1') AS fields`,
     );
     const finalTags = new Set<string>(stored.rows[0].tags);
-    for (const tag of new Set([...contact.tags, ...finalTags]))
-      assert.equal(
-        body.changes.tags[tag],
-        contact.tags.includes(tag) === finalTags.has(tag) ? undefined : finalTags.has(tag),
-      );
+    for (const tag of new Set([...contact.tags, ...finalTags])) assert.equal(body.changes.tags[tag], contact.tags.includes(tag) === finalTags.has(tag) ? undefined : finalTags.has(tag));
     assert.deepEqual({ ...contact.fields, ...body.changes.fields }, stored.rows[0].fields);
-    const deliveries = (
-      await pool.query("SELECT node_id,endpoint_id::text,payload FROM webhook_deliveries ORDER BY created_at,node_id")
-    ).rows;
+    const deliveries = (await pool.query("SELECT node_id,endpoint_id::text,payload FROM webhook_deliveries ORDER BY created_at,node_id")).rows;
     assert.ok(deliveries.length);
     assert.deepEqual(
       body.webhooks,
@@ -472,9 +419,7 @@ test("a published test run leaves out a field that another version saves a reply
     edges: [{ from: "start", port: "next", to: "notify" }],
   });
   // Two concurrent publishes can both pass their checks; this version stands for the other one.
-  const other = (
-    await pool.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'ask','{}') RETURNING id", [workspaceId])
-  ).rows[0].id;
+  const other = (await pool.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'ask','{}') RETURNING id", [workspaceId])).rows[0].id;
   await pool.query(
     `INSERT INTO flow_versions(flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,field_ids,published_by)
      VALUES($1,$2,1,0,$3::jsonb,$4,'2001',$5::uuid[],$6)`,
@@ -544,17 +489,9 @@ test("synthetic input is validated against the workspace's fields with fixed cod
     [{ source: "draft", comment_text: "x".repeat(2001) }, 400, "invalid_test_run"],
     [{ source: "draft", comment_text: "size", reply_branch: "later" }, 400, "invalid_test_run"],
     [{ source: "draft", comment_text: "size", tags: ["\u0000"] }, 400, "invalid_contact_tags"],
-    [
-      { source: "draft", comment_text: "size", tags: Array.from({ length: 21 }, (_, i) => `t${i}`) },
-      400,
-      "invalid_test_run",
-    ],
+    [{ source: "draft", comment_text: "size", tags: Array.from({ length: 21 }, (_, i) => `t${i}`) }, 400, "invalid_test_run"],
     [{ source: "draft", comment_text: "size", fields: { city: "Seoul" } }, 400, "invalid_test_run"],
-    [
-      { source: "draft", comment_text: "size", fields: { [cityField]: "a", [cityField.toUpperCase()]: "b" } },
-      400,
-      "invalid_test_run",
-    ],
+    [{ source: "draft", comment_text: "size", fields: { [cityField]: "a", [cityField.toUpperCase()]: "b" } }, 400, "invalid_test_run"],
     [{ source: "draft", comment_text: "size", fields: { [endpointId]: "x" } }, 400, "unknown_field"],
     [{ source: "draft", comment_text: "size", fields: { [archivedField]: "x" } }, 400, "unknown_field"],
     [{ source: "draft", comment_text: "size", fields: { [countField]: "3" } }, 400, "invalid_field_value"],

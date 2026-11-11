@@ -37,8 +37,7 @@ export class AuthLimiter {
       return new Response(null, { status: 400 });
     }
     const { limit, period } = (input ?? {}) as { limit?: unknown; period?: unknown };
-    if (!Number.isInteger(limit) || Number(limit) < 1 || !Number.isInteger(period) || Number(period) < 1)
-      return new Response(null, { status: 400 });
+    if (!Number.isInteger(limit) || Number(limit) < 1 || !Number.isInteger(period) || Number(period) < 1) return new Response(null, { status: 400 });
     const now = Date.now();
     let window = await this.state.storage.get<Window>("window");
     if (!window || now >= window.end) {

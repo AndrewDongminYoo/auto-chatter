@@ -81,11 +81,7 @@ async function serverReport(query: string, row: Record<string, unknown> = {}) {
       };
     },
   } as unknown as Pool;
-  const body = await flowRunReport(
-    pool,
-    { id: "u", email: "u@example.test" },
-    new URLSearchParams(`from=2026-10-01&before=2026-10-02&expected_time_zone=Asia%2FSeoul${query}`),
-  );
+  const body = await flowRunReport(pool, { id: "u", email: "u@example.test" }, new URLSearchParams(`from=2026-10-01&before=2026-10-02&expected_time_zone=Asia%2FSeoul${query}`));
   return { body, statements };
 }
 
@@ -101,13 +97,7 @@ test("flow report accepts each breakdown, rejects any other or repeated one and 
     assert.deepEqual(body.groups, []);
     assert.equal(statements.at(-1)!.values[7], dimension);
   }
-  for (const query of [
-    "&group_by=",
-    "&group_by=week",
-    "&group_by=Day",
-    "&group_by=day&group_by=day",
-    "&group_by=day&group_by=flow",
-  ])
+  for (const query of ["&group_by=", "&group_by=week", "&group_by=Day", "&group_by=day&group_by=day", "&group_by=day&group_by=flow"])
     await assert.rejects(serverReport(query), (error: unknown) => {
       assert.ok(error instanceof ApiError);
       assert.equal(error.status, 400);
@@ -243,13 +233,9 @@ test("flow report renders separate partitions and exports only the displayed sna
   const requests: string[] = [];
   const h = harness(async (url) => {
     requests.push(url);
-    return url === "/api/flows"
-      ? { flows: [{ id: "88888888-8888-4888-8888-888888888888", name: "=SECRET-FLOW" }] }
-      : snapshot;
+    return url === "/api/flows" ? { flows: [{ id: "88888888-8888-4888-8888-888888888888", name: "=SECRET-FLOW" }] } : snapshot;
   });
-  await h.controller.configure("admin", "Factory", [
-    { id: "55555555-5555-4555-8555-555555555555", username: "=SECRET-ACCOUNT" },
-  ]);
+  await h.controller.configure("admin", "Factory", [{ id: "55555555-5555-4555-8555-555555555555", username: "=SECRET-ACCOUNT" }]);
   assert.equal(h.get("flow-reports-section").hidden, false);
   assert.equal(h.inputs.from.value, "");
   assert.match(h.get("flow-report-zone").textContent, /직접 입력/);
@@ -400,10 +386,7 @@ test("flow report renders a breakdown table with loaded labels and exports group
     assert.equal(own.length, 20);
     assert.ok(own.every((line) => line[11] === "connection"));
     assert.equal(own.find((line) => line[0] === "run" && line[1] === "total")![2], group.run_counts.total);
-    assert.equal(
-      own.find((line) => line[0] === "reply_wait" && line[1] === "replied")![2],
-      group.reply_wait_counts.replied,
-    );
+    assert.equal(own.find((line) => line[0] === "reply_wait" && line[1] === "replied")![2], group.reply_wait_counts.replied);
   }
   assert.equal(lines.filter((line) => line[12] === "" && line[11] === "").length, 20);
 
@@ -418,11 +401,7 @@ test("flow report renders a breakdown table with loaded labels and exports group
 
 test("flow report shows an empty breakdown and never lets a late grouped response overwrite newer input", async () => {
   let reports = 0;
-  const h = harness(async (url) =>
-    url === "/api/flows"
-      ? { flows: [] }
-      : { ...grouped, group_by: "day", groups: reports++ === 0 ? grouped.groups : [] },
-  );
+  const h = harness(async (url) => (url === "/api/flows" ? { flows: [] } : { ...grouped, group_by: "day", groups: reports++ === 0 ? grouped.groups : [] }));
   await h.controller.configure("owner", "Asia/Seoul", []);
   h.inputs.group_by.value = "day";
   await h.form.dispatch("submit");

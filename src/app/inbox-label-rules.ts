@@ -36,13 +36,11 @@ async function readRule(db: Pick<Pool, "query">, workspace: string, id: string):
 // The editor (public/app/inbox.js) joins keywords with ", " into an <input>, which strips CR and LF, and splits
 // them again on commas, so a keyword with a comma or a line break would not survive an edit unchanged.
 function keywordList(value: unknown, required: boolean): string[] {
-  if (!Array.isArray(value) || value.length > LABEL_RULE_KEYWORD_LIMIT)
-    throw new ApiError(400, "invalid_label_rule_keywords");
+  if (!Array.isArray(value) || value.length > LABEL_RULE_KEYWORD_LIMIT) throw new ApiError(400, "invalid_label_rule_keywords");
   const keywords = value.map((item) => {
     if (typeof item !== "string" || item.length > 300) throw new ApiError(400, "invalid_label_rule_keywords");
     const keyword = normalizeMatchText(item);
-    if (!keyword || [...keyword].length > LABEL_RULE_KEYWORD_MAX || /[\u0000,\r\n]/.test(keyword))
-      throw new ApiError(400, "invalid_label_rule_keywords");
+    if (!keyword || [...keyword].length > LABEL_RULE_KEYWORD_MAX || /[\u0000,\r\n]/.test(keyword)) throw new ApiError(400, "invalid_label_rule_keywords");
     return keyword;
   });
   if (required && !keywords.length) throw new ApiError(400, "invalid_label_rule_keywords");
@@ -58,13 +56,7 @@ type RuleInput = {
 
 function parseRule(input: unknown, extra: readonly string[] = []): RuleInput & Record<string, unknown> {
   const allowed = ["label_id", "match_mode", "keywords", "excluded_keywords", ...extra];
-  if (
-    !isRecord(input) ||
-    Object.keys(input).some((key) => !allowed.includes(key)) ||
-    !isUuid(input.label_id) ||
-    !["contains", "exact"].includes(String(input.match_mode))
-  )
-    throw new ApiError(400, "invalid_label_rule");
+  if (!isRecord(input) || Object.keys(input).some((key) => !allowed.includes(key)) || !isUuid(input.label_id) || !["contains", "exact"].includes(String(input.match_mode))) throw new ApiError(400, "invalid_label_rule");
   return {
     ...input,
     label_id: input.label_id.toLowerCase(),
@@ -77,12 +69,7 @@ function parseRule(input: unknown, extra: readonly string[] = []): RuleInput & R
 // FOR SHARE holds the label until the rule write commits, so an archive cannot commit between this check and the
 // write; the archive then waits for the rule and the rule only makes ingestion skip it.
 async function lockActiveLabel(client: PoolClient, workspace: string, label: string): Promise<void> {
-  const found = (
-    await client.query<{ archived: boolean }>(
-      "SELECT archived FROM instagram_inbox_labels WHERE workspace_id=$1 AND id=$2 FOR SHARE",
-      [workspace, label],
-    )
-  ).rows[0];
+  const found = (await client.query<{ archived: boolean }>("SELECT archived FROM instagram_inbox_labels WHERE workspace_id=$1 AND id=$2 FOR SHARE", [workspace, label])).rows[0];
   if (!found) throw new ApiError(404, "label_not_found");
   if (found.archived) throw new ApiError(409, "label_archived");
 }
@@ -105,11 +92,7 @@ async function transaction<T>(pool: Pool, work: (client: PoolClient) => Promise<
 // Active rules first, each group in the order ingestion applies them.
 export async function listLabelRules(pool: Pool, user: User): Promise<LabelRule[]> {
   const workspace = await workspaceFor(pool, user, "admin");
-  return (
-    await pool.query<LabelRule>(`${RULE_SELECT} WHERE r.workspace_id=$1 ORDER BY r.archived,r.created_at,r.id`, [
-      workspace,
-    ])
-  ).rows;
+  return (await pool.query<LabelRule>(`${RULE_SELECT} WHERE r.workspace_id=$1 ORDER BY r.archived,r.created_at,r.id`, [workspace])).rows;
 }
 
 export async function createLabelRule(pool: Pool, user: User, input: unknown): Promise<LabelRule> {
@@ -125,15 +108,7 @@ export async function createLabelRule(pool: Pool, user: User, input: unknown): P
        SELECT $1,$2,$3,$4::text[],$5::text[],$6,$6
        WHERE (SELECT count(*) FROM instagram_inbox_label_rules WHERE workspace_id=$1 AND NOT archived)<$7
        RETURNING id`,
-      [
-        workspace,
-        rule.label_id,
-        rule.match_mode,
-        rule.keywords,
-        rule.excluded_keywords,
-        user.id,
-        ACTIVE_LABEL_RULE_LIMIT,
-      ],
+      [workspace, rule.label_id, rule.match_mode, rule.keywords, rule.excluded_keywords, user.id, ACTIVE_LABEL_RULE_LIMIT],
     );
     if (!created.rows[0]) throw new ApiError(409, "label_rule_limit_reached");
     return (await readRule(client, workspace, created.rows[0].id))!;
@@ -142,23 +117,16 @@ export async function createLabelRule(pool: Pool, user: User, input: unknown): P
 
 export type SaveLabelRuleResult = { conflict: boolean; rule: LabelRule };
 
-const sameList = (a: readonly string[], b: readonly string[]) =>
-  a.length === b.length && a.every((value, index) => value === b[index]);
+const sameList = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((value, index) => value === b[index]);
 
 // Replaces the rule's label, mode and keywords at its expected version; a stale version answers with the current rule.
 // The rule row is locked FOR NO KEY UPDATE, which never blocks the key-share lock that ingestion's audit row takes on
 // it. An archived rule cannot be changed, and its label must still be active, as at creation.
-export async function updateLabelRule(
-  pool: Pool,
-  user: User,
-  id: string,
-  input: unknown,
-): Promise<SaveLabelRuleResult> {
+export async function updateLabelRule(pool: Pool, user: User, id: string, input: unknown): Promise<SaveLabelRuleResult> {
   if (!isUuid(id)) throw new ApiError(400, "invalid_label_rule");
   const rule = parseRule(input, ["expected_version"]);
   const expected = rule.expected_version;
-  if (!Number.isInteger(expected) || Number(expected) < 1 || Number(expected) >= 2147483647)
-    throw new ApiError(400, "invalid_label_rule");
+  if (!Number.isInteger(expected) || Number(expected) < 1 || Number(expected) >= 2147483647) throw new ApiError(400, "invalid_label_rule");
   const workspace = await workspaceFor(pool, user, "admin");
   return transaction(pool, async (client) => {
     const row = (
@@ -172,13 +140,7 @@ export async function updateLabelRule(
     if (row.version !== expected) return { conflict: true, rule: (await readRule(client, workspace, id))! };
     if (row.archived) throw new ApiError(409, "label_rule_archived");
     // An unchanged rule stores nothing and keeps its version.
-    if (
-      row.label_id === rule.label_id &&
-      row.match_mode === rule.match_mode &&
-      sameList(row.keywords, rule.keywords) &&
-      sameList(row.excluded_keywords, rule.excluded_keywords)
-    )
-      return { conflict: false, rule: (await readRule(client, workspace, id))! };
+    if (row.label_id === rule.label_id && row.match_mode === rule.match_mode && sameList(row.keywords, rule.keywords) && sameList(row.excluded_keywords, rule.excluded_keywords)) return { conflict: false, rule: (await readRule(client, workspace, id))! };
     await lockActiveLabel(client, workspace, rule.label_id);
     await client.query(
       `UPDATE instagram_inbox_label_rules SET label_id=$3,match_mode=$4,keywords=$5::text[],excluded_keywords=$6::text[],

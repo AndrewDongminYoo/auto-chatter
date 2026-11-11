@@ -25,8 +25,7 @@ test("a token rejection is HTTP 401 or a 400/403 Graph code 10, 190 or 200-299",
     assert.equal(isMetaTokenRejection(429, code), false, `429 code ${code}`);
     assert.equal(isMetaTokenRejection(500, code), false, `500 code ${code}`);
   }
-  for (const code of [1, 2, 4, 17, 32, 100, 199, 300, 613, "190", null, undefined])
-    assert.equal(isMetaTokenRejection(400, code), false, `code ${String(code)}`);
+  for (const code of [1, 2, 4, 17, 32, 100, 199, 300, 613, "190", null, undefined]) assert.equal(isMetaTokenRejection(400, code), false, `code ${String(code)}`);
 });
 
 test("metaTokenRejected reads a copy of the body, so the response can still be read", async () => {

@@ -13,21 +13,12 @@ test("request bodies are refused above the size limit and when not declared as J
       body: text,
     });
   assert.deepEqual(await readJson(json(body(16_384))), { text: "x".repeat(16_373) });
-  await assert.rejects(
-    readJson(json(body(16_385))),
-    (e: unknown) => e instanceof ApiError && e.status === 413 && e.message === "request_too_large",
-  );
+  await assert.rejects(readJson(json(body(16_385))), (e: unknown) => e instanceof ApiError && e.status === 413 && e.message === "request_too_large");
   // A route with a larger allowance (flow documents) still stops one byte above it.
   assert.ok(await readJson(json(body(69_632)), 69_632));
   await assert.rejects(readJson(json(body(69_633)), 69_632), (e: unknown) => e instanceof ApiError && e.status === 413);
   for (const type of ["text/plain", "application/x-www-form-urlencoded", ""])
-    await assert.rejects(
-      readJson(
-        new Request("https://app.test/api/x", { method: "POST", headers: { "content-type": type }, body: "{}" }),
-      ),
-      (e: unknown) => e instanceof ApiError && e.status === 415 && e.message === "json_required",
-      type,
-    );
+    await assert.rejects(readJson(new Request("https://app.test/api/x", { method: "POST", headers: { "content-type": type }, body: "{}" })), (e: unknown) => e instanceof ApiError && e.status === 415 && e.message === "json_required", type);
 });
 
 const config = { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" };
@@ -40,15 +31,9 @@ test("protected requests require a session and a remotely verified confirmed use
     assert.equal(new Headers(init?.headers).get("authorization"), "Bearer signed-token");
     return Response.json({ id: userId, email: "owner@example.test", email_confirmed_at: "2026-01-01" });
   });
-  await assert.rejects(
-    client.user(new Request("https://app.test/api/me")),
-    (e: unknown) => e instanceof ApiError && e.status === 401,
-  );
+  await assert.rejects(client.user(new Request("https://app.test/api/me")), (e: unknown) => e instanceof ApiError && e.status === 401);
   assert.equal(calls, 0);
-  assert.deepEqual(
-    await client.user(new Request("https://app.test/api/me", { headers: { cookie: "__Host-ac-access=signed-token" } })),
-    { id: userId, email: "owner@example.test" },
-  );
+  assert.deepEqual(await client.user(new Request("https://app.test/api/me", { headers: { cookie: "__Host-ac-access=signed-token" } })), { id: userId, email: "owner@example.test" });
   assert.equal(calls, 1);
 });
 
@@ -59,10 +44,8 @@ test("every provider call carries the secret key and forwards the client IP for 
     const headers = new Headers(init?.headers);
     const path = new URL(String(url)).pathname;
     seen.push({ path, apikey: headers.get("apikey"), forwarded: headers.get("sb-forwarded-for") });
-    if (path.endsWith("/token"))
-      return Response.json({ access_token: "access-test", refresh_token: "refresh-test", expires_in: 3600 });
-    if (path.endsWith("/user") && init?.method === "GET")
-      return Response.json({ id: userId, email: "owner@example.test", email_confirmed_at: "2026-01-01" });
+    if (path.endsWith("/token")) return Response.json({ access_token: "access-test", refresh_token: "refresh-test", expires_in: 3600 });
+    if (path.endsWith("/user") && init?.method === "GET") return Response.json({ id: userId, email: "owner@example.test", email_confirmed_at: "2026-01-01" });
     return new Response(null, { status: 204 });
   }) as typeof fetch;
   const exercise = async (client: AuthClient) => {
@@ -79,18 +62,7 @@ test("every provider call carries the secret key and forwards the client IP for 
   await exercise(new AuthClient(secretConfig, provider, "203.0.113.9"));
   assert.deepEqual(
     seen.map((call) => call.path),
-    [
-      "/auth/v1/user",
-      "/auth/v1/token",
-      "/auth/v1/signup",
-      "/auth/v1/recover",
-      "/auth/v1/resend",
-      "/auth/v1/user",
-      "/auth/v1/logout",
-      "/auth/v1/token",
-      "/auth/v1/token",
-      "/auth/v1/logout",
-    ],
+    ["/auth/v1/user", "/auth/v1/token", "/auth/v1/signup", "/auth/v1/recover", "/auth/v1/resend", "/auth/v1/user", "/auth/v1/logout", "/auth/v1/token", "/auth/v1/token", "/auth/v1/logout"],
   );
   for (const call of seen) assert.deepEqual(call, { ...call, apikey: "sb_secret_test", forwarded: "203.0.113.9" });
   // Without a client IP (a local request) the header is left out rather than invented.
@@ -117,11 +89,7 @@ test("an expired, revoked or unverifiable session is refused instead of trusted"
     [503, 503],
   ] as const) {
     const client = new AuthClient(config, async () => Response.json({ msg: "refused" }, { status }));
-    await assert.rejects(
-      client.user(request),
-      (e: unknown) => e instanceof ApiError && e.status === expected,
-      `provider ${status} must answer ${expected}`,
-    );
+    await assert.rejects(client.user(request), (e: unknown) => e instanceof ApiError && e.status === expected, `provider ${status} must answer ${expected}`);
   }
   const offline = new AuthClient(config, async () => {
     throw new TypeError("network down");
@@ -135,17 +103,12 @@ test("invalid or unconfirmed remote users cannot authorize requests", async () =
     { id: "bad-id", email_confirmed_at: "yes" },
   ]) {
     const client = new AuthClient(config, async () => Response.json(data));
-    await assert.rejects(
-      client.user(new Request("https://app.test/api/me", { headers: { cookie: "__Host-ac-access=untrusted" } })),
-      ApiError,
-    );
+    await assert.rejects(client.user(new Request("https://app.test/api/me", { headers: { cookie: "__Host-ac-access=untrusted" } })), ApiError);
   }
 });
 
 test("login puts session tokens in secure HttpOnly cookies, never response JSON", async () => {
-  const client = new AuthClient(config, async () =>
-    Response.json({ access_token: "access-test", refresh_token: "refresh-test", expires_in: 3600 }),
-  );
+  const client = new AuthClient(config, async () => Response.json({ access_token: "access-test", refresh_token: "refresh-test", expires_in: 3600 }));
   const response = await client.login({ email: "owner@example.test", password: "example-password" });
   const cookies = response.headers.getSetCookie();
   assert.equal(cookies.length, 2);
@@ -169,43 +132,27 @@ test("remote redirects are refused rather than following credentials", async () 
 
 test("mutations reject missing and cross-origin Origin headers", () => {
   for (const origin of [undefined, "https://attacker.test", "null"]) {
-    assert.throws(
-      () =>
-        requireSameOrigin(
-          new Request("https://app.test/api/rules", { method: "POST", headers: origin ? { Origin: origin } : {} }),
-        ),
-      ApiError,
-    );
+    assert.throws(() => requireSameOrigin(new Request("https://app.test/api/rules", { method: "POST", headers: origin ? { Origin: origin } : {} })), ApiError);
   }
-  requireSameOrigin(
-    new Request("https://app.test/api/rules", { method: "POST", headers: { Origin: "https://app.test" } }),
-  );
+  requireSameOrigin(new Request("https://app.test/api/rules", { method: "POST", headers: { Origin: "https://app.test" } }));
 });
 
 test("duplicate access cookies are rejected rather than choosing an identity", async () => {
   const client = new AuthClient(config, async () => {
     throw new Error("must not call provider");
   });
-  await assert.rejects(
-    client.user(
-      new Request("https://app.test/api/me", { headers: { cookie: "__Host-ac-access=a; __Host-ac-access=b" } }),
-    ),
-    (e: unknown) => e instanceof ApiError && e.status === 401,
-  );
+  await assert.rejects(client.user(new Request("https://app.test/api/me", { headers: { cookie: "__Host-ac-access=a; __Host-ac-access=b" } })), (e: unknown) => e instanceof ApiError && e.status === 401);
 });
 
 test("logout refreshes an expired access session before remote revocation", async () => {
   const calls: string[] = [];
   const client = new AuthClient(config, async (url, init) => {
     calls.push(String(url));
-    if (String(url).includes("/token?"))
-      return Response.json({ access_token: "new-access", refresh_token: "new-refresh", expires_in: 3600 });
+    if (String(url).includes("/token?")) return Response.json({ access_token: "new-access", refresh_token: "new-refresh", expires_in: 3600 });
     assert.equal(new Headers(init?.headers).get("authorization"), "Bearer new-access");
     return new Response(null, { status: 204 });
   });
-  const response = await client.logout(
-    new Request("https://app.test", { headers: { cookie: "__Host-ac-refresh=refresh-test" } }),
-  );
+  const response = await client.logout(new Request("https://app.test", { headers: { cookie: "__Host-ac-refresh=refresh-test" } }));
   assert.equal(response.status, 200);
   assert.equal(calls.length, 2);
   assert.ok(calls[1]!.endsWith("/logout?scope=local"));
@@ -216,9 +163,7 @@ test("ambiguous logout clears the browser but reports remote revocation failure"
   const client = new AuthClient(config, async () => {
     throw new Error("offline");
   });
-  const response = await client.logout(
-    new Request("https://app.test", { headers: { cookie: "__Host-ac-access=access-test" } }),
-  );
+  const response = await client.logout(new Request("https://app.test", { headers: { cookie: "__Host-ac-access=access-test" } }));
   assert.equal(response.status, 503);
   assert.equal(response.headers.getSetCookie().length, 2);
 });
@@ -259,12 +204,9 @@ test("signup and confirmation resend hide provider account state and cooldowns",
       paths.push(new URL(String(input)).pathname);
       return Response.json({}, { status: providerStatus });
     });
-    assert.deepEqual(
-      await (await client.signup({ email: "owner@example.test", password: "example-password" })).json(),
-      {
-        confirmation_required: true,
-      },
-    );
+    assert.deepEqual(await (await client.signup({ email: "owner@example.test", password: "example-password" })).json(), {
+      confirmation_required: true,
+    });
     assert.deepEqual(await (await client.resendConfirmation({ email: "owner@example.test" })).json(), {
       confirmation_requested: true,
     });
@@ -313,11 +255,9 @@ test("mail requests also spend an hourly per-IP and a project-wide mail allowanc
     AUTH_MAIL_IP_LIMIT: recording("mailIp", mailIp),
     AUTH_MAIL_LIMIT: recording("mail", mail),
   });
-  const from = (ip: string) =>
-    new Request("https://app.test/api/auth/recover", { method: "POST", headers: { "CF-Connecting-IP": ip } });
+  const from = (ip: string) => new Request("https://app.test/api/auth/recover", { method: "POST", headers: { "CF-Connecting-IP": ip } });
   const mailPaths = ["/api/auth/signup", "/api/auth/recover", "/api/auth/resend-confirmation"];
-  for (const [index, pathname] of mailPaths.entries())
-    await limitAuthRequest(from("203.0.113.10"), pathname, { email: `user${index}@example.test` }, env());
+  for (const [index, pathname] of mailPaths.entries()) await limitAuthRequest(from("203.0.113.10"), pathname, { email: `user${index}@example.test` }, env());
   await limitAuthRequest(from("198.51.100.7"), "/api/auth/recover", { email: "other@example.test" }, env());
   await limitAuthRequest(from("203.0.113.10"), "/api/auth/login", { email: "user0@example.test" }, env());
   // One per-IP mail key for every mail path from the same address, a different one for another address.
@@ -331,22 +271,12 @@ test("mail requests also spend an hourly per-IP and a project-wide mail allowanc
 
   // A refusal at either mail allowance is a 429; a client over its own allowance spends nothing project-wide.
   seen.mail = [];
-  await assert.rejects(
-    limitAuthRequest(from("203.0.113.10"), "/api/auth/recover", { email: "x@example.test" }, env(false)),
-    (e: unknown) => e instanceof ApiError && e.status === 429 && e.message === "auth_rate_limited",
-  );
+  await assert.rejects(limitAuthRequest(from("203.0.113.10"), "/api/auth/recover", { email: "x@example.test" }, env(false)), (e: unknown) => e instanceof ApiError && e.status === 429 && e.message === "auth_rate_limited");
   assert.deepEqual(seen.mail, []);
-  await assert.rejects(
-    limitAuthRequest(from("203.0.113.10"), "/api/auth/signup", { email: "x@example.test" }, env(true, false)),
-    (e: unknown) => e instanceof ApiError && e.status === 429 && e.message === "auth_rate_limited",
-  );
+  await assert.rejects(limitAuthRequest(from("203.0.113.10"), "/api/auth/signup", { email: "x@example.test" }, env(true, false)), (e: unknown) => e instanceof ApiError && e.status === 429 && e.message === "auth_rate_limited");
   // The mail allowances are required for mail paths only.
   const withoutMail = { AUTH_IP_LIMIT: recording("ip"), AUTH_EMAIL_LIMIT: recording("email") };
-  for (const pathname of mailPaths)
-    await assert.rejects(
-      limitAuthRequest(from("203.0.113.10"), pathname, { email: "x@example.test" }, withoutMail),
-      (e: unknown) => e instanceof ApiError && e.status === 503,
-    );
+  for (const pathname of mailPaths) await assert.rejects(limitAuthRequest(from("203.0.113.10"), pathname, { email: "x@example.test" }, withoutMail), (e: unknown) => e instanceof ApiError && e.status === 503);
   await limitAuthRequest(from("203.0.113.10"), "/api/auth/login", { email: "x@example.test" }, withoutMail);
 });
 
@@ -409,31 +339,14 @@ test("authentication throttles reject excess attempts and missing bindings befor
   const request = new Request("https://app.test/api/auth/signup", { method: "POST" });
   const allow = { limit: async () => ({ success: true }) };
   const refuse = { limit: async () => ({ success: false }) };
-  await assert.rejects(
-    limitAuthRequest(
-      request,
-      "/api/auth/signup",
-      { email: "x@example.test" },
-      { AUTH_IP_LIMIT: refuse, AUTH_EMAIL_LIMIT: allow, AUTH_MAIL_IP_LIMIT: allow, AUTH_MAIL_LIMIT: allow },
-    ),
-    (error: unknown) => error instanceof ApiError && error.status === 429,
-  );
-  await assert.rejects(
-    limitAuthRequest(request, "/api/auth/signup", { email: "x@example.test" }, { AUTH_IP_LIMIT: allow }),
-    (error: unknown) => error instanceof ApiError && error.status === 503,
-  );
+  await assert.rejects(limitAuthRequest(request, "/api/auth/signup", { email: "x@example.test" }, { AUTH_IP_LIMIT: refuse, AUTH_EMAIL_LIMIT: allow, AUTH_MAIL_IP_LIMIT: allow, AUTH_MAIL_LIMIT: allow }), (error: unknown) => error instanceof ApiError && error.status === 429);
+  await assert.rejects(limitAuthRequest(request, "/api/auth/signup", { email: "x@example.test" }, { AUTH_IP_LIMIT: allow }), (error: unknown) => error instanceof ApiError && error.status === 503);
 });
 
 test("password recovery rejects malformed input and reports provider outages without leaking details", async () => {
   const client = new AuthClient(config, async () => new Response("secret provider body", { status: 503 }));
-  await assert.rejects(
-    client.recover({ email: "invalid" }),
-    (error: unknown) => error instanceof ApiError && error.status === 400,
-  );
-  await assert.rejects(
-    client.recover({ email: "owner@example.test" }),
-    (error: unknown) => error instanceof ApiError && error.status === 503 && !error.message.includes("secret"),
-  );
+  await assert.rejects(client.recover({ email: "invalid" }), (error: unknown) => error instanceof ApiError && error.status === 400);
+  await assert.rejects(client.recover({ email: "owner@example.test" }), (error: unknown) => error instanceof ApiError && error.status === 503 && !error.message.includes("secret"));
 });
 
 test("reset uses only the supplied access token, clears cookies, and never returns credentials", async () => {
@@ -464,26 +377,18 @@ test("invalid recovery tokens never update a password and expired tokens get a g
   });
   await assert.rejects(client.resetPassword({ access_token: "bad token", password: "new-password-123" }), ApiError);
   assert.equal(calls, 0);
-  await assert.rejects(
-    client.resetPassword({ access_token: "expired-token", password: "new-password-123" }),
-    (error: unknown) => error instanceof ApiError && error.status === 401 && error.message === "recovery_link_invalid",
-  );
+  await assert.rejects(client.resetPassword({ access_token: "expired-token", password: "new-password-123" }), (error: unknown) => error instanceof ApiError && error.status === 401 && error.message === "recovery_link_invalid");
   assert.equal(calls, 1);
 });
 
 test("provider password policy rejection is distinct from an expired recovery link", async () => {
   const client = new AuthClient(config, async () => new Response("secret password policy", { status: 422 }));
-  await assert.rejects(
-    client.resetPassword({ access_token: "recovery-access", password: "new-password-123" }),
-    (error: unknown) => error instanceof ApiError && error.status === 400 && error.message === "password_rejected",
-  );
+  await assert.rejects(client.resetPassword({ access_token: "recovery-access", password: "new-password-123" }), (error: unknown) => error instanceof ApiError && error.status === 400 && error.message === "password_rejected");
 });
 
 test("password update never claims confirmed logout when provider refuses revocation", async () => {
   for (const status of [400, 401, 403, 503]) {
-    const client = new AuthClient(config, async (input) =>
-      String(input).endsWith("/user") ? Response.json({ id: userId }) : new Response(null, { status }),
-    );
+    const client = new AuthClient(config, async (input) => (String(input).endsWith("/user") ? Response.json({ id: userId }) : new Response(null, { status })));
     const response = await client.resetPassword({ access_token: "recovery-access", password: "new-password-123" });
     assert.equal(response.status, 503);
     assert.deepEqual(await response.json(), { error: "password_updated_logout_unconfirmed" });

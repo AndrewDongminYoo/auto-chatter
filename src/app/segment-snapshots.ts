@@ -3,15 +3,7 @@ import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { lockWorkspaceForMember, roleAllows, workspaceFor, type WorkspaceRole } from "./settings.ts";
 import { validateFieldCondition } from "./contact-fields.ts";
 import { contactCsvRow, contactCsvScalar } from "./contact-csv.ts";
-import {
-  contactConditionFields,
-  lockActiveSegment,
-  savedSegmentConditions,
-  segmentConditionSql,
-  segmentPreviewCounts,
-  segmentPreviewSql,
-  type SegmentPreviewSummary,
-} from "./contacts.ts";
+import { contactConditionFields, lockActiveSegment, savedSegmentConditions, segmentConditionSql, segmentPreviewCounts, segmentPreviewSql, type SegmentPreviewSummary } from "./contacts.ts";
 
 // A snapshot freezes the comment senders a saved segment selects at one as_of (#35, the target snapshot spec).
 // It stores identifiers only, sends nothing and decides no delivery eligibility.
@@ -26,22 +18,11 @@ export const SEGMENT_SNAPSHOT_LIMITS: Readonly<SegmentSnapshotLimits> = Object.f
   pageSize: 50,
 });
 
-export const SEGMENT_SNAPSHOT_CSV_HEADER = [
-  "format_version",
-  "snapshot_id",
-  "segment_id",
-  "as_of",
-  "workspace_id",
-  "channel",
-  "identity_kind",
-  "connection_id",
-  "sender_id",
-] as const;
+export const SEGMENT_SNAPSHOT_CSV_HEADER = ["format_version", "snapshot_id", "segment_id", "as_of", "workspace_id", "channel", "identity_kind", "connection_id", "sender_id"] as const;
 
 const utc = (column: string) => `to_char(${column} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 // The summary columns of a snapshot row (prefix is its alias with the dot): never its members or its definition.
-const summary = (prefix = "s.") =>
-  `${prefix}id,${prefix}segment_id,${prefix}segment_name,${utc(`${prefix}as_of`)} AS as_of,${prefix}counts,${prefix}member_count,${prefix}created_at`;
+const summary = (prefix = "s.") => `${prefix}id,${prefix}segment_id,${prefix}segment_name,${utc(`${prefix}as_of`)} AS as_of,${prefix}counts,${prefix}member_count,${prefix}created_at`;
 const SUMMARY = summary();
 // The member rows the workspace ($1) stores now across its snapshots: what the freeze limit and the usage both count.
 const STORED_MEMBERS = `(SELECT count(*)::int FROM instagram_segment_snapshot_members m
@@ -58,13 +39,7 @@ function memberCursor(value: string | null): { connection_id: string; sender_id:
   try {
     if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new Error();
     const result: unknown = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
-    if (
-      !isRecord(result) ||
-      !isUuid(result.connection_id) ||
-      typeof result.sender_id !== "string" ||
-      !result.sender_id.trim()
-    )
-      throw new Error();
+    if (!isRecord(result) || !isUuid(result.connection_id) || typeof result.sender_id !== "string" || !result.sender_id.trim()) throw new Error();
     return { connection_id: result.connection_id, sender_id: result.sender_id };
   } catch {
     throw new ApiError(400, "invalid_snapshot_request");
@@ -77,13 +52,7 @@ function memberCursor(value: string | null): { connection_id: string; sender_id:
 // preview counts and the members share one snapshot taken after those locks: a connection or person deletion either
 // committed before it (and its rows are not read) or waits for this commit (and deletes the new member rows).
 // REPEATABLE READ would fix the snapshot at the first lock and read rows a deletion removed while this waited.
-export async function createSegmentSnapshot(
-  pool: Pool,
-  user: User,
-  segmentId: string,
-  input: unknown,
-  limits: Partial<SegmentSnapshotLimits> = {},
-) {
+export async function createSegmentSnapshot(pool: Pool, user: User, segmentId: string, input: unknown, limits: Partial<SegmentSnapshotLimits> = {}) {
   const { maxMembers, perWorkspace, maxStoredMembers } = { ...SEGMENT_SNAPSHOT_LIMITS, ...limits };
   if (!isUuid(segmentId)) throw new ApiError(400, "invalid_snapshot_request");
   parseSnapshotRequest(input);
@@ -94,20 +63,11 @@ export async function createSegmentSnapshot(
     await lockWorkspaceForMember(client, workspace, user, "admin");
     const segment = await lockActiveSegment(client, workspace, segmentId);
     const conditions = await savedSegmentConditions(client, workspace, segment.id);
-    for (const condition of contactConditionFields(conditions))
-      await validateFieldCondition(client, workspace, condition);
-    await client.query(
-      "SELECT id FROM instagram_connections WHERE workspace_id=$1 AND ($2::uuid IS NULL OR id=$2) ORDER BY id FOR SHARE",
-      [workspace, conditions.connectionId],
-    );
+    for (const condition of contactConditionFields(conditions)) await validateFieldCondition(client, workspace, condition);
+    await client.query("SELECT id FROM instagram_connections WHERE workspace_id=$1 AND ($2::uuid IS NULL OR id=$2) ORDER BY id FOR SHARE", [workspace, conditions.connectionId]);
     // Both counts read rows committed before the workspace lock was granted, so concurrent creations stay within them.
     // Stored member rows are counted, not member_count, so rows a deletion removed no longer count.
-    const existing = (
-      await client.query<{ snapshots: number; members: number }>(
-        `SELECT count(*)::int AS snapshots,${STORED_MEMBERS} AS members FROM instagram_segment_snapshots WHERE workspace_id=$1`,
-        [workspace],
-      )
-    ).rows[0]!;
+    const existing = (await client.query<{ snapshots: number; members: number }>(`SELECT count(*)::int AS snapshots,${STORED_MEMBERS} AS members FROM instagram_segment_snapshots WHERE workspace_id=$1`, [workspace])).rows[0]!;
     if (existing.snapshots >= perWorkspace) throw new ApiError(409, "snapshot_limit_reached");
     // The members are the segment export's selection (its contactScope, matches and HAVING, in its order) and the
     // counts the preview's summary, both from segmentConditionSql at the statement's own clock. The clock appears
@@ -115,9 +75,7 @@ export async function createSegmentSnapshot(
     const sql = segmentConditionSql(workspace, conditions, "statement_timestamp()", null);
     const limitPosition = sql.values.length + 1;
     const rows = (
-      await client.query<
-        SegmentPreviewSummary & { connection_id: string | null; sender_id: string | null; as_of: string }
-      >(
+      await client.query<SegmentPreviewSummary & { connection_id: string | null; sender_id: string | null; as_of: string }>(
         `WITH ${sql.evaluation}, ${segmentPreviewSql(sql)}, selected AS (
            SELECT e.connection_id,e.sender_id
            ${sql.contactScope}
@@ -140,16 +98,7 @@ export async function createSegmentSnapshot(
       await client.query(
         `INSERT INTO instagram_segment_snapshots(workspace_id,segment_id,created_by,as_of,definition,segment_name,counts,member_count)
          VALUES($1,$2,$3,$4::timestamptz,$5::jsonb,$6,$7::jsonb,$8) RETURNING ${summary("")}`,
-        [
-          workspace,
-          segment.id,
-          user.id,
-          rows[0]!.as_of,
-          JSON.stringify(definition),
-          segment.name,
-          JSON.stringify(segmentPreviewCounts(rows[0], conditions)),
-          members.length,
-        ],
+        [workspace, segment.id, user.id, rows[0]!.as_of, JSON.stringify(definition), segment.name, JSON.stringify(segmentPreviewCounts(rows[0], conditions)), members.length],
       )
     ).rows[0];
     if (members.length)
@@ -187,11 +136,7 @@ export async function listSegmentSnapshots(pool: Pool, user: User, segmentId: st
 // limits count. One statement reads both, so the list and the usage share one snapshot. usage.snapshots is the list's
 // length, which equals the freeze check's count because the (segment_id, workspace_id) foreign key keeps every
 // snapshot's segment in its workspace. The workspace keeps at most perWorkspace snapshots, so there is no pagination.
-export async function listWorkspaceSegmentSnapshots(
-  pool: Pool,
-  user: User,
-  options: URLSearchParams = new URLSearchParams(),
-) {
+export async function listWorkspaceSegmentSnapshots(pool: Pool, user: User, options: URLSearchParams = new URLSearchParams()) {
   if (options.size) throw new ApiError(400, "invalid_snapshot_request");
   const workspace = await workspaceFor(pool, user, "admin");
   const rows = (
@@ -221,14 +166,8 @@ export async function listWorkspaceSegmentSnapshots(
 
 // The summary, the definition copy and one page of the stored members. stored_member_count counts the rows still
 // stored, which a connection or person deletion can make smaller than member_count.
-export async function getSegmentSnapshot(
-  pool: Pool,
-  user: User,
-  snapshotId: string,
-  options: URLSearchParams = new URLSearchParams(),
-) {
-  if (!isUuid(snapshotId) || [...options.keys()].some((key) => key !== "after") || options.getAll("after").length > 1)
-    throw new ApiError(400, "invalid_snapshot_request");
+export async function getSegmentSnapshot(pool: Pool, user: User, snapshotId: string, options: URLSearchParams = new URLSearchParams()) {
+  if (!isUuid(snapshotId) || [...options.keys()].some((key) => key !== "after") || options.getAll("after").length > 1) throw new ApiError(400, "invalid_snapshot_request");
   const after = memberCursor(options.get("after"));
   const workspace = await workspaceFor(pool, user, "admin");
   const { pageSize } = SEGMENT_SNAPSHOT_LIMITS;
@@ -250,41 +189,24 @@ export async function getSegmentSnapshot(
   ).rows;
   if (!rows[0]) throw new ApiError(404, "snapshot_not_found");
   const { member_connection_id: _connection, member_sender_id: _sender, ...snapshot } = rows[0];
-  const members = rows
-    .filter((row) => row.member_connection_id !== null)
-    .map((row) => ({ connection_id: row.member_connection_id, sender_id: row.member_sender_id }));
+  const members = rows.filter((row) => row.member_connection_id !== null).map((row) => ({ connection_id: row.member_connection_id, sender_id: row.member_sender_id }));
   const page = members.slice(0, pageSize);
   const last = page.at(-1);
   return {
     snapshot,
     members: page,
-    after:
-      members.length > pageSize && last
-        ? Buffer.from(JSON.stringify({ connection_id: last.connection_id, sender_id: last.sender_id })).toString(
-            "base64url",
-          )
-        : null,
+    after: members.length > pageSize && last ? Buffer.from(JSON.stringify({ connection_id: last.connection_id, sender_id: last.sender_id })).toString("base64url") : null,
   };
 }
 
 // Compare only still-stored keys with the current saved definition. All reads share one read-only snapshot,
 // including membership, the definition and both sets; no deleted identity is reconstructed and no key is returned.
-export async function compareSegmentSnapshot(
-  pool: Pool,
-  user: User,
-  snapshotId: string,
-  options: URLSearchParams = new URLSearchParams(),
-) {
+export async function compareSegmentSnapshot(pool: Pool, user: User, snapshotId: string, options: URLSearchParams = new URLSearchParams()) {
   if (!isUuid(snapshotId) || options.size) throw new ApiError(400, "invalid_snapshot_request");
   const client = await pool.connect();
   try {
     await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
-    const membership = (
-      await client.query<{ workspace_id: string; role: WorkspaceRole }>(
-        "SELECT workspace_id,role FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL",
-        [user.id],
-      )
-    ).rows[0];
+    const membership = (await client.query<{ workspace_id: string; role: WorkspaceRole }>("SELECT workspace_id,role FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL", [user.id])).rows[0];
     if (!membership) throw new ApiError(403, "workspace_required");
     if (!roleAllows(membership.role, "admin")) throw new ApiError(403, "role_forbidden");
     const workspace = membership.workspace_id;
@@ -301,8 +223,7 @@ export async function compareSegmentSnapshot(
     if (!snapshot) throw new ApiError(404, "snapshot_not_found");
     if (snapshot.archived) throw new ApiError(404, "segment_not_found");
     const conditions = await savedSegmentConditions(client, workspace, snapshot.segment_id);
-    for (const condition of contactConditionFields(conditions))
-      await validateFieldCondition(client, workspace, condition);
+    for (const condition of contactConditionFields(conditions)) await validateFieldCondition(client, workspace, condition);
     const sql = segmentConditionSql(workspace, conditions, "statement_timestamp()", null);
     const result = (
       await client.query(
@@ -359,18 +280,6 @@ export async function exportSegmentSnapshotCsv(pool: Pool, user: User, snapshotI
   if (!rows[0]) throw new ApiError(404, "snapshot_not_found");
   const { id, segment_id: segment, as_of: asOf } = rows[0];
   let body = "﻿" + contactCsvRow(SEGMENT_SNAPSHOT_CSV_HEADER);
-  for (const row of rows)
-    if (row.connection_id !== null && row.sender_id !== null)
-      body += contactCsvRow([
-        "1",
-        id,
-        segment,
-        asOf,
-        workspace,
-        "instagram",
-        "comment_sender",
-        row.connection_id,
-        contactCsvScalar(row.sender_id, true),
-      ]);
+  for (const row of rows) if (row.connection_id !== null && row.sender_id !== null) body += contactCsvRow(["1", id, segment, asOf, workspace, "instagram", "comment_sender", row.connection_id, contactCsvScalar(row.sender_id, true)]);
   return { body, snapshotId: id, asOf };
 }

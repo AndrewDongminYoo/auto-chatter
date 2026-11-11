@@ -5,8 +5,7 @@ import { workspaceFor } from "./settings.ts";
 function dateValue(value: string | null): number {
   if (!value || !/^[1-9]\d{3}-\d{2}-\d{2}$/.test(value)) throw new ApiError(400, "invalid_report_query");
   const date = new Date(`${value}T00:00:00.000Z`);
-  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value)
-    throw new ApiError(400, "invalid_report_query");
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value) throw new ApiError(400, "invalid_report_query");
   return date.getTime();
 }
 
@@ -55,8 +54,7 @@ const COUNTS = `json_build_object(
 export async function flowRunReport(pool: Pool, user: User, query: URLSearchParams) {
   const workspace = await workspaceFor(pool, user, "admin");
   const allowed = new Set(["from", "before", "expected_time_zone", "connection_id", "flow_id", "group_by"]);
-  for (const key of query.keys())
-    if (!allowed.has(key) || query.getAll(key).length !== 1) throw new ApiError(400, "invalid_report_query");
+  for (const key of query.keys()) if (!allowed.has(key) || query.getAll(key).length !== 1) throw new ApiError(400, "invalid_report_query");
   const from = query.get("from");
   const before = query.get("before");
   const days = (dateValue(before) - dateValue(from)) / 86_400_000;
@@ -64,16 +62,7 @@ export async function flowRunReport(pool: Pool, user: User, query: URLSearchPara
   const connection = query.get("connection_id");
   const flow = query.get("flow_id");
   const groupBy = query.get("group_by");
-  if (
-    days <= 0 ||
-    days > 366 ||
-    !zone ||
-    zone.length > 100 ||
-    (connection !== null && !isUuid(connection)) ||
-    (flow !== null && !isUuid(flow)) ||
-    (groupBy !== null && !GROUP_BY.has(groupBy))
-  )
-    throw new ApiError(400, "invalid_report_query");
+  if (days <= 0 || days > 366 || !zone || zone.length > 100 || (connection !== null && !isUuid(connection)) || (flow !== null && !isUuid(flow)) || (groupBy !== null && !GROUP_BY.has(groupBy))) throw new ApiError(400, "invalid_report_query");
   // Run creation selects the cohort. The unique outbox and DM delivery flow_run_id permit one left join each (a run
   // has at most one of them: a comment run's reply or a DM-started run's first message, #33);
   // step and webhook histories must not multiply counts or imply delivery success.

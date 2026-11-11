@@ -8,8 +8,7 @@ import { EXPORTED_TABLES } from "./workspace-export.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const owner = { id: "11111111-1111-4111-8111-111111111111", email: "owner@example.test" };
@@ -40,20 +39,7 @@ beforeEach(async () => {
   await pool.query(
     `INSERT INTO workspace_members(workspace_id,user_id,role,email)
      VALUES($1,$2,'owner',$3),($1,$4,'admin',$5),($1,$6,'agent',$7),($1,$8,'agent',$9),($10,$11,'owner',$12)`,
-    [
-      workspaceId,
-      owner.id,
-      owner.email,
-      admin.id,
-      admin.email,
-      agent.id,
-      agent.email,
-      other.id,
-      other.email,
-      otherWorkspaceId,
-      outsider.id,
-      outsider.email,
-    ],
+    [workspaceId, owner.id, owner.email, admin.id, admin.email, agent.id, agent.email, other.id, other.email, otherWorkspaceId, outsider.id, outsider.email],
   );
   await pool.query(
     `INSERT INTO instagram_connections(id,workspace_id,account_id,username,active,inbox_enabled,inbox_enabled_at)
@@ -67,13 +53,7 @@ after(async () => pool.end());
 
 type Connect = () => Promise<unknown>;
 
-function request(
-  actor: Actor,
-  method: string,
-  path: string,
-  body?: unknown,
-  connect: Connect = pool.connect.bind(pool),
-) {
+function request(actor: Actor, method: string, path: string, body?: unknown, connect: Connect = pool.connect.bind(pool)) {
   return appApi(
     new Request(`https://app.test${path}`, {
       method,
@@ -112,21 +92,13 @@ async function label(name: string, actor: Actor = admin): Promise<Label> {
   return body<Label>(await createLabel(actor, name), 201);
 }
 
-const labelsPath = (recipient = "456", connection = connectionId) =>
-  `/api/inbox/conversations/${connection}/${recipient}/labels`;
-const putLabels = (actor: Actor, ids: string[], expected: number, recipient = "456", connection = connectionId) =>
-  request(actor, "PUT", labelsPath(recipient, connection), { expected_version: expected, label_ids: ids });
-const notesPath = (recipient = "456", connection = connectionId) =>
-  `/api/inbox/conversations/${connection}/${recipient}/notes`;
-const addNote = (actor: Actor, text: unknown, recipient = "456", connection = connectionId) =>
-  request(actor, "POST", notesPath(recipient, connection), { body: text });
+const labelsPath = (recipient = "456", connection = connectionId) => `/api/inbox/conversations/${connection}/${recipient}/labels`;
+const putLabels = (actor: Actor, ids: string[], expected: number, recipient = "456", connection = connectionId) => request(actor, "PUT", labelsPath(recipient, connection), { expected_version: expected, label_ids: ids });
+const notesPath = (recipient = "456", connection = connectionId) => `/api/inbox/conversations/${connection}/${recipient}/notes`;
+const addNote = (actor: Actor, text: unknown, recipient = "456", connection = connectionId) => request(actor, "POST", notesPath(recipient, connection), { body: text });
 
 async function labelRows() {
-  return (
-    await pool.query(
-      "SELECT connection_id,recipient_id,label_ids::text[] AS label_ids,version FROM instagram_inbox_conversation_labels ORDER BY recipient_id",
-    )
-  ).rows;
+  return (await pool.query("SELECT connection_id,recipient_id,label_ids::text[] AS label_ids,version FROM instagram_inbox_conversation_labels ORDER BY recipient_id")).rows;
 }
 async function eventRows() {
   return (
@@ -146,9 +118,7 @@ async function settledOrWaiting(operation: Promise<unknown>, count = 1) {
   let settled = false;
   void operation.finally(() => (settled = true)).catch(() => undefined);
   for (let attempt = 0; attempt < 200 && !settled; attempt += 1) {
-    const waiting = await pool.query(
-      "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()",
-    );
+    const waiting = await pool.query("SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()");
     if (waiting.rows[0].waiting >= count) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -183,62 +153,39 @@ function heldBeforeCommit(actor: Actor, method: string, path: string, payload: u
 }
 
 async function reachCommit(held: ReturnType<typeof heldBeforeCommit>) {
-  await Promise.race([
-    held.atCommit,
-    held.response.then((response) => assert.fail(`the request finished before COMMIT with ${response.status}`)),
-  ]);
+  await Promise.race([held.atCommit, held.response.then((response) => assert.fail(`the request finished before COMMIT with ${response.status}`))]);
 }
 
 const deletionSql = {
   connection: ["SELECT public.delete_connection_data($1,$2,$3,'123') AS result", [workspaceId, connectionId, owner.id]],
-  person: [
-    "SELECT public.delete_person_data($1,$2,$3,'dm_recipient','456') AS result",
-    [workspaceId, connectionId, owner.id],
-  ],
+  person: ["SELECT public.delete_person_data($1,$2,$3,'dm_recipient','456') AS result", [workspaceId, connectionId, owner.id]],
   workspace: ["SELECT public.delete_workspace_data($1,$2) AS result", [workspaceId, owner.id]],
 } as const;
-const runDeletion = (deletion: keyof typeof deletionSql) =>
-  pool.query(deletionSql[deletion][0], [...deletionSql[deletion][1]]);
+const runDeletion = (deletion: keyof typeof deletionSql) => pool.query(deletionSql[deletion][0], [...deletionSql[deletion][1]]);
 
 test("admins manage labels; every role lists them with archived ones flagged", async () => {
   const vip = await label("  VIP 고객  ");
   assert.equal(vip.name, "VIP 고객");
   assert.equal(vip.archived, false);
   const refund = await label("환불 문의", owner);
-  for (const name of ["", "   ", "a".repeat(31), "탭\u0007", "zero​width", 7])
-    assert.equal(await errorCode(await createLabel(admin, name as string), 400), "invalid_label", String(name));
+  for (const name of ["", "   ", "a".repeat(31), "탭\u0007", "zero​width", 7]) assert.equal(await errorCode(await createLabel(admin, name as string), 400), "invalid_label", String(name));
   assert.equal((await createLabel(admin, "가".repeat(30))).status, 201);
-  assert.equal(
-    await errorCode(await request(admin, "POST", "/api/inbox/labels", { name: "x", color: "red" }), 400),
-    "invalid_label",
-  );
+  assert.equal(await errorCode(await request(admin, "POST", "/api/inbox/labels", { name: "x", color: "red" }), 400), "invalid_label");
   // Agents read labels but cannot change them.
   assert.equal(await errorCode(await createLabel(agent, "agent label"), 403), "role_forbidden");
-  assert.equal(
-    await errorCode(await request(agent, "PATCH", `/api/inbox/labels/${vip.id}`, { name: "x" }), 403),
-    "role_forbidden",
-  );
+  assert.equal(await errorCode(await request(agent, "PATCH", `/api/inbox/labels/${vip.id}`, { name: "x" }), 403), "role_forbidden");
   assert.equal(await errorCode(await request(agent, "DELETE", `/api/inbox/labels/${vip.id}`), 403), "role_forbidden");
   assert.equal(await errorCode(await request(stranger, "GET", "/api/inbox/labels"), 403), "workspace_required");
 
   // Names are unique among active labels, ignoring case; archiving frees the name.
   assert.equal(await errorCode(await createLabel(admin, "vip 고객"), 409), "label_name_exists");
-  const renamed = await body<Label>(
-    await request(admin, "PATCH", `/api/inbox/labels/${refund.id}`, { name: " 환불 " }),
-    200,
-  );
+  const renamed = await body<Label>(await request(admin, "PATCH", `/api/inbox/labels/${refund.id}`, { name: " 환불 " }), 200);
   assert.equal(renamed.name, "환불");
-  assert.equal(
-    await errorCode(await request(admin, "PATCH", `/api/inbox/labels/${refund.id}`, { name: "VIP 고객" }), 409),
-    "label_name_exists",
-  );
+  assert.equal(await errorCode(await request(admin, "PATCH", `/api/inbox/labels/${refund.id}`, { name: "VIP 고객" }), 409), "label_name_exists");
   const archived = await body<Label>(await request(admin, "DELETE", `/api/inbox/labels/${vip.id}`), 200);
   assert.equal(archived.archived, true);
   assert.equal((await request(admin, "DELETE", `/api/inbox/labels/${vip.id}`)).status, 200);
-  assert.equal(
-    await errorCode(await request(admin, "PATCH", `/api/inbox/labels/${vip.id}`, { name: "new" }), 409),
-    "label_archived",
-  );
+  assert.equal(await errorCode(await request(admin, "PATCH", `/api/inbox/labels/${vip.id}`, { name: "new" }), 409), "label_archived");
   const again = await label("vip 고객");
   assert.notEqual(again.id, vip.id);
 
@@ -258,18 +205,9 @@ test("admins manage labels; every role lists them with archived ones flagged", a
   assert.equal(listed.labels[3]!.id, vip.id);
   // Another workspace's label is not found, and its list is separate.
   const foreign = await label("foreign", outsider);
-  assert.equal(
-    await errorCode(await request(admin, "PATCH", `/api/inbox/labels/${foreign.id}`, { name: "mine" }), 404),
-    "label_not_found",
-  );
-  assert.equal(
-    await errorCode(await request(admin, "DELETE", `/api/inbox/labels/${foreign.id}`), 404),
-    "label_not_found",
-  );
-  assert.equal(
-    (await body<{ labels: Label[] }>(await request(outsider, "GET", "/api/inbox/labels"), 200)).labels.length,
-    1,
-  );
+  assert.equal(await errorCode(await request(admin, "PATCH", `/api/inbox/labels/${foreign.id}`, { name: "mine" }), 404), "label_not_found");
+  assert.equal(await errorCode(await request(admin, "DELETE", `/api/inbox/labels/${foreign.id}`), 404), "label_not_found");
+  assert.equal((await body<{ labels: Label[] }>(await request(outsider, "GET", "/api/inbox/labels"), 200)).labels.length, 1);
   assert.equal(await errorCode(await request(admin, "DELETE", "/api/inbox/labels/abc-123"), 400), "invalid_label");
   const crossOrigin = await appApi(
     new Request("https://app.test/api/inbox/labels", {
@@ -293,12 +231,7 @@ test("a workspace has at most 50 active labels; archived labels do not count", a
 });
 
 test("concurrent creations at the limit queue on the workspace row, so only one passes", async () => {
-  for (let index = 0; index < 49; index += 1)
-    await pool.query("INSERT INTO instagram_inbox_labels(workspace_id,name,created_by) VALUES($1,$2,$3)", [
-      workspaceId,
-      `label ${index}`,
-      admin.id,
-    ]);
+  for (let index = 0; index < 49; index += 1) await pool.query("INSERT INTO instagram_inbox_labels(workspace_id,name,created_by) VALUES($1,$2,$3)", [workspaceId, `label ${index}`, admin.id]);
   const held = heldBeforeCommit(admin, "POST", "/api/inbox/labels", { name: "first" });
   try {
     await reachCommit(held);
@@ -313,10 +246,7 @@ test("concurrent creations at the limit queue on the workspace row, so only one 
   } finally {
     held.release();
   }
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_labels WHERE NOT archived")).rows[0].count,
-    50,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_labels WHERE NOT archived")).rows[0].count, 50);
 });
 
 test("a label set changes at its expected version and writes one audit row per version", async () => {
@@ -352,10 +282,7 @@ test("a label set changes at its expected version and writes one audit row per v
     { recipient_id: "456", version: 2, added: [], removed: [refund.id], actor_id: admin.id },
     { recipient_id: "456", version: 3, added: [], removed: [vip.id], actor_id: owner.id },
   ]);
-  const opened = (await body<{ label_set: LabelSet }>(
-    await request(agent, "GET", `/api/connections/${connectionId}/inbox/456`),
-    200,
-  )) as { label_set: LabelSet };
+  const opened = (await body<{ label_set: LabelSet }>(await request(agent, "GET", `/api/connections/${connectionId}/inbox/456`), 200)) as { label_set: LabelSet };
   assert.deepEqual(opened.label_set, { version: 3, labels: [] });
 });
 
@@ -373,10 +300,7 @@ test("an archived label stays on a conversation that has it but cannot be added"
     { id: refund.id, name: "refund", archived: false },
     { id: vip.id, name: "vip", archived: true },
   ]);
-  const listed = await body<{ conversations: { recipient_id: string; label_set: LabelSet }[] }>(
-    await request(agent, "GET", "/api/inbox"),
-    200,
-  );
+  const listed = await body<{ conversations: { recipient_id: string; label_set: LabelSet }[] }>(await request(agent, "GET", "/api/inbox"), 200);
   assert.deepEqual(
     listed.conversations.map((row) => [row.recipient_id, row.label_set.labels.map((item) => item.archived)]),
     [
@@ -410,23 +334,13 @@ test("label set requests are validated, scoped to the workspace and refused to n
     { expected_version: 0, label_ids: many },
     { expected_version: 0, label_ids: [], extra: true },
   ])
-    assert.equal(
-      await errorCode(await request(agent, "PUT", labelsPath(), payload), 400),
-      "invalid_label_request",
-      JSON.stringify(payload),
-    );
+    assert.equal(await errorCode(await request(agent, "PUT", labelsPath(), payload), 400), "invalid_label_request", JSON.stringify(payload));
   // Ten labels is the most a conversation holds.
   assert.equal((await putLabels(agent, many.slice(0, 10), 0)).status, 200);
-  assert.equal(
-    await errorCode(await request(agent, "PUT", `${labelsPath()}?x=1`, { expected_version: 0, label_ids: [] }), 400),
-    "invalid_label_request",
-  );
+  assert.equal(await errorCode(await request(agent, "PUT", `${labelsPath()}?x=1`, { expected_version: 0, label_ids: [] }), 400), "invalid_label_request");
   assert.equal(await errorCode(await putLabels(agent, [foreign.id], 1), 404), "label_not_found");
   assert.equal(await errorCode(await putLabels(agent, [vip.id], 0, "999"), 404), "conversation_not_found");
-  assert.equal(
-    await errorCode(await putLabels(agent, [vip.id], 0, "700", foreignConnectionId), 404),
-    "connection_not_found",
-  );
+  assert.equal(await errorCode(await putLabels(agent, [vip.id], 0, "700", foreignConnectionId), 404), "connection_not_found");
   assert.equal(await errorCode(await putLabels(stranger, [], 0), 403), "workspace_required");
   const crossOrigin = await appApi(
     new Request(`https://app.test${labelsPath()}`, {
@@ -491,14 +405,8 @@ test("notes are append-only text listed newest first, never as messages and neve
   assert.equal(first.body, "환불 요청 확인 중");
   assert.deepEqual(first.author, { user_id: agent.id, email: agent.email });
   await body<Note>(await addNote(owner, "가".repeat(2000)), 201);
-  for (const text of ["", "   ", "가".repeat(2001), "nul\u0000"])
-    assert.equal(await errorCode(await addNote(agent, text), 400), "invalid_note", text.slice(0, 5));
-  for (const payload of [{}, { body: 7 }, { body: "x", extra: true }])
-    assert.equal(
-      await errorCode(await request(agent, "POST", notesPath(), payload), 400),
-      "invalid_note_request",
-      JSON.stringify(payload),
-    );
+  for (const text of ["", "   ", "가".repeat(2001), "nul\u0000"]) assert.equal(await errorCode(await addNote(agent, text), 400), "invalid_note", text.slice(0, 5));
+  for (const payload of [{}, { body: 7 }, { body: "x", extra: true }]) assert.equal(await errorCode(await request(agent, "POST", notesPath(), payload), 400), "invalid_note_request", JSON.stringify(payload));
   assert.equal(await errorCode(await addNote(agent, "x", "999"), 404), "conversation_not_found");
   assert.equal(await errorCode(await addNote(agent, "x", "456", foreignConnectionId), 404), "connection_not_found");
   assert.equal(await errorCode(await addNote(stranger, "x"), 403), "workspace_required");
@@ -508,10 +416,7 @@ test("notes are append-only text listed newest first, never as messages and neve
   assert.equal(page.notes.length, 50);
   assert.equal(page.notes[0]!.body, "note 48");
   assert.ok(page.before);
-  const rest = await body<{ notes: Note[]; before: string | null }>(
-    await request(agent, "GET", `${notesPath()}?before=${page.before}`),
-    200,
-  );
+  const rest = await body<{ notes: Note[]; before: string | null }>(await request(agent, "GET", `${notesPath()}?before=${page.before}`), 200);
   assert.deepEqual(
     rest.notes.map((note) => note.id),
     [first.id],
@@ -519,18 +424,12 @@ test("notes are append-only text listed newest first, never as messages and neve
   assert.equal(rest.before, null);
   assert.equal(await errorCode(await request(agent, "GET", `${notesPath()}?before=0`), 400), "invalid_note_request");
   // A note is not a message and is not found by the DM search.
-  const messages = await body<{ messages: { text: string }[] }>(
-    await request(agent, "GET", `/api/connections/${connectionId}/inbox/456`),
-    200,
-  );
+  const messages = await body<{ messages: { text: string }[] }>(await request(agent, "GET", `/api/connections/${connectionId}/inbox/456`), 200);
   assert.deepEqual(
     messages.messages.map((message) => message.text),
     ["hello there"],
   );
-  const searched = await body<{ conversations: unknown[] }>(
-    await request(agent, "GET", `/api/inbox?q=${encodeURIComponent("환불")}`),
-    200,
-  );
+  const searched = await body<{ conversations: unknown[] }>(await request(agent, "GET", `/api/inbox?q=${encodeURIComponent("환불")}`), 200);
   assert.deepEqual(searched.conversations, []);
   // Every note above is stored; access.db.test.ts checks that server roles cannot update or delete one.
   assert.equal(await noteCount(), 51);
@@ -541,10 +440,7 @@ test("notes of another workspace's conversation are neither listed nor written",
   await seed("700", "foreign", "2026-10-01T00:00:01Z", foreignConnectionId);
   await body(await addNote(agent, "internal memo"), 201);
   await body(await addNote(outsider, "their memo", "700", foreignConnectionId), 201);
-  assert.equal(
-    await errorCode(await request(agent, "GET", notesPath("700", foreignConnectionId)), 404),
-    "connection_not_found",
-  );
+  assert.equal(await errorCode(await request(agent, "GET", notesPath("700", foreignConnectionId)), 404), "connection_not_found");
   assert.equal(await errorCode(await request(outsider, "GET", notesPath()), 404), "connection_not_found");
   assert.equal(await errorCode(await addNote(outsider, "planted"), 404), "connection_not_found");
   assert.equal(await errorCode(await request(stranger, "GET", notesPath()), 403), "workspace_required");
@@ -556,26 +452,16 @@ test("the label filter combines with the other filters and pages with the cursor
   const other = await label("other");
   for (let index = 0; index < 53; index += 1) {
     const recipient = String(1000 + index);
-    await seed(
-      recipient,
-      `message ${index}`,
-      new Date(Date.parse("2026-10-01T01:00:00Z") - index * 1000).toISOString(),
-    );
+    await seed(recipient, `message ${index}`, new Date(Date.parse("2026-10-01T01:00:00Z") - index * 1000).toISOString());
     // Every recipient but 1001 and 1002 gets vip; 1002 gets the other label.
     if (index === 1) continue;
     await body(await putLabels(admin, index === 2 ? [other.id] : [vip.id], 0, recipient), 200);
   }
-  const first = await body<{ conversations: { recipient_id: string; label_set: LabelSet }[]; after: string | null }>(
-    await request(agent, "GET", `/api/inbox?label=${vip.id}`),
-    200,
-  );
+  const first = await body<{ conversations: { recipient_id: string; label_set: LabelSet }[]; after: string | null }>(await request(agent, "GET", `/api/inbox?label=${vip.id}`), 200);
   assert.equal(first.conversations.length, 50);
   assert.ok(first.conversations.every((row) => row.label_set.labels.some((item) => item.id === vip.id)));
   assert.ok(first.after);
-  const second = await body<{ conversations: { recipient_id: string }[]; after: string | null }>(
-    await request(agent, "GET", `/api/inbox?label=${vip.id}&after=${first.after}`),
-    200,
-  );
+  const second = await body<{ conversations: { recipient_id: string }[]; after: string | null }>(await request(agent, "GET", `/api/inbox?label=${vip.id}&after=${first.after}`), 200);
   assert.deepEqual(
     second.conversations.map((row) => row.recipient_id),
     ["1052"],
@@ -592,18 +478,12 @@ test("the label filter combines with the other filters and pages with the cursor
     }),
     200,
   );
-  const closed = await body<{ conversations: { recipient_id: string }[] }>(
-    await request(agent, "GET", `/api/inbox?label=${vip.id}&status=closed`),
-    200,
-  );
+  const closed = await body<{ conversations: { recipient_id: string }[] }>(await request(agent, "GET", `/api/inbox?label=${vip.id}&status=closed`), 200);
   assert.deepEqual(
     closed.conversations.map((row) => row.recipient_id),
     ["1003"],
   );
-  const searched = await body<{ conversations: { recipient_id: string }[] }>(
-    await request(agent, "GET", `/api/inbox?label=${other.id}&q=message%202`),
-    200,
-  );
+  const searched = await body<{ conversations: { recipient_id: string }[] }>(await request(agent, "GET", `/api/inbox?label=${other.id}&q=message%202`), 200);
   assert.deepEqual(
     searched.conversations.map((row) => row.recipient_id),
     ["1002"],
@@ -611,11 +491,7 @@ test("the label filter combines with the other filters and pages with the cursor
   assert.equal(await errorCode(await request(agent, "GET", "/api/inbox?label=not-a-uuid"), 400), "invalid_inbox_query");
   // A label of another workspace matches nothing.
   const foreign = await label("foreign", outsider);
-  assert.deepEqual(
-    (await body<{ conversations: unknown[] }>(await request(agent, "GET", `/api/inbox?label=${foreign.id}`), 200))
-      .conversations,
-    [],
-  );
+  assert.deepEqual((await body<{ conversations: unknown[] }>(await request(agent, "GET", `/api/inbox?label=${foreign.id}`), 200)).conversations, []);
 });
 
 for (const deletion of ["connection", "person", "workspace"] as const) {
@@ -748,9 +624,7 @@ test("person deletion removes only that DM recipient's label sets, audit and not
     ["457", "458"],
   );
   assert.deepEqual(
-    (await pool.query("SELECT recipient_id FROM instagram_inbox_notes ORDER BY recipient_id")).rows.map(
-      (row) => row.recipient_id,
-    ),
+    (await pool.query("SELECT recipient_id FROM instagram_inbox_notes ORDER BY recipient_id")).rows.map((row) => row.recipient_id),
     ["457", "458"],
   );
   const connection = (await runDeletion("connection")).rows[0].result;
@@ -785,11 +659,7 @@ test("migration 033 replays (with later deletion migrations), every deletion fun
   }
   const migration = await readFile(new URL("../../db/migrations/033_inbox_labels_notes.sql", import.meta.url), "utf8");
   // Migrations 034 and 035 redefine the same functions after 033, in the order deploy/migrate-multi-user.sql runs them.
-  const later = await Promise.all(
-    ["034_inbox_reminders.sql", "035_inbox_label_rules.sql"].map((file) =>
-      readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8"),
-    ),
-  );
+  const later = await Promise.all(["034_inbox_reminders.sql", "035_inbox_label_rules.sql"].map((file) => readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8")));
   for (let run = 0; run < 2; run++) {
     await pool.query(migration);
     for (const sql of later) await pool.query(sql);
@@ -809,27 +679,12 @@ test("migration 033 replays (with later deletion migrations), every deletion fun
   ])
     await pool.query(await readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8"));
   assert.deepEqual(await functions(), current);
-  for (const table of [
-    "instagram_inbox_labels",
-    "instagram_inbox_conversation_labels",
-    "instagram_inbox_label_events",
-    "instagram_inbox_notes",
-  ])
-    assert.deepEqual(EXPORTED_TABLES[table], { scope: "workspace" }, table);
+  for (const table of ["instagram_inbox_labels", "instagram_inbox_conversation_labels", "instagram_inbox_label_events", "instagram_inbox_notes"]) assert.deepEqual(EXPORTED_TABLES[table], { scope: "workspace" }, table);
   // The set holds at most 10 labels, without NULL or a repeat, and an event records a real change.
   await seed("456", "one", "2026-10-01T00:00:01Z");
-  const insertSet = (ids: string) =>
-    pool.query(
-      `INSERT INTO instagram_inbox_conversation_labels(workspace_id,connection_id,recipient_id,label_ids) VALUES($1,$2,'456',${ids})`,
-      [workspaceId, connectionId],
-    );
+  const insertSet = (ids: string) => pool.query(`INSERT INTO instagram_inbox_conversation_labels(workspace_id,connection_id,recipient_id,label_ids) VALUES($1,$2,'456',${ids})`, [workspaceId, connectionId]);
   await assert.rejects(insertSet("ARRAY[NULL]::uuid[]"), { code: "23514" });
-  await assert.rejects(
-    insertSet(
-      "ARRAY[gen_random_uuid(),gen_random_uuid()]||'{00000000-0000-4000-8000-000000000000,00000000-0000-4000-8000-000000000000}'::uuid[]",
-    ),
-    { code: "23514" },
-  );
+  await assert.rejects(insertSet("ARRAY[gen_random_uuid(),gen_random_uuid()]||'{00000000-0000-4000-8000-000000000000,00000000-0000-4000-8000-000000000000}'::uuid[]"), { code: "23514" });
   await assert.rejects(insertSet("ARRAY(SELECT gen_random_uuid() FROM generate_series(1,11))"), { code: "23514" });
   await insertSet("'{}'");
   await assert.rejects(
@@ -840,11 +695,5 @@ test("migration 033 replays (with later deletion migrations), every deletion fun
     ),
     { code: "23514" },
   );
-  await assert.rejects(
-    pool.query(
-      "INSERT INTO instagram_inbox_notes(workspace_id,connection_id,recipient_id,author_id,body) VALUES($1,$2,'456',$3,'   ')",
-      [workspaceId, connectionId, agent.id],
-    ),
-    { code: "23514" },
-  );
+  await assert.rejects(pool.query("INSERT INTO instagram_inbox_notes(workspace_id,connection_id,recipient_id,author_id,body) VALUES($1,$2,'456',$3,'   ')", [workspaceId, connectionId, agent.id]), { code: "23514" });
 });

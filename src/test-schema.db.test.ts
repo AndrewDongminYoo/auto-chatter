@@ -23,9 +23,7 @@ after(async () => {
 });
 
 async function publicTables(): Promise<string[]> {
-  const result = await pool.query<{ name: string }>(
-    "SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename",
-  );
+  const result = await pool.query<{ name: string }>("SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename");
   return result.rows.map((row) => row.name);
 }
 
@@ -63,11 +61,7 @@ test("resetTestSchema restores the foreign keys that an incomplete drop list lea
   }
   if (existing.length > 0) await pool.query(`DROP TABLE IF EXISTS ${existing.join(", ")} CASCADE`);
   await pool.query(schema);
-  assert.deepEqual(
-    [...schemaTableNames(schema)].sort(),
-    await publicTables(),
-    "the helper's table list must name every table that db/schema.sql creates",
-  );
+  assert.deepEqual([...schemaTableNames(schema)].sort(), await publicTables(), "the helper's table list must name every table that db/schema.sql creates");
   const baseline = await foreignKeys();
   assert.deepEqual(await connectionKeyTables(), [...identityLinkTables].sort());
 

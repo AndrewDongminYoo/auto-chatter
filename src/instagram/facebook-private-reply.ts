@@ -2,13 +2,7 @@ import { PreSendVerificationError, type PrivateReplyRequest, type PrivateReplyTr
 import { evaluatePrivateReply } from "./reply-policy.ts";
 import { classifyMetaGraphFailure } from "./meta-graph-error.ts";
 
-const requiredPermissions = [
-  "pages_show_list",
-  "instagram_basic",
-  "instagram_manage_comments",
-  "pages_read_engagement",
-  "pages_messaging",
-] as const;
+const requiredPermissions = ["pages_show_list", "instagram_basic", "instagram_manage_comments", "pages_read_engagement", "pages_messaging"] as const;
 const supportedSurfaces = new Set(["AD", "FEED", "REELS"]);
 
 export interface FacebookPrivateReplyConfig {
@@ -25,11 +19,9 @@ export interface FacebookPrivateReplyConfig {
   beforeSend?: (request: PrivateReplyRequest) => Promise<void>;
 }
 
-export type PermissionInspection =
-  { verified: true } | { verified: false; reason: string; missingPermissions?: string[] };
+export type PermissionInspection = { verified: true } | { verified: false; reason: string; missingPermissions?: string[] };
 
-type PageAccess =
-  { verified: true; accessToken: string } | { verified: false; reason: string; missingPermissions?: string[] };
+type PageAccess = { verified: true; accessToken: string } | { verified: false; reason: string; missingPermissions?: string[] };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -53,8 +45,7 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
 
   constructor(config: FacebookPrivateReplyConfig) {
     if (!/^v\d+\.\d+$/.test(config.graphVersion)) throw new Error("Invalid Meta Graph version");
-    if (![config.appId, config.pageId, config.accountId].every((id) => /^\d+$/.test(id)))
-      throw new Error("Invalid Meta account ID");
+    if (![config.appId, config.pageId, config.accountId].every((id) => /^\d+$/.test(id))) throw new Error("Invalid Meta account ID");
     if (!validConnectionId(config.connectionId)) throw new Error("Invalid Instagram connection ID");
     if (!config.appAccessToken || !config.userAccessToken) throw new Error("Meta access tokens are required");
     const timeoutMs = config.timeoutMs ?? 10_000;
@@ -71,12 +62,7 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
     return url;
   }
 
-  private async graphRequest(
-    url: URL,
-    token: string,
-    method = "GET",
-    body?: unknown,
-  ): Promise<{ status: number; data: unknown }> {
+  private async graphRequest(url: URL, token: string, method = "GET", body?: unknown): Promise<{ status: number; data: unknown }> {
     let response: Response;
     try {
       response = await this.fetchImpl(url, {
@@ -106,26 +92,15 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
   }
 
   private async pageAccess(): Promise<PageAccess> {
-    const debug = await this.graphRequest(
-      this.graphUrl("debug_token", { input_token: this.config.userAccessToken }),
-      this.config.appAccessToken,
-    );
+    const debug = await this.graphRequest(this.graphUrl("debug_token", { input_token: this.config.userAccessToken }), this.config.appAccessToken);
     const details = isRecord(debug.data) ? debug.data.data : null;
     if (!isRecord(details) || details.is_valid !== true || details.app_id !== this.config.appId) {
       return { verified: false, reason: "user_token_unverified" };
     }
-    if (
-      typeof details.expires_at === "number" &&
-      details.expires_at > 0 &&
-      details.expires_at * 1000 <= this.now().getTime()
-    ) {
+    if (typeof details.expires_at === "number" && details.expires_at > 0 && details.expires_at * 1000 <= this.now().getTime()) {
       return { verified: false, reason: "user_token_expired" };
     }
-    if (
-      typeof details.data_access_expires_at === "number" &&
-      details.data_access_expires_at > 0 &&
-      details.data_access_expires_at * 1000 <= this.now().getTime()
-    ) {
+    if (typeof details.data_access_expires_at === "number" && details.data_access_expires_at > 0 && details.data_access_expires_at * 1000 <= this.now().getTime()) {
       return { verified: false, reason: "data_access_expired" };
     }
     const scopes = Array.isArray(details.scopes) ? details.scopes : [];
@@ -148,10 +123,7 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
       }
       for (const item of pages.data.data) {
         if (!isRecord(item) || item.id !== this.config.pageId) continue;
-        if (
-          !isRecord(item.instagram_business_account) ||
-          item.instagram_business_account.id !== this.config.accountId
-        ) {
+        if (!isRecord(item.instagram_business_account) || item.instagram_business_account.id !== this.config.accountId) {
           return { verified: false, reason: "page_not_linked_to_account" };
         }
         if (!Array.isArray(item.tasks) || !item.tasks.includes("MESSAGING")) {
@@ -190,35 +162,19 @@ export class FacebookPrivateReplyTransport implements PrivateReplyTransport {
     const page = await this.pageAccess();
     if (!page.verified) return denied;
 
-    const comment = await this.graphRequest(
-      this.graphUrl(encodeURIComponent(request.commentId), { fields: "id,from,media,timestamp" }),
-      this.config.userAccessToken,
-    );
+    const comment = await this.graphRequest(this.graphUrl(encodeURIComponent(request.commentId), { fields: "id,from,media,timestamp" }), this.config.userAccessToken);
     if (!isRecord(comment.data) || comment.data.id !== request.commentId) return denied;
     const createdAt = typeof comment.data.timestamp === "string" ? new Date(comment.data.timestamp) : null;
-    const commentMatches =
-      isRecord(comment.data.from) &&
-      comment.data.from.id === request.senderId &&
-      isRecord(comment.data.media) &&
-      comment.data.media.id === request.mediaId;
+    const commentMatches = isRecord(comment.data.from) && comment.data.from.id === request.senderId && isRecord(comment.data.media) && comment.data.media.id === request.mediaId;
     if (!commentMatches) return { commentCreatedAt: createdAt, authorizationVerified: true, mediaOwned: false };
 
-    const media = await this.graphRequest(
-      this.graphUrl(encodeURIComponent(request.mediaId), { fields: "id,owner,media_product_type" }),
-      this.config.userAccessToken,
-    );
-    const mediaOwned =
-      isRecord(media.data) &&
-      media.data.id === request.mediaId &&
-      isRecord(media.data.owner) &&
-      recordId(media.data.owner.id) === request.accountId &&
-      supportedSurfaces.has(media.data.media_product_type as string);
+    const media = await this.graphRequest(this.graphUrl(encodeURIComponent(request.mediaId), { fields: "id,owner,media_product_type" }), this.config.userAccessToken);
+    const mediaOwned = isRecord(media.data) && media.data.id === request.mediaId && isRecord(media.data.owner) && recordId(media.data.owner.id) === request.accountId && supportedSurfaces.has(media.data.media_product_type as string);
     return { commentCreatedAt: createdAt, authorizationVerified: true, mediaOwned };
   }
 
   async send(request: PrivateReplyRequest): ReturnType<PrivateReplyTransport["send"]> {
-    if (!this.matchesConnection(request) || !request.text.trim())
-      throw new PreSendVerificationError("block", "invalid_request");
+    if (!this.matchesConnection(request) || !request.text.trim()) throw new PreSendVerificationError("block", "invalid_request");
     let verification;
     try {
       verification = await this.verify(request);

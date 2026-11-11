@@ -6,23 +6,13 @@ import { verifiedDmRecipientsSql } from "./inbox-identity.ts";
 type After = { workspace_id: string; connection_id: string; sender_id: string; recipient_id: string };
 function parseAfter(query: URLSearchParams, connection: string, sender: string): After | null {
   if (!isUuid(connection) || !/^\d{1,40}$/.test(sender)) throw new ApiError(400, "invalid_contact_request");
-  for (const key of query.keys())
-    if (key !== "after" || query.getAll(key).length !== 1) throw new ApiError(400, "invalid_contact_request");
+  for (const key of query.keys()) if (key !== "after" || query.getAll(key).length !== 1) throw new ApiError(400, "invalid_contact_request");
   if (!query.has("after")) return null;
   try {
     const encoded = query.get("after")!;
     if (encoded.length > 1024 || !/^[A-Za-z0-9_-]+$/.test(encoded)) throw new Error();
     const value: unknown = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
-    if (
-      !isRecord(value) ||
-      Object.keys(value).length !== 4 ||
-      !isUuid(value.workspace_id) ||
-      value.connection_id !== connection ||
-      value.sender_id !== sender ||
-      typeof value.recipient_id !== "string" ||
-      !/^\d{1,40}$/.test(value.recipient_id)
-    )
-      throw new Error();
+    if (!isRecord(value) || Object.keys(value).length !== 4 || !isUuid(value.workspace_id) || value.connection_id !== connection || value.sender_id !== sender || typeof value.recipient_id !== "string" || !/^\d{1,40}$/.test(value.recipient_id)) throw new Error();
     return value as After;
   } catch {
     throw new ApiError(400, "invalid_contact_request");
@@ -42,13 +32,7 @@ type Consent = {
 
 // An advisory read only: membership and every returned fact share one snapshot. No row/advisory locks,
 // read-position changes, provider requests, queue notifications or derived consent grants.
-export async function contactDetails(
-  pool: Pool,
-  user: User,
-  connection: string,
-  sender: string,
-  query: URLSearchParams,
-) {
+export async function contactDetails(pool: Pool, user: User, connection: string, sender: string, query: URLSearchParams) {
   const after = parseAfter(query, connection, sender);
   const client = await pool.connect();
   try {
@@ -119,10 +103,7 @@ export async function contactDetails(
         [workspace, connection, sender, conversations.map((row) => row.recipient_id)],
       )
     ).rows;
-    const consentFor = (kind: string, value: string) =>
-      states
-        .filter((row) => row.identity_kind === kind && row.identity_value === value)
-        .map(({ identity_kind: _kind, identity_value: _value, ...state }) => state);
+    const consentFor = (kind: string, value: string) => states.filter((row) => row.identity_kind === kind && row.identity_value === value).map(({ identity_kind: _kind, identity_value: _value, ...state }) => state);
     const { manual_paused, handoff_paused, ...facts } = contact;
     const last = conversations.at(-1);
     const detail = {

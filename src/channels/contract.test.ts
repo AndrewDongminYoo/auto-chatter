@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  checkCapability,
-  eventReceiptKey,
-  sameScopedIdentity,
-  type ChannelAdapter,
-  type ChannelEvent,
-} from "./contract.ts";
+import { checkCapability, eventReceiptKey, sameScopedIdentity, type ChannelAdapter, type ChannelEvent } from "./contract.ts";
 import { evaluateChannelConsent, evaluateWindow } from "./policy.ts";
 
 // No provider, registry entry or fetch: deliberately different opaque identities and support.
@@ -37,10 +31,7 @@ const fake: ChannelAdapter = {
     if (typeof value !== "string" || !value) throw new Error("missing receipt");
     return { kind: "accepted", messageId: value };
   },
-  classifySendError: (error) =>
-    error instanceof FakeRefusal
-      ? { kind: "refused", refusal: "other", code: "fake_refusal", retryAfterSeconds: null }
-      : { kind: "unknown", code: "send_outcome_unknown" },
+  classifySendError: (error) => (error instanceof FakeRefusal ? { kind: "refused", refusal: "other", code: "fake_refusal", retryAfterSeconds: null } : { kind: "unknown", code: "send_outcome_unknown" }),
 };
 
 test("test-only second adapter exercises capabilities without a production provider", () => {
@@ -106,10 +97,7 @@ test("consent never transfers an equal string between identities accounts worksp
       reason: "marketing_consent_required",
     });
   }
-  assert.equal(
-    evaluateChannelConsent({ scope: requested, state: { ...grant, evidenceKind: "import" } }).eligible,
-    false,
-  );
+  assert.equal(evaluateChannelConsent({ scope: requested, state: { ...grant, evidenceKind: "import" } }).eligible, false);
   const service = { ...scope, purpose: "service_reply" as const };
   assert.equal(
     evaluateChannelConsent({
@@ -127,10 +115,7 @@ test("consent never transfers an equal string between identities accounts worksp
     }).eligible,
     false,
   );
-  assert.deepEqual(
-    evaluateChannelConsent({ scope: service, state: { ...grant, purpose: "service_reply", decision: "revoke" } }),
-    { eligible: false, reason: "recipient_opted_out" },
-  );
+  assert.deepEqual(evaluateChannelConsent({ scope: service, state: { ...grant, purpose: "service_reply", decision: "revoke" } }), { eligible: false, reason: "recipient_opted_out" });
 });
 
 test("window evaluation is strict at every boundary and rejects untrusted anchors", () => {
@@ -144,6 +129,5 @@ test("window evaluation is strict at every boundary and rejects untrusted anchor
     assert.equal(evaluateWindow(new Date(NaN), anchor, duration), "unverified");
     assert.equal(evaluateWindow(new Date(1000), new Date(NaN), duration), "unverified");
   }
-  for (const duration of [0, -1, NaN, Infinity])
-    assert.equal(evaluateWindow(new Date(1000), anchor, duration), "unverified");
+  for (const duration of [0, -1, NaN, Infinity]) assert.equal(evaluateWindow(new Date(1000), anchor, duration), "unverified");
 });

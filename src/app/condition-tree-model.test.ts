@@ -30,11 +30,7 @@ interface TreeModel {
   segmentTreeNeedsValue(operator: string): boolean;
   segmentTreeBuild(draft: Draft | null, fields: { id: string; type: string }[]): { tree: Tree | null; error: string };
   segmentTreeSame(left: Draft | null, right: Draft | null, fields?: { id: string; type: string }[]): boolean;
-  segmentTreeUnsaved(
-    draft: Draft | null,
-    savedTrees: (Tree | null | undefined)[],
-    fields?: { id: string; type: string }[],
-  ): boolean;
+  segmentTreeUnsaved(draft: Draft | null, savedTrees: (Tree | null | undefined)[], fields?: { id: string; type: string }[]): boolean;
   segmentTreeRemoveField(draft: Draft | null, fieldId: string): { draft: Draft | null; removed: number };
   segmentTreeSummary(tree: Tree, fieldText: (leaf: Record<string, unknown>) => string): string;
 }
@@ -123,10 +119,7 @@ test("adding groups stops at five groups and at ten leaves, with the reason", ()
   assert.equal(refused.draft.groups.length, 5);
   // Ten leaves leave nothing to put in a new group.
   const full = draftOf(5, 5);
-  assert.equal(
-    model.segmentTreeAddGroup(full).error,
-    "조건은 모든 그룹을 합쳐 최대 10개이므로 그룹을 더 추가할 수 없습니다.",
-  );
+  assert.equal(model.segmentTreeAddGroup(full).error, "조건은 모든 그룹을 합쳐 최대 10개이므로 그룹을 더 추가할 수 없습니다.");
   assert.equal(model.segmentTreeAddGroup(full).draft.groups.length, 2);
   assert.equal(model.segmentTreeAddGroup(draftOf(5, 4)).error, "");
   // The input draft is never changed.
@@ -144,10 +137,7 @@ test("removing a group keeps at least one group", () => {
   assert.equal(model.segmentTreeRemoveGroupBlock(draft), "");
   const single = draftOf(2);
   const refused = model.segmentTreeRemoveGroup(single, 0);
-  assert.equal(
-    refused.error,
-    "그룹은 하나 이상 있어야 합니다. 그룹 조건을 쓰지 않으려면 그룹 조건 지우기를 눌러 주세요.",
-  );
+  assert.equal(refused.error, "그룹은 하나 이상 있어야 합니다. 그룹 조건을 쓰지 않으려면 그룹 조건 지우기를 눌러 주세요.");
   assert.equal(model.segmentTreeRemoveGroupBlock(single), refused.error);
   assert.deepEqual(tags(refused.draft), [["t1", "t2"]]);
   assert.equal(model.segmentTreeRemoveGroup(draft, 3).error, "그룹을 찾을 수 없습니다.");
@@ -257,21 +247,11 @@ test("a complete draft builds the canonical tree with typed values, in order", (
     groups: [
       {
         mode: "all",
-        conditions: [
-          tagLeaf(" VIP "),
-          fieldLeaf(numberField, "gte", "100000"),
-          fieldLeaf(textField, "eq", ""),
-          fieldLeaf(booleanField, "eq", "ignored", "false"),
-        ],
+        conditions: [tagLeaf(" VIP "), fieldLeaf(numberField, "gte", "100000"), fieldLeaf(textField, "eq", ""), fieldLeaf(booleanField, "eq", "ignored", "false")],
       },
       {
         mode: "any",
-        conditions: [
-          tagLeaf("event", "no_tag"),
-          fieldLeaf(dateField, "lt", "2026-10-01"),
-          fieldLeaf(textField, "is_unset", "stale"),
-          tagLeaf("VIP"),
-        ],
+        conditions: [tagLeaf("event", "no_tag"), fieldLeaf(dateField, "lt", "2026-10-01"), fieldLeaf(textField, "is_unset", "stale"), tagLeaf("VIP")],
       },
     ],
   };
@@ -281,21 +261,11 @@ test("a complete draft builds the canonical tree with typed values, in order", (
       groups: [
         {
           mode: "all",
-          conditions: [
-            { tag: " VIP " },
-            { field_id: numberField, field_operator: "gte", field_value: 100000 },
-            { field_id: textField, field_operator: "eq", field_value: "" },
-            { field_id: booleanField, field_operator: "eq", field_value: false },
-          ],
+          conditions: [{ tag: " VIP " }, { field_id: numberField, field_operator: "gte", field_value: 100000 }, { field_id: textField, field_operator: "eq", field_value: "" }, { field_id: booleanField, field_operator: "eq", field_value: false }],
         },
         {
           mode: "any",
-          conditions: [
-            { tag: "event", negate: true },
-            { field_id: dateField, field_operator: "lt", field_value: "2026-10-01" },
-            { field_id: textField, field_operator: "is_unset" },
-            { tag: "VIP" },
-          ],
+          conditions: [{ tag: "event", negate: true }, { field_id: dateField, field_operator: "lt", field_value: "2026-10-01" }, { field_id: textField, field_operator: "is_unset" }, { tag: "VIP" }],
         },
       ],
     },
@@ -305,20 +275,12 @@ test("a complete draft builds the canonical tree with typed values, in order", (
 });
 
 test("an incomplete leaf refuses the build and names its place", () => {
-  const build = (leaf: DraftLeaf, list = fields) =>
-    model.segmentTreeBuild({ mode: "all", groups: [draftOf(1).groups[0], { mode: "all", conditions: [leaf] }] }, list)
-      .error;
+  const build = (leaf: DraftLeaf, list = fields) => model.segmentTreeBuild({ mode: "all", groups: [draftOf(1).groups[0], { mode: "all", conditions: [leaf] }] }, list).error;
   assert.equal(build(tagLeaf("  ")), "그룹 2의 조건 1에 태그를 입력해 주세요.");
   assert.equal(build(tagLeaf("", "no_tag")), "그룹 2의 조건 1에 태그를 입력해 주세요.");
   assert.equal(build(fieldLeaf("", "eq")), "그룹 2의 조건 1에서 추가 정보 필드를 선택해 주세요.");
-  assert.equal(
-    build(fieldLeaf(textField, "eq"), []),
-    "그룹 2의 조건 1의 필드를 사용할 수 없습니다. 다른 필드를 선택하거나 조건을 삭제해 주세요.",
-  );
-  assert.equal(
-    build(fieldLeaf(textField, "gt", "a")),
-    "그룹 2의 조건 1에서 이 필드에 쓸 수 없는 비교 방식을 골랐습니다.",
-  );
+  assert.equal(build(fieldLeaf(textField, "eq"), []), "그룹 2의 조건 1의 필드를 사용할 수 없습니다. 다른 필드를 선택하거나 조건을 삭제해 주세요.");
+  assert.equal(build(fieldLeaf(textField, "gt", "a")), "그룹 2의 조건 1에서 이 필드에 쓸 수 없는 비교 방식을 골랐습니다.");
   assert.equal(build(fieldLeaf(numberField, "eq", " ")), "그룹 2의 조건 1에 숫자 값을 입력해 주세요.");
   assert.equal(build(fieldLeaf(numberField, "eq", "1e999")), "그룹 2의 조건 1에 숫자 값을 입력해 주세요.");
   assert.equal(build(fieldLeaf(numberField, "eq", "abc")), "그룹 2의 조건 1에 숫자 값을 입력해 주세요.");
@@ -346,12 +308,7 @@ test("a saved tree becomes a draft that builds back to the same tree", () => {
     groups: [
       {
         mode: "all",
-        conditions: [
-          { tag: "vip" },
-          { field_id: numberField, field_operator: "gte", field_value: 100000 },
-          { field_id: booleanField, field_operator: "eq", field_value: false },
-          { field_id: textField, field_operator: "eq", field_value: "" },
-        ],
+        conditions: [{ tag: "vip" }, { field_id: numberField, field_operator: "gte", field_value: 100000 }, { field_id: booleanField, field_operator: "eq", field_value: false }, { field_id: textField, field_operator: "eq", field_value: "" }],
       },
       {
         mode: "any",
@@ -392,10 +349,7 @@ test("comparison is order sensitive, like the server's unchanged check", () => {
   const field = { mode: "all", groups: [{ mode: "all", conditions: [fieldLeaf(textField, "is_set")] }] };
   const hidden = model.segmentTreeSetLeaf(field, 0, 0, { value: "typed", tag: "unused" }).draft;
   assert.equal(model.segmentTreeSame(field, hidden), true);
-  assert.equal(
-    model.segmentTreeSame(field, model.segmentTreeSetLeaf(field, 0, 0, { field_operator: "eq" }).draft),
-    false,
-  );
+  assert.equal(model.segmentTreeSame(field, model.segmentTreeSetLeaf(field, 0, 0, { field_operator: "eq" }).draft), false);
   const valued = { mode: "all", groups: [{ mode: "all", conditions: [fieldLeaf(numberField, "eq", "1")] }] };
   assert.equal(model.segmentTreeSame(valued, model.segmentTreeSetLeaf(valued, 0, 0, { value: "2" }).draft), false);
   const tag = draftOf(1);
@@ -426,14 +380,8 @@ test("comparison reads only the value input of the field's type", () => {
   assert.equal(model.segmentTreeSame(edited, loaded, fields), true);
   assert.equal(model.segmentTreeUnsaved(edited, [saved], fields), false);
   // The input of the field's type is still compared.
-  assert.equal(
-    model.segmentTreeSame(model.segmentTreeSetLeaf(loaded, 0, 0, { value: "6" }).draft, loaded, fields),
-    false,
-  );
-  assert.equal(
-    model.segmentTreeSame(model.segmentTreeSetLeaf(loaded, 0, 1, { boolean: "true" }).draft, loaded, fields),
-    false,
-  );
+  assert.equal(model.segmentTreeSame(model.segmentTreeSetLeaf(loaded, 0, 0, { value: "6" }).draft, loaded, fields), false);
+  assert.equal(model.segmentTreeSame(model.segmentTreeSetLeaf(loaded, 0, 1, { boolean: "true" }).draft, loaded, fields), false);
   // Without the field's type, both inputs are compared.
   assert.equal(model.segmentTreeSame(edited, loaded, []), false);
   assert.equal(model.segmentTreeSame(edited, loaded), false);

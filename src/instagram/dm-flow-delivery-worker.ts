@@ -70,9 +70,7 @@ export interface DmFlowClaim {
 // reason, so a row whose window closed ends instead of retrying for as long as a pause lasts. Within each kind the
 // first reason in this order is reported.
 export async function assertDmFlowDeliveryAllowed(pool: ConsentQueryable, claim: DmFlowClaim): Promise<void> {
-  const row = (
-    await pool.query(GUARD_SQL, [claim.workspaceId, claim.id, claim.attempt, claim.connectionId, claim.encryptedToken])
-  ).rows[0];
+  const row = (await pool.query(GUARD_SQL, [claim.workspaceId, claim.id, claim.attempt, claim.connectionId, claim.encryptedToken])).rows[0];
   if (!row) throw new PreSendVerificationError("block", "delivery_changed");
   const blocks: string[] = [];
   const retries: string[] = [];
@@ -120,13 +118,7 @@ type Outcome = "pending" | "sent" | "failed" | "blocked" | "unknown";
 // Claims and processes at most one row of the connection; returns whether a row was claimed. The run stays
 // delivering whatever the outcome, as a comment run does after its private reply: the row's status is the run's
 // delivery state (listFlowRuns, flowRunReport).
-export async function processNextDmFlowDelivery(
-  pool: Pool,
-  connection: string,
-  transport: DmFlowDeliveryTransport,
-  encryptedToken: string | null,
-  options: { globalSendEnabled: boolean },
-): Promise<boolean> {
+export async function processNextDmFlowDelivery(pool: Pool, connection: string, transport: DmFlowDeliveryTransport, encryptedToken: string | null, options: { globalSendEnabled: boolean }): Promise<boolean> {
   const attempt = randomUUID();
   const claimed = (
     await pool.query<{
@@ -161,12 +153,7 @@ export async function processNextDmFlowDelivery(
 
   // Lands the attempt; throws when the claim was lost. A rate limit pauses the connection (locked before the row, as
   // the other workers do) and defers the row to the pause end, or fails it once the retry tiers are used up.
-  const finish = async (
-    status: Outcome,
-    code: string | null,
-    messageId: string | null = null,
-    rateLimit: { retryAfterSeconds: number | null } | null = null,
-  ): Promise<void> => {
+  const finish = async (status: Outcome, code: string | null, messageId: string | null = null, rateLimit: { retryAfterSeconds: number | null } | null = null): Promise<void> => {
     const writer = await pool.connect();
     try {
       await writer.query("BEGIN");
@@ -215,8 +202,7 @@ export async function processNextDmFlowDelivery(
       await assertDmFlowDeliveryAllowed(pool, claim);
       return true;
     } catch (error) {
-      if (error instanceof PreSendVerificationError)
-        await finish(error.disposition === "retry" ? "pending" : "blocked", error.failureCode);
+      if (error instanceof PreSendVerificationError) await finish(error.disposition === "retry" ? "pending" : "blocked", error.failureCode);
       else await finish("pending", "verification_unavailable");
       return false;
     }

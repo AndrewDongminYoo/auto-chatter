@@ -8,8 +8,7 @@ import { ConsentEventConflictError, recipientOptedOut, recordChannelConsentEvent
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const workspaceId = "11111111-1111-4111-8111-111111111111";
@@ -18,10 +17,7 @@ const actorId = "33333333-3333-4333-8333-333333333333";
 
 async function waitForDatabaseLock(applicationName: string): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    const activity = await pool.query(
-      "SELECT wait_event_type FROM pg_stat_activity WHERE datname=current_database() AND application_name=$1 AND state='active'",
-      [applicationName],
-    );
+    const activity = await pool.query("SELECT wait_event_type FROM pg_stat_activity WHERE datname=current_database() AND application_name=$1 AND state='active'", [applicationName]);
     if (activity.rows[0]?.wait_event_type === "Lock") return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -35,10 +31,7 @@ before(async () => {
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1)", [workspaceId]);
-  await pool.query(
-    "INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'account-1',true)",
-    [connectionId, workspaceId],
-  );
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'account-1',true)", [connectionId, workspaceId]);
 });
 
 after(async () => pool.end());
@@ -67,10 +60,7 @@ test("consent ledger preserves revoke and re-consent evidence", async () => {
   assert.equal(replay.eventId, first.eventId);
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM channel_consent_events")).rows[0].count, 1);
 
-  await assert.rejects(
-    recordChannelConsentEvent(pool, { ...grant, decision: "revoke" }),
-    (error: unknown) => error instanceof ConsentEventConflictError && error.code === "consent_request_conflict",
-  );
+  await assert.rejects(recordChannelConsentEvent(pool, { ...grant, decision: "revoke" }), (error: unknown) => error instanceof ConsentEventConflictError && error.code === "consent_request_conflict");
 
   const revoke = await recordChannelConsentEvent(pool, {
     ...grant,
@@ -82,12 +72,7 @@ test("consent ledger preserves revoke and re-consent evidence", async () => {
   });
   assert.equal(revoke.applied, true);
   assert.equal(
-    (
-      await pool.query(
-        "SELECT decision,last_event_id::text AS last_event_id FROM channel_consent_state WHERE workspace_id=$1 AND connection_id=$2 AND identity_value='recipient-1' AND purpose='marketing'",
-        [workspaceId, connectionId],
-      )
-    ).rows[0].last_event_id,
+    (await pool.query("SELECT decision,last_event_id::text AS last_event_id FROM channel_consent_state WHERE workspace_id=$1 AND connection_id=$2 AND identity_value='recipient-1' AND purpose='marketing'", [workspaceId, connectionId])).rows[0].last_event_id,
     revoke.eventId,
   );
 
@@ -98,11 +83,7 @@ test("consent ledger preserves revoke and re-consent evidence", async () => {
     occurredAt: new Date("2019-01-01T00:00:00.000Z"),
   });
   assert.equal(reconsent.applied, true);
-  const events = (
-    await pool.query(
-      "SELECT id::text,decision,evidence_kind,evidence_reference,occurred_at,recorded_at FROM channel_consent_events ORDER BY id",
-    )
-  ).rows;
+  const events = (await pool.query("SELECT id::text,decision,evidence_kind,evidence_reference,occurred_at,recorded_at FROM channel_consent_events ORDER BY id")).rows;
   assert.deepEqual(
     events.map(({ id, decision, evidence_kind, evidence_reference }) => ({
       id,
@@ -142,18 +123,10 @@ test("consent ledger preserves revoke and re-consent evidence", async () => {
     evidenceReference: "inbox:all-opt-out",
   });
   assert.equal(allRevoke.states.length, 2);
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT purpose,decision,last_event_id::text AS last_event_id FROM channel_consent_state WHERE workspace_id=$1 AND connection_id=$2 AND identity_value='recipient-1' ORDER BY purpose",
-        [workspaceId, connectionId],
-      )
-    ).rows,
-    [
-      { purpose: "marketing", decision: "revoke", last_event_id: allRevoke.eventId },
-      { purpose: "service_reply", decision: "revoke", last_event_id: allRevoke.eventId },
-    ],
-  );
+  assert.deepEqual((await pool.query("SELECT purpose,decision,last_event_id::text AS last_event_id FROM channel_consent_state WHERE workspace_id=$1 AND connection_id=$2 AND identity_value='recipient-1' ORDER BY purpose", [workspaceId, connectionId])).rows, [
+    { purpose: "marketing", decision: "revoke", last_event_id: allRevoke.eventId },
+    { purpose: "service_reply", decision: "revoke", last_event_id: allRevoke.eventId },
+  ]);
   const recipientScope = {
     workspaceId,
     connectionId,
@@ -164,18 +137,9 @@ test("consent ledger preserves revoke and re-consent evidence", async () => {
   assert.equal(await recipientOptedOut(pool, [recipientScope]), true);
   assert.equal(await recipientOptedOut(pool, [{ ...recipientScope, identityValue: "recipient-2" }]), false);
   assert.equal(await recipientOptedOut(pool, [{ ...recipientScope, identityKind: "dm_recipient" }]), false);
-  assert.equal(
-    await recipientOptedOut(pool, [{ ...recipientScope, connectionId: "99999999-9999-4999-8999-999999999999" }]),
-    false,
-  );
-  assert.equal(
-    await recipientOptedOut(pool, [{ ...recipientScope, workspaceId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }]),
-    false,
-  );
-  assert.equal(
-    await recipientOptedOut(pool, [{ ...recipientScope, identityValue: "recipient-2" }, recipientScope]),
-    true,
-  );
+  assert.equal(await recipientOptedOut(pool, [{ ...recipientScope, connectionId: "99999999-9999-4999-8999-999999999999" }]), false);
+  assert.equal(await recipientOptedOut(pool, [{ ...recipientScope, workspaceId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }]), false);
+  assert.equal(await recipientOptedOut(pool, [{ ...recipientScope, identityValue: "recipient-2" }, recipientScope]), true);
 
   await assert.rejects(
     recordChannelConsentEvent(pool, {
@@ -195,18 +159,10 @@ test("consent ledger preserves revoke and re-consent evidence", async () => {
     purpose: "service_reply",
     evidenceReference: "inbox:service-reconsent",
   });
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT purpose,decision,last_event_id::text AS last_event_id FROM channel_consent_state WHERE workspace_id=$1 AND connection_id=$2 AND identity_value='recipient-1' ORDER BY purpose",
-        [workspaceId, connectionId],
-      )
-    ).rows,
-    [
-      { purpose: "marketing", decision: "revoke", last_event_id: allRevoke.eventId },
-      { purpose: "service_reply", decision: "grant", last_event_id: serviceReconsent.eventId },
-    ],
-  );
+  assert.deepEqual((await pool.query("SELECT purpose,decision,last_event_id::text AS last_event_id FROM channel_consent_state WHERE workspace_id=$1 AND connection_id=$2 AND identity_value='recipient-1' ORDER BY purpose", [workspaceId, connectionId])).rows, [
+    { purpose: "marketing", decision: "revoke", last_event_id: allRevoke.eventId },
+    { purpose: "service_reply", decision: "grant", last_event_id: serviceReconsent.eventId },
+  ]);
   assert.equal(await recipientOptedOut(pool, [recipientScope]), false);
 });
 
@@ -251,9 +207,7 @@ test("concurrent consent writes use server order instead of occurred_at", async 
 
     const [first, second] = await Promise.all([firstWrite, secondWrite]);
     assert.notEqual(first.eventId, second.eventId);
-    const events = await pool.query(
-      "SELECT id::text,request_key::text,decision,occurred_at FROM channel_consent_events ORDER BY channel_consent_events.id",
-    );
+    const events = await pool.query("SELECT id::text,request_key::text,decision,occurred_at FROM channel_consent_events ORDER BY channel_consent_events.id");
     assert.deepEqual(
       events.rows
         .map((row) => ({
@@ -278,14 +232,7 @@ test("concurrent consent writes use server order instead of occurred_at", async 
     assert.equal(events.rows.find((row) => row.request_key.endsWith("1"))?.id, first.eventId);
     assert.equal(events.rows.find((row) => row.request_key.endsWith("2"))?.id, second.eventId);
     const newest = events.rows.at(-1);
-    assert.deepEqual(
-      (
-        await pool.query(
-          "SELECT decision,last_event_id::text AS last_event_id,occurred_at FROM channel_consent_state WHERE identity_value='concurrent-recipient'",
-        )
-      ).rows[0],
-      { decision: newest.decision, last_event_id: newest.id, occurred_at: newest.occurred_at },
-    );
+    assert.deepEqual((await pool.query("SELECT decision,last_event_id::text AS last_event_id,occurred_at FROM channel_consent_state WHERE identity_value='concurrent-recipient'")).rows[0], { decision: newest.decision, last_event_id: newest.id, occurred_at: newest.occurred_at });
   } finally {
     await blocker.query("ROLLBACK");
     blocker.release();
@@ -312,10 +259,7 @@ test("channel consent migration creates and preserves the ledger when replayed",
      FROM channel_consent_events WHERE id=$1`,
     [eventId],
   );
-  await assert.rejects(
-    pool.query("UPDATE channel_consent_state SET decision='grant' WHERE identity_value='migration-recipient'"),
-    { code: "23514" },
-  );
+  await assert.rejects(pool.query("UPDATE channel_consent_state SET decision='grant' WHERE identity_value='migration-recipient'"), { code: "23514" });
   await pool.query(migration);
   const newerEventId = (
     await pool.query(
@@ -350,10 +294,7 @@ test("channel consent migration creates and preserves the ledger when replayed",
 
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM channel_consent_events")).rows[0].count, 2);
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM channel_consent_state")).rows[0].count, 1);
-  assert.equal(
-    (await pool.query("SELECT to_regclass('channel_consent_events_scope_idx')::text AS index_name")).rows[0].index_name,
-    "channel_consent_events_scope_idx",
-  );
+  assert.equal((await pool.query("SELECT to_regclass('channel_consent_events_scope_idx')::text AS index_name")).rows[0].index_name, "channel_consent_events_scope_idx");
   await assert.rejects(
     pool.query(
       `INSERT INTO channel_consent_events(request_key,workspace_id,connection_id,channel,identity_kind,identity_value,purpose,decision,evidence_kind,evidence_reference,occurred_at,actor_id)

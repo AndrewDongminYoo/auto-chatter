@@ -77,18 +77,7 @@ before(() => {
   repo = join(dir, "repo");
   mkdirSync(repo);
   fakeWrangler = join(dir, "fake-wrangler");
-  writeFileSync(
-    fakeWrangler,
-    [
-      "#!/usr/bin/env bash",
-      'case "$1" in',
-      '  deployments) printf "%s\\n" "$FAKE_DEPLOYMENT" ;;',
-      `  versions) [ "$3" = ${versionId} ] || exit 9; printf "%s\\n" "$FAKE_VERSION" ;;`,
-      "  *) exit 7 ;;",
-      "esac",
-      "",
-    ].join("\n"),
-  );
+  writeFileSync(fakeWrangler, ["#!/usr/bin/env bash", 'case "$1" in', '  deployments) printf "%s\\n" "$FAKE_DEPLOYMENT" ;;', `  versions) [ "$3" = ${versionId} ] || exit 9; printf "%s\\n" "$FAKE_VERSION" ;;`, "  *) exit 7 ;;", "esac", ""].join("\n"));
   chmodSync(fakeWrangler, 0o755);
   fakeBin = join(dir, "bin");
   mkdirSync(fakeBin);
@@ -156,10 +145,7 @@ test("the migration guard stops when the active deployment is split or unreadabl
     ],
   });
   assertStops(runGuard(commits.chore, { tag: commits.base, deployment: split }), /not one version at 100%/);
-  assertStops(
-    runGuard(commits.chore, { tag: commits.base, deployment: "warning\n{" }),
-    /deployment output is not JSON/,
-  );
+  assertStops(runGuard(commits.chore, { tag: commits.base, deployment: "warning\n{" }), /deployment output is not JSON/);
 });
 
 test("the migration guard names a missing git or node instead of guessing a cause", () => {

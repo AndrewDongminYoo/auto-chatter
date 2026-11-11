@@ -13,8 +13,7 @@ const START_KEYS = ["original_member_count", "remaining_member_count", ...CAMPAI
 function dateValue(value: string | null): number {
   if (!value || !/^[1-9]\d{3}-\d{2}-\d{2}$/.test(value)) throw new ApiError(400, "invalid_report_query");
   const date = new Date(`${value}T00:00:00.000Z`);
-  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value)
-    throw new ApiError(400, "invalid_report_query");
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value) throw new ApiError(400, "invalid_report_query");
   return date.getTime();
 }
 
@@ -22,15 +21,13 @@ function dateValue(value: string | null): number {
 // screen used. `draft_id` is optional.
 export function parseCampaignRunReportQuery(query: URLSearchParams) {
   const allowed = new Set(["from", "before", "expected_time_zone", "draft_id"]);
-  for (const key of query.keys())
-    if (!allowed.has(key) || query.getAll(key).length !== 1) throw new ApiError(400, "invalid_report_query");
+  for (const key of query.keys()) if (!allowed.has(key) || query.getAll(key).length !== 1) throw new ApiError(400, "invalid_report_query");
   const from = query.get("from");
   const before = query.get("before");
   const days = (dateValue(before) - dateValue(from)) / 86_400_000;
   const zone = query.get("expected_time_zone");
   const draft = query.get("draft_id");
-  if (days <= 0 || days > 366 || !zone || zone.length > 100 || (draft !== null && !isUuid(draft)))
-    throw new ApiError(400, "invalid_report_query");
+  if (days <= 0 || days > 366 || !zone || zone.length > 100 || (draft !== null && !isUuid(draft))) throw new ApiError(400, "invalid_report_query");
   return { from: from!, before: before!, zone, draft };
 }
 

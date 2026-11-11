@@ -1,17 +1,7 @@
-import {
-  processNextManualReply,
-  assertManualReplyAllowed,
-  recoverStaleManualReplies,
-} from "../instagram/manual-reply-worker.ts";
+import { processNextManualReply, assertManualReplyAllowed, recoverStaleManualReplies } from "../instagram/manual-reply-worker.ts";
 import { instagramAdapter, partitionInstagramEvents } from "../instagram/channel-adapter.ts";
 import { ingestMessageReads, parseMessageReadEvents } from "../instagram/message-reads.ts";
-import {
-  clearExpiredUnmatchedReplies,
-  ingestMessages,
-  processNextFollowReply,
-  reconcileUnmatchedReplies,
-  recoverStaleFollowReplies,
-} from "../instagram/follow-flow.ts";
+import { clearExpiredUnmatchedReplies, ingestMessages, processNextFollowReply, reconcileUnmatchedReplies, recoverStaleFollowReplies } from "../instagram/follow-flow.ts";
 import { readMetaGraphError, type IdentityCheck } from "../instagram/meta-graph-error.ts";
 import { clearReauthRequired, markReauthRequired } from "../app/instagram-reauth.ts";
 import { refreshDueInstagramTokensWithFailures } from "../app/instagram-token-refresh.ts";
@@ -47,11 +37,7 @@ async function tokenRotated(pool: Pool, connectionId: string, encryptedToken: st
   return current.rows[0]?.rotated === true;
 }
 
-async function wakeDueReplies(
-  pool: Pool,
-  env: Env,
-  scope?: { connectionId: string } | { accountIds: string[] },
-): Promise<void> {
+async function wakeDueReplies(pool: Pool, env: Env, scope?: { connectionId: string } | { accountIds: string[] }): Promise<void> {
   if (env.SEND_ENABLED !== "true") return;
   // A connection at its private reply budget (#60) is due only for manual replies and follow confirmations, so
   // the wake after a queue message does not queue it again for replies it cannot claim. Campaign rows (#36) are due
@@ -84,11 +70,7 @@ async function wakeDueReplies(
        OR (EXISTS(SELECT 1 FROM campaign_deliveries delivery WHERE delivery.connection_id=c.id AND ${campaignDeliveryDueSql("delivery")})
          AND ${campaignBudgetOpenSql("c.id")}))))
      ORDER BY CASE WHEN $3 THEN c.send_woken_at END NULLS FIRST, c.id LIMIT 100`,
-    [
-      scope && "connectionId" in scope ? scope.connectionId : null,
-      scope && "accountIds" in scope ? scope.accountIds : null,
-      !scope,
-    ],
+    [scope && "connectionId" in scope ? scope.connectionId : null, scope && "accountIds" in scope ? scope.accountIds : null, !scope],
   );
   const queued: string[] = [];
   try {
@@ -133,8 +115,7 @@ async function readBody(request: Request, limit = 1024 * 1024): Promise<Uint8Arr
 
 // Meta's deauthorize callback (#16). Nothing reaches the database until the signed request verifies.
 async function deauthorize(request: Request, env: Env, correlationId: string): Promise<Response> {
-  if (!env.INSTAGRAM_OAUTH_APP_SECRET || !env.HYPERDRIVE?.connectionString)
-    throw new ConfigurationError("Deauthorize callback not configured");
+  if (!env.INSTAGRAM_OAUTH_APP_SECRET || !env.HYPERDRIVE?.connectionString) throw new ConfigurationError("Deauthorize callback not configured");
   if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
   const body = await readBody(request, DEAUTHORIZE_BODY_LIMIT);
   if (body === null) return new Response(null, { status: 413 });
@@ -148,16 +129,8 @@ async function deauthorize(request: Request, env: Env, correlationId: string): P
       ["connection_disconnected", disconnected],
       ["connection_skipped", skipped],
     ] as const)
-      for (const connectionId of ids)
-        logOperation(
-          { event: "instagram_deauthorized", code, correlation_id: correlationId, connection_id: connectionId },
-          "info",
-        );
-    if (!disconnected.length && !skipped.length)
-      logOperation(
-        { event: "instagram_deauthorized", code: "no_connection_matched", correlation_id: correlationId },
-        "info",
-      );
+      for (const connectionId of ids) logOperation({ event: "instagram_deauthorized", code, correlation_id: correlationId, connection_id: connectionId }, "info");
+    if (!disconnected.length && !skipped.length) logOperation({ event: "instagram_deauthorized", code: "no_connection_matched", correlation_id: correlationId }, "info");
     return new Response(null, { status: 200 });
   } finally {
     await pool.end();
@@ -189,8 +162,7 @@ async function receive(request: Request, env: Env, correlationId: string): Promi
   if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "GET, POST" } });
   const body = await readBody(request);
   if (body === null) return new Response(null, { status: 413 });
-  if (!verifySignature(body, request.headers.get("x-hub-signature-256"), env.INSTAGRAM_APP_SECRET))
-    return new Response(null, { status: 403 });
+  if (!verifySignature(body, request.headers.get("x-hub-signature-256"), env.INSTAGRAM_APP_SECRET)) return new Response(null, { status: 403 });
   let comments;
   let messages;
   let reads;
@@ -244,23 +216,13 @@ export default {
         const connectionId = (message.body as { connectionId: string }).connectionId;
         const pool = openPool(env, correlationId);
         try {
-          const result = await pool.query(
-            "SELECT id,workspace_id,account_id,access_token_encrypted,send_enabled,token_expires_at>now() AS token_valid FROM instagram_connections WHERE id=$1",
-            [connectionId],
-          );
+          const result = await pool.query("SELECT id,workspace_id,account_id,access_token_encrypted,send_enabled,token_expires_at>now() AS token_valid FROM instagram_connections WHERE id=$1", [connectionId]);
           const connection = result.rows[0];
-          if (
-            connection &&
-            (!connection.send_enabled || !connection.token_valid || !connection.access_token_encrypted)
-          ) {
+          if (connection && (!connection.send_enabled || !connection.token_valid || !connection.access_token_encrypted)) {
             await processNextManualReply(pool, connectionId, null, connection.access_token_encrypted);
           } else if (connection) {
             if (!env.TOKEN_ENCRYPTION_KEY) throw new ConfigurationError("Token encryption not configured");
-            const accessToken = openSecret(
-              connection.access_token_encrypted,
-              env.TOKEN_ENCRYPTION_KEY,
-              `${connection.workspace_id}:${connection.account_id}`,
-            );
+            const accessToken = openSecret(connection.access_token_encrypted, env.TOKEN_ENCRYPTION_KEY, `${connection.workspace_id}:${connection.account_id}`);
             const rawGraphFetch: typeof fetch = async (input, init) => {
               const response = await fetch(input, { ...init, redirect: "manual" });
               if (response.status >= 300 && response.status < 400) {
@@ -271,14 +233,11 @@ export default {
             };
             const graphFetch: typeof fetch = async (input, init) => {
               if (init?.method === "POST") {
-                const current = await pool.query(
-                  "SELECT 1 FROM instagram_connections WHERE id=$1 AND active AND send_enabled AND token_expires_at>now() AND access_token_encrypted=$2 AND (send_paused_until IS NULL OR send_paused_until<=now())",
-                  [connectionId, connection.access_token_encrypted],
-                );
-                if (!current.rowCount)
-                  throw (await tokenRotated(pool, connectionId, connection.access_token_encrypted))
-                    ? new PreSendVerificationError("retry", "token_rotated")
-                    : new PreSendVerificationError("block", "connection_changed");
+                const current = await pool.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND active AND send_enabled AND token_expires_at>now() AND access_token_encrypted=$2 AND (send_paused_until IS NULL OR send_paused_until<=now())", [
+                  connectionId,
+                  connection.access_token_encrypted,
+                ]);
+                if (!current.rowCount) throw (await tokenRotated(pool, connectionId, connection.access_token_encrypted)) ? new PreSendVerificationError("retry", "token_rotated") : new PreSendVerificationError("block", "connection_changed");
                 const body = typeof init.body === "string" ? JSON.parse(init.body) : null;
                 if (body?.recipient?.comment_id) {
                   // The reply's rule or flow must still be on; a flow run keeps its pinned version.
@@ -293,13 +252,8 @@ export default {
                     [connectionId, body.recipient.comment_id],
                   );
                   if (!rule.rowCount) throw new PreSendVerificationError("block", "inactive_rule");
-                  if (rule.rows[0].source_enabled !== true)
-                    throw new PreSendVerificationError(
-                      "block",
-                      rule.rows[0].from_flow ? "inactive_flow" : "inactive_rule",
-                    );
-                  if (rule.rows[0].automation_active === false)
-                    throw new PreSendVerificationError("retry", "contact_paused");
+                  if (rule.rows[0].source_enabled !== true) throw new PreSendVerificationError("block", rule.rows[0].from_flow ? "inactive_flow" : "inactive_rule");
+                  if (rule.rows[0].automation_active === false) throw new PreSendVerificationError("retry", "contact_paused");
                   const reply = rule.rows[0];
                   try {
                     if (
@@ -317,16 +271,9 @@ export default {
                 }
               }
               const response = await rawGraphFetch(input, init);
-              const postError =
-                init?.method === "POST" && response.status >= 400 && response.status < 500
-                  ? await readMetaGraphError(response.clone())
-                  : null;
+              const postError = init?.method === "POST" && response.status >= 400 && response.status < 500 ? await readMetaGraphError(response.clone()) : null;
               const definitePostRejection = postError?.code != null && !postError.transient;
-              if (
-                !response.ok &&
-                (init?.method !== "POST" || definitePostRejection) &&
-                (await tokenRotated(pool, connectionId, connection.access_token_encrypted))
-              ) {
+              if (!response.ok && (init?.method !== "POST" || definitePostRejection) && (await tokenRotated(pool, connectionId, connection.access_token_encrypted))) {
                 await response.body?.cancel();
                 throw new PreSendVerificationError("retry", "token_rotated");
               }
@@ -341,8 +288,7 @@ export default {
               if (reported.has(check)) return;
               reported.add(check);
               try {
-                if (check === "rejected")
-                  await markReauthRequired(pool, connectionId, connection.access_token_encrypted, "token_rejected");
+                if (check === "rejected") await markReauthRequired(pool, connectionId, connection.access_token_encrypted, "token_rejected");
                 else await clearReauthRequired(pool, connectionId, connection.access_token_encrypted, "token_rejected");
               } catch (error) {
                 logOperation({
@@ -370,13 +316,7 @@ export default {
                 fetchImpl: graphFetch,
                 beforeSend: async (context) => {
                   if (env.SEND_ENABLED !== "true") throw new PreSendVerificationError("block", "global_send_disabled");
-                  await assertManualReplyAllowed(
-                    pool,
-                    context.replyId,
-                    context.attemptId,
-                    connectionId,
-                    connection.access_token_encrypted,
-                  );
+                  await assertManualReplyAllowed(pool, context.replyId, context.attemptId, connectionId, connection.access_token_encrypted);
                 },
               }),
               connection.access_token_encrypted,
@@ -403,12 +343,8 @@ export default {
                   AND (c.send_paused_until IS NULL OR c.send_paused_until<=now())`,
                       [context.replyId, context.attemptId, connectionId, connection.access_token_encrypted],
                     );
-                    if (permitted.rows[0]?.automation_active === false)
-                      throw new PreSendVerificationError("retry", "contact_paused");
-                    if (!permitted.rowCount)
-                      throw (await tokenRotated(pool, connectionId, connection.access_token_encrypted))
-                        ? new PreSendVerificationError("retry", "token_rotated")
-                        : new PreSendVerificationError("block", "delivery_not_permitted");
+                    if (permitted.rows[0]?.automation_active === false) throw new PreSendVerificationError("retry", "contact_paused");
+                    if (!permitted.rowCount) throw (await tokenRotated(pool, connectionId, connection.access_token_encrypted)) ? new PreSendVerificationError("retry", "token_rotated") : new PreSendVerificationError("block", "delivery_not_permitted");
                     const reply = permitted.rows[0];
                     try {
                       if (
@@ -435,10 +371,7 @@ export default {
                 return await graphFetch(input, init);
               } catch (error) {
                 if (error instanceof PreSendVerificationError && error.failureCode === "connection_changed") {
-                  const paused = await pool.query(
-                    "SELECT 1 FROM instagram_connections WHERE id=$1 AND active AND send_enabled AND token_expires_at>now() AND send_paused_until>now()",
-                    [connectionId],
-                  );
+                  const paused = await pool.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND active AND send_enabled AND token_expires_at>now() AND send_paused_until>now()", [connectionId]);
                   if (paused.rowCount) throw new PreSendVerificationError("retry", "connection_paused");
                 }
                 throw error;
@@ -469,17 +402,7 @@ export default {
                 connection.access_token_encrypted,
                 { globalSendEnabled },
               ));
-            const replyProcessed =
-              !manualProcessed &&
-              !followProcessed &&
-              !dmProcessed &&
-              (await processNextPrivateReply(
-                pool,
-                new InstagramLoginPrivateReplyTransport(config),
-                () => new Date(),
-                connectionId,
-                correlationId,
-              ));
+            const replyProcessed = !manualProcessed && !followProcessed && !dmProcessed && (await processNextPrivateReply(pool, new InstagramLoginPrivateReplyTransport(config), () => new Date(), connectionId, correlationId));
             // A campaign row (#36) is sent only when no automation of this connection had a row, so automations
             // keep priority. Its final guard runs again in beforeSend, and graphFetch checks the connection once more
             // just before the POST.
@@ -587,8 +510,7 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
   const flush = async (withCron: boolean): Promise<void> => {
     const pending = outcomes;
     outcomes = [];
-    const rows = (): StepOutcome[] =>
-      withCron ? [...pending, { name: "cron", failure: failed ? "step_failed" : null, at: new Date() }] : pending;
+    const rows = (): StepOutcome[] => (withCron ? [...pending, { name: "cron", failure: failed ? "step_failed" : null, at: new Date() }] : pending);
     let statementFailure: string;
     try {
       await recordSteps(pool, rows());
@@ -611,27 +533,13 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
     await step("token_refresh", async () => {
       if (!env.TOKEN_ENCRYPTION_KEY) throw new ConfigurationError("Token encryption not configured");
       // A connection is attempted at most once a day, so a failure fails only the run that attempted it.
-      const { failed: refreshFailures } = await refreshDueInstagramTokensWithFailures(
-        pool,
-        env.TOKEN_ENCRYPTION_KEY,
-        countedFetch,
-        new Date(),
-        env.META_GRAPH_VERSION,
-        correlationId,
-      );
+      const { failed: refreshFailures } = await refreshDueInstagramTokensWithFailures(pool, env.TOKEN_ENCRYPTION_KEY, countedFetch, new Date(), env.META_GRAPH_VERSION, correlationId);
       if (refreshFailures > 0) throw new TokenRefreshFailedError();
     });
     // The webhook subscription check (#179) runs while sending is off too, because receiving still depends on
     // it. A connection is attempted at most once per interval, so a failure fails only the run that attempted it.
     await step("subscription_check", async () => {
-      const { failed: checkFailures } = await checkDueInstagramSubscriptions(
-        pool,
-        env.TOKEN_ENCRYPTION_KEY,
-        countedFetch,
-        new Date(),
-        env.META_GRAPH_VERSION,
-        correlationId,
-      );
+      const { failed: checkFailures } = await checkDueInstagramSubscriptions(pool, env.TOKEN_ENCRYPTION_KEY, countedFetch, new Date(), env.META_GRAPH_VERSION, correlationId);
       if (checkFailures > 0) throw new SubscriptionCheckFailedError();
     });
     // Linking a kept DM to its now-sent reply and resuming a delayed flow run only change state or
@@ -644,9 +552,7 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
     // recorded times.
     if (env.SEND_ENABLED === "true") {
       await step("stale_recovery", async () => {
-        await pool.query(
-          "UPDATE private_reply_outbox SET status='unknown',failure_code='worker_interrupted',recovered_at=clock_timestamp() WHERE status='sending' AND attempt_started_at<now()-interval '10 minutes'",
-        );
+        await pool.query("UPDATE private_reply_outbox SET status='unknown',failure_code='worker_interrupted',recovered_at=clock_timestamp() WHERE status='sending' AND attempt_started_at<now()-interval '10 minutes'");
         await recoverStaleManualReplies(pool);
         await recoverStaleFollowReplies(pool, new Date(Date.now() - 10 * 60_000));
         await recoverStaleCampaignDeliveries(pool);
@@ -710,44 +616,20 @@ import { ingestComments, resumeDueFlowRuns } from "../instagram/store.ts";
 import { verifySignature, verifySubscription } from "../instagram/webhook.ts";
 import { processNextPrivateReply, PreSendVerificationError } from "../instagram/reply-worker.ts";
 import { campaignBudgetOpenSql, privateReplyBudgetOpenSql } from "../instagram/send-quota.ts";
-import {
-  assertCampaignDeliveryAllowed,
-  campaignDeliveryDueSql,
-  completeCampaignRuns,
-  endUnreachableCampaignDeliveries,
-  processNextCampaignDelivery,
-  recoverStaleCampaignDeliveries,
-} from "../instagram/campaign-delivery-worker.ts";
-import {
-  assertDmFlowDeliveryAllowed,
-  dmFlowDeliveryDueSql,
-  processNextDmFlowDelivery,
-  recoverStaleDmFlowDeliveries,
-} from "../instagram/dm-flow-delivery-worker.ts";
+import { assertCampaignDeliveryAllowed, campaignDeliveryDueSql, completeCampaignRuns, endUnreachableCampaignDeliveries, processNextCampaignDelivery, recoverStaleCampaignDeliveries } from "../instagram/campaign-delivery-worker.ts";
+import { assertDmFlowDeliveryAllowed, dmFlowDeliveryDueSql, processNextDmFlowDelivery, recoverStaleDmFlowDeliveries } from "../instagram/dm-flow-delivery-worker.ts";
 import { InstagramLoginPrivateReplyTransport } from "../instagram/instagram-login-private-reply.ts";
 import { publicPage } from "./public-pages.ts";
 import { openPool } from "./pool.ts";
 import { appApi } from "../app/api.ts";
 import type { AuthEnv } from "../app/auth.ts";
 import { deleteExpiredOAuthStates, type InstagramOAuthEnv } from "../app/instagram-oauth.ts";
-import {
-  DEAUTHORIZE_BODY_LIMIT,
-  deauthorizeInstagramUser,
-  parseDeauthorizeBody,
-} from "../app/instagram-deauthorization.ts";
+import { DEAUTHORIZE_BODY_LIMIT, deauthorizeInstagramUser, parseDeauthorizeBody } from "../app/instagram-deauthorization.ts";
 
 import { openSecret } from "../app/secrets.ts";
 import { isRecord, isUuid } from "../app/auth.ts";
 import { InstagramFollowTransport } from "../instagram/follow-transport.ts";
-import {
-  ConfigurationError,
-  failureCode,
-  logOperation,
-  SubscriptionCheckFailedError,
-  TokenRefreshFailedError,
-  type OperationPart,
-  type OperationStep,
-} from "../app/operations-log.ts";
+import { ConfigurationError, failureCode, logOperation, SubscriptionCheckFailedError, TokenRefreshFailedError, type OperationPart, type OperationStep } from "../app/operations-log.ts";
 import { evaluateAlerts, recordStep, recordSteps, type StepOutcome } from "../app/operations-health.ts";
 import { CRON_SUBREQUEST_BUDGET, deliverDueWebhooks } from "../app/webhook-delivery.ts";
 import { startDueCampaignRuns } from "../app/campaign-runs.ts";

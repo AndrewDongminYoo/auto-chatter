@@ -117,13 +117,8 @@ test("helper values match the spec's worked examples", () => {
 
 // Every text size in the dashboard stylesheet comes from a font-size token, so a literal size cannot drift back in.
 test("every font size in styles.css uses a declared font-size token", () => {
-  const styles = readFileSync(new URL("../../public/app/styles.css", import.meta.url), "utf8").replace(
-    /\/\*[\s\S]*?\*\//g,
-    "",
-  );
-  const declared = new Set(
-    [...tokensCss.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/(--font-size-[a-z0-9-]+)\s*:/g)].map((match) => match[1]),
-  );
+  const styles = readFileSync(new URL("../../public/app/styles.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const declared = new Set([...tokensCss.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/(--font-size-[a-z0-9-]+)\s*:/g)].map((match) => match[1]));
   const failures: string[] = [];
   const sizes = [...styles.matchAll(/(?<![-\w])font-size\s*:\s*([^;}]+)/g)].map((match) => match[1].trim());
   assert.ok(sizes.length > 0, "styles.css must declare font sizes for this check to read");
@@ -146,10 +141,7 @@ test("every font size in styles.css uses a declared font-size token", () => {
   assert.deepEqual(failures, [], `font-size failures:\n${failures.join("\n")}`);
 });
 
-const stylesWithoutComments = readFileSync(new URL("../../public/app/styles.css", import.meta.url), "utf8").replace(
-  /\/\*[\s\S]*?\*\//g,
-  "",
-);
+const stylesWithoutComments = readFileSync(new URL("../../public/app/styles.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
 interface Declaration {
   selector: string;
@@ -194,8 +186,7 @@ const spacingTerm = /^(?:0|auto|\d+(?:\.\d+)?%|var\(--space-\d+\)|calc\(var\(--s
 const radiusTerm = /^(?:0|var\(--radius(?:-[a-z]+)?\))$/;
 const spacingProperty = /^(?:padding|margin|gap|row-gap|column-gap)(?:-[a-z-]+)?$/;
 // Above the largest token (48px), spacing stays a px literal on the 4px grid.
-const beyondScale = (term: string) =>
-  /^\d+px$/.test(term) && Number.parseInt(term, 10) > 48 && Number.parseInt(term, 10) % 4 === 0;
+const beyondScale = (term: string) => /^\d+px$/.test(term) && Number.parseInt(term, 10) > 48 && Number.parseInt(term, 10) % 4 === 0;
 // Literals the scales cannot express, each allowed only in the declaration that needs it: the summary chevron's
 // margin is part of the drawn icon, and the 1-3px values are hairline offsets in badges, chips and toggles.
 const spacingExceptions = new Set([
@@ -214,15 +205,10 @@ const spacingExceptions = new Set([
   "summary::before { margin: 0 10px 2px 2px }",
 ]);
 // The 2px corners that shape the message bubble tails.
-const radiusExceptions = new Set([
-  ".bubble.incoming { border-bottom-left-radius: 2px }",
-  ".bubble.outgoing { border-bottom-right-radius: 2px }",
-]);
+const radiusExceptions = new Set([".bubble.incoming { border-bottom-left-radius: 2px }", ".bubble.outgoing { border-bottom-right-radius: 2px }"]);
 
 test("styles.css declares and reads no step-1 alias property", () => {
-  const aliases = [...stylesWithoutComments.matchAll(/--(?:color-[a-z0-9-]+|radius-control)\b/g)].map(
-    (match) => match[0],
-  );
+  const aliases = [...stylesWithoutComments.matchAll(/--(?:color-[a-z0-9-]+|radius-control)\b/g)].map((match) => match[0]);
   assert.deepEqual(aliases, [], `alias properties still in styles.css: ${aliases.join(", ")}`);
 });
 
@@ -257,11 +243,7 @@ test("every border radius in styles.css uses a radius token or an allowed litera
 });
 
 test("every space and radius token that styles.css reads is declared in tokens.css", () => {
-  const declared = new Set(
-    [...tokensCss.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/(--(?:space|radius)[a-z0-9-]*)\s*:/g)].map(
-      (match) => match[1],
-    ),
-  );
+  const declared = new Set([...tokensCss.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/(--(?:space|radius)[a-z0-9-]*)\s*:/g)].map((match) => match[1]));
   const read = [...stylesWithoutComments.matchAll(/var\((--(?:space|radius)[a-z0-9-]*)\)/g)].map((match) => match[1]);
   assert.ok(read.length > 0, "styles.css must read space or radius tokens for this check to read");
   const missing = [...new Set(read.filter((name) => !declared.has(name)))];
@@ -276,9 +258,7 @@ for (const mode of ["light", "dark"] as const) {
       const foreground = tokens.get(pair.foreground);
       const background = tokens.get(pair.background);
       if (!foreground || !background) {
-        failures.push(
-          `pair ${pair.number}: ${[pair.foreground, pair.background].filter((name) => !tokens.has(name)).join(", ")} missing from the ${mode} tokens`,
-        );
+        failures.push(`pair ${pair.number}: ${[pair.foreground, pair.background].filter((name) => !tokens.has(name)).join(", ")} missing from the ${mode} tokens`);
         continue;
       }
       const ratio = contrast(foreground, background);

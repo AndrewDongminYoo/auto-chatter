@@ -112,16 +112,13 @@ a{color:#174ba3;text-underline-offset:3px}.meta{color:#596475}li{margin:10px 0}
 export function publicPage(request: Request): Response | null {
   const pathname = new URL(request.url).pathname;
   if (pathname !== "/privacy" && pathname !== "/data-deletion" && pathname !== "/service") return null;
-  if (request.method !== "GET" && request.method !== "HEAD")
-    return new Response(null, { status: 405, headers: { Allow: "GET, HEAD" } });
-  const title =
-    pathname === "/privacy" ? "개인정보처리방침" : pathname === "/service" ? "서비스 이용약관" : "데이터 삭제 안내";
+  if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405, headers: { Allow: "GET, HEAD" } });
+  const title = pathname === "/privacy" ? "개인정보처리방침" : pathname === "/service" ? "서비스 이용약관" : "데이터 삭제 안내";
   const content = pathname === "/privacy" ? privacy : pathname === "/service" ? service : deletion;
   return new Response(request.method === "HEAD" ? null : document(title, content), {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
-      "Content-Security-Policy":
-        "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
       "Cache-Control": "public, max-age=300",

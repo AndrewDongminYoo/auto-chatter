@@ -125,9 +125,7 @@ test("handoff report shows event metrics and exports the displayed snapshot with
     requests.push(url);
     return snapshot;
   });
-  h.controller.configure("admin", "Factory", [
-    { id: "55555555-5555-4555-8555-555555555555", username: "=SECRET-ACCOUNT" },
-  ]);
+  h.controller.configure("admin", "Factory", [{ id: "55555555-5555-4555-8555-555555555555", username: "=SECRET-ACCOUNT" }]);
   assert.equal(h.get("handoff-reports-section").hidden, false);
   assert.match(h.get("handoff-report-zone").textContent, /직접 입력/);
   assert.equal(h.inputs.from.value, "");

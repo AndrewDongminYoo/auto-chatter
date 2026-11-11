@@ -17,27 +17,14 @@ export interface InstagramOAuthEnv {
   INSTAGRAM_INTERNAL_EMAILS?: string;
 }
 
-const permissions = [
-  "instagram_business_basic",
-  "instagram_business_manage_comments",
-  "instagram_business_manage_messages",
-];
+const permissions = ["instagram_business_basic", "instagram_business_manage_comments", "instagram_business_manage_messages"];
 const stateHash = (state: string) => createHash("sha256").update(state).digest("hex");
 
 function config(env: InstagramOAuthEnv) {
-  if (
-    !env.APP_ORIGIN ||
-    !env.INSTAGRAM_OAUTH_APP_ID ||
-    !/^\d+$/.test(env.INSTAGRAM_OAUTH_APP_ID) ||
-    !env.INSTAGRAM_OAUTH_APP_SECRET ||
-    !env.TOKEN_ENCRYPTION_KEY ||
-    !env.META_GRAPH_VERSION ||
-    !/^v\d+\.\d+$/.test(env.META_GRAPH_VERSION)
-  )
+  if (!env.APP_ORIGIN || !env.INSTAGRAM_OAUTH_APP_ID || !/^\d+$/.test(env.INSTAGRAM_OAUTH_APP_ID) || !env.INSTAGRAM_OAUTH_APP_SECRET || !env.TOKEN_ENCRYPTION_KEY || !env.META_GRAPH_VERSION || !/^v\d+\.\d+$/.test(env.META_GRAPH_VERSION))
     throw new ApiError(503, "instagram_not_configured");
   const origin = new URL(env.APP_ORIGIN);
-  if (origin.protocol !== "https:" || origin.origin !== env.APP_ORIGIN)
-    throw new ApiError(503, "instagram_not_configured");
+  if (origin.protocol !== "https:" || origin.origin !== env.APP_ORIGIN) throw new ApiError(503, "instagram_not_configured");
   // Validate key material before creating an authorization flow.
   sealSecret("key-check", env.TOKEN_ENCRYPTION_KEY, "config-check");
   return {
@@ -60,10 +47,7 @@ export async function beginInstagramOAuth(pool: Pool, user: User, env: Instagram
   try {
     await client.query("BEGIN");
     await lockWorkspaceForMember(client, workspaceId, user, "admin");
-    await client.query(
-      "INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES($1,$2,$3,now()+interval '10 minutes')",
-      [stateHash(state), user.id, workspaceId],
-    );
+    await client.query("INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES($1,$2,$3,now()+interval '10 minutes')", [stateHash(state), user.id, workspaceId]);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -83,10 +67,7 @@ export async function beginInstagramOAuth(pool: Pool, user: User, env: Instagram
   }))
     url.searchParams.set(key, value);
   const response = json({ url: url.toString() });
-  response.headers.append(
-    "Set-Cookie",
-    `__Host-ac-oauth=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
-  );
+  response.headers.append("Set-Cookie", `__Host-ac-oauth=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`);
   return response;
 }
 
@@ -143,13 +124,7 @@ export function oauthProviderFailureCode(step: OAuthProviderStep, failure: strin
   return code;
 }
 
-function providerFailure(
-  step: OAuthProviderStep,
-  failure: string,
-  correlationId: string | undefined,
-  parts: readonly string[] = [],
-  error = "instagram_connection_failed",
-): ApiError {
+function providerFailure(step: OAuthProviderStep, failure: string, correlationId: string | undefined, parts: readonly string[] = [], error = "instagram_connection_failed"): ApiError {
   logOperation(
     {
       event: "instagram_oauth_provider_failed",
@@ -194,26 +169,14 @@ async function readErrorBody(response: Response): Promise<unknown> {
   }
 }
 
-async function providerJson(
-  fetchImpl: typeof fetch,
-  step: OAuthProviderStep,
-  url: URL | string,
-  init: RequestInit,
-  correlationId: string | undefined,
-): Promise<unknown> {
+async function providerJson(fetchImpl: typeof fetch, step: OAuthProviderStep, url: URL | string, init: RequestInit, correlationId: string | undefined): Promise<unknown> {
   let response: Response;
   try {
     response = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(10_000), redirect: "manual" });
   } catch {
     throw providerFailure(step, "network", correlationId);
   }
-  if (!response.ok)
-    throw providerFailure(
-      step,
-      `http_${response.status}`,
-      correlationId,
-      providerErrorParts(await readErrorBody(response)),
-    );
+  if (!response.ok) throw providerFailure(step, `http_${response.status}`, correlationId, providerErrorParts(await readErrorBody(response)));
   try {
     return await response.json();
   } catch {
@@ -234,24 +197,12 @@ export async function finishInstagramOAuth(
   const url = new URL(request.url);
   const state = url.searchParams.get("state");
   const browserState = cookie(request, "__Host-ac-oauth");
-  if (
-    !state ||
-    !browserState ||
-    url.searchParams.getAll("state").length !== 1 ||
-    !/^[a-f0-9]{64}$/.test(state) ||
-    !/^[a-f0-9]{64}$/.test(browserState) ||
-    !timingSafeEqual(Buffer.from(state), Buffer.from(browserState))
-  )
-    throw new ApiError(400, "invalid_oauth_state");
+  if (!state || !browserState || url.searchParams.getAll("state").length !== 1 || !/^[a-f0-9]{64}$/.test(state) || !/^[a-f0-9]{64}$/.test(browserState) || !timingSafeEqual(Buffer.from(state), Buffer.from(browserState))) throw new ApiError(400, "invalid_oauth_state");
   const workspaceId = await workspaceFor(pool, user, "admin");
-  const consumed = await pool.query(
-    "UPDATE instagram_oauth_states SET consumed_at=now() WHERE state_hash=$1 AND user_id=$2 AND workspace_id=$3 AND consumed_at IS NULL AND expires_at>now() RETURNING state_hash",
-    [stateHash(state), user.id, workspaceId],
-  );
+  const consumed = await pool.query("UPDATE instagram_oauth_states SET consumed_at=now() WHERE state_hash=$1 AND user_id=$2 AND workspace_id=$3 AND consumed_at IS NULL AND expires_at>now() RETURNING state_hash", [stateHash(state), user.id, workspaceId]);
   if (consumed.rowCount !== 1) throw new ApiError(400, "invalid_oauth_state");
   const code = url.searchParams.get("code");
-  if (url.searchParams.has("error") || !code || code.length > 4096 || url.searchParams.getAll("code").length !== 1)
-    throw new ApiError(400, "instagram_authorization_denied");
+  if (url.searchParams.has("error") || !code || code.length > 4096 || url.searchParams.getAll("code").length !== 1) throw new ApiError(400, "instagram_authorization_denied");
   const short = await providerJson(
     fetchImpl,
     "code_exchange",
@@ -270,15 +221,9 @@ export async function finishInstagramOAuth(
     correlationId,
   );
   const entry = isRecord(short) && Array.isArray(short.data) ? short.data[0] : short;
-  if (!isRecord(entry) || typeof entry.access_token !== "string" || !entry.access_token)
-    throw providerFailure("code_exchange", "invalid_shape", correlationId);
-  const granted = Array.isArray(entry.permissions)
-    ? entry.permissions
-    : typeof entry.permissions === "string"
-      ? entry.permissions.split(",")
-      : [];
-  if (!permissions.every((permission) => granted.includes(permission)))
-    throw new ApiError(400, "instagram_permissions_required");
+  if (!isRecord(entry) || typeof entry.access_token !== "string" || !entry.access_token) throw providerFailure("code_exchange", "invalid_shape", correlationId);
+  const granted = Array.isArray(entry.permissions) ? entry.permissions : typeof entry.permissions === "string" ? entry.permissions.split(",") : [];
+  if (!permissions.every((permission) => granted.includes(permission))) throw new ApiError(400, "instagram_permissions_required");
   // The app-scoped user ID that the deauthorize callback may carry. A missing or malformed value does not fail
   // the connection.
   const instagramUserId = normalizedUserId(entry.user_id);
@@ -288,27 +233,12 @@ export async function finishInstagramOAuth(
   exchange.searchParams.set("client_secret", settings.secret);
   exchange.searchParams.set("access_token", entry.access_token);
   const long = await providerJson(fetchImpl, "long_lived_exchange", exchange, { method: "GET" }, correlationId);
-  if (!isRecord(long) || typeof long.access_token !== "string" || !long.access_token)
-    throw providerFailure("long_lived_exchange", "invalid_shape_missing_token", correlationId);
-  if (typeof long.expires_in !== "number" || !Number.isFinite(long.expires_in))
-    throw providerFailure("long_lived_exchange", "invalid_shape_expires_in_type", correlationId);
-  if (long.expires_in <= 86400 || long.expires_in > 90 * 86400)
-    throw providerFailure("long_lived_exchange", "invalid_shape_expires_in_range", correlationId);
-  const profile = await providerJson(
-    fetchImpl,
-    "profile",
-    `https://graph.instagram.com/${settings.version}/me?fields=user_id,username`,
-    { method: "GET", headers: { Authorization: `Bearer ${long.access_token}` } },
-    correlationId,
-  );
+  if (!isRecord(long) || typeof long.access_token !== "string" || !long.access_token) throw providerFailure("long_lived_exchange", "invalid_shape_missing_token", correlationId);
+  if (typeof long.expires_in !== "number" || !Number.isFinite(long.expires_in)) throw providerFailure("long_lived_exchange", "invalid_shape_expires_in_type", correlationId);
+  if (long.expires_in <= 86400 || long.expires_in > 90 * 86400) throw providerFailure("long_lived_exchange", "invalid_shape_expires_in_range", correlationId);
+  const profile = await providerJson(fetchImpl, "profile", `https://graph.instagram.com/${settings.version}/me?fields=user_id,username`, { method: "GET", headers: { Authorization: `Bearer ${long.access_token}` } }, correlationId);
   const account = isRecord(profile) && Array.isArray(profile.data) ? profile.data[0] : profile;
-  if (
-    !isRecord(account) ||
-    typeof account.user_id !== "string" ||
-    !/^\d+$/.test(account.user_id) ||
-    typeof account.username !== "string"
-  )
-    throw providerFailure("profile", "invalid_shape", correlationId, [], "instagram_account_unverified");
+  if (!isRecord(account) || typeof account.user_id !== "string" || !/^\d+$/.test(account.user_id) || typeof account.username !== "string") throw providerFailure("profile", "invalid_shape", correlationId, [], "instagram_account_unverified");
   const encrypted = sealSecret(long.access_token, settings.key, `${workspaceId}:${account.user_id}`);
   // The provider calls above take seconds, and accepting an invite can move the user out of this workspace
   // meanwhile. acceptInvite holds the old workspace row FOR UPDATE while it checks that the workspace is empty,
@@ -321,19 +251,12 @@ export async function finishInstagramOAuth(
   try {
     await client.query("BEGIN");
     await client.query("SELECT id FROM workspaces WHERE id=$1 FOR NO KEY UPDATE", [workspaceId]);
-    const member = await client.query(
-      "SELECT 1 FROM workspace_members WHERE user_id=$1 AND workspace_id=$2 AND removed_at IS NULL AND role IN ('owner','admin')",
-      [user.id, workspaceId],
-    );
+    const member = await client.query("SELECT 1 FROM workspace_members WHERE user_id=$1 AND workspace_id=$2 AND removed_at IS NULL AND role IN ('owner','admin')", [user.id, workspaceId]);
     if (member.rowCount !== 1) throw new ApiError(403, "workspace_required");
     // An account held by another workspace is refused here, not by the INSERT below: that row is not locked, and
     // if its deletion committed before the INSERT, the INSERT would add a connection that skipped the limit.
-    const holder = await client.query<{ workspace_id: string }>(
-      "SELECT workspace_id FROM instagram_connections WHERE account_id=$1",
-      [account.user_id],
-    );
-    if ((holder.rows[0]?.workspace_id ?? workspaceId) !== workspaceId)
-      throw new ApiError(409, "instagram_account_already_connected");
+    const holder = await client.query<{ workspace_id: string }>("SELECT workspace_id FROM instagram_connections WHERE account_id=$1", [account.user_id]);
+    if ((holder.rows[0]?.workspace_id ?? workspaceId) !== workspaceId) throw new ApiError(409, "instagram_account_already_connected");
     await requireConnectionSlot(client, workspaceId, account.user_id);
     saved = await client.query(
       `INSERT INTO instagram_connections(id,workspace_id,account_id,username,active,send_enabled,access_token_encrypted,token_expires_at,instagram_user_id,deauthorized_at)
@@ -347,15 +270,7 @@ export async function finishInstagramOAuth(
          subscription_token_obtained_at=NULL,
          instagram_user_id=EXCLUDED.instagram_user_id,deauthorized_at=NULL
        WHERE instagram_connections.workspace_id=$2 RETURNING id`,
-      [
-        randomUUID(),
-        workspaceId,
-        account.user_id,
-        account.username,
-        encrypted,
-        Math.floor(long.expires_in),
-        instagramUserId,
-      ],
+      [randomUUID(), workspaceId, account.user_id, account.username, encrypted, Math.floor(long.expires_in), instagramUserId],
     );
     await client.query("COMMIT");
   } catch (error) {
@@ -380,8 +295,7 @@ export async function finishInstagramOAuth(
     },
     correlationId,
   );
-  if (!isRecord(subscribed) || subscribed.success !== true)
-    throw providerFailure("subscribe", "not_success", correlationId, [], "instagram_subscription_failed");
+  if (!isRecord(subscribed) || subscribed.success !== true) throw providerFailure("subscribe", "not_success", correlationId, [], "instagram_subscription_failed");
   const activated = await pool.query(
     `UPDATE instagram_connections SET active=true,
      inbox_enabled_at=CASE WHEN NOT active AND inbox_enabled THEN clock_timestamp() ELSE inbox_enabled_at END

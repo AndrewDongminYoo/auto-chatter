@@ -32,12 +32,7 @@ async function rateLimitKey(value: string): Promise<string> {
     .replace(/=+$/, "");
 }
 
-export async function limitAuthRequest(
-  request: Request,
-  pathname: string,
-  input: unknown,
-  env: AuthRateLimitEnv,
-): Promise<void> {
+export async function limitAuthRequest(request: Request, pathname: string, input: unknown, env: AuthRateLimitEnv): Promise<void> {
   if (!env.AUTH_IP_LIMIT || !env.AUTH_EMAIL_LIMIT) throw new ApiError(503, "auth_unavailable");
   const mail = MAIL_PATHS.has(pathname);
   if (mail && (!env.AUTH_MAIL_IP_LIMIT || !env.AUTH_MAIL_LIMIT)) throw new ApiError(503, "auth_unavailable");

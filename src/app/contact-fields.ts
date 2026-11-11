@@ -5,20 +5,13 @@ import { lockWorkspaceForMember, workspaceFor } from "./settings.ts";
 // Serializes every writer of one contact's tags and field values: flow runs, which read them before
 // writing, and manual edits. Taken after the connection lock, and after any field row lock.
 export async function lockContact(client: PoolClient, connectionId: string, senderId: string) {
-  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1::text || ':' || $2, 0))", [
-    connectionId.toLowerCase(),
-    senderId,
-  ]);
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1::text || ':' || $2, 0))", [connectionId.toLowerCase(), senderId]);
 }
 
 // The fields, among fieldIds, that a reply wait of any published flow version of the workspace saves a
 // reply DM into (#47). Every version counts, current or not: versions are immutable and a value one of
 // them stored may still be in the field, so a webhook node never sends such a field.
-export async function replySavedFields(
-  client: PoolClient,
-  workspaceId: string,
-  fieldIds: readonly unknown[],
-): Promise<Set<string>> {
+export async function replySavedFields(client: PoolClient, workspaceId: string, fieldIds: readonly unknown[]): Promise<Set<string>> {
   const ids = fieldIds.filter(isUuid);
   if (!ids.length) return new Set();
   const saved = await client.query<{ id: string }>(
@@ -39,16 +32,10 @@ export function fieldConditionNeedsValue(operator: string): boolean {
 
 export function parseFieldCondition(input: Record<string, unknown>): FieldCondition | null {
   if (input.field_id === undefined || input.field_id === null) {
-    if (input.field_operator != null || Object.hasOwn(input, "field_value"))
-      throw new ApiError(400, "invalid_field_condition");
+    if (input.field_operator != null || Object.hasOwn(input, "field_value")) throw new ApiError(400, "invalid_field_condition");
     return null;
   }
-  if (
-    !isUuid(input.field_id) ||
-    typeof input.field_operator !== "string" ||
-    !["eq", "gt", "gte", "lt", "lte", "is_set", "is_unset"].includes(input.field_operator)
-  )
-    throw new ApiError(400, "invalid_field_condition");
+  if (!isUuid(input.field_id) || typeof input.field_operator !== "string" || !["eq", "gt", "gte", "lt", "lte", "is_set", "is_unset"].includes(input.field_operator)) throw new ApiError(400, "invalid_field_condition");
   if (
     fieldConditionNeedsValue(input.field_operator)
       ? !Object.hasOwn(input, "field_value") ||
@@ -72,11 +59,7 @@ export function isValidFieldValue(type: string, value: unknown): boolean {
       ? typeof value === "number" && Number.isFinite(value)
       : type === "boolean"
         ? typeof value === "boolean"
-        : type === "date" &&
-          typeof value === "string" &&
-          /^\d{4}-\d{2}-\d{2}$/.test(value) &&
-          Number.isFinite(Date.parse(value)) &&
-          new Date(value).toISOString().slice(0, 10) === value;
+        : type === "date" && typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
 }
 
 function validateValue(type: string, value: unknown) {
@@ -87,46 +70,23 @@ function validateValue(type: string, value: unknown) {
 export type SqlReader = {
   query<R extends QueryResultRow = QueryResultRow>(text: string, values: unknown[]): Promise<QueryResult<R>>;
 };
-export async function validateFieldCondition(
-  db: SqlReader,
-  workspace: string,
-  condition: FieldCondition | null,
-  lock = false,
-) {
+export async function validateFieldCondition(db: SqlReader, workspace: string, condition: FieldCondition | null, lock = false) {
   if (!condition) return;
-  const field = (
-    await db.query<{ type: string }>(
-      `SELECT type FROM instagram_contact_fields WHERE workspace_id=$1 AND id=$2 AND NOT archived${lock ? " FOR SHARE" : ""}`,
-      [workspace, condition.field_id],
-    )
-  ).rows[0];
+  const field = (await db.query<{ type: string }>(`SELECT type FROM instagram_contact_fields WHERE workspace_id=$1 AND id=$2 AND NOT archived${lock ? " FOR SHARE" : ""}`, [workspace, condition.field_id])).rows[0];
   if (!field) throw new ApiError(404, "field_not_found");
   if (fieldConditionNeedsValue(condition.field_operator)) {
-    if (condition.field_operator !== "eq" && !["number", "date"].includes(field.type))
-      throw new ApiError(400, "invalid_field_condition");
+    if (condition.field_operator !== "eq" && !["number", "date"].includes(field.type)) throw new ApiError(400, "invalid_field_condition");
     validateValue(field.type, condition.field_value);
   }
 }
 
 export async function listContactFields(pool: Pool, user: User) {
   const workspace = await workspaceFor(pool, user, "agent");
-  return (
-    await pool.query(
-      "SELECT id,name,type FROM instagram_contact_fields WHERE workspace_id=$1 AND NOT archived ORDER BY name,id",
-      [workspace],
-    )
-  ).rows;
+  return (await pool.query("SELECT id,name,type FROM instagram_contact_fields WHERE workspace_id=$1 AND NOT archived ORDER BY name,id", [workspace])).rows;
 }
 
 export async function createContactField(pool: Pool, user: User, input: unknown) {
-  if (
-    !isRecord(input) ||
-    Object.keys(input).some((key) => !["name", "type"].includes(key)) ||
-    typeof input.name !== "string" ||
-    input.name.length > 300 ||
-    typeof input.type !== "string" ||
-    !["text", "number", "boolean", "date"].includes(input.type)
-  )
+  if (!isRecord(input) || Object.keys(input).some((key) => !["name", "type"].includes(key)) || typeof input.name !== "string" || input.name.length > 300 || typeof input.type !== "string" || !["text", "number", "boolean", "date"].includes(input.type))
     throw new ApiError(400, "invalid_contact_field");
   const name = input.name.trim().normalize("NFC");
   if (!name || name.length > 60 || /[\p{Cc}\p{Cf}]/u.test(name)) throw new ApiError(400, "invalid_contact_field");
@@ -158,15 +118,7 @@ export async function archiveContactField(pool: Pool, user: User, id: string) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    if (
-      !(
-        await client.query("SELECT id FROM instagram_contact_fields WHERE workspace_id=$1 AND id=$2 FOR UPDATE", [
-          workspace,
-          id,
-        ])
-      ).rows[0]
-    )
-      throw new ApiError(404, "field_not_found");
+    if (!(await client.query("SELECT id FROM instagram_contact_fields WHERE workspace_id=$1 AND id=$2 FOR UPDATE", [workspace, id])).rows[0]) throw new ApiError(404, "field_not_found");
     if (
       (
         await client.query(
@@ -191,10 +143,7 @@ export async function archiveContactField(pool: Pool, user: User, id: string) {
       ).rows[0]
     )
       throw new ApiError(409, "field_in_use");
-    await client.query("UPDATE instagram_contact_fields SET archived=true WHERE workspace_id=$1 AND id=$2", [
-      workspace,
-      id,
-    ]);
+    await client.query("UPDATE instagram_contact_fields SET archived=true WHERE workspace_id=$1 AND id=$2", [workspace, id]);
     await client.query("COMMIT");
     return { id };
   } catch (error) {
@@ -205,38 +154,15 @@ export async function archiveContactField(pool: Pool, user: User, id: string) {
   }
 }
 
-export async function saveContactFieldValue(
-  pool: Pool,
-  user: User,
-  connectionId: string,
-  senderId: string,
-  id: string,
-  input: unknown,
-) {
-  if (
-    !isUuid(connectionId) ||
-    !isUuid(id) ||
-    !senderId.trim() ||
-    !isRecord(input) ||
-    Object.keys(input).length !== 1 ||
-    !Object.hasOwn(input, "value")
-  )
-    throw new ApiError(400, "invalid_field_value");
+export async function saveContactFieldValue(pool: Pool, user: User, connectionId: string, senderId: string, id: string, input: unknown) {
+  if (!isUuid(connectionId) || !isUuid(id) || !senderId.trim() || !isRecord(input) || Object.keys(input).length !== 1 || !Object.hasOwn(input, "value")) throw new ApiError(400, "invalid_field_value");
   const workspace = await workspaceFor(pool, user, "agent");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     // Same connection lock as lockContactConnection in contacts.ts, which serializes with data deletion.
-    await client.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR SHARE", [
-      connectionId,
-      workspace,
-    ]);
-    const field = (
-      await client.query<{ type: string }>(
-        "SELECT type FROM instagram_contact_fields WHERE workspace_id=$1 AND id=$2 AND NOT archived FOR SHARE",
-        [workspace, id],
-      )
-    ).rows[0];
+    await client.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR SHARE", [connectionId, workspace]);
+    const field = (await client.query<{ type: string }>("SELECT type FROM instagram_contact_fields WHERE workspace_id=$1 AND id=$2 AND NOT archived FOR SHARE", [workspace, id])).rows[0];
     if (!field) throw new ApiError(404, "field_not_found");
     if (input.value !== null) validateValue(field.type, input.value);
     await lockContact(client, connectionId, senderId);

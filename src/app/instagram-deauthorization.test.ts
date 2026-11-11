@@ -7,11 +7,9 @@ const secret = "synthetic-secret";
 const encode = (payload: unknown) => Buffer.from(JSON.stringify(payload)).toString("base64url");
 // Signs the encoded payload string as given, so a malformed payload still carries a valid signature and the
 // rejection under test cannot come from a signature mismatch.
-const sign = (encodedPayload: string, key = secret) =>
-  `${createHmac("sha256", key).update(encodedPayload).digest("base64url")}.${encodedPayload}`;
+const sign = (encodedPayload: string, key = secret) => `${createHmac("sha256", key).update(encodedPayload).digest("base64url")}.${encodedPayload}`;
 const valid = { algorithm: "HMAC-SHA256", issued_at: 1_760_000_000, user_id: "17841400000000001" };
-const form = (signedRequest: string) =>
-  new TextEncoder().encode(new URLSearchParams({ signed_request: signedRequest }).toString());
+const form = (signedRequest: string) => new TextEncoder().encode(new URLSearchParams({ signed_request: signedRequest }).toString());
 
 const verified = { userId: "17841400000000001", issuedAt: 1_760_000_000 };
 
@@ -72,8 +70,7 @@ test("a correctly signed payload with the wrong algorithm, user ID or issue time
     { ...valid, issued_at: null },
   ])
     assert.equal(verifySignedRequest(sign(encode(payload)), secret), null, JSON.stringify(payload));
-  for (const encoded of [encode([valid]), encode("text"), Buffer.from("{not json").toString("base64url")])
-    assert.equal(verifySignedRequest(sign(encoded), secret), null, encoded);
+  for (const encoded of [encode([valid]), encode("text"), Buffer.from("{not json").toString("base64url")]) assert.equal(verifySignedRequest(sign(encoded), secret), null, encoded);
 });
 
 test("a request without a dot or with characters outside base64url is refused", () => {
@@ -83,8 +80,7 @@ test("a request without a dot or with characters outside base64url is refused", 
   assert.equal(verifySignedRequest(`.${payload}`, secret), null);
   assert.equal(verifySignedRequest(`${signature}.`, secret), null);
   // The payload is signed as written, so only the alphabet check can refuse it.
-  for (const encoded of [`${payload}!`, `${payload}+`, `${payload}/`, `${payload}.x`])
-    assert.equal(verifySignedRequest(sign(encoded), secret), null, encoded);
+  for (const encoded of [`${payload}!`, `${payload}+`, `${payload}/`, `${payload}.x`]) assert.equal(verifySignedRequest(sign(encoded), secret), null, encoded);
   assert.equal(verifySignedRequest(`${signature.slice(0, -1)}*.${payload}`, secret), null);
 });
 

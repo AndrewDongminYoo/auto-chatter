@@ -8,9 +8,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export async function readMetaGraphError(
-  response: Response,
-): Promise<{ code: number | null; transient: boolean; rateLimited: boolean } | null> {
+export async function readMetaGraphError(response: Response): Promise<{ code: number | null; transient: boolean; rateLimited: boolean } | null> {
   let body: unknown;
   try {
     body = (await response.json()) as unknown;

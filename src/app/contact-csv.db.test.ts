@@ -8,13 +8,7 @@ import * as csv from "./contact-csv.ts";
 import { previewContactCsv } from "./contact-csv-preview.ts";
 import { applyContactCsv, CONTACT_IMPORT_APPLY_REQUEST_BYTES } from "./contact-csv-import.ts";
 import { decodeContactScalar, parseContactCsv } from "./contact-csv-test-utils.ts";
-import {
-  archiveContactSegment,
-  createContactSegment,
-  listContacts,
-  lockContactConnection,
-  saveContactTags,
-} from "./contacts.ts";
+import { archiveContactSegment, createContactSegment, listContacts, lockContactConnection, saveContactTags } from "./contacts.ts";
 import { lockContact } from "./contact-fields.ts";
 import { seedWorkspace } from "./workspace-fixture.ts";
 import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
@@ -22,8 +16,7 @@ import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
 const local = new URL(databaseUrl);
-if (local.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(local.hostname))
-  throw new Error("Database tests require local automations_test");
+if (local.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(local.hostname)) throw new Error("Database tests require local automations_test");
 const pool = new Pool({ connectionString: databaseUrl });
 const workspace = "11111111-1111-4111-8111-111111111111",
   foreign = "22222222-2222-4222-8222-222222222222";
@@ -68,14 +61,8 @@ beforeEach(async () => {
   notifications = 0;
   await pool.query("TRUNCATE workspaces,workspace_deletion_records CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspace, foreign]);
-  await pool.query(
-    "INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'admin'),($1,$4,'agent')",
-    [workspace, owner, admin, agent],
-  );
-  await pool.query(
-    "INSERT INTO instagram_connections(id,workspace_id,account_id,username,active) VALUES($1,$2,'123','shop',true),($3,$2,'124',NULL,false)",
-    [connection, workspace, second],
-  );
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'admin'),($1,$4,'agent')", [workspace, owner, admin, agent]);
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,username,active) VALUES($1,$2,'123','shop',true),($3,$2,'124',NULL,false)", [connection, workspace, second]);
 });
 after(async () => pool.end());
 async function request(actor = owner, suffix = "") {
@@ -97,22 +84,11 @@ async function request(actor = owner, suffix = "") {
   );
 }
 async function add(sender: string, conn = connection, ws = workspace) {
-  await pool.query(
-    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$4,'RAW COMMENT SECRET','2026-10-04T12:34:56.123456Z')",
-    [ws, conn, randomUUID(), sender],
-  );
+  await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$4,'RAW COMMENT SECRET','2026-10-04T12:34:56.123456Z')", [ws, conn, randomUUID(), sender]);
 }
 async function field(name: string, type: string, json: string | null, archived = false, sender = "00123") {
-  const id = (
-    await pool.query(
-      "INSERT INTO instagram_contact_fields(workspace_id,name,type,archived) VALUES($1,$2,$3,$4) RETURNING id",
-      [workspace, name, type, archived],
-    )
-  ).rows[0].id;
-  await pool.query(
-    "INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,$3,$4,$5::jsonb)",
-    [workspace, connection, sender, id, json],
-  );
+  const id = (await pool.query("INSERT INTO instagram_contact_fields(workspace_id,name,type,archived) VALUES($1,$2,$3,$4) RETURNING id", [workspace, name, type, archived])).rows[0].id;
+  await pool.query("INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,$3,$4,$5::jsonb)", [workspace, connection, sender, id, json]);
   return id as string;
 }
 const records = (body: string) =>
@@ -162,8 +138,7 @@ async function previewRequest(body: unknown, actor = owner, suffix = "", origin 
       API_WRITE_WORKSPACE_LIMIT: { limit: async () => ({ success: true }) },
     },
     () => ({ query: pool.query.bind(pool), end: async () => {} }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: actor, email: "member@example.test", email_confirmed_at: "2026-10-17" })) as typeof fetch,
+    (async () => Response.json({ id: actor, email: "member@example.test", email_confirmed_at: "2026-10-17" })) as typeof fetch,
     async () => {
       notifications++;
     },
@@ -183,8 +158,7 @@ async function applyRequest(body: unknown, actor = owner, suffix = "", raw?: str
       API_WRITE_WORKSPACE_LIMIT: { limit: async () => ({ success: true }) },
     },
     tracked,
-    (async () =>
-      Response.json({ id: actor, email: "member@example.test", email_confirmed_at: "2026-10-17" })) as typeof fetch,
+    (async () => Response.json({ id: actor, email: "member@example.test", email_confirmed_at: "2026-10-17" })) as typeof fetch,
     async () => {
       notifications++;
     },
@@ -194,27 +168,18 @@ async function applyRequest(body: unknown, actor = owner, suffix = "", raw?: str
 function applyBody(csvText: string, preview: { rows: { row: number; status: string; current_tags?: string[] }[] }) {
   return {
     csv: csvText,
-    expected: preview.rows
-      .filter((row) => row.status === "changed")
-      .map((row) => ({ row: row.row, current_tags: row.current_tags })),
+    expected: preview.rows.filter((row) => row.status === "changed").map((row) => ({ row: row.row, current_tags: row.current_tags })),
   };
 }
 async function tagsByContact() {
-  return (
-    await pool.query("SELECT connection_id,sender_id,tags FROM instagram_contact_tags ORDER BY connection_id,sender_id")
-  ).rows;
+  return (await pool.query("SELECT connection_id,sender_id,tags FROM instagram_contact_tags ORDER BY connection_id,sender_id")).rows;
 }
 async function databaseSnapshot() {
-  const tables = (await pool.query("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename"))
-    .rows;
+  const tables = (await pool.query("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")).rows;
   const snapshot: Record<string, unknown> = {};
   for (const { tablename } of tables) {
     assert.match(tablename, /^[a-z_]+$/);
-    snapshot[tablename] = (
-      await pool.query(
-        `SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]') AS value FROM "${tablename}" t`,
-      )
-    ).rows[0].value;
+    snapshot[tablename] = (await pool.query(`SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]') AS value FROM "${tablename}" t`)).rows[0].value;
   }
   return snapshot;
 }
@@ -223,21 +188,14 @@ test("CSV tag preview uses existing contacts and exported v1 without changing an
   await add("00123");
   await add("00123", second);
   await add("90071992547409931234567890");
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'00123',ARRAY['old'])",
-    [workspace, connection],
-  );
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'00123',ARRAY['old'])", [workspace, connection]);
   const before = await databaseSnapshot();
   const exported = await csv.exportContactCsv(tracked(), user);
   const roundtrip = await previewRequest({ csv: exported.body }, admin);
   assert.equal(roundtrip.status, 200);
   assert.equal((await roundtrip.json()).counts.unchanged, 3);
   const response = await previewRequest({
-    csv: previewCsv([
-      {},
-      { connection_id: second, tags_json: "[]" },
-      { sender_id: "'90071992547409931234567890", tags_json: '["=formula","<script>"]' },
-    ]),
+    csv: previewCsv([{}, { connection_id: second, tags_json: "[]" }, { sender_id: "'90071992547409931234567890", tags_json: '["=formula","<script>"]' }]),
   });
   assert.equal(response.status, 200, await response.clone().text());
   const result = await response.json();
@@ -261,24 +219,10 @@ test("CSV tag preview separates all duplicate identities invalid scope and unava
   await add("00123");
   await add("00123", second);
   const other = randomUUID();
-  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'foreign')", [
-    other,
-    foreign,
-  ]);
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'foreign')", [other, foreign]);
   await add("00123", other, foreign);
   const response = await previewRequest({
-    csv: previewCsv([
-      {},
-      {},
-      { connection_id: second },
-      { workspace_id: foreign },
-      { connection_id: other },
-      { sender_id: "'missing" },
-      { tags_json: '[""]' },
-      { sender_id: "00123" },
-      { format_version: "2" },
-      { channel: "telegram" },
-    ]),
+    csv: previewCsv([{}, {}, { connection_id: second }, { workspace_id: foreign }, { connection_id: other }, { sender_id: "'missing" }, { tags_json: '[""]' }, { sender_id: "00123" }, { format_version: "2" }, { channel: "telegram" }]),
   });
   assert.equal(response.status, 200);
   const result = await response.json();
@@ -298,15 +242,7 @@ test("CSV tag preview enforces admin same-origin shape file and record limits", 
   await pool.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [admin, owner]);
   assert.equal((await previewRequest(body, admin)).status, 403);
   assert.equal((await previewRequest(body, owner, "", "https://other.test")).status, 403);
-  for (const input of [
-    {},
-    { csv: 3 },
-    { ...body, apply: true },
-    { csv: '"broken' },
-    { csv: "wrong,header" },
-    { csv: previewCsv([]) + "\0" },
-  ])
-    assert.equal((await previewRequest(input)).status, 400);
+  for (const input of [{}, { csv: 3 }, { ...body, apply: true }, { csv: '"broken' }, { csv: "wrong,header" }, { csv: previewCsv([]) + "\0" }]) assert.equal((await previewRequest(input)).status, 400);
   assert.equal((await previewRequest(body, owner, "?apply=true")).status, 400);
   assert.equal((await previewRequest({ csv: "x".repeat(128 * 1024 + 1) })).status, 422);
   assert.equal((await previewRequest({ csv: previewCsv(Array.from({ length: 501 }, () => ({}))) })).status, 422);
@@ -345,10 +281,7 @@ test("CSV preview rechecks a role downgrade and contact deletion in the final re
 
 test("CSV preview shows tag clearing and rejects invalid rows before duplicate detection", async () => {
   await add("00123");
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'00123',ARRAY['old'])",
-    [workspace, connection],
-  );
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'00123',ARRAY['old'])", [workspace, connection]);
   const result = await previewContactCsv(pool, user, { csv: previewCsv([{ tags_json: "[]" }, { tags_json: '[""]' }]) });
   assert.equal(result.rows[0]!.status, "changed");
   assert.deepEqual(result.rows[0]!.proposed_tags, []);
@@ -373,15 +306,8 @@ test("CSV tag apply writes exactly the changed rows once and a repeated file cha
   await add("00123");
   await add("00123", second);
   await add("90071992547409931234567890");
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'00123',ARRAY['old']),($1,$3,'00123',ARRAY['kept'])",
-    [workspace, connection, second],
-  );
-  const file = previewCsv([
-    {},
-    { connection_id: second, tags_json: '["kept"]' },
-    { sender_id: "'90071992547409931234567890", tags_json: '["=formula","<script>"]' },
-  ]);
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'00123',ARRAY['old']),($1,$3,'00123',ARRAY['kept'])", [workspace, connection, second]);
+  const file = previewCsv([{}, { connection_id: second, tags_json: '["kept"]' }, { sender_id: "'90071992547409931234567890", tags_json: '["=formula","<script>"]' }]);
   const before = await databaseSnapshot();
   const preview = await previewContactCsv(pool, { id: admin, email: "admin@example.test" }, { csv: file });
   assert.equal(preview.counts.changed, 2);
@@ -433,10 +359,7 @@ test("CSV tag apply refuses a file with an invalid duplicate or unavailable row 
   await add("00123");
   await add("00123", second);
   const other = randomUUID();
-  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'foreign')", [
-    other,
-    foreign,
-  ]);
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'foreign')", [other, foreign]);
   await add("00123", other, foreign);
   const before = await databaseSnapshot();
   for (const [bad, status] of [
@@ -470,10 +393,7 @@ test("CSV tag apply refuses a file with an invalid duplicate or unavailable row 
 test("CSV duplicate detection compares account IDs without case in the preview and the apply", async () => {
   // An account ID with letters, so its uppercase spelling is a different string for the same account.
   const lettered = "abcdef12-3456-4789-8abc-def012345678";
-  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'125',true)", [
-    lettered,
-    workspace,
-  ]);
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'125',true)", [lettered, workspace]);
   await add("00123", lettered);
   const file = previewCsv([
     { connection_id: lettered, tags_json: '["a"]' },
@@ -502,10 +422,7 @@ test("CSV duplicate detection compares account IDs without case in the preview a
 test("CSV tag apply refuses stale rows after an edit committed before its read or started after its locks", async () => {
   await add("00123");
   await add("456");
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'00123',ARRAY['old'])",
-    [workspace, connection],
-  );
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'00123',ARRAY['old'])", [workspace, connection]);
   const file = previewCsv([{}, { sender_id: "'456", tags_json: '["second"]' }]);
   const preview = await previewContactCsv(pool, user, { csv: file });
   assert.equal(preview.counts.changed, 2);
@@ -539,11 +456,7 @@ test("CSV tag apply refuses stale rows after an edit committed before its read o
     await lockContact(holder, connection, "00123");
     statements.length = 0;
     const applying = applyContactCsv(tracked(), user, body);
-    await waitFor(
-      async () =>
-        (await pool.query("SELECT count(*)::int AS waiting FROM pg_locks WHERE locktype='advisory' AND NOT granted"))
-          .rows[0].waiting === 1,
-    );
+    await waitFor(async () => (await pool.query("SELECT count(*)::int AS waiting FROM pg_locks WHERE locktype='advisory' AND NOT granted")).rows[0].waiting === 1);
     assert.equal(
       statements.some((sql) => sql.includes(snapshotSql)),
       false,
@@ -580,8 +493,7 @@ test("CSV tag apply refuses when a changed contact disappears between its read a
   const preview = await previewContactCsv(pool, user, { csv: file });
   const before = await databaseSnapshot();
   afterQuery = async (_client, sql) => {
-    if (sql.includes("statement_timestamp() AS checked_at"))
-      await pool.query("DELETE FROM instagram_comment_events WHERE sender_id='456'");
+    if (sql.includes("statement_timestamp() AS checked_at")) await pool.query("DELETE FROM instagram_comment_events WHERE sender_id='456'");
   };
   const response = await applyRequest(applyBody(file, preview));
   assert.equal(response.status, 409, await response.clone().text());
@@ -619,14 +531,10 @@ test("CSV tag apply enforces admin membership query shape and body limits withou
     { csv: file, expected: [{ row: 1, current_tags: [], extra: true }] },
   ])
     assert.equal((await applyRequest(input)).status, 400, JSON.stringify(input).slice(0, 80));
-  assert.equal(
-    (await applyRequest(undefined, owner, "", "x".repeat(CONTACT_IMPORT_APPLY_REQUEST_BYTES + 1))).status,
-    413,
-  );
+  assert.equal((await applyRequest(undefined, owner, "", "x".repeat(CONTACT_IMPORT_APPLY_REQUEST_BYTES + 1))).status, 413);
   // The preview recheck inside the transaction refuses a role lost after workspaceFor.
   afterQuery = async (_client, sql) => {
-    if (sql.includes("contact-import:"))
-      await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [owner]);
+    if (sql.includes("contact-import:")) await pool.query("UPDATE workspace_members SET role='agent' WHERE user_id=$1", [owner]);
   };
   assert.equal((await applyRequest(body)).status, 403);
   afterQuery = undefined;
@@ -643,10 +551,7 @@ test("CSV GET returns fixed download headers and owner/admin empty files, never 
     assert.equal(response.headers.get("content-type"), "text/csv; charset=utf-8");
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.equal(response.headers.get("x-content-type-options"), "nosniff");
-    assert.match(
-      response.headers.get("content-disposition") ?? "",
-      /^attachment; filename="auto-chatter-contacts-v1-\d{4}-\d{2}-\d{2}\.csv"$/,
-    );
+    assert.match(response.headers.get("content-disposition") ?? "", /^attachment; filename="auto-chatter-contacts-v1-\d{4}-\d{2}-\d{2}\.csv"$/);
     const bytes = Buffer.from(await response.arrayBuffer());
     assert.equal(bytes.subarray(0, 3).toString("hex"), "efbbbf");
     assert.deepEqual(parseContactCsv(bytes.toString()), [Array.from(csv.CONTACT_CSV_HEADER)]);
@@ -679,16 +584,8 @@ test("CSV deduplicates comments per connection, includes disconnected connection
   await add("90071992547409931234567890");
   await add("00123", second);
   await pool.query("UPDATE instagram_connections SET username=$2 WHERE id=$1", [connection, " \u200b＝SUM(1,2)"]);
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'00123',ARRAY['한글','" +
-      '"' +
-      ";=next','alpha'])",
-    [workspace, connection],
-  );
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused,handoff_paused) VALUES($1,$2,'00123',false,true)",
-    [workspace, connection],
-  );
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'00123',ARRAY['한글','" + '"' + ";=next','alpha'])", [workspace, connection]);
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused,handoff_paused) VALUES($1,$2,'00123',false,true)", [workspace, connection]);
   const ids = {
     zero: await field("zero", "number", "0"),
     no: await field("no", "boolean", "false"),
@@ -743,28 +640,10 @@ test("CSV excludes other workspaces and raw message/credential/evidence/private-
   await add("00123");
   await field("allowed text", "text", '"stored custom value"');
   await pool.query("UPDATE instagram_connections SET access_token_encrypted='TOKEN-SECRET' WHERE id=$1", [connection]);
-  await pool.query(
-    "INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at) VALUES($1,$2,'987','dm','RAW-DM-SECRET','text',now())",
-    [workspace, connection],
-  );
-  await pool.query(
-    "INSERT INTO instagram_inbox_reminders(workspace_id,connection_id,recipient_id,creator_id,due_at,note) VALUES($1,$2,'987',$3,now(),'REMINDER-SECRET')",
-    [workspace, connection, agent],
-  );
-  const tables = (
-    await pool.query("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")
-  ).rows.map((x) => x.tablename as string);
-  const snapshot = async () =>
-    Promise.all(
-      tables.map(
-        async (name) =>
-          (
-            await pool.query(
-              `SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]') AS rows FROM "${name}" t`,
-            )
-          ).rows[0].rows,
-      ),
-    );
+  await pool.query("INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at) VALUES($1,$2,'987','dm','RAW-DM-SECRET','text',now())", [workspace, connection]);
+  await pool.query("INSERT INTO instagram_inbox_reminders(workspace_id,connection_id,recipient_id,creator_id,due_at,note) VALUES($1,$2,'987',$3,now(),'REMINDER-SECRET')", [workspace, connection, agent]);
+  const tables = (await pool.query("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")).rows.map((x) => x.tablename as string);
+  const snapshot = async () => Promise.all(tables.map(async (name) => (await pool.query(`SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]') AS rows FROM "${name}" t`)).rows[0].rows));
   const before = await snapshot();
   let readonly = false;
   afterQuery = async (client, sql) => {
@@ -787,10 +666,7 @@ test("CSV excludes other workspaces and raw message/credential/evidence/private-
 test("all batches use the membership snapshot while fields/tags/archives and deletion change concurrently", async () => {
   for (const sender of ["1", "2", "3"]) await add(sender);
   const f = await field("saved", "text", '"before"', false, "3");
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'3',ARRAY['before'])",
-    [workspace, connection],
-  );
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'3',ARRAY['before'])", [workspace, connection]);
   let changed = false;
   afterQuery = async (_client, sql) => {
     if (!changed && sql.includes("WITH contacts AS")) {
@@ -842,10 +718,7 @@ test("internal row and UTF-8 byte limits rollback with no successful partial fil
 });
 
 test("production row cap responds with a JSON error and no attachment rather than a truncated CSV", async () => {
-  await pool.query(
-    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,n::text,'media',n::text,'x' FROM generate_series(1,5001) n",
-    [workspace, connection],
-  );
+  await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,n::text,'media',n::text,'x' FROM generate_series(1,5001) n", [workspace, connection]);
   const response = await request();
   assert.equal(response.status, 422, await response.clone().text());
   assert.equal(response.headers.has("content-disposition"), false);
@@ -854,16 +727,14 @@ test("production row cap responds with a JSON error and no attachment rather tha
 
 test("query failure rolls back and real statement timeout destroys the client without reusing a pending query", async () => {
   await add("1");
-  changeQuery = (query) =>
-    query.text.includes("WITH contacts AS") ? { ...query, text: "SELECT does_not_exist FROM nowhere" } : query;
+  changeQuery = (query) => (query.text.includes("WITH contacts AS") ? { ...query, text: "SELECT does_not_exist FROM nowhere" } : query);
   await assert.rejects(csv.exportContactCsv(tracked(), user), { code: "42P01" });
   assert.ok(statements.includes("ROLLBACK"));
   assert.equal(releases.length, 1);
   assert.notEqual(releases[0], true);
   statements.length = 0;
   releases.length = 0;
-  changeQuery = (query) =>
-    query.text.includes("WITH contacts AS") ? { ...query, text: "SELECT pg_sleep(5)", values: [] } : query;
+  changeQuery = (query) => (query.text.includes("WITH contacts AS") ? { ...query, text: "SELECT pg_sleep(5)", values: [] } : query);
   await assert.rejects(csv.exportContactCsv(tracked(), user, { timeoutMs: 100 }), {
     status: 503,
     message: "contact_export_timeout",
@@ -880,14 +751,13 @@ test("effective pause exports manual and handoff causes without implying deliver
     [false, true],
     [true, true],
   ]) {
-    await pool.query(
-      "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused,handoff_paused) VALUES($1,$2,'00123',$3,$4) ON CONFLICT(workspace_id,connection_id,sender_id) DO UPDATE SET paused=$3,handoff_paused=$4",
-      [workspace, connection, manual, handoff],
-    );
-    assert.equal(
-      records((await csv.exportContactCsv(tracked(), user)).body)[0]!.automation_paused,
-      String(manual || handoff),
-    );
+    await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused,handoff_paused) VALUES($1,$2,'00123',$3,$4) ON CONFLICT(workspace_id,connection_id,sender_id) DO UPDATE SET paused=$3,handoff_paused=$4", [
+      workspace,
+      connection,
+      manual,
+      handoff,
+    ]);
+    assert.equal(records((await csv.exportContactCsv(tracked(), user)).body)[0]!.automation_paused, String(manual || handoff));
   }
   await pool.query("UPDATE instagram_connections SET username='' WHERE id=$1", [connection]);
   assert.equal(records((await csv.exportContactCsv(tracked(), user)).body)[0]!.connection_username, "'");
@@ -911,20 +781,13 @@ const asOf = "2026-10-10T03:00:00.000000Z";
 // listContacts evaluates at statement_timestamp(); pin it as settings.db.test.ts relativeClock does.
 function listClock(): Pool {
   return {
-    query: async (sql: string, values: unknown[] = []) =>
-      pool.query(sql.replace("statement_timestamp()", `'${asOf}'::timestamptz`), values),
+    query: async (sql: string, values: unknown[] = []) => pool.query(sql.replace("statement_timestamp()", `'${asOf}'::timestamptz`), values),
   } as unknown as Pool;
 }
 // The export takes its one evaluation time from the exported_at read (transaction_timestamp()); pin that read.
-const exportClock = (query: QueryConfig) =>
-  query.text.includes("transaction_timestamp()")
-    ? { ...query, text: query.text.replace("transaction_timestamp()", `'${asOf}'::timestamptz`) }
-    : query;
+const exportClock = (query: QueryConfig) => (query.text.includes("transaction_timestamp()") ? { ...query, text: query.text.replace("transaction_timestamp()", `'${asOf}'::timestamptz`) } : query);
 async function comment(sender: string, at: string, conn = connection) {
-  await pool.query(
-    "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$4,'RAW COMMENT SECRET',$5)",
-    [workspace, conn, randomUUID(), sender, at],
-  );
+  await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$4,'RAW COMMENT SECRET',$5)", [workspace, conn, randomUUID(), sender, at]);
 }
 async function segmentFixture() {
   // Latest comments, in Asia/Seoul (the workspace default) relative to asOf (12:00 on 2026-10-10 local).
@@ -943,14 +806,7 @@ async function segmentFixture() {
     ["e", ["lead"], second],
   ] as const)
     await saveContactTags(pool, user, conn, sender, { tags });
-  const field = async (name: string, type: string) =>
-    (
-      await pool.query("INSERT INTO instagram_contact_fields(workspace_id,name,type) VALUES($1,$2,$3) RETURNING id", [
-        workspace,
-        name,
-        type,
-      ])
-    ).rows[0].id as string;
+  const field = async (name: string, type: string) => (await pool.query("INSERT INTO instagram_contact_fields(workspace_id,name,type) VALUES($1,$2,$3) RETURNING id", [workspace, name, type])).rows[0].id as string;
   const score = await field("score", "number"),
     plan = await field("plan", "text");
   for (const [sender, id, value, conn] of [
@@ -960,10 +816,7 @@ async function segmentFixture() {
     ["a", plan, '"pro"', connection],
     ["c", plan, '"pro"', connection],
   ] as const)
-    await pool.query(
-      "INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,$3,$4,$5::jsonb)",
-      [workspace, conn, sender, id, value],
-    );
+    await pool.query("INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,$3,$4,$5::jsonb)", [workspace, conn, sender, id, value]);
   for (const [sender, decision] of [
     ["a", "grant"],
     ["c", "revoke"],
@@ -984,8 +837,7 @@ async function segmentFixture() {
     });
   return { score, plan };
 }
-const pairs = (rows: { connection_id: string; sender_id: string }[]) =>
-  rows.map((row) => `${row.connection_id === second ? "second" : "first"}:${row.sender_id}`).sort();
+const pairs = (rows: { connection_id: string; sender_id: string }[]) => rows.map((row) => `${row.connection_id === second ? "second" : "first"}:${row.sender_id}`).sort();
 
 test("segment export selects exactly the contact list's segment contacts for every condition kind at one clock", async () => {
   const { score, plan } = await segmentFixture();
@@ -1014,14 +866,8 @@ test("segment export selects exactly the contact list's segment contacts for eve
       },
       ["a", "c", "second:e"],
     ],
-    [
-      { tag: "vip", field_id: score, field_operator: "gte", field_value: 5, condition_operator: "or" },
-      ["a", "c", "second:e"],
-    ],
-    [
-      { last_comment_from: "2026-10-09T00:00:00.000Z", last_comment_before: "2026-10-10T02:00:00.000Z" },
-      ["a", "b", "g"],
-    ],
+    [{ tag: "vip", field_id: score, field_operator: "gte", field_value: 5, condition_operator: "or" }, ["a", "c", "second:e"]],
+    [{ last_comment_from: "2026-10-09T00:00:00.000Z", last_comment_before: "2026-10-10T02:00:00.000Z" }, ["a", "b", "g"]],
     [{ last_comment_days: 3 }, ["a", "b", "d", "g", "second:e"]],
     [{ last_comment_period: "today" }, ["a", "d", "f", "g", "second:e"]],
     [{ consent_purpose: "marketing", consent_state: "granted" }, ["a"]],
@@ -1039,8 +885,7 @@ test("segment export selects exactly the contact list's segment contacts for eve
     const segment = await createContactSegment(pool, user, { name: `segment ${index}`, ...definition });
     const listed = await listContacts(listClock(), user, new URLSearchParams({ segment_id: segment.id }));
     assert.equal(listed.after, null);
-    const names = (rows: { connection_id: string; sender_id: string }[]) =>
-      pairs(rows).map((pair) => pair.replace(/^first:/, ""));
+    const names = (rows: { connection_id: string; sender_id: string }[]) => pairs(rows).map((pair) => pair.replace(/^first:/, ""));
     assert.deepEqual(names(listed.contacts), [...expected].sort(), JSON.stringify(definition));
     const tracking: (query: QueryConfig) => QueryConfig = exportClock;
     changeQuery = (query) => {
@@ -1052,11 +897,7 @@ test("segment export selects exactly the contact list's segment contacts for eve
     assert.equal(exported.exportedAt, asOf);
     assert.equal(exported.segmentId, segment.id);
     const rows = records(exported.body);
-    assert.deepEqual(
-      pairs(rows.map((row) => ({ connection_id: row.connection_id!, sender_id: decodeContactScalar(row.sender_id!) }))),
-      pairs(listed.contacts),
-      JSON.stringify(definition),
-    );
+    assert.deepEqual(pairs(rows.map((row) => ({ connection_id: row.connection_id!, sender_id: decodeContactScalar(row.sender_id!) }))), pairs(listed.contacts), JSON.stringify(definition));
     // The same v1 rows as the full export, in its order, filtered to the segment.
     const selected = new Set(rows.map((row) => `${row.connection_id}:${row.sender_id}`));
     assert.deepEqual(
@@ -1139,10 +980,7 @@ for (const count of [0, 1, 25, 26, 51])
     assert.equal(evaluations(), 1);
     assert.equal(detailReads(), Math.ceil(count / 25));
     const rows = records(exported.body);
-    assert.deepEqual(
-      pairs(rows.map((row) => ({ connection_id: row.connection_id!, sender_id: decodeContactScalar(row.sender_id!) }))),
-      pairs(listed),
-    );
+    assert.deepEqual(pairs(rows.map((row) => ({ connection_id: row.connection_id!, sender_id: decodeContactScalar(row.sender_id!) }))), pairs(listed));
     // The same v1 rows as the full export, in its order, filtered to the segment.
     assert.deepEqual(
       rows,
@@ -1182,10 +1020,7 @@ test("segment export refuses more than maxRows members before any detail read an
 test("segment selection counts toward the export deadline and a timeout destroys the client", async () => {
   const segment = await memberFixture(1);
   // The selection turns off the transaction's statement_timeout, so only the selection's own read timeout can stop it.
-  changeQuery = (query) =>
-    query.text.includes("evaluation AS MATERIALIZED")
-      ? { ...query, text: "SET LOCAL statement_timeout = 0; SELECT pg_sleep(5)", values: [] }
-      : query;
+  changeQuery = (query) => (query.text.includes("evaluation AS MATERIALIZED") ? { ...query, text: "SET LOCAL statement_timeout = 0; SELECT pg_sleep(5)", values: [] } : query);
   const started = performance.now();
   await assert.rejects(csv.exportContactCsv(tracked(), user, { timeoutMs: 100 }, segment.id), {
     status: 503,
@@ -1202,11 +1037,7 @@ test("segment export answers segment_not_found for archived missing and foreign 
   await add("00123");
   const archived = await createContactSegment(pool, user, { name: "archived" });
   await archiveContactSegment(pool, user, archived.id);
-  const foreignSegment = (
-    await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'foreign') RETURNING id", [
-      foreign,
-    ])
-  ).rows[0].id as string;
+  const foreignSegment = (await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,'foreign') RETURNING id", [foreign])).rows[0].id as string;
   for (const id of [archived.id, randomUUID(), foreignSegment]) {
     const response = await request(owner, `?segment_id=${id}`);
     assert.equal(response.status, 404);
@@ -1258,10 +1089,7 @@ test("segment export refuses an oversized selection whole, returns only the head
     assert.equal(response.headers.get("content-type"), "text/csv; charset=utf-8");
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.equal(response.headers.get("x-content-type-options"), "nosniff");
-    assert.match(
-      response.headers.get("content-disposition") ?? "",
-      new RegExp(`^attachment; filename="auto-chatter-contacts-v1-segment-${id}-\\d{4}-\\d{2}-\\d{2}\\.csv"$`),
-    );
+    assert.match(response.headers.get("content-disposition") ?? "", new RegExp(`^attachment; filename="auto-chatter-contacts-v1-segment-${id}-\\d{4}-\\d{2}-\\d{2}\\.csv"$`));
     const bytes = Buffer.from(await response.arrayBuffer());
     assert.equal(bytes.subarray(0, 3).toString("hex"), "efbbbf");
     const parsed = parseContactCsv(bytes.toString());

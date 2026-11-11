@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  checkInstagramSubscription,
-  classifySubscribedApps,
-  REQUIRED_SUBSCRIPTION_FIELDS,
-} from "./instagram-subscription-check.ts";
+import { checkInstagramSubscription, classifySubscribedApps, REQUIRED_SUBSCRIPTION_FIELDS } from "./instagram-subscription-check.ts";
 import { sealSecret } from "./secrets.ts";
 
 const key = Buffer.alloc(32, 3).toString("base64");
@@ -61,8 +57,7 @@ test("subscribed_apps is present only when one entry holds every required field,
     }),
     "unverified",
   );
-  for (const shape of [null, [], "text", {}, { data: "x" }, { data: [{ id: "a" }] }, { data: [null] }])
-    assert.equal(classifySubscribedApps(shape), "unverified", JSON.stringify(shape));
+  for (const shape of [null, [], "text", {}, { data: "x" }, { data: [{ id: "a" }] }, { data: [null] }]) assert.equal(classifySubscribedApps(shape), "unverified", JSON.stringify(shape));
 });
 
 test("the shared check reads me first and subscribed_apps only for the stored account", async () => {
@@ -108,13 +103,7 @@ test("the shared check reads me first and subscribed_apps only for the stored ac
     ["me 5xx", graph(() => Response.json({ error: { code: 190 } }, { status: 500 })), "unverified", false, 1],
     ["me network", graph(() => Promise.reject(new TypeError("fetch failed"))), "unverified", false, 1],
     ["me shape", graph(() => Response.json({ id: "123" })), "unverified", false, 1],
-    [
-      "me redirect",
-      graph(() => new Response(null, { status: 302, headers: { Location: "https://other.test" } })),
-      "unverified",
-      false,
-      1,
-    ],
+    ["me redirect", graph(() => new Response(null, { status: 302, headers: { Location: "https://other.test" } })), "unverified", false, 1],
     [
       "subscribed_apps 5xx",
       graph(
@@ -137,11 +126,7 @@ test("the shared check reads me first and subscribed_apps only for the stored ac
     ],
   ];
   for (const [label, provider, status, identityAccepted, calls] of cases) {
-    assert.deepEqual(
-      await checkInstagramSubscription(connection, key, "v26.0", provider.fetchImpl),
-      { status, identityAccepted },
-      label,
-    );
+    assert.deepEqual(await checkInstagramSubscription(connection, key, "v26.0", provider.fetchImpl), { status, identityAccepted }, label);
     assert.equal(provider.paths.length, calls, label);
   }
 });
@@ -156,10 +141,7 @@ test("a token that does not decrypt makes no Meta request", async () => {
       status: "undecryptable",
       identityAccepted: false,
     });
-  assert.deepEqual(
-    await checkInstagramSubscription(connection, Buffer.alloc(32, 4).toString("base64"), "v26.0", provider.fetchImpl),
-    { status: "undecryptable", identityAccepted: false },
-  );
+  assert.deepEqual(await checkInstagramSubscription(connection, Buffer.alloc(32, 4).toString("base64"), "v26.0", provider.fetchImpl), { status: "undecryptable", identityAccepted: false });
   assert.deepEqual(provider.paths, []);
 });
 

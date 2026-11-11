@@ -1,12 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Pool } from "pg";
-import {
-  clearExpiredUnmatchedReplies,
-  processNextFollowReply,
-  reconcileUnmatchedReplies,
-  recoverStaleFollowReplies,
-} from "./follow-flow.ts";
+import { clearExpiredUnmatchedReplies, processNextFollowReply, reconcileUnmatchedReplies, recoverStaleFollowReplies } from "./follow-flow.ts";
 import type { FollowTransport } from "./follow-transport.ts";
 import { deliveryRecipientOptedOut } from "./channel-consent.ts";
 import { evaluatePrivateReply } from "./reply-policy.ts";
@@ -108,13 +103,7 @@ async function privateReplyRecipientOptedOut(pool: Pool, row: ClaimedRow): Promi
   });
 }
 
-export async function processNextPrivateReply(
-  pool: Pool,
-  transport: PrivateReplyTransport,
-  now: () => Date = () => new Date(),
-  connectionId: string,
-  correlationId?: string,
-): Promise<boolean> {
+export async function processNextPrivateReply(pool: Pool, transport: PrivateReplyTransport, now: () => Date = () => new Date(), connectionId: string, correlationId?: string): Promise<boolean> {
   if (!connectionId) throw new Error("Instagram connection ID is required");
   const attemptId = randomUUID();
   const claimed = await pool.query<ClaimedRow>(
@@ -149,35 +138,20 @@ export async function processNextPrivateReply(
     try {
       optedOut = await privateReplyRecipientOptedOut(pool, row);
     } catch {
-      await updateClaim(
-        pool,
-        "UPDATE private_reply_outbox SET status='pending',attempt_id=NULL,attempt_started_at=NULL,next_attempt_at=now()+interval '1 minute',failure_code='consent_unavailable' WHERE id=$1 AND status='sending' AND attempt_id=$2",
-        [row.id, attemptId],
-      );
+      await updateClaim(pool, "UPDATE private_reply_outbox SET status='pending',attempt_id=NULL,attempt_started_at=NULL,next_attempt_at=now()+interval '1 minute',failure_code='consent_unavailable' WHERE id=$1 AND status='sending' AND attempt_id=$2", [row.id, attemptId]);
       return true;
     }
     if (!optedOut) return false;
-    await updateClaim(
-      pool,
-      "UPDATE private_reply_outbox SET status='blocked',failure_code='recipient_opted_out' WHERE id=$1 AND status='sending' AND attempt_id=$2",
-      [row.id, attemptId],
-    );
+    await updateClaim(pool, "UPDATE private_reply_outbox SET status='blocked',failure_code='recipient_opted_out' WHERE id=$1 AND status='sending' AND attempt_id=$2", [row.id, attemptId]);
     return true;
   };
   if (await stopForConsent()) return true;
   if (row.follow_config && transport.supportsFollowReplies === false) {
-    await updateClaim(
-      pool,
-      "UPDATE private_reply_outbox SET status='blocked',failure_code='follow_requires_instagram_login' WHERE id=$1 AND status='sending' AND attempt_id=$2",
-      [row.id, attemptId],
-    );
+    await updateClaim(pool, "UPDATE private_reply_outbox SET status='blocked',failure_code='follow_requires_instagram_login' WHERE id=$1 AND status='sending' AND attempt_id=$2", [row.id, attemptId]);
     return true;
   }
 
-  const connectionResult = await pool.query<ConnectionRow>(
-    "SELECT account_id, active FROM instagram_connections WHERE id = $1 AND workspace_id = $2",
-    [row.connection_id, row.workspace_id],
-  );
+  const connectionResult = await pool.query<ConnectionRow>("SELECT account_id, active FROM instagram_connections WHERE id = $1 AND workspace_id = $2", [row.connection_id, row.workspace_id]);
   const connection = connectionResult.rows[0];
   if (!connection) throw new Error("Claimed reply has no connection");
   const request: PrivateReplyRequest = {
@@ -190,20 +164,11 @@ export async function processNextPrivateReply(
     mediaId: row.media_id,
     senderId: row.sender_id,
     text: row.private_reply_text,
-    ...(row.follow_config &&
-    typeof row.follow_config === "object" &&
-    "confirmation_button_title" in row.follow_config &&
-    typeof row.follow_config.confirmation_button_title === "string"
-      ? { confirmationButtonTitle: row.follow_config.confirmation_button_title }
-      : {}),
+    ...(row.follow_config && typeof row.follow_config === "object" && "confirmation_button_title" in row.follow_config && typeof row.follow_config.confirmation_button_title === "string" ? { confirmationButtonTitle: row.follow_config.confirmation_button_title } : {}),
   };
 
   if (!connection.active) {
-    await updateClaim(
-      pool,
-      "UPDATE private_reply_outbox SET status = 'blocked', failure_code = 'inactive_connection' WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-      [row.id, attemptId],
-    );
+    await updateClaim(pool, "UPDATE private_reply_outbox SET status = 'blocked', failure_code = 'inactive_connection' WHERE id = $1 AND status = 'sending' AND attempt_id = $2", [row.id, attemptId]);
     return true;
   }
 
@@ -211,18 +176,14 @@ export async function processNextPrivateReply(
   try {
     verification = await transport.verify(request);
   } catch {
-    await updateClaim(
-      pool,
-      "UPDATE private_reply_outbox SET status = 'pending', attempt_id = NULL, attempt_started_at = NULL, next_attempt_at = now() + interval '1 minute', failure_code = 'verification_failed' WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-      [row.id, attemptId],
-    );
+    await updateClaim(pool, "UPDATE private_reply_outbox SET status = 'pending', attempt_id = NULL, attempt_started_at = NULL, next_attempt_at = now() + interval '1 minute', failure_code = 'verification_failed' WHERE id = $1 AND status = 'sending' AND attempt_id = $2", [
+      row.id,
+      attemptId,
+    ]);
     return true;
   }
 
-  const currentConnection = await pool.query<{ active: boolean }>(
-    "SELECT active FROM instagram_connections WHERE id = $1 AND workspace_id = $2",
-    [row.connection_id, row.workspace_id],
-  );
+  const currentConnection = await pool.query<{ active: boolean }>("SELECT active FROM instagram_connections WHERE id = $1 AND workspace_id = $2", [row.connection_id, row.workspace_id]);
   const policy = evaluatePrivateReply({
     now: now(),
     commentCreatedAt: verification.commentCreatedAt,
@@ -232,11 +193,7 @@ export async function processNextPrivateReply(
     isOwnComment: verification.isOwnComment === true || request.senderId === request.accountId,
   });
   if (!policy.eligible) {
-    await updateClaim(
-      pool,
-      "UPDATE private_reply_outbox SET status = 'blocked', failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-      [row.id, attemptId, policy.reason],
-    );
+    await updateClaim(pool, "UPDATE private_reply_outbox SET status = 'blocked', failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2", [row.id, attemptId, policy.reason]);
     return true;
   }
 
@@ -279,20 +236,12 @@ export async function processNextPrivateReply(
     [row.id],
   );
   if (source.rows[0]?.enabled !== true) {
-    await updateClaim(
-      pool,
-      "UPDATE private_reply_outbox SET status='blocked',failure_code=$3 WHERE id=$1 AND status='sending' AND attempt_id=$2",
-      [row.id, attemptId, source.rows[0]?.from_flow ? "inactive_flow" : "inactive_rule"],
-    );
+    await updateClaim(pool, "UPDATE private_reply_outbox SET status='blocked',failure_code=$3 WHERE id=$1 AND status='sending' AND attempt_id=$2", [row.id, attemptId, source.rows[0]?.from_flow ? "inactive_flow" : "inactive_rule"]);
     return true;
   }
   // The hourly budget counts this row from here on (#60). A transport can still stop before its POST, which
   // counts a call that was not made; the budget errs toward stopping early.
-  await updateClaim(
-    pool,
-    "UPDATE private_reply_outbox SET provider_called_at=now() WHERE id=$1 AND status='sending' AND attempt_id=$2",
-    [row.id, attemptId],
-  );
+  await updateClaim(pool, "UPDATE private_reply_outbox SET provider_called_at=now() WHERE id=$1 AND status='sending' AND attempt_id=$2", [row.id, attemptId]);
   let messageId: string;
   let recipientId: string | null = null;
   try {
@@ -303,17 +252,13 @@ export async function processNextPrivateReply(
   } catch (error) {
     if (error instanceof PreSendVerificationError) {
       if (error.disposition === "retry") {
-        await updateClaim(
-          pool,
-          "UPDATE private_reply_outbox SET status = 'pending', attempt_id = NULL, attempt_started_at = NULL, next_attempt_at = now() + interval '1 minute', failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-          [row.id, attemptId, error.failureCode],
-        );
+        await updateClaim(pool, "UPDATE private_reply_outbox SET status = 'pending', attempt_id = NULL, attempt_started_at = NULL, next_attempt_at = now() + interval '1 minute', failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2", [
+          row.id,
+          attemptId,
+          error.failureCode,
+        ]);
       } else {
-        await updateClaim(
-          pool,
-          "UPDATE private_reply_outbox SET status = 'blocked', failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-          [row.id, attemptId, error.failureCode],
-        );
+        await updateClaim(pool, "UPDATE private_reply_outbox SET status = 'blocked', failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2", [row.id, attemptId, error.failureCode]);
       }
       return true;
     }
@@ -341,18 +286,10 @@ export async function processNextPrivateReply(
       return true;
     }
     if (error instanceof ProviderRejectedError) {
-      await updateClaim(
-        pool,
-        "UPDATE private_reply_outbox SET status = 'failed', failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-        [row.id, attemptId, error.failureCode],
-      );
+      await updateClaim(pool, "UPDATE private_reply_outbox SET status = 'failed', failure_code = $3 WHERE id = $1 AND status = 'sending' AND attempt_id = $2", [row.id, attemptId, error.failureCode]);
       return true;
     }
-    await updateClaim(
-      pool,
-      "UPDATE private_reply_outbox SET status = 'unknown', failure_code = 'send_outcome_unknown' WHERE id = $1 AND status = 'sending' AND attempt_id = $2",
-      [row.id, attemptId],
-    );
+    await updateClaim(pool, "UPDATE private_reply_outbox SET status = 'unknown', failure_code = 'send_outcome_unknown' WHERE id = $1 AND status = 'sending' AND attempt_id = $2", [row.id, attemptId]);
     return true;
   }
 
@@ -389,10 +326,7 @@ export async function processNextPrivateReply(
 
 export async function recoverStalePrivateReplies(pool: Pool, olderThan: Date, connectionId: string): Promise<number> {
   if (!connectionId) throw new Error("Instagram connection ID is required");
-  const result = await pool.query(
-    "UPDATE private_reply_outbox SET status = 'unknown', failure_code = 'worker_interrupted', recovered_at = clock_timestamp() WHERE status = 'sending' AND attempt_started_at < $1 AND connection_id = $2",
-    [olderThan, connectionId],
-  );
+  const result = await pool.query("UPDATE private_reply_outbox SET status = 'unknown', failure_code = 'worker_interrupted', recovered_at = clock_timestamp() WHERE status = 'sending' AND attempt_started_at < $1 AND connection_id = $2", [olderThan, connectionId]);
   return result.rowCount ?? 0;
 }
 
@@ -409,11 +343,9 @@ export async function runPrivateReplyWorker(
   } = {},
 ): Promise<void> {
   if (!connectionId) throw new Error("Instagram connection ID is required");
-  if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 1)
-    throw new Error("pollIntervalMs must be a positive integer");
+  if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 1) throw new Error("pollIntervalMs must be a positive integer");
   const recoveryIntervalMs = options.recoveryIntervalMs ?? 60_000;
-  if (!Number.isInteger(recoveryIntervalMs) || recoveryIntervalMs < 1)
-    throw new Error("recoveryIntervalMs must be a positive integer");
+  if (!Number.isInteger(recoveryIntervalMs) || recoveryIntervalMs < 1) throw new Error("recoveryIntervalMs must be a positive integer");
   const now = options.now ?? (() => new Date());
   const recover = async (at: Date) => {
     const correlationId = randomUUID();
@@ -443,9 +375,7 @@ export async function runPrivateReplyWorker(
       await recover(new Date(currentTime - 10 * 60_000));
       nextRecoveryAt = currentTime + recoveryIntervalMs;
     }
-    const followed = options.follow
-      ? await processNextFollowReply(pool, connectionId, options.follow.transport, now, options.follow.accountId)
-      : false;
+    const followed = options.follow ? await processNextFollowReply(pool, connectionId, options.follow.transport, now, options.follow.accountId) : false;
     if (signal.aborted) break;
     const replied = await processNextPrivateReply(pool, transport, now, connectionId);
     if (followed || replied) continue;

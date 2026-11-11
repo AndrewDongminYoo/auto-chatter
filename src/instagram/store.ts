@@ -2,14 +2,7 @@ import type { Pool, PoolClient } from "pg";
 import type { InstagramComment } from "./webhook.ts";
 import { matchesCommentRule, type CommentRuleMatch } from "./comment-rule.ts";
 import { fieldWriteTargets, parseFlowDocument, webhookFieldIds, type FlowDocument } from "../app/flow-schema.ts";
-import {
-  flowWebhookPayload,
-  matchesFlowTrigger,
-  planFlowRun,
-  type FlowChanges,
-  type FlowPlan,
-  type ResumeEntry,
-} from "../app/flow-runtime.ts";
+import { flowWebhookPayload, matchesFlowTrigger, planFlowRun, type FlowChanges, type FlowPlan, type ResumeEntry } from "../app/flow-runtime.ts";
 import { lockContact, replySavedFields } from "../app/contact-fields.ts";
 
 const ACTION_TYPES = new Set(["add_tag", "remove_tag", "set_field"]);
@@ -85,10 +78,7 @@ export async function ingestComments(pool: Pool, comments: readonly InstagramCom
   try {
     await client.query("BEGIN");
     for (const comment of comments) {
-      const connections = await client.query<ConnectionRow>(
-        "SELECT id, workspace_id FROM instagram_connections WHERE account_id = $1 AND active = true",
-        [comment.accountId],
-      );
+      const connections = await client.query<ConnectionRow>("SELECT id, workspace_id FROM instagram_connections WHERE account_id = $1 AND active = true", [comment.accountId]);
       const connection = connections.rows[0];
       if (!connection) continue;
 
@@ -151,12 +141,7 @@ export async function ingestComments(pool: Pool, comments: readonly InstagramCom
 }
 
 // Starts the enabled flow published for this media, inside the comment's ingestion transaction.
-async function startFlowRun(
-  client: PoolClient,
-  connection: ConnectionRow,
-  eventId: string,
-  comment: InstagramComment,
-): Promise<void> {
+async function startFlowRun(client: PoolClient, connection: ConnectionRow, eventId: string, comment: InstagramComment): Promise<void> {
   const flows = await client.query<{ flow_id: string; version_id: string; version_no: number; definition: unknown }>(
     `SELECT f.id AS flow_id,v.id AS version_id,v.version_no,v.definition FROM flows f
      JOIN flow_versions v ON v.id=f.published_version_id AND v.flow_id=f.id
@@ -171,15 +156,10 @@ async function startFlowRun(
   if (document && hasActions(document)) {
     // A run that changes contact data takes the contact-write connection lock (see
     // lockContactConnection), so it serializes with data deletion and sees a disconnect.
-    const locked = await client.query(
-      "SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2 AND active FOR SHARE",
-      [connection.id, connection.workspace_id],
-    );
+    const locked = await client.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2 AND active FOR SHARE", [connection.id, connection.workspace_id]);
     if (!locked.rowCount) return;
   }
-  const writableFields = document
-    ? await lockRunContact(client, connection, document, comment.senderId)
-    : new Set<string>();
+  const writableFields = document ? await lockRunContact(client, connection, document, comment.senderId) : new Set<string>();
   const facts = await readContact(client, connection, comment.senderId);
   const plan: FlowPlan = document
     ? planFlowRun(document, facts, {
@@ -197,39 +177,17 @@ async function startFlowRun(
   const runs = await client.query<{ id: string }>(
     `INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,event_id,status,failure_code,resume_at,resume_node_id)
      VALUES($1,$2,$3,$4,$5,$6,$7,${resumeAtSql("$1", "$8", "$10")},$9) ON CONFLICT(flow_id,event_id) DO NOTHING RETURNING id`,
-    [
-      connection.workspace_id,
-      connection.id,
-      flow.flow_id,
-      flow.version_id,
-      eventId,
-      state.status,
-      state.failureCode,
-      state.delayMinutes,
-      state.resumeNodeId,
-      state.untilTime,
-    ],
+    [connection.workspace_id, connection.id, flow.flow_id, flow.version_id, eventId, state.status, state.failureCode, state.delayMinutes, state.resumeNodeId, state.untilTime],
   );
   const run = runs.rows[0];
   if (!run) return;
-  await recordPlan(
-    client,
-    connection,
-    { id: run.id, flowId: flow.flow_id, versionNo: flow.version_no },
-    { eventId, ...comment },
-    facts.stored,
-    plan,
-    0,
-  );
+  await recordPlan(client, connection, { id: run.id, flowId: flow.flow_id, versionNo: flow.version_no }, { eventId, ...comment }, facts.stored, plan, 0);
 }
 
 // Whether a run of this version may change contact data: an action, or a reply wait that saves the
 // reply into a field.
 function hasActions(document: FlowDocument): boolean {
-  return document.nodes.some(
-    (node) =>
-      ACTION_TYPES.has(node.type) || (node.type === "wait_for_reply" && node.config.save_field_id !== undefined),
-  );
+  return document.nodes.some((node) => ACTION_TYPES.has(node.type) || (node.type === "wait_for_reply" && node.config.save_field_id !== undefined));
 }
 
 // How a run is stored after a walk. A queued message followed by a reply wait leaves the run
@@ -242,10 +200,7 @@ function runState(plan: FlowPlan): {
   resumeNodeId: string | null;
 } {
   const none = { failureCode: null, delayMinutes: null, untilTime: null };
-  if (plan.status === "message")
-    return plan.wait_node_id === undefined
-      ? { ...none, status: "delivering", resumeNodeId: null }
-      : { ...none, status: "awaiting_reply", resumeNodeId: plan.wait_node_id };
+  if (plan.status === "message") return plan.wait_node_id === undefined ? { ...none, status: "delivering", resumeNodeId: null } : { ...none, status: "awaiting_reply", resumeNodeId: plan.wait_node_id };
   if (plan.status === "waiting")
     return {
       ...none,
@@ -265,26 +220,15 @@ function runState(plan: FlowPlan): {
 // a field from being archived before this transaction writes its value, and the contact lock is held
 // until commit, so another run or a manual edit cannot change this contact's tags or field values
 // between this run's read and its write: every recorded outcome is what was stored.
-async function lockRunContact(
-  client: PoolClient,
-  connection: ConnectionRow,
-  document: FlowDocument,
-  senderId: string,
-): Promise<Set<string>> {
+async function lockRunContact(client: PoolClient, connection: ConnectionRow, document: FlowDocument, senderId: string): Promise<Set<string>> {
   if (!hasActions(document)) return new Set();
-  const writable = await client.query<{ id: string }>(
-    "SELECT id::text FROM instagram_contact_fields WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND NOT archived FOR SHARE",
-    [connection.workspace_id, fieldWriteTargets(document)],
-  );
+  const writable = await client.query<{ id: string }>("SELECT id::text FROM instagram_contact_fields WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND NOT archived FOR SHARE", [connection.workspace_id, fieldWriteTargets(document)]);
   await lockContact(client, connection.id, senderId);
   return new Set(writable.rows.map((row) => row.id));
 }
 
 async function readContact(client: PoolClient, connection: ConnectionRow, senderId: string) {
-  const tags = await client.query<{ tags: string[] }>(
-    "SELECT tags FROM instagram_contact_tags WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3",
-    [connection.workspace_id, connection.id, senderId],
-  );
+  const tags = await client.query<{ tags: string[] }>("SELECT tags FROM instagram_contact_tags WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3", [connection.workspace_id, connection.id, senderId]);
   const fields = await client.query<{ field_id: string; value: unknown }>(
     `SELECT field_id::text,value FROM instagram_contact_field_values
      WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3`,
@@ -297,11 +241,7 @@ async function readContact(client: PoolClient, connection: ConnectionRow, sender
 // The fields this version's webhook nodes name that a published version of the workspace saves a reply
 // into (#47); the walk leaves them out of every payload. Read after the contact facts: a version is
 // published before any reply it saves, so a stored reply is never read without its version being seen here.
-async function webhookReplyFields(
-  client: PoolClient,
-  connection: ConnectionRow,
-  document: FlowDocument,
-): Promise<Set<string>> {
+async function webhookReplyFields(client: PoolClient, connection: ConnectionRow, document: FlowDocument): Promise<Set<string>> {
   return replySavedFields(client, connection.workspace_id, webhookFieldIds(document));
 }
 
@@ -314,14 +254,7 @@ type RunIdentity = { id: string; flowId: string; versionNo: number };
 // username or an Instagram identifier; the comment sender is stored
 // beside it only so person deletion finds the row. One delivery exists per run and node, and an endpoint
 // outside the workspace queues nothing; either case is recorded on the node's step as not_queued.
-async function queueWebhooks(
-  client: PoolClient,
-  connection: ConnectionRow,
-  run: RunIdentity,
-  senderId: string,
-  plan: FlowPlan,
-  steps: FlowPlan["steps"],
-): Promise<void> {
+async function queueWebhooks(client: PoolClient, connection: ConnectionRow, run: RunIdentity, senderId: string, plan: FlowPlan, steps: FlowPlan["steps"]): Promise<void> {
   for (const webhook of plan.webhooks ?? []) {
     const eventId = crypto.randomUUID();
     const queued = await client.query(
@@ -360,15 +293,7 @@ async function queueWebhooks(
 
 // Stores what one walk of a run produced: contact changes, the queued webhook deliveries and reply, and
 // the steps, numbered from firstSeq so a resumed run continues its path.
-async function recordPlan(
-  client: PoolClient,
-  connection: ConnectionRow,
-  run: RunIdentity,
-  comment: RunComment,
-  stored: readonly string[],
-  plan: FlowPlan,
-  firstSeq: number,
-): Promise<void> {
+async function recordPlan(client: PoolClient, connection: ConnectionRow, run: RunIdentity, comment: RunComment, stored: readonly string[], plan: FlowPlan, firstSeq: number): Promise<void> {
   const runId = run.id;
   await applyContactChanges(client, connection, comment.senderId, stored, plan.changes);
   const steps = [...plan.steps];
@@ -379,38 +304,18 @@ async function recordPlan(
       `INSERT INTO private_reply_outbox
         (workspace_id,connection_id,event_id,flow_run_id,comment_id,media_id,sender_id,private_reply_text)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING RETURNING id`,
-      [
-        connection.workspace_id,
-        connection.id,
-        comment.eventId,
-        runId,
-        comment.commentId,
-        comment.postId,
-        comment.senderId,
-        plan.text,
-      ],
+      [connection.workspace_id, connection.id, comment.eventId, runId, comment.commentId, comment.postId, comment.senderId, plan.text],
     );
     if (!queued.rowCount) {
       steps[steps.length - 1] = { ...steps[steps.length - 1]!, outcome: "duplicate_recipient" };
-      await client.query(
-        "UPDATE flow_runs SET status='skipped',failure_code='duplicate_recipient',resume_at=NULL,resume_node_id=NULL WHERE id=$1",
-        [runId],
-      );
+      await client.query("UPDATE flow_runs SET status='skipped',failure_code='duplicate_recipient',resume_at=NULL,resume_node_id=NULL WHERE id=$1", [runId]);
     }
   }
   await client.query(
     `INSERT INTO flow_step_runs(run_id,workspace_id,connection_id,seq,node_id,node_type,outcome)
      SELECT $1,$2,$3,$7+step.seq-1,step.node_id,step.node_type,step.outcome
      FROM unnest($4::text[],$5::text[],$6::text[]) WITH ORDINALITY AS step(node_id,node_type,outcome,seq)`,
-    [
-      runId,
-      connection.workspace_id,
-      connection.id,
-      steps.map((step) => step.node_id),
-      steps.map((step) => step.node_type),
-      steps.map((step) => step.outcome),
-      firstSeq,
-    ],
+    [runId, connection.workspace_id, connection.id, steps.map((step) => step.node_id), steps.map((step) => step.node_type), steps.map((step) => step.outcome), firstSeq],
   );
 }
 
@@ -485,12 +390,7 @@ const CLAIMED_RUN = `SELECT run.status,run.resume_node_id,f.enabled AND NOT f.ar
   LEFT JOIN private_reply_outbox reply ON reply.flow_run_id=run.id`;
 
 async function lockRunConnection(client: PoolClient, connectionId: string) {
-  return (
-    await client.query<{ workspace_id: string; active: boolean }>(
-      "SELECT workspace_id::text,active FROM instagram_connections WHERE id=$1 FOR SHARE",
-      [connectionId],
-    )
-  ).rows[0];
+  return (await client.query<{ workspace_id: string; active: boolean }>("SELECT workspace_id::text,active FROM instagram_connections WHERE id=$1 FOR SHARE", [connectionId])).rows[0];
 }
 
 async function resumeFlowRun(client: PoolClient, runId: string, connectionId: string): Promise<boolean> {
@@ -526,11 +426,7 @@ async function resumeFlowRun(client: PoolClient, runId: string, connectionId: st
 // even one delivered concurrently, advances neither that run again nor another run waiting on the
 // same person. A message ID that already started a DM trigger flow on the run's connection (a redelivery,
 // #291) advances no run either.
-export async function resumeRepliedFlowRun(
-  client: PoolClient,
-  message: { accountId: string; senderId: string; messageId: string; text: string; timestamp: Date },
-  early = false,
-): Promise<boolean> {
+export async function resumeRepliedFlowRun(client: PoolClient, message: { accountId: string; senderId: string; messageId: string; text: string; timestamp: Date }, early = false): Promise<boolean> {
   const since = early ? "reply.attempt_started_at" : "reply.sent_at";
   const unanswered = `NOT EXISTS(SELECT 1 FROM flow_runs answered WHERE answered.connection_id=run.connection_id
     AND answered.reply_message_id=$4)
@@ -561,29 +457,13 @@ export async function resumeRepliedFlowRun(
     );
     const run = claimed.rows[0];
     if (!run) continue;
-    await continueFlowRun(
-      client,
-      candidate.id,
-      candidate.connection_id,
-      connection,
-      run,
-      { node_id: run.resume_node_id, port: "replied" },
-      { text: message.text, messageId: message.messageId },
-    );
+    await continueFlowRun(client, candidate.id, candidate.connection_id, connection, run, { node_id: run.resume_node_id, port: "replied" }, { text: message.text, messageId: message.messageId });
     return true;
   }
 }
 
 // Continues a claimed run from where it stopped, under the connection lock its caller holds.
-async function continueFlowRun(
-  client: PoolClient,
-  runId: string,
-  connectionId: string,
-  connection: { workspace_id: string; active: boolean },
-  run: ClaimedRun,
-  entry: ResumeEntry,
-  reply?: { text: string; messageId: string },
-): Promise<void> {
+async function continueFlowRun(client: PoolClient, runId: string, connectionId: string, connection: { workspace_id: string; active: boolean }, run: ClaimedRun, entry: ResumeEntry, reply?: { text: string; messageId: string }): Promise<void> {
   // A delay or a time wait counts from when the run reaches it (resumeAtSql), and a time wait reads
   // the workspace time zone at that moment. A reply is recorded on the run even when it only cancels
   // it, because the message was still used up by this run.
@@ -592,19 +472,9 @@ async function continueFlowRun(
       `UPDATE flow_runs SET status=$2,failure_code=$3,resume_at=${resumeAtSql("flow_runs.workspace_id", "$4", "$8")},
          resume_node_id=$5,reply_message_id=coalesce($7,reply_message_id)
        WHERE id=$1 AND status=$6`,
-      [
-        runId,
-        state.status,
-        state.failureCode,
-        state.delayMinutes,
-        state.resumeNodeId,
-        run.status,
-        reply?.messageId ?? null,
-        state.untilTime,
-      ],
+      [runId, state.status, state.failureCode, state.delayMinutes, state.resumeNodeId, run.status, reply?.messageId ?? null, state.untilTime],
     );
-  const cancelled = (failureCode: string) =>
-    finish({ status: "cancelled", failureCode, delayMinutes: null, untilTime: null, resumeNodeId: null });
+  const cancelled = (failureCode: string) => finish({ status: "cancelled", failureCode, delayMinutes: null, untilTime: null, resumeNodeId: null });
   // Turning the flow off or losing the connection during a delay or a reply wait ends the run before
   // any node after it runs; turning it back on does not revive it.
   if (!connection.active) {
@@ -645,41 +515,18 @@ async function continueFlowRun(
         changes: { tags: new Map(), fields: new Map() },
       };
   await finish(runState(plan));
-  const next = await client.query<{ seq: number }>(
-    "SELECT coalesce(max(seq),-1)+1 AS seq FROM flow_step_runs WHERE run_id=$1",
-    [runId],
-  );
-  await recordPlan(
-    client,
-    owner,
-    { id: runId, flowId: run.flow_id, versionNo: run.version_no },
-    { eventId: run.event_id, commentId: run.comment_id, postId: run.media_id, senderId: run.sender_id },
-    facts.stored,
-    plan,
-    next.rows[0]!.seq,
-  );
+  const next = await client.query<{ seq: number }>("SELECT coalesce(max(seq),-1)+1 AS seq FROM flow_step_runs WHERE run_id=$1", [runId]);
+  await recordPlan(client, owner, { id: runId, flowId: run.flow_id, versionNo: run.version_no }, { eventId: run.event_id, commentId: run.comment_id, postId: run.media_id, senderId: run.sender_id }, facts.stored, plan, next.rows[0]!.seq);
 }
 
 // Writes a run's net tag and field changes under the contact lock taken in startFlowRun.
-async function applyContactChanges(
-  client: PoolClient,
-  connection: ConnectionRow,
-  senderId: string,
-  stored: readonly string[],
-  changes: FlowChanges,
-): Promise<void> {
+async function applyContactChanges(client: PoolClient, connection: ConnectionRow, senderId: string, stored: readonly string[], changes: FlowChanges): Promise<void> {
   const key = [connection.workspace_id, connection.id, senderId];
   if (changes.tags.size)
     await client.query(
       `INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,$3,$4::text[])
        ON CONFLICT(workspace_id,connection_id,sender_id) DO UPDATE SET tags=EXCLUDED.tags`,
-      [
-        ...key,
-        [
-          ...stored.filter((tag) => changes.tags.get(tag) !== false),
-          ...[...changes.tags].filter(([, member]) => member).map(([tag]) => tag),
-        ],
-      ],
+      [...key, [...stored.filter((tag) => changes.tags.get(tag) !== false), ...[...changes.tags].filter(([, member]) => member).map(([tag]) => tag)]],
     );
   if (changes.fields.size)
     await client.query(

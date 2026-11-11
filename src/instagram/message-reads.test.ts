@@ -13,8 +13,7 @@ const seen = {
   timestamp: 1569262485349,
   read: { mid: "aWdfZAG1faXRlbToxOklHTWVzc2FnZAUlEOjE3ODQx" },
 };
-const body = (...events: unknown[]) =>
-  bytes({ object: "instagram", entry: [{ id: "123", time: 1569262486134, messaging: events }] });
+const body = (...events: unknown[]) => bytes({ object: "instagram", entry: [{ id: "123", time: 1569262486134, messaging: events }] });
 
 test("a messaging_seen event becomes one read of one message", () => {
   assert.deepEqual(parseMessageReadEvents(body(seen)), [
@@ -61,12 +60,8 @@ test("malformed read events are skipped without failing the body", () => {
   assert.equal(parseMessageReadEvents(body(...malformed, seen)).length, 1);
   assert.deepEqual(parseMessageReadEvents(bytes({ object: "instagram", entry: [{ id: "123" }, null] })), []);
   assert.equal(parseMessageReadEvents(body({ ...seen, read: { mid: "m".repeat(512) } })).length, 1);
-  assert.deepEqual(
-    parseMessageReadEvents(body({ ...seen, timestamp: 253402300799999 }))[0]?.readAt,
-    new Date(253402300799999),
-  );
-  for (const invalid of [bytes({ object: "page", entry: [] }), bytes({ object: "instagram" }), bytes(null)])
-    assert.throws(() => parseMessageReadEvents(invalid));
+  assert.deepEqual(parseMessageReadEvents(body({ ...seen, timestamp: 253402300799999 }))[0]?.readAt, new Date(253402300799999));
+  for (const invalid of [bytes({ object: "page", entry: [] }), bytes({ object: "instagram" }), bytes(null)]) assert.throws(() => parseMessageReadEvents(invalid));
 });
 
 test("a read event is never an inbound message, postback or comment", () => {

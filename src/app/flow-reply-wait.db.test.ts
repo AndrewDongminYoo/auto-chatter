@@ -11,8 +11,7 @@ import { lockContact } from "./contact-fields.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
 const testUrl = new URL(databaseUrl);
-if (!["localhost", "127.0.0.1"].includes(testUrl.hostname) || testUrl.pathname !== "/automations_test")
-  throw new Error("TEST_DATABASE_URL must point at the local automations_test database");
+if (!["localhost", "127.0.0.1"].includes(testUrl.hostname) || testUrl.pathname !== "/automations_test") throw new Error("TEST_DATABASE_URL must point at the local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const userId = "11111111-1111-4111-8111-111111111111";
@@ -34,10 +33,7 @@ beforeEach(async () => {
      VALUES($1,$2,'owned-account',true,'token')`,
     [connectionId, workspaceId],
   );
-  await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'Size','text')", [
-    sizeField,
-    workspaceId,
-  ]);
+  await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'Size','text')", [sizeField, workspaceId]);
 });
 
 after(async () => pool.end());
@@ -51,8 +47,7 @@ function request(method: string, path: string, body?: unknown) {
     }),
     apiEnv,
     () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 
@@ -129,11 +124,7 @@ async function sendWhileReceiving(deliver: (at: Date) => Promise<void>): Promise
     {
       ...transport,
       send: async (reply) => {
-        const started = (
-          await pool.query<{ at: Date }>("SELECT attempt_started_at AS at FROM private_reply_outbox WHERE id=$1", [
-            reply.id,
-          ])
-        ).rows[0]!.at;
+        const started = (await pool.query<{ at: Date }>("SELECT attempt_started_at AS at FROM private_reply_outbox WHERE id=$1", [reply.id])).rows[0]!.at;
         deliveredAt = new Date(started.getTime() + 1);
         await deliver(deliveredAt);
         await new Promise((resolve) => setTimeout(resolve, 5));
@@ -143,8 +134,7 @@ async function sendWhileReceiving(deliver: (at: Date) => Promise<void>): Promise
     () => new Date(),
     connectionId,
   );
-  const sent = (await pool.query<{ sent_at: Date }>("SELECT max(sent_at) AS sent_at FROM private_reply_outbox"))
-    .rows[0]!;
+  const sent = (await pool.query<{ sent_at: Date }>("SELECT max(sent_at) AS sent_at FROM private_reply_outbox")).rows[0]!;
   assert.ok(deliveredAt! < sent.sent_at, "the DM must be dated before the reply was recorded as sent");
   return deliveredAt!;
 }
@@ -166,21 +156,11 @@ function dm(senderId: string, text: string, options: { at?: Date; id?: string; p
 }
 
 async function tagsOf(senderId: string): Promise<string[] | undefined> {
-  return (
-    await pool.query("SELECT tags FROM instagram_contact_tags WHERE connection_id=$1 AND sender_id=$2", [
-      connectionId,
-      senderId,
-    ])
-  ).rows[0]?.tags;
+  return (await pool.query("SELECT tags FROM instagram_contact_tags WHERE connection_id=$1 AND sender_id=$2", [connectionId, senderId])).rows[0]?.tags;
 }
 
 async function sizeOf(senderId: string): Promise<unknown> {
-  return (
-    await pool.query(
-      "SELECT value FROM instagram_contact_field_values WHERE connection_id=$1 AND sender_id=$2 AND field_id=$3",
-      [connectionId, senderId, sizeField],
-    )
-  ).rows[0]?.value;
+  return (await pool.query("SELECT value FROM instagram_contact_field_values WHERE connection_id=$1 AND sender_id=$2 AND field_id=$3", [connectionId, senderId, sizeField])).rows[0]?.value;
 }
 
 type Run = {
@@ -203,9 +183,7 @@ function outcomes(run: Run | undefined) {
 
 // Moves every sent reply back in time, so its wait is over or nearly over.
 async function sentMinutesAgo(minutes: number) {
-  await pool.query("UPDATE private_reply_outbox SET sent_at=now()-make_interval(mins=>$1) WHERE status='sent'", [
-    minutes,
-  ]);
+  await pool.query("UPDATE private_reply_outbox SET sent_at=now()-make_interval(mins=>$1) WHERE status='sent'", [minutes]);
 }
 
 // The text that starts the run claim (CLAIMED_RUN in store.ts). pg_stat_activity keeps only the first 1 kB of a
@@ -215,10 +193,7 @@ const RUN_CLAIM = "%FROM flow_runs run JOIN flows f%";
 
 async function waitForLock(pattern: string) {
   for (let attempt = 0; attempt < 100; attempt++) {
-    const waiting = await pool.query(
-      "SELECT 1 FROM pg_stat_activity WHERE wait_event_type IN ('Lock','advisory') AND query LIKE $1",
-      [pattern],
-    );
+    const waiting = await pool.query("SELECT 1 FROM pg_stat_activity WHERE wait_event_type IN ('Lock','advisory') AND query LIKE $1", [pattern]);
     if (waiting.rowCount) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -264,9 +239,7 @@ test("a reply that arrives while the private reply is being sent still continues
   assert.equal(run!.status, "ended");
   assert.deepEqual(outcomes(run), ["start:next", "ask:queued", "wait:replied", "wait:set", "answered:added"]);
   assert.equal(await sizeOf("sender-1"), "XL");
-  const stored = (
-    await pool.query("SELECT message_id,matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies")
-  ).rows;
+  const stored = (await pool.query("SELECT message_id,matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies")).rows;
   assert.deepEqual(stored, [{ message_id: "early-1", matched: true }]);
 });
 
@@ -295,25 +268,18 @@ test("an early message dated before the send started, or a postback, does not an
   });
   assert.equal((await runs(id))[0]!.status, "awaiting_reply");
   // A message dated before the attempt cannot answer it and is not kept; the postback was offered once.
-  assert.deepEqual(
-    (await pool.query("SELECT message_id,matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies")).rows,
-    [{ message_id: "tap", matched: true }],
-  );
+  assert.deepEqual((await pool.query("SELECT message_id,matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies")).rows, [{ message_id: "tap", matched: true }]);
   assert.equal(await reconcileUnmatchedReplies(pool), 0);
 });
 
 test("the scheduled reconcile links an early reply that the send path left behind", async () => {
   const id = await enabledFlow();
   await comment("comment-1", "sender-1");
-  await pool.query(
-    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute'",
-  );
+  await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute'");
   await dm("9001", "XL", { at: new Date(Date.now() - 30_000), id: "early-1" });
   assert.equal((await runs(id))[0]!.status, "awaiting_reply");
   // The reply is recorded as sent elsewhere, without the reconcile that normally follows.
-  await pool.query(
-    "UPDATE private_reply_outbox SET status='sent',recipient_id='9001',provider_message_id='mid',sent_at=now()",
-  );
+  await pool.query("UPDATE private_reply_outbox SET status='sent',recipient_id='9001',provider_message_id='mid',sent_at=now()");
   assert.equal(await reconcileUnmatchedReplies(pool), 1);
   assert.equal(await reconcileUnmatchedReplies(pool), 0);
   assert.equal((await runs(id))[0]!.status, "ended");
@@ -326,30 +292,17 @@ test("neither reconcile gives a kept reply to an earlier reply while another one
   await comment("comment-1", "sender-1");
   await sendAll();
   await dm("9001", "S", { id: "in-a" });
-  const a = (
-    await pool.query(
-      "UPDATE private_reply_outbox SET attempt_started_at=now()-interval '5 minutes',sent_at=now()-interval '5 minutes' RETURNING id::text",
-    )
-  ).rows[0].id as string;
+  const a = (await pool.query("UPDATE private_reply_outbox SET attempt_started_at=now()-interval '5 minutes',sent_at=now()-interval '5 minutes' RETURNING id::text")).rows[0].id as string;
   // Reply B goes to the same person and is being sent when the answer to it arrives.
   await comment("comment-2", "sender-2");
-  await pool.query(
-    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute' WHERE comment_id='comment-2'",
-  );
+  await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute' WHERE comment_id='comment-2'");
   await dm("9001", "XL", { at: new Date(Date.now() - 30_000), id: "early-b" });
   assert.equal(await reconcileUnmatchedReplies(pool), 0);
   assert.equal(await reconcileUnmatchedReplies(pool, { connectionId }), 0);
   // A's post-send pass (A was being sent too when the DM arrived) must not use it up either.
   assert.equal(await reconcileUnmatchedReplies(pool, { replyId: a }), 0);
-  assert.deepEqual(
-    (await pool.query("SELECT message_id,matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies")).rows,
-    [{ message_id: "early-b", matched: false }],
-  );
-  const b = (
-    await pool.query(
-      "UPDATE private_reply_outbox SET status='sent',recipient_id='9001',provider_message_id='mid-b',sent_at=now() WHERE comment_id='comment-2' RETURNING id::text",
-    )
-  ).rows[0].id as string;
+  assert.deepEqual((await pool.query("SELECT message_id,matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies")).rows, [{ message_id: "early-b", matched: false }]);
+  const b = (await pool.query("UPDATE private_reply_outbox SET status='sent',recipient_id='9001',provider_message_id='mid-b',sent_at=now() WHERE comment_id='comment-2' RETURNING id::text")).rows[0].id as string;
   assert.equal(await reconcileUnmatchedReplies(pool, { replyId: b }), 1);
   const statuses = (await runs(id)).map((run) => run.status);
   assert.deepEqual(statuses, ["ended", "ended"]);
@@ -361,13 +314,9 @@ test("neither reconcile gives a kept reply to an earlier reply while another one
 async function keptAnswerAfterWaitEnded(): Promise<string> {
   const id = await enabledFlow(waitingDocument({ timeout: 1 }));
   await comment("comment-1", "sender-1");
-  await pool.query(
-    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '3 minutes'",
-  );
+  await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '3 minutes'");
   await dm("9001", "XL", { at: new Date(Date.now() - 150_000), id: "early-1" });
-  await pool.query(
-    "UPDATE private_reply_outbox SET status='sent',recipient_id='9001',provider_message_id='mid',sent_at=now()-interval '2 minutes'",
-  );
+  await pool.query("UPDATE private_reply_outbox SET status='sent',recipient_id='9001',provider_message_id='mid',sent_at=now()-interval '2 minutes'");
   return id;
 }
 
@@ -376,13 +325,7 @@ test("a wait does not time out while a reply kept in time is not linked yet", as
   assert.equal(await resumeDueFlowRuns(pool), 0);
   assert.equal((await runs(id))[0]!.status, "awaiting_reply");
   assert.equal(await reconcileUnmatchedReplies(pool), 1);
-  assert.deepEqual(outcomes((await runs(id))[0]), [
-    "start:next",
-    "ask:queued",
-    "wait:replied",
-    "wait:set",
-    "answered:added",
-  ]);
+  assert.deepEqual(outcomes((await runs(id))[0]), ["start:next", "ask:queued", "wait:replied", "wait:set", "answered:added"]);
   assert.equal(await sizeOf("sender-1"), "XL");
   assert.equal(await resumeDueFlowRuns(pool), 0);
 });
@@ -398,13 +341,9 @@ test("a kept reply no longer holds the wait 15 minutes after it was received", a
 test("a kept reply that turns 15 minutes old while the reconcile waits for its connection is not linked", async () => {
   const id = await enabledFlow();
   await comment("comment-1", "sender-1");
-  await pool.query(
-    "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute'",
-  );
+  await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now()-interval '1 minute'");
   await dm("9001", "XL", { at: new Date(Date.now() - 30_000), id: "early-1" });
-  await pool.query(
-    "UPDATE private_reply_outbox SET status='sent',recipient_id='9001',provider_message_id='mid',sent_at=now()",
-  );
+  await pool.query("UPDATE private_reply_outbox SET status='sent',recipient_id='9001',provider_message_id='mid',sent_at=now()");
   const holder = await pool.connect();
   try {
     await holder.query("BEGIN");
@@ -422,10 +361,7 @@ test("a kept reply that turns 15 minutes old while the reconcile waits for its c
   }
   assert.equal((await runs(id))[0]!.status, "awaiting_reply");
   assert.equal(await sizeOf("sender-1"), undefined);
-  assert.deepEqual(
-    (await pool.query("SELECT matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies")).rows,
-    [{ matched: false }],
-  );
+  assert.deepEqual((await pool.query("SELECT matched_at IS NOT NULL AS matched FROM instagram_unmatched_replies")).rows, [{ matched: false }]);
 });
 
 test("a redelivered or later message advances the run once, and a postback never does", async () => {
@@ -704,8 +640,7 @@ test("a duplicate reply to the same person and media skips the run without a wai
   const id = await enabledFlow();
   await comment("comment-1", "sender-1");
   await comment("comment-2", "sender-1");
-  const stored = (await pool.query("SELECT status,failure_code,resume_node_id FROM flow_runs ORDER BY created_at"))
-    .rows;
+  const stored = (await pool.query("SELECT status,failure_code,resume_node_id FROM flow_runs ORDER BY created_at")).rows;
   assert.deepEqual(stored, [
     { status: "awaiting_reply", failure_code: null, resume_node_id: "wait" },
     { status: "skipped", failure_code: "duplicate_recipient", resume_node_id: null },
@@ -716,10 +651,7 @@ test("a duplicate reply to the same person and media skips the run without a wai
 test("the field a wait saves into is in use while the version is published", async () => {
   await enabledFlow();
   assert.equal((await request("DELETE", `/api/contact-fields/${sizeField}`)).status, 409);
-  await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'Count','number')", [
-    "77777777-7777-4777-8777-777777777777",
-    workspaceId,
-  ]);
+  await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'Count','number')", ["77777777-7777-4777-8777-777777777777", workspaceId]);
   const draft = waitingDocument({ mediaId: "1790" });
   draft.nodes[2]!.config = { timeout_minutes: 60, save_field_id: "77777777-7777-4777-8777-777777777777" };
   const created = await request("POST", "/api/flows", { name: "Wrong type", draft });
@@ -742,12 +674,7 @@ test("deleting the comment sender or the DM recipient removes an awaiting run", 
     ["comment_sender", "sender-1"],
     ["dm_recipient", "9002"],
   ]) {
-    const result = (
-      await pool.query<{ result: { deleted_counts: Record<string, number> } }>(
-        "SELECT public.delete_person_data($1,$2,$3,$4,$5) AS result",
-        [workspaceId, connectionId, userId, kind, value],
-      )
-    ).rows[0]!.result;
+    const result = (await pool.query<{ result: { deleted_counts: Record<string, number> } }>("SELECT public.delete_person_data($1,$2,$3,$4,$5) AS result", [workspaceId, connectionId, userId, kind, value])).rows[0]!.result;
     assert.equal(result.deleted_counts.flow_runs, 1, kind);
   }
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM flow_runs")).rows[0].count, 0);
@@ -759,15 +686,8 @@ test("deleting the connection removes its awaiting runs", async () => {
   await enabledFlow();
   await comment("comment-1", "sender-1");
   await sendAll();
-  await pool.query("UPDATE instagram_connections SET active=false,access_token_encrypted=NULL WHERE id=$1", [
-    connectionId,
-  ]);
-  const connection = (
-    await pool.query<{ result: { deleted_counts: Record<string, number> } }>(
-      "SELECT public.delete_connection_data($1,$2,$3,'owned-account') AS result",
-      [workspaceId, connectionId, userId],
-    )
-  ).rows[0]!.result;
+  await pool.query("UPDATE instagram_connections SET active=false,access_token_encrypted=NULL WHERE id=$1", [connectionId]);
+  const connection = (await pool.query<{ result: { deleted_counts: Record<string, number> } }>("SELECT public.delete_connection_data($1,$2,$3,'owned-account') AS result", [workspaceId, connectionId, userId])).rows[0]!.result;
   assert.equal(connection.deleted_counts.flow_runs, 1);
 });
 
@@ -776,12 +696,7 @@ test("migration 026 replays after 025 and only an awaiting run carries a wait wi
   // fail on existing rows and only the assertions below can catch it.
   const delays = await readFile(new URL("../../db/migrations/025_flow_delays.sql", import.meta.url), "utf8");
   const waits = await readFile(new URL("../../db/migrations/026_flow_reply_waits.sql", import.meta.url), "utf8");
-  const definition = async () =>
-    (
-      await pool.query(
-        "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid='flow_runs'::regclass AND conname='flow_runs_state'",
-      )
-    ).rows[0].def;
+  const definition = async () => (await pool.query("SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid='flow_runs'::regclass AND conname='flow_runs_state'")).rows[0].def;
   await pool.query(waits);
   // 025 replayed after 026 must keep the wider constraint: read it before anything reapplies 026.
   await pool.query(delays);
@@ -842,9 +757,7 @@ test("the flow report counts runs that reached a wait and the waits a recipient'
     ["comment-9", "skipped", false],
   ]);
   // A wait leaves a step only when the run resumes past it, so steps alone would find runs 1 and 2 only.
-  const stepped = await pool.query(
-    "SELECT DISTINCT run_id FROM flow_step_runs WHERE node_type='wait_for_reply' AND outcome IN ('replied','timeout')",
-  );
+  const stepped = await pool.query("SELECT DISTINCT run_id FROM flow_step_runs WHERE node_type='wait_for_reply' AND outcome IN ('replied','timeout')");
   assert.equal(stepped.rowCount, 2);
 
   const period = (

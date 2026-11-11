@@ -4,19 +4,7 @@
 // Each entry is written as one JSON string line, so line-based collectors (the Node worker's stdout under Compose)
 // can parse it; a plain object would be printed by Node as a multi-line inspected block.
 
-export const OPERATION_STEPS = [
-  "kept_reply_cleanup",
-  "oauth_state_cleanup",
-  "token_refresh",
-  "subscription_check",
-  "early_reply_reconcile",
-  "flow_resume",
-  "stale_recovery",
-  "wake",
-  "webhook_delivery",
-  "campaign_start",
-  "alerts",
-] as const;
+export const OPERATION_STEPS = ["kept_reply_cleanup", "oauth_state_cleanup", "token_refresh", "subscription_check", "early_reply_reconcile", "flow_resume", "stale_recovery", "wake", "webhook_delivery", "campaign_start", "alerts"] as const;
 export type OperationStep = (typeof OPERATION_STEPS)[number];
 
 // The parts of the campaign_start step (#280), named on a cron_step_part_failed line.

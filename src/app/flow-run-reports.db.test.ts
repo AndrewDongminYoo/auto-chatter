@@ -7,8 +7,7 @@ import { appApi } from "./api.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: databaseUrl });
 const workspace = "11111111-1111-4111-8111-111111111111";
 const otherWorkspace = "22222222-2222-4222-8222-222222222222";
@@ -28,30 +27,19 @@ beforeEach(async () => {
   serial = 0;
   await pool.query("TRUNCATE workspaces CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspace, otherWorkspace]);
-  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'agent')", [
-    workspace,
-    owner,
-    agent,
-  ]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'agent')", [workspace, owner, agent]);
   for (const [ws, id] of [
     [workspace, connection],
     [workspace, secondConnection],
     [otherWorkspace, otherConnection],
   ])
-    await pool.query(
-      "INSERT INTO instagram_connections(id,workspace_id,account_id,username,instagram_user_id) VALUES($1::uuid,$2,$1::text,'SECRET-ACCOUNT',$1::text)",
-      [id, ws],
-    );
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,username,instagram_user_id) VALUES($1::uuid,$2,$1::text,'SECRET-ACCOUNT',$1::text)", [id, ws]);
   for (const [ws, id, conn] of [
     [workspace, flow, connection],
     [workspace, archivedFlow, connection],
     [otherWorkspace, otherFlow, otherConnection],
   ]) {
-    await pool.query("INSERT INTO flows(id,workspace_id,name,draft,archived) VALUES($1,$2,'SECRET-FLOW','{}',$3)", [
-      id,
-      ws,
-      id === archivedFlow,
-    ]);
+    await pool.query("INSERT INTO flows(id,workspace_id,name,draft,archived) VALUES($1,$2,'SECRET-FLOW','{}',$3)", [id, ws, id === archivedFlow]);
     await pool.query(
       `INSERT INTO flow_versions(id,flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,published_by)
        VALUES($1,$1,$2,1,0,'{}',$3,'1789',$4)`,
@@ -80,12 +68,7 @@ async function seed(status: string, replyStatus?: string, at = "2026-09-30T15:00
       [ws, conn, key],
     )
   ).rows[0].id;
-  const version = (
-    await pool.query(
-      "SELECT id FROM flow_versions WHERE flow_id=$1 AND trigger_connection_id=$2 ORDER BY version_no LIMIT 1",
-      [id, conn],
-    )
-  ).rows[0].id;
+  const version = (await pool.query("SELECT id FROM flow_versions WHERE flow_id=$1 AND trigger_connection_id=$2 ORDER BY version_no LIMIT 1", [id, conn])).rows[0].id;
   const run = (
     await pool.query(
       `INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,event_id,status,failure_code,created_at,resume_at,resume_node_id)
@@ -119,8 +102,7 @@ function request(query = params, actor = owner, plans?: Record<string, unknown>[
         connect: pool.connect.bind(pool),
         end: async () => {},
       }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: actor, email: "owner@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actor, email: "owner@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 async function report(query = params) {
@@ -226,20 +208,12 @@ async function markRead(conn: string, messageId: string, recipient = "901") {
   );
 }
 async function replyMessageId(run: string, messageId: string) {
-  await pool.query("UPDATE private_reply_outbox SET provider_message_id=$2,sent_at=now() WHERE flow_run_id=$1", [
-    run,
-    messageId,
-  ]);
+  await pool.query("UPDATE private_reply_outbox SET provider_message_id=$2,sent_at=now() WHERE flow_run_id=$1", [run, messageId]);
 }
 // A run a DM started, with its first message in flow_dm_deliveries as the DM delivery worker leaves it.
 async function seedDmRun(deliveryStatus: "pending" | "sent", messageId?: string, conn = connection) {
   const key = String(++serial);
-  const version = (
-    await pool.query(
-      "SELECT id FROM flow_versions WHERE flow_id=$1 AND trigger_connection_id=$2 ORDER BY version_no LIMIT 1",
-      [flow, conn],
-    )
-  ).rows[0].id;
+  const version = (await pool.query("SELECT id FROM flow_versions WHERE flow_id=$1 AND trigger_connection_id=$2 ORDER BY version_no LIMIT 1", [flow, conn])).rows[0].id;
   const start = (
     await pool.query(
       `INSERT INTO instagram_dm_start_events(workspace_id,connection_id,message_id,sender_id,flow_id,flow_version_id,trigger_type,message_at)
@@ -355,12 +329,7 @@ test("flow report counts a sent first message on a connection that cannot report
   for (const groupBy of ["connection", "flow", "day"]) assertGroupSums(await report(`${params}&group_by=${groupBy}`));
   const accounts = await report(`${params}&group_by=connection`);
   assert.deepEqual(
-    accounts.groups.map((group: Group) => [
-      group.key,
-      group.reply_counts.sent,
-      group.reply_counts.read,
-      group.reply_counts.read_unavailable,
-    ]),
+    accounts.groups.map((group: Group) => [group.key, group.reply_counts.sent, group.reply_counts.read, group.reply_counts.read_unavailable]),
     [
       [connection, "1", "0", "0"],
       [secondConnection, "3", "1", "2"],
@@ -380,10 +349,7 @@ test("flow report isolates workspace and combines owned account and flow filters
   assert.equal((await report(`${params}&connection_id=${connection}`)).run_counts.total, "2");
   assert.equal((await report(`${params}&flow_id=${flow}&connection_id=${connection}`)).run_counts.total, "1");
   assert.equal((await report(`${params}&flow_id=${archivedFlow}`)).run_counts.failed, "1");
-  assert.equal(
-    (await report(`${params}&flow_id=${archivedFlow}&connection_id=${secondConnection}`)).run_counts.total,
-    "0",
-  );
+  assert.equal((await report(`${params}&flow_id=${archivedFlow}&connection_id=${secondConnection}`)).run_counts.total, "0");
   assert.equal((await request(`${params}&connection_id=${otherConnection}`)).status, 404);
   assert.equal((await request(`${params}&flow_id=${otherFlow}`)).status, 404);
   assert.equal((await request(`${params}&flow_id=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb`)).status, 404);
@@ -463,9 +429,7 @@ test("flow report breaks runs down by day, account or flow and the groups add up
   assert.deepEqual(none.groups, []);
 
   for (const dimension of ["day", "connection", "flow"]) {
-    const empty = await report(
-      `from=2025-01-01&before=2025-01-02&expected_time_zone=Asia%2FSeoul&group_by=${dimension}`,
-    );
+    const empty = await report(`from=2025-01-01&before=2025-01-02&expected_time_zone=Asia%2FSeoul&group_by=${dimension}`);
     assert.deepEqual(empty.groups, []);
     assert.deepEqual(empty.reply_wait_counts, { reached: "0", replied: "0", not_replied: "0" });
   }
@@ -490,16 +454,7 @@ test("flow report day groups follow workspace-local midnight, including DST days
   await pool.query("TRUNCATE flow_step_runs, private_reply_outbox, flow_runs CASCADE");
   await pool.query("UPDATE workspaces SET time_zone='America/New_York' WHERE id=$1", [workspace]);
   // 2026-03-08 is 23 hours long in New York and 2026-11-01 is 25 hours long.
-  for (const at of [
-    "2026-03-08T04:59:59Z",
-    "2026-03-08T05:00:00Z",
-    "2026-03-09T03:59:59Z",
-    "2026-03-09T04:00:00Z",
-    "2026-11-01T04:00:00Z",
-    "2026-11-02T04:59:59Z",
-    "2026-11-02T05:00:00Z",
-  ])
-    await seed("ended", undefined, at);
+  for (const at of ["2026-03-08T04:59:59Z", "2026-03-08T05:00:00Z", "2026-03-09T03:59:59Z", "2026-03-09T04:00:00Z", "2026-11-01T04:00:00Z", "2026-11-02T04:59:59Z", "2026-11-02T05:00:00Z"]) await seed("ended", undefined, at);
   const spring = await report("from=2026-03-07&before=2026-03-10&expected_time_zone=America%2FNew_York&group_by=day");
   assert.deepEqual(
     spring.groups.map((group: Group) => [group.key, group.run_counts.total]),
@@ -576,12 +531,7 @@ test("flow report bounds real aggregate index reads in all optional filter combi
   await pool.query("ANALYZE flow_runs");
   await pool.query("ANALYZE flow_step_runs");
   // Every filter set with every dimension, including none: 16 combinations.
-  const filters = [
-    "",
-    `&connection_id=${connection}`,
-    `&flow_id=${flow}`,
-    `&connection_id=${connection}&flow_id=${flow}`,
-  ];
+  const filters = ["", `&connection_id=${connection}`, `&flow_id=${flow}`, `&connection_id=${connection}&flow_id=${flow}`];
   const dimensions = ["", "&group_by=day", "&group_by=connection", "&group_by=flow"];
   for (const suffix of filters.flatMap((filter) => dimensions.map((dimension) => filter + dimension))) {
     const plans: Record<string, unknown>[] = [];
@@ -596,22 +546,14 @@ test("flow report bounds real aggregate index reads in all optional filter combi
     function walk(node: Record<string, unknown>) {
       if (node["Relation Name"]) relations.push(String(node["Relation Name"]));
       const condition = String(node["Index Cond"]);
-      if (
-        String(node["Index Name"]).startsWith("flow_runs_") &&
-        condition.includes("created_at >=") &&
-        condition.includes("created_at <")
-      )
-        scans.push(node);
+      if (String(node["Index Name"]).startsWith("flow_runs_") && condition.includes("created_at >=") && condition.includes("created_at <")) scans.push(node);
       for (const child of (node.Plans ?? []) as Record<string, unknown>[]) walk(child);
     }
     walk(plans[0]!);
     assert.equal(scans.length, 1, "report must bound index reads by the creation period");
     assert.equal(relations.includes("flow_step_runs"), false, "report must not read step history");
     // The existing flow history index is also valid when an owned flow is selected.
-    assert.match(
-      String(scans[0]["Index Cond"]),
-      suffix.includes("flow_id=") ? /(?:workspace_id|flow_id) =/ : /workspace_id =/,
-    );
+    assert.match(String(scans[0]["Index Cond"]), suffix.includes("flow_id=") ? /(?:workspace_id|flow_id) =/ : /workspace_id =/);
     assert.match(String(scans[0]["Index Cond"]), /created_at >=/);
     assert.match(String(scans[0]["Index Cond"]), /created_at </);
     assert.equal(scans[0]["Actual Rows"], 1);

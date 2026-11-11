@@ -55,26 +55,16 @@ export const instagramAdapter: ChannelAdapter = {
         receipt: { family: "message", providerId: message.messageId },
         actor: { kind: "dm_recipient", value: message.senderId },
         occurredAt: message.timestamp,
-        ...(message.confirmationReplyId === undefined
-          ? { kind: "text_message", text: message.text }
-          : { kind: "confirmation_postback", title: message.text, replyBinding: message.confirmationReplyId }),
+        ...(message.confirmationReplyId === undefined ? { kind: "text_message", text: message.text } : { kind: "confirmation_postback", title: message.text, replyBinding: message.confirmationReplyId }),
       })),
     ];
   },
   acceptSendResult(value) {
-    if (
-      !value ||
-      typeof value !== "object" ||
-      !("messageId" in value) ||
-      typeof value.messageId !== "string" ||
-      !value.messageId.trim()
-    )
-      throw new Error("Invalid send acknowledgement");
+    if (!value || typeof value !== "object" || !("messageId" in value) || typeof value.messageId !== "string" || !value.messageId.trim()) throw new Error("Invalid send acknowledgement");
     return { kind: "accepted", messageId: value.messageId };
   },
   classifySendError(error) {
-    if (error instanceof PreSendVerificationError)
-      return { kind: "not_attempted", disposition: error.disposition, code: error.failureCode };
+    if (error instanceof PreSendVerificationError) return { kind: "not_attempted", disposition: error.disposition, code: error.failureCode };
     if (error instanceof ProviderRateLimitedError)
       return {
         kind: "refused",
@@ -82,8 +72,7 @@ export const instagramAdapter: ChannelAdapter = {
         code: error.failureCode,
         retryAfterSeconds: error.retryAfterSeconds,
       };
-    if (error instanceof ProviderRejectedError)
-      return { kind: "refused", refusal: "other", code: error.failureCode, retryAfterSeconds: null };
+    if (error instanceof ProviderRejectedError) return { kind: "refused", refusal: "other", code: error.failureCode, retryAfterSeconds: null };
     return { kind: "unknown", code: "send_outcome_unknown" };
   },
 };
@@ -97,12 +86,7 @@ export function partitionInstagramEvents(events: readonly ChannelEvent[]): {
     messages: InstagramMessage[] = [];
   for (const event of events) {
     const comment = event.kind === "comment";
-    if (
-      event.account.channel !== "instagram" ||
-      event.receipt.family !== (comment ? "comment" : "message") ||
-      event.actor.kind !== (comment ? "comment_sender" : "dm_recipient")
-    )
-      throw new Error("Invalid Instagram channel event");
+    if (event.account.channel !== "instagram" || event.receipt.family !== (comment ? "comment" : "message") || event.actor.kind !== (comment ? "comment_sender" : "dm_recipient")) throw new Error("Invalid Instagram channel event");
     if (event.kind === "comment")
       comments.push({
         accountId: event.account.accountId,

@@ -9,22 +9,13 @@ import { CONVERSATION_LABEL_LIMIT } from "../app/inbox-labels.ts";
 // (lockInboxConversations) take it exclusive, so DMs of one conversation are serialized with each other and
 // with state changes, while DMs of different conversations never wait on each other. Callers take it after
 // the connection FOR SHARE.
-export async function lockConversation(
-  client: PoolClient,
-  connectionId: string,
-  recipientId: string,
-  mode: "shared" | "exclusive",
-) {
+export async function lockConversation(client: PoolClient, connectionId: string, recipientId: string, mode: "shared" | "exclusive") {
   const lock = mode === "shared" ? "pg_advisory_xact_lock_shared" : "pg_advisory_xact_lock";
-  await client.query(`SELECT ${lock}(hashtextextended('inbox-conversation:' || $1::uuid::text || ':' || $2, 0))`, [
-    connectionId,
-    recipientId,
-  ]);
+  await client.query(`SELECT ${lock}(hashtextextended('inbox-conversation:' || $1::uuid::text || ':' || $2, 0))`, [connectionId, recipientId]);
 }
 
 // A DM dated more than a minute ahead, or with text PostgreSQL cannot store, is never stored.
-const storable = (message: InstagramMessage, now: Date) =>
-  message.timestamp.getTime() <= now.getTime() + 60000 && !message.text.includes("\u0000");
+const storable = (message: InstagramMessage, now: Date) => message.timestamp.getTime() <= now.getTime() + 60000 && !message.text.includes("\u0000");
 
 // Takes, before any DM of the batch is stored, the conversation lock exclusive for every conversation the batch
 // can store a DM into (#127). The read position is an ID watermark (`m.id > last_read_message_id`), so the DMs of
@@ -34,29 +25,18 @@ const storable = (message: InstagramMessage, now: Date) =>
 // and only then is the storage predicate of storeInboxMessage evaluated, so the INSERT sees the connection state
 // read here. The conversations are then locked in (connection, recipient) order, so batches with their senders
 // in opposite orders queue instead of deadlocking.
-export async function lockInboxConversations(
-  client: PoolClient,
-  messages: readonly InstagramMessage[],
-  now: Date,
-): Promise<void> {
+export async function lockInboxConversations(client: PoolClient, messages: readonly InstagramMessage[], now: Date): Promise<void> {
   const batch = messages.filter((message) => storable(message, now));
   if (!batch.length) return;
-  await client.query("SELECT 1 FROM instagram_connections WHERE account_id=ANY($1::text[]) ORDER BY id FOR SHARE", [
-    [...new Set(batch.map((message) => message.accountId))],
-  ]);
+  await client.query("SELECT 1 FROM instagram_connections WHERE account_id=ANY($1::text[]) ORDER BY id FOR SHARE", [[...new Set(batch.map((message) => message.accountId))]]);
   const conversations = await client.query<{ connection_id: string; recipient_id: string }>(
     `SELECT DISTINCT c.id AS connection_id,m.recipient_id
      FROM unnest($1::text[],$2::text[],$3::timestamptz[]) AS m(account_id,recipient_id,message_at)
      JOIN instagram_connections c ON c.account_id=m.account_id AND c.active AND c.inbox_enabled AND c.inbox_enabled_at<=m.message_at
      ORDER BY c.id,m.recipient_id`,
-    [
-      batch.map((message) => message.accountId),
-      batch.map((message) => message.senderId),
-      batch.map((message) => message.timestamp),
-    ],
+    [batch.map((message) => message.accountId), batch.map((message) => message.senderId), batch.map((message) => message.timestamp)],
   );
-  for (const row of conversations.rows)
-    await lockConversation(client, row.connection_id, row.recipient_id, "exclusive");
+  for (const row of conversations.rows) await lockConversation(client, row.connection_id, row.recipient_id, "exclusive");
 }
 
 // A newly stored DM reopens its closed conversation (#22), with an audit row and no actor. A redelivered
@@ -70,14 +50,7 @@ export async function storeInboxMessage(client: PoolClient, message: InstagramMe
      WHERE account_id=$1 AND active AND inbox_enabled AND inbox_enabled_at<=$6
      ON CONFLICT(connection_id,message_id) DO NOTHING
      RETURNING stored.workspace_id::text,stored.connection_id::text`,
-    [
-      message.accountId,
-      message.senderId,
-      message.messageId,
-      message.text,
-      message.confirmationReplyId ? "postback" : "text",
-      message.timestamp,
-    ],
+    [message.accountId, message.senderId, message.messageId, message.text, message.confirmationReplyId ? "postback" : "text", message.timestamp],
   );
   const inserted = stored.rows.sort((a, b) => a.connection_id.localeCompare(b.connection_id));
   for (const row of inserted) {
@@ -102,8 +75,7 @@ export async function storeInboxMessage(client: PoolClient, message: InstagramMe
       [row.workspace_id, row.connection_id, message.senderId],
     );
     // A button postback is never matched against keyword rules; only a typed DM is.
-    if (!message.confirmationReplyId)
-      await applyLabelRules(client, row.workspace_id, row.connection_id, message.senderId, message.text);
+    if (!message.confirmationReplyId) await applyLabelRules(client, row.workspace_id, row.connection_id, message.senderId, message.text);
   }
 }
 
@@ -117,17 +89,10 @@ type LabelRule = {
 
 // The labels the matching rules add, in rule order: only active labels that the conversation does not have and that
 // no member ever removed from it, and only as many as fit in the set.
-function labelsToAdd(
-  candidates: readonly string[],
-  current: readonly string[],
-  active: readonly string[],
-  removed: readonly string[],
-): string[] {
+function labelsToAdd(candidates: readonly string[], current: readonly string[], active: readonly string[], removed: readonly string[]): string[] {
   const room = CONVERSATION_LABEL_LIMIT - current.length;
   if (room <= 0) return [];
-  return candidates
-    .filter((id) => active.includes(id) && !current.includes(id) && !removed.includes(id))
-    .slice(0, room);
+  return candidates.filter((id) => active.includes(id) && !current.includes(id) && !removed.includes(id)).slice(0, room);
 }
 
 // Keyword label rules (#132), for a text DM this ingestion stored. The caller holds the connection FOR SHARE and the
@@ -138,13 +103,7 @@ function labelsToAdd(
 // that the label tables cannot store (more than 40 digits) skips the rules altogether. One DM writes at most one
 // label-set version and one audit row, attributed to the first matching rule by (created_at, id), even when that
 // rule's own label was skipped. Labelling sends nothing, so paused and handed-off contacts are labelled too.
-async function applyLabelRules(
-  client: PoolClient,
-  workspace: string,
-  connection: string,
-  recipient: string,
-  text: string,
-): Promise<void> {
+async function applyLabelRules(client: PoolClient, workspace: string, connection: string, recipient: string, text: string): Promise<void> {
   // The recipient_id CHECK of the label tables would raise, and the stored DM would roll back with it.
   if (!/^[0-9]{1,40}$/.test(recipient)) return;
   // Read without a lock: a rule change that is not committed yet applies from the next DM.
@@ -192,15 +151,7 @@ async function applyLabelRules(
      WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3`,
     conversation,
   );
-  if (
-    !labelsToAdd(
-      candidates,
-      existing.rows[0]?.label_ids ?? [],
-      await activeLabels("FOR SHARE"),
-      await removedByMember(),
-    ).length
-  )
-    return;
+  if (!labelsToAdd(candidates, existing.rows[0]?.label_ids ?? [], await activeLabels("FOR SHARE"), await removedByMember()).length) return;
   // Then the manual path's order: the version 0 placeholder (the same as no row) gives concurrent writers a row to
   // queue on, the label-set row FOR UPDATE, and the labels FOR SHARE by ID, which this transaction already holds.
   await client.query(

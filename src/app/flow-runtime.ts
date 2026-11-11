@@ -1,14 +1,6 @@
 import { matchesCommentRule } from "../instagram/comment-rule.ts";
 import { isValidFieldValue } from "./contact-fields.ts";
-import {
-  DM_TRIGGER_TYPES,
-  flowTrigger,
-  normalizeTag,
-  replySaveFields,
-  type FlowDocument,
-  type FlowError,
-  type FlowNode,
-} from "./flow-schema.ts";
+import { DM_TRIGGER_TYPES, flowTrigger, normalizeTag, replySaveFields, type FlowDocument, type FlowError, type FlowNode } from "./flow-schema.ts";
 
 // What the runtime knows about the commenter when the comment arrives.
 export type ContactFacts = { tags: ReadonlySet<string>; fields: ReadonlyMap<string, unknown> };
@@ -63,19 +55,7 @@ export type FlowPlan = { steps: FlowStep[]; changes: FlowChanges; webhooks?: Flo
 
 // Follow checks and message buttons are refused when a flow is enabled rather than skipped at run
 // time.
-const EXECUTABLE_TYPES = new Set([
-  "instagram_comment",
-  "has_tag",
-  "field_equals",
-  "instagram_message",
-  "add_tag",
-  "remove_tag",
-  "set_field",
-  "delay",
-  "wait_until",
-  "wait_for_reply",
-  "webhook",
-]);
+const EXECUTABLE_TYPES = new Set(["instagram_comment", "has_tag", "field_equals", "instagram_message", "add_tag", "remove_tag", "set_field", "delay", "wait_until", "wait_for_reply", "webhook"]);
 // Where a stopped run continues: a delay or a time wait on next, a reply wait on replied or timeout.
 export type ResumeEntry = { node_id: string; port: string };
 const RESUME_PORTS: Record<string, string[]> = {
@@ -102,21 +82,14 @@ function variableFieldIds(text: string): string[] {
 export function flowExecutionErrors(document: FlowDocument, fieldTypes: ReadonlyMap<string, string>): FlowError[] {
   const errors: FlowError[] = [];
   document.nodes.forEach((node, index) => {
-    if (!executable(node.type))
-      errors.push({ code: "unsupported_node", node_id: node.id, path: `nodes[${index}].type` });
-    else if (node.type === "instagram_message" && node.config.button_title !== undefined)
-      errors.push({ code: "unsupported_message", node_id: node.id, path: `nodes[${index}].config` });
-    else if (
-      node.type === "instagram_message" &&
-      variableFieldIds(String(node.config.text)).some((id) => fieldTypes.get(id) === "boolean")
-    )
-      errors.push({ code: "unsupported_variable", node_id: node.id, path: `nodes[${index}].config.text` });
+    if (!executable(node.type)) errors.push({ code: "unsupported_node", node_id: node.id, path: `nodes[${index}].type` });
+    else if (node.type === "instagram_message" && node.config.button_title !== undefined) errors.push({ code: "unsupported_message", node_id: node.id, path: `nodes[${index}].config` });
+    else if (node.type === "instagram_message" && variableFieldIds(String(node.config.text)).some((id) => fieldTypes.get(id) === "boolean")) errors.push({ code: "unsupported_variable", node_id: node.id, path: `nodes[${index}].config.text` });
   });
   const byId = new Map(document.nodes.map((node) => [node.id, node]));
   // The only node after a message is a reply wait; anything else would send or act after the reply.
   document.edges.forEach((edge, index) => {
-    if (byId.get(edge.from)?.type === "instagram_message" && !leadsToWait(document, edge))
-      errors.push({ code: "unsupported_after_message", edge_index: index, path: `edges[${index}]` });
+    if (byId.get(edge.from)?.type === "instagram_message" && !leadsToWait(document, edge)) errors.push({ code: "unsupported_after_message", edge_index: index, path: `edges[${index}]` });
   });
   return errors;
 }
@@ -150,11 +123,7 @@ function fieldMatches(node: FlowNode, fields: ReadonlyMap<string, unknown>): boo
 
 // Substitutes every variable in one pass; substituted values are never scanned again, so comment
 // text and stored field values cannot introduce variables of their own.
-function render(
-  text: string,
-  fields: ReadonlyMap<string, unknown>,
-  input: RunInput,
-): { text: string } | { error: string } {
+function render(text: string, fields: ReadonlyMap<string, unknown>, input: RunInput): { text: string } | { error: string } {
   let error: string | null = null;
   const rendered = text.replace(VARIABLE, (_, name: string) => {
     if (name === "comment.text") return input.commentText;
@@ -178,20 +147,11 @@ function render(
 // it; resuming at
 // a reply wait first records the port taken and, when the wait saves the reply, the save outcome, so
 // the run's steps read as one path.
-export function planFlowRun(
-  document: FlowDocument,
-  facts: ContactFacts,
-  input: RunInput,
-  resume?: ResumeEntry,
-): FlowPlan {
+export function planFlowRun(document: FlowDocument, facts: ContactFacts, input: RunInput, resume?: ResumeEntry): FlowPlan {
   const tags = new Set(facts.tags);
   const fields = new Map(facts.fields);
   const changes = (): FlowChanges => ({
-    tags: new Map(
-      [...new Set([...facts.tags, ...tags])]
-        .filter((tag) => facts.tags.has(tag) !== tags.has(tag))
-        .map((tag) => [tag, tags.has(tag)]),
-    ),
+    tags: new Map([...new Set([...facts.tags, ...tags])].filter((tag) => facts.tags.has(tag) !== tags.has(tag)).map((tag) => [tag, tags.has(tag)])),
     fields: new Map([...fields].filter(([id, value]) => facts.fields.get(id) !== value)),
   });
   const webhooks: FlowWebhook[] = [];
@@ -205,12 +165,7 @@ export function planFlowRun(
   });
   const byId = new Map(document.nodes.map((node) => [node.id, node]));
   const start = resume === undefined ? trigger(document) : byId.get(resume.node_id);
-  if (
-    !start ||
-    (resume !== undefined &&
-      !(Object.hasOwn(RESUME_PORTS, start.type) && RESUME_PORTS[start.type]!.includes(resume.port)))
-  )
-    return { status: "failed", steps: [], failure_code: "invalid_definition", ...effects() };
+  if (!start || (resume !== undefined && !(Object.hasOwn(RESUME_PORTS, start.type) && RESUME_PORTS[start.type]!.includes(resume.port)))) return { status: "failed", steps: [], failure_code: "invalid_definition", ...effects() };
   const steps: FlowStep[] = [];
   const afterWait = start.type === "wait_for_reply";
   if (resume === undefined) steps.push({ node_id: start.id, node_type: start.type, outcome: "next" });
@@ -270,12 +225,7 @@ export function planFlowRun(
     } else if (node.type === "webhook") {
       // The store queues the delivery in the run's transaction; the walk goes on without waiting.
       const fieldIds = node.config.field_ids;
-      if (
-        typeof node.config.endpoint_id !== "string" ||
-        !Array.isArray(fieldIds) ||
-        fieldIds.some((id) => typeof id !== "string")
-      )
-        return fail(node, "invalid_definition");
+      if (typeof node.config.endpoint_id !== "string" || !Array.isArray(fieldIds) || fieldIds.some((id) => typeof id !== "string")) return fail(node, "invalid_definition");
       webhooks.push({
         node_id: node.id,
         endpoint_id: node.config.endpoint_id.toLowerCase(),

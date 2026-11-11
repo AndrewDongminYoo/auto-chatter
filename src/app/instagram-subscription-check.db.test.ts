@@ -11,8 +11,7 @@ import { ConfigurationError } from "./operations-log.ts";
 import { sealSecret } from "./secrets.ts";
 
 const url = new URL(process.env.TEST_DATABASE_URL ?? "http://invalid");
-if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: url.toString() });
 const user = { id: "11111111-1111-4111-8111-111111111111", email: "owner@example.test" };
 const key = Buffer.alloc(32, 7).toString("base64");
@@ -37,8 +36,7 @@ beforeEach(async () => {
   workspaceId = await ensureWorkspace(pool, user);
   ciphertext = await addConnection(connection, "98765");
   logLines = [];
-  for (const method of ["log", "warn", "error"] as const)
-    mock.method(console, method, (line: string) => logLines.push(JSON.parse(line) as Record<string, string>));
+  for (const method of ["log", "warn", "error"] as const) mock.method(console, method, (line: string) => logLines.push(JSON.parse(line) as Record<string, string>));
 });
 afterEach(() => {
   mock.restoreAll();
@@ -70,10 +68,7 @@ async function record(id = connection) {
 }
 
 // A Meta stand-in: me answers the token's own account, subscribed_apps answers fields. Either can be replaced.
-function meta(
-  fields: string[] | (() => Response | Promise<Response>) = ["comments", "messages", "messaging_postbacks"],
-  me?: () => Response | Promise<Response>,
-) {
+function meta(fields: string[] | (() => Response | Promise<Response>) = ["comments", "messages", "messaging_postbacks"], me?: () => Response | Promise<Response>) {
   const accounts: string[] = [];
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const target = new URL(String(input));
@@ -84,16 +79,13 @@ function meta(
       return me ? me() : Response.json({ user_id: account });
     }
     assert.equal(target.pathname, `/v26.0/${account}/subscribed_apps`);
-    return typeof fields === "function"
-      ? fields()
-      : Response.json({ data: [{ id: "app", subscribed_fields: fields }] });
+    return typeof fields === "function" ? fields() : Response.json({ data: [{ id: "app", subscribed_fields: fields }] });
   }) as typeof fetch;
   return { fetchImpl, accounts };
 }
 const missing = ["comments", "messages"];
 
-const run = (fetchImpl: typeof fetch, now = new Date()) =>
-  checkDueInstagramSubscriptions(pool, key, fetchImpl, now, "v26.0", correlationId);
+const run = (fetchImpl: typeof fetch, now = new Date()) => checkDueInstagramSubscriptions(pool, key, fetchImpl, now, "v26.0", correlationId);
 
 test("the cron claims only eligible connections, longest-unchecked first, at most two per run", async () => {
   const hours = (count: number) => new Date(Date.now() - count * 3600_000);
@@ -104,9 +96,7 @@ test("the cron claims only eligible connections, longest-unchecked first, at mos
   await addConnection("10000000-0000-4000-8000-000000000005", "5", ",subscription_check_attempted_at", [hours(9)]);
   await addConnection("10000000-0000-4000-8000-000000000006", "6");
   await addConnection("10000000-0000-4000-8000-000000000007", "7");
-  await pool.query(
-    "UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL WHERE account_id='6'",
-  );
+  await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL WHERE account_id='6'");
   await pool.query("UPDATE instagram_connections SET token_expires_at=now()-interval '1 second' WHERE account_id='7'");
   await pool.query("UPDATE instagram_connections SET active=false WHERE account_id='3'");
   const provider = meta();
@@ -116,17 +106,7 @@ test("the cron claims only eligible connections, longest-unchecked first, at mos
   assert.deepEqual(await run(provider.fetchImpl), { checked: 1, failed: 0 });
   assert.deepEqual(await run(provider.fetchImpl), { checked: 0, failed: 0 });
   assert.deepEqual(provider.accounts, ["98765", "5", "1"]);
-  for (const account of ["2", "3", "4", "6", "7"])
-    assert.equal(
-      (
-        await pool.query(
-          "SELECT subscription_checked_at FROM instagram_connections WHERE account_id=$1 AND subscription_checked_at IS NOT NULL",
-          [account],
-        )
-      ).rowCount,
-      0,
-      account,
-    );
+  for (const account of ["2", "3", "4", "6", "7"]) assert.equal((await pool.query("SELECT subscription_checked_at FROM instagram_connections WHERE account_id=$1 AND subscription_checked_at IS NOT NULL", [account])).rowCount, 0, account);
 });
 
 test("a connection is attempted at most once every six hours, also after a transient failure", async () => {
@@ -154,15 +134,7 @@ test("a connection is attempted at most once every six hours, also after a trans
 
 test("a lost subscription keeps its first time for the same token, a present result clears it, and each change is logged once", async () => {
   const setDue = () => pool.query("UPDATE instagram_connections SET subscription_check_attempted_at=NULL");
-  const checkedAtMicros = async () =>
-    BigInt(
-      (
-        await pool.query<{ microseconds: string }>(
-          "SELECT (extract(epoch FROM subscription_checked_at)*1000000)::bigint::text AS microseconds FROM instagram_connections WHERE id=$1",
-          [connection],
-        )
-      ).rows[0]!.microseconds,
-    );
+  const checkedAtMicros = async () => BigInt((await pool.query<{ microseconds: string }>("SELECT (extract(epoch FROM subscription_checked_at)*1000000)::bigint::text AS microseconds FROM instagram_connections WHERE id=$1", [connection])).rows[0]!.microseconds);
   await run(meta(missing).fetchImpl);
   const first = await record();
   const firstCheckedAt = await checkedAtMicros();
@@ -215,10 +187,7 @@ test("a lost subscription keeps its first time for the same token, a present res
 test("a result for a replaced token writes nothing, and the list hides a record for an older token", async () => {
   const replacement = sealSecret("token-98765", key, `${workspaceId}:98765`);
   const racing = meta(missing, async () => {
-    await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2,token_obtained_at=now() WHERE id=$1", [
-      connection,
-      replacement,
-    ]);
+    await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2,token_obtained_at=now() WHERE id=$1", [connection, replacement]);
     return Response.json({ error: { code: 190 } }, { status: 400 });
   });
   assert.deepEqual(await run(racing.fetchImpl), { checked: 1, failed: 0 });
@@ -234,10 +203,7 @@ test("a result for a replaced token writes nothing, and the list hides a record 
     },
   );
   const lateMissing = meta(missing, async () => {
-    await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [
-      connection,
-      sealSecret("token-98765", key, `${workspaceId}:98765`),
-    ]);
+    await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [connection, sealSecret("token-98765", key, `${workspaceId}:98765`)]);
     return Response.json({ user_id: "98765" });
   });
   await pool.query("UPDATE instagram_connections SET subscription_check_attempted_at=NULL");
@@ -266,10 +232,7 @@ test("a Meta rejection records the reconnect marker and leaves the subscription 
   const due = () => pool.query("UPDATE instagram_connections SET subscription_check_attempted_at=NULL");
   await due();
   await run(meta(missing, () => new Response("denied", { status: 401 })).fetchImpl);
-  assert.deepEqual(
-    { ...(await record()), subscription_check_attempted_at: undefined },
-    { ...lost, subscription_check_attempted_at: undefined, reauth_reason: "token_rejected" },
-  );
+  assert.deepEqual({ ...(await record()), subscription_check_attempted_at: undefined }, { ...lost, subscription_check_attempted_at: undefined, reauth_reason: "token_rejected" });
   assert.equal((await listConnections(pool, user))[0].reauth_reason, "token_rejected");
   // A mismatch or a transient read of me leaves the marker; only an identity Meta accepted clears it.
   for (const me of [() => Response.json({ user_id: "other" }), () => new Response("busy", { status: 429 })]) {
@@ -279,10 +242,7 @@ test("a Meta rejection records the reconnect marker and leaves the subscription 
   }
   await due();
   await run(meta(() => new Response("down", { status: 503 })).fetchImpl);
-  assert.deepEqual(
-    { ...(await record()), subscription_check_attempted_at: undefined },
-    { ...lost, subscription_check_attempted_at: undefined },
-  );
+  assert.deepEqual({ ...(await record()), subscription_check_attempted_at: undefined }, { ...lost, subscription_check_attempted_at: undefined });
   // A rejection of subscribed_apps after an accepted identity is a rejection too.
   await due();
   await run(meta(() => Response.json({ error: { code: 10 } }, { status: 403 })).fetchImpl);
@@ -324,24 +284,11 @@ test("an accepted identity keeps a refresh_rejected marker and its first time", 
 
 test("missing configuration fails before any claim, and a token that does not decrypt counts as a failure", async () => {
   const provider = meta();
-  await assert.rejects(
-    checkDueInstagramSubscriptions(pool, undefined, provider.fetchImpl, new Date(), "v26.0"),
-    ConfigurationError,
-  );
-  for (const version of [undefined, "26.0", "v26"])
-    await assert.rejects(
-      checkDueInstagramSubscriptions(pool, key, provider.fetchImpl, new Date(), version),
-      ConfigurationError,
-    );
-  await assert.rejects(
-    checkDueInstagramSubscriptions(pool, "short", provider.fetchImpl, new Date(), "v26.0"),
-    ConfigurationError,
-  );
+  await assert.rejects(checkDueInstagramSubscriptions(pool, undefined, provider.fetchImpl, new Date(), "v26.0"), ConfigurationError);
+  for (const version of [undefined, "26.0", "v26"]) await assert.rejects(checkDueInstagramSubscriptions(pool, key, provider.fetchImpl, new Date(), version), ConfigurationError);
+  await assert.rejects(checkDueInstagramSubscriptions(pool, "short", provider.fetchImpl, new Date(), "v26.0"), ConfigurationError);
   assert.equal((await record()).subscription_check_attempted_at, null);
-  await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [
-    connection,
-    sealSecret("token-98765", key, "another-context"),
-  ]);
+  await pool.query("UPDATE instagram_connections SET access_token_encrypted=$2 WHERE id=$1", [connection, sealSecret("token-98765", key, "another-context")]);
   assert.deepEqual(await run(provider.fetchImpl), { checked: 1, failed: 1 });
   assert.notEqual((await record()).subscription_check_attempted_at, null);
   assert.deepEqual(provider.accounts, []);
@@ -373,11 +320,7 @@ test("an OAuth reconnect, a disconnect and a deauthorize callback clear the subs
     if (path === "/oauth/access_token")
       return Response.json({
         access_token: "short-token",
-        permissions: [
-          "instagram_business_basic",
-          "instagram_business_manage_comments",
-          "instagram_business_manage_messages",
-        ],
+        permissions: ["instagram_business_basic", "instagram_business_manage_comments", "instagram_business_manage_messages"],
       });
     if (path === "/access_token") return Response.json({ access_token: "long-token", expires_in: 5_184_000 });
     if (path.endsWith("/me")) return Response.json({ user_id: "98765", username: "account" });
@@ -393,10 +336,7 @@ test("an OAuth reconnect, a disconnect and a deauthorize callback clear the subs
   assert.deepEqual(provider.accounts, ["98765"]);
   await disconnectConnection(pool, user, connection);
   assert.deepEqual((await columns()).rows, [cleared]);
-  await pool.query(
-    "UPDATE instagram_connections SET active=true,access_token_encrypted=$2,token_expires_at=now()+interval '30 days' WHERE id=$1",
-    [connection, ciphertext],
-  );
+  await pool.query("UPDATE instagram_connections SET active=true,access_token_encrypted=$2,token_expires_at=now()+interval '30 days' WHERE id=$1", [connection, ciphertext]);
   await run(meta(missing).fetchImpl);
   assert.notEqual((await record()).subscription_missing_at, null);
   assert.deepEqual(await deauthorizeInstagramUser(pool, { userId: "98765", issuedAt: null }), {
@@ -426,31 +366,9 @@ test("the manual check writes the same record and attempt time, and keeps its re
   // The cron then waits a full interval for this token.
   assert.deepEqual(await run(meta().fetchImpl), { checked: 0, failed: 0 });
   // A mismatch stays reconnect_required without a marker; a Meta rejection records one.
-  assert.equal(
-    (
-      await connectionHealth(
-        pool,
-        user,
-        connection,
-        env,
-        meta(missing, () => Response.json({ user_id: "1" })).fetchImpl,
-      )
-    ).status,
-    "reconnect_required",
-  );
+  assert.equal((await connectionHealth(pool, user, connection, env, meta(missing, () => Response.json({ user_id: "1" })).fetchImpl)).status, "reconnect_required");
   assert.equal((await record()).reauth_reason, null);
-  assert.equal(
-    (
-      await connectionHealth(
-        pool,
-        user,
-        connection,
-        env,
-        meta(missing, () => Response.json({ error: { code: 190 } }, { status: 400 })).fetchImpl,
-      )
-    ).status,
-    "reconnect_required",
-  );
+  assert.equal((await connectionHealth(pool, user, connection, env, meta(missing, () => Response.json({ error: { code: 190 } }, { status: 400 })).fetchImpl)).status, "reconnect_required");
   assert.equal((await record()).reauth_reason, "token_rejected");
   assert.equal((await connectionHealth(pool, user, connection, env, meta().fetchImpl)).status, "fields_present");
   assert.deepEqual(
@@ -468,8 +386,7 @@ test("the manual check writes the same record and attempt time, and keeps its re
 test("a failed record write never changes the manual response and is logged with a fixed code", async () => {
   const originalQuery = Pool.prototype.query;
   mock.method(pool, "query", async function (this: Pool, sql: string, values?: unknown[]) {
-    if (typeof sql === "string" && /subscription_check_attempted_at=clock|subscription_checked_at=now_/.test(sql))
-      throw Object.assign(new Error("write failed for token-98765"), { code: "40001" });
+    if (typeof sql === "string" && /subscription_check_attempted_at=clock|subscription_checked_at=now_/.test(sql)) throw Object.assign(new Error("write failed for token-98765"), { code: "40001" });
     return Reflect.apply(originalQuery, this, [sql, values]);
   });
   const result = await connectionHealth(pool, user, connection, env, meta(missing).fetchImpl, correlationId);

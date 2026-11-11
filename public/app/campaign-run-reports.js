@@ -41,13 +41,7 @@ function createCampaignRunReports({ api, node }) {
       "delivery",
       "delivery_counts",
       byId("campaign-report-delivery-counts"),
-      [
-        ["total", "발송 행 합계"],
-        ...sendStatusEntries(["pending", "sending", "sent"]),
-        ["read", "읽음 확인"],
-        ["read_unavailable", "읽음 확인 불가"],
-        ...sendStatusEntries(["failed", "blocked", "unknown", "cancelled"]),
-      ],
+      [["total", "발송 행 합계"], ...sendStatusEntries(["pending", "sending", "sent"]), ["read", "읽음 확인"], ["read_unavailable", "읽음 확인 불가"], ...sendStatusEntries(["failed", "blocked", "unknown", "cancelled"])],
     ],
   ];
   let generation = 0;
@@ -105,12 +99,10 @@ function createCampaignRunReports({ api, node }) {
       const { drafts } = await api("/api/campaign-drafts");
       if (current !== contextGeneration || !permitted) return;
       for (const draft of drafts) if (!draft.archived) form.elements.draft_id.append(new Option(draft.name, draft.id));
-      draftNotice.textContent =
-        "목록에는 화면을 연 시점에 보관하지 않은 캠페인만 표시됩니다. 이후 만들거나 보관한 캠페인은 새로고침하면 반영됩니다. 전체 조회에는 보관한 캠페인의 실행도 포함됩니다.";
+      draftNotice.textContent = "목록에는 화면을 연 시점에 보관하지 않은 캠페인만 표시됩니다. 이후 만들거나 보관한 캠페인은 새로고침하면 반영됩니다. 전체 조회에는 보관한 캠페인의 실행도 포함됩니다.";
     } catch {
       if (current !== contextGeneration) return;
-      draftNotice.textContent =
-        "캠페인 목록을 불러오지 못했습니다. 전체 조회는 가능하며, 개별 캠페인을 선택하려면 페이지를 새로고침해 주세요.";
+      draftNotice.textContent = "캠페인 목록을 불러오지 못했습니다. 전체 조회는 가능하며, 개별 캠페인을 선택하려면 페이지를 새로고침해 주세요.";
     } finally {
       if (current === contextGeneration) form.elements.draft_id.disabled = false;
     }
@@ -171,39 +163,10 @@ function createCampaignRunReports({ api, node }) {
   });
   download.addEventListener("click", () => {
     if (!result || !permitted) return;
-    const rows = [
-      [
-        "group",
-        "metric",
-        "count",
-        "from_date",
-        "before_date_exclusive",
-        "time_zone",
-        "period_from_utc",
-        "period_before_utc",
-        "checked_at_utc",
-        "draft_id",
-      ],
-    ];
-    for (const [group, property, , metrics] of groups)
-      for (const [key] of metrics)
-        rows.push([
-          group,
-          key,
-          result[property][key],
-          result.from,
-          result.before,
-          result.time_zone,
-          result.period_from,
-          result.period_before,
-          result.checked_at,
-          result.draft_id ?? "",
-        ]);
+    const rows = [["group", "metric", "count", "from_date", "before_date_exclusive", "time_zone", "period_from_utc", "period_before_utc", "checked_at_utc", "draft_id"]];
+    for (const [group, property, , metrics] of groups) for (const [key] of metrics) rows.push([group, key, result[property][key], result.from, result.before, result.time_zone, result.period_from, result.period_before, result.checked_at, result.draft_id ?? ""]);
     // Fixed keys and validated metadata only; campaign names, message text and customer data are excluded.
-    const csv =
-      "﻿" +
-      rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\r\n") +
-      "\r\n";
+    const csv = "﻿" + rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\r\n") + "\r\n";
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const link = node("a");
     link.href = url;

@@ -1,19 +1,10 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { test } from "node:test";
-import {
-  dohResolver,
-  isPublicAddress,
-  parseWebhookUrl,
-  signingKeyContext,
-  webhookSignature,
-} from "./webhook-delivery.ts";
+import { dohResolver, isPublicAddress, parseWebhookUrl, signingKeyContext, webhookSignature } from "./webhook-delivery.ts";
 
 test("a webhook URL is https on port 443 with a public-looking host name", () => {
-  assert.equal(
-    parseWebhookUrl("https://hooks.example.com/in?source=flow")?.href,
-    "https://hooks.example.com/in?source=flow",
-  );
+  assert.equal(parseWebhookUrl("https://hooks.example.com/in?source=flow")?.href, "https://hooks.example.com/in?source=flow");
   assert.equal(parseWebhookUrl("https://hooks.example.com:443/in")?.href, "https://hooks.example.com/in");
   assert.equal(parseWebhookUrl("https://HOOKS.example.com")?.hostname, "hooks.example.com");
 });
@@ -58,45 +49,12 @@ test("only public unicast addresses pass, for every blocked class and its embedd
     CGNAT: ["100.64.0.1", "100.127.255.255"],
     multicast: ["224.0.0.1", "239.255.255.255", "ff02::1"],
     unspecified: ["0.0.0.0", "0.1.2.3", "::"],
-    reserved: [
-      "240.0.0.1",
-      "255.255.255.255",
-      "192.0.0.1",
-      "192.0.2.1",
-      "192.88.99.1",
-      "198.18.0.1",
-      "198.19.255.255",
-      "198.51.100.1",
-      "203.0.113.1",
-      "2001:db8::1",
-      "2001::1",
-      "2002:7f00:1::1",
-      "3fff::1",
-      "100::1",
-      "::2",
-      "4000::1",
-    ],
-    "IPv4-mapped": [
-      "::ffff:127.0.0.1",
-      "::ffff:10.0.0.1",
-      "::ffff:7f00:1",
-      "::ffff:169.254.169.254",
-      "::ffff:100.64.0.1",
-    ],
+    reserved: ["240.0.0.1", "255.255.255.255", "192.0.0.1", "192.0.2.1", "192.88.99.1", "198.18.0.1", "198.19.255.255", "198.51.100.1", "203.0.113.1", "2001:db8::1", "2001::1", "2002:7f00:1::1", "3fff::1", "100::1", "::2", "4000::1"],
+    "IPv4-mapped": ["::ffff:127.0.0.1", "::ffff:10.0.0.1", "::ffff:7f00:1", "::ffff:169.254.169.254", "::ffff:100.64.0.1"],
     NAT64: ["64:ff9b::7f00:1", "64:ff9b::10.0.0.1", "64:ff9b::c0a8:101", "64:ff9b:1::1"],
-    "not an address": [
-      "",
-      "hooks.example.com",
-      "1.2.3",
-      "999.1.1.1",
-      "1.2.3.4.5",
-      "fe80::1%eth0",
-      "1::2::3",
-      "12345::1",
-    ],
+    "not an address": ["", "hooks.example.com", "1.2.3", "999.1.1.1", "1.2.3.4.5", "fe80::1%eth0", "1::2::3", "12345::1"],
   };
-  for (const [label, addresses] of Object.entries(blocked))
-    for (const address of addresses) assert.equal(isPublicAddress(address), false, `${label}: ${address}`);
+  for (const [label, addresses] of Object.entries(blocked)) for (const address of addresses) assert.equal(isPublicAddress(address), false, `${label}: ${address}`);
   for (const address of [
     "1.1.1.1",
     "8.8.8.8",
@@ -120,10 +78,7 @@ test("only public unicast addresses pass, for every blocked class and its embedd
 test("the signature carries one timestamp and one key and HMAC pair per valid key", () => {
   const body = '{"event_id":"e-1"}';
   const expected = (secret: string) => createHmac("sha256", secret).update(`1790000000.${body}`).digest("hex");
-  assert.equal(
-    webhookSignature(body, [{ id: "key-1", secret: "whsec_one" }], 1_790_000_000),
-    `t=1790000000,k=key-1,v1=${expected("whsec_one")}`,
-  );
+  assert.equal(webhookSignature(body, [{ id: "key-1", secret: "whsec_one" }], 1_790_000_000), `t=1790000000,k=key-1,v1=${expected("whsec_one")}`);
   assert.equal(
     webhookSignature(
       body,
@@ -136,14 +91,8 @@ test("the signature carries one timestamp and one key and HMAC pair per valid ke
     `t=1790000000,k=key-1,v1=${expected("whsec_one")},k=key-2,v1=${expected("whsec_two")}`,
   );
   // Another body or timestamp gives another signature.
-  assert.notEqual(
-    webhookSignature(`${body} `, [{ id: "key-1", secret: "whsec_one" }], 1_790_000_000),
-    webhookSignature(body, [{ id: "key-1", secret: "whsec_one" }], 1_790_000_000),
-  );
-  assert.notEqual(
-    webhookSignature(body, [{ id: "key-1", secret: "whsec_one" }], 1_790_000_001).split(",")[2],
-    `v1=${expected("whsec_one")}`,
-  );
+  assert.notEqual(webhookSignature(`${body} `, [{ id: "key-1", secret: "whsec_one" }], 1_790_000_000), webhookSignature(body, [{ id: "key-1", secret: "whsec_one" }], 1_790_000_000));
+  assert.notEqual(webhookSignature(body, [{ id: "key-1", secret: "whsec_one" }], 1_790_000_001).split(",")[2], `v1=${expected("whsec_one")}`);
 });
 
 test("the sealing context of a signing secret names its workspace, endpoint and key", () => {
@@ -168,10 +117,7 @@ test("the DNS-over-HTTPS resolver returns every A and AAAA address and skips oth
       : Response.json({ Status: 0, Answer: [{ name: "hooks.example.com", type: 28, data: "2606:4700::1" }] });
   }) as typeof fetch);
   assert.deepEqual(await resolve("hooks.example.com"), ["203.0.113.7", "8.8.8.8", "2606:4700::1"]);
-  assert.deepEqual(requests.map(({ url }) => `${url.origin}${url.pathname}`).sort(), [
-    "https://cloudflare-dns.com/dns-query",
-    "https://cloudflare-dns.com/dns-query",
-  ]);
+  assert.deepEqual(requests.map(({ url }) => `${url.origin}${url.pathname}`).sort(), ["https://cloudflare-dns.com/dns-query", "https://cloudflare-dns.com/dns-query"]);
   assert.deepEqual(requests.map(({ url }) => url.searchParams.get("type")).sort(), ["A", "AAAA"]);
   for (const { url, init } of requests) {
     assert.equal(url.searchParams.get("name"), "hooks.example.com");
@@ -188,13 +134,7 @@ test("a name that does not exist or has no address resolves to no address", asyn
 });
 
 test("a failed DNS lookup throws instead of reporting no address", async () => {
-  for (const answer of [
-    () => Response.json({ Status: 2 }),
-    () => Response.json({ Status: 0 }, { status: 503 }),
-    () => new Response(null, { status: 302, headers: { location: "https://elsewhere.example/dns-query" } }),
-    () => new Response("not json"),
-    () => Response.json([]),
-  ])
+  for (const answer of [() => Response.json({ Status: 2 }), () => Response.json({ Status: 0 }, { status: 503 }), () => new Response(null, { status: 302, headers: { location: "https://elsewhere.example/dns-query" } }), () => new Response("not json"), () => Response.json([])])
     await assert.rejects(dohResolver((async () => answer()) as typeof fetch)("hooks.example.com"));
   await assert.rejects(
     dohResolver((async () => {

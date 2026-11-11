@@ -15,14 +15,10 @@ test("only the operation log and the Node command entry points write to the cons
   const allowed = ["app/operations-log.ts", "instagram/main.ts", "instagram/worker-main.ts"];
   const srcDir = fileURLToPath(new URL("src/", repoDir));
   const entries = await readdir(srcDir, { recursive: true, withFileTypes: true });
-  const sources = entries
-    .filter((entry) => entry.isFile() && /\.(?:ts|mjs|js)$/.test(entry.name) && !/\.test\.(?:ts|mjs)$/.test(entry.name))
-    .map((entry) => relative(srcDir, join(entry.parentPath, entry.name)).split(sep).join("/"));
+  const sources = entries.filter((entry) => entry.isFile() && /\.(?:ts|mjs|js)$/.test(entry.name) && !/\.test\.(?:ts|mjs)$/.test(entry.name)).map((entry) => relative(srcDir, join(entry.parentPath, entry.name)).split(sep).join("/"));
   assert.ok(sources.length > 0);
   const writers = [];
-  for (const path of sources)
-    if (/\bconsole\b|\bprocess\s*\.\s*std(?:out|err)\b/.test(await readFile(join(srcDir, path), "utf8")))
-      writers.push(path);
+  for (const path of sources) if (/\bconsole\b|\bprocess\s*\.\s*std(?:out|err)\b/.test(await readFile(join(srcDir, path), "utf8"))) writers.push(path);
   assert.deepEqual(writers.sort(), allowed);
 });
 
@@ -32,14 +28,7 @@ test("the committed Worker configuration keeps sending and public connection off
     vars: Record<string, string>;
     env?: unknown;
   };
-  assert.deepEqual(Object.keys(config.vars).sort(), [
-    "APP_ORIGIN",
-    "INSTAGRAM_OAUTH_APP_ID",
-    "INSTAGRAM_PUBLIC_CONNECT_ENABLED",
-    "META_GRAPH_VERSION",
-    "SEND_ENABLED",
-    "SUPABASE_URL",
-  ]);
+  assert.deepEqual(Object.keys(config.vars).sort(), ["APP_ORIGIN", "INSTAGRAM_OAUTH_APP_ID", "INSTAGRAM_PUBLIC_CONNECT_ENABLED", "META_GRAPH_VERSION", "SEND_ENABLED", "SUPABASE_URL"]);
   assert.equal(config.vars.SEND_ENABLED, "false");
   assert.equal(config.vars.INSTAGRAM_PUBLIC_CONNECT_ENABLED, "false");
   assert.equal(config.env, undefined, "no environment may override the committed vars");
@@ -67,9 +56,7 @@ function directives(policy: string): Map<string, string[]> {
   const names = parsed.map((tokens) => tokens[0]!.toLowerCase());
   assert.equal(new Set(names).size, names.length, `duplicate CSP directive in: ${policy}`);
   // Keywords, schemes and hosts match ASCII case-insensitively, so 'UNSAFE-INLINE' and DATA: count as the lowercase forms.
-  return new Map(
-    parsed.map((tokens) => [tokens[0]!.toLowerCase(), tokens.slice(1).map((source) => source.toLowerCase())]),
-  );
+  return new Map(parsed.map((tokens) => [tokens[0]!.toLowerCase(), tokens.slice(1).map((source) => source.toLowerCase())]));
 }
 
 test("the dashboard CSP allows only same-origin scripts, with no inline or eval escape", async () => {
@@ -82,27 +69,13 @@ test("the dashboard CSP allows only same-origin scripts, with no inline or eval 
   const policy = directives(csp[0]!.slice(csp[0]!.indexOf(":") + 1));
   // An allowlist of directive names, so any new directive (script-src-elem, script-src-attr, worker-src, ...)
   // that could override or widen script-src fails here and has to be reviewed on purpose.
-  assert.deepEqual([...policy.keys()].sort(), [
-    "base-uri",
-    "connect-src",
-    "default-src",
-    "form-action",
-    "frame-ancestors",
-    "img-src",
-    "script-src",
-    "style-src",
-  ]);
+  assert.deepEqual([...policy.keys()].sort(), ["base-uri", "connect-src", "default-src", "form-action", "frame-ancestors", "img-src", "script-src", "style-src"]);
   assert.deepEqual(policy.get("default-src"), ["'none'"]);
   assert.deepEqual(policy.get("script-src"), ["'self'"]);
   assert.deepEqual(policy.get("base-uri"), ["'none'"]);
   assert.deepEqual(policy.get("frame-ancestors"), ["'none'"]);
   assert.deepEqual(policy.get("form-action"), ["'self'"]);
-  for (const [name, sources] of policy)
-    for (const source of sources)
-      assert.ok(
-        !["'unsafe-inline'", "'unsafe-eval'", "'unsafe-hashes'", "data:", "*"].includes(source),
-        `${name} must not allow ${source}`,
-      );
+  for (const [name, sources] of policy) for (const source of sources) assert.ok(!["'unsafe-inline'", "'unsafe-eval'", "'unsafe-hashes'", "data:", "*"].includes(source), `${name} must not allow ${source}`);
 });
 
 test("the dashboard files are revalidated on every load because their names are not versioned", async () => {
@@ -139,8 +112,7 @@ test("dashboard scripts write user data as text, never through an HTML or code s
   // document.write in any of those forms; dynamic import() is refused so no unscanned module is loaded.
   // This is a best-effort text guard, not a parser: an alias such as `const d = document; d.write(x)` is outside it
   // and is left to code review. Script execution itself is enforced by the CSP test above.
-  const sinks =
-    /\b(?:innerHTML|outerHTML|insertAdjacentHTML|srcdoc|writeln|eval|Function|createContextualFragment|parseFromString|setHTMLUnsafe|parseHTMLUnsafe)\b|\bdocument\s*(?:\?\.|\.)?\s*(?:\[\s*["'`]\s*)?write\b|\bimport\s*\(/;
+  const sinks = /\b(?:innerHTML|outerHTML|insertAdjacentHTML|srcdoc|writeln|eval|Function|createContextualFragment|parseFromString|setHTMLUnsafe|parseHTMLUnsafe)\b|\bdocument\s*(?:\?\.|\.)?\s*(?:\[\s*["'`]\s*)?write\b|\bimport\s*\(/;
   for (const name of files) {
     const source = await readFile(new URL(name, appDir), "utf8");
     assert.doesNotMatch(source, sinks, `${name} must not use an HTML or code sink`);

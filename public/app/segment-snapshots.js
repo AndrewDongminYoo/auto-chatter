@@ -19,13 +19,10 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
   const comparison = byId("segment-snapshot-comparison");
   const messages = {
     snapshot_too_large: "필터에 맞는 연락처가 5,000명을 넘어 고정하지 않았습니다. 조건을 좁혀 다시 시도해 주세요.",
-    snapshot_limit_reached:
-      "작업 공간에 고정한 대상이 최대 200개라 더 고정할 수 없습니다. 고정한 명단은 데이터 내보내기에 함께 담기고 관리자도 지울 수 없어 둔 한도입니다. 고정한 대상은 작업 공간 데이터를 삭제할 때만 지워집니다.",
-    snapshot_members_limit_reached:
-      "작업 공간에 저장한 명단이 모두 합쳐 20,000행을 넘게 되어 고정하지 않았습니다. 고정한 명단은 데이터 내보내기에 함께 담기고 관리자도 지울 수 없어 둔 한도입니다. 저장한 명단은 계정·이용자·작업 공간 데이터를 삭제할 때만 지워집니다.",
+    snapshot_limit_reached: "작업 공간에 고정한 대상이 최대 200개라 더 고정할 수 없습니다. 고정한 명단은 데이터 내보내기에 함께 담기고 관리자도 지울 수 없어 둔 한도입니다. 고정한 대상은 작업 공간 데이터를 삭제할 때만 지워집니다.",
+    snapshot_members_limit_reached: "작업 공간에 저장한 명단이 모두 합쳐 20,000행을 넘게 되어 고정하지 않았습니다. 고정한 명단은 데이터 내보내기에 함께 담기고 관리자도 지울 수 없어 둔 한도입니다. 저장한 명단은 계정·이용자·작업 공간 데이터를 삭제할 때만 지워집니다.",
     snapshot_not_found: "고정한 대상을 찾을 수 없습니다. 목록을 다시 불러와 주세요.",
-    segment_not_found:
-      "원래 필터가 보관되었거나 찾을 수 없어 비교하지 못했습니다. 고정한 명단과 CSV는 계속 볼 수 있습니다.",
+    segment_not_found: "원래 필터가 보관되었거나 찾을 수 없어 비교하지 못했습니다. 고정한 명단과 CSV는 계속 볼 수 있습니다.",
     role_forbidden: "소유자와 관리자만 대상을 고정하고 볼 수 있습니다.",
   };
   let generation = 0;
@@ -123,15 +120,8 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
     list.replaceChildren(
       ...snapshots.map((snapshot) => {
         const item = node("li", "");
-        const origin = workspaceWide
-          ? `"${snapshot.segment_name}" 필터${snapshot.segment_archived ? " · 보관됨" : ""} · `
-          : "";
-        item.append(
-          node(
-            "span",
-            `${origin}${time(snapshot.as_of)} 기준 · 대상 ${count(snapshot.member_count)}명 · 검사한 연락처 ${count(snapshot.counts.evaluated)}명 `,
-          ),
-        );
+        const origin = workspaceWide ? `"${snapshot.segment_name}" 필터${snapshot.segment_archived ? " · 보관됨" : ""} · ` : "";
+        item.append(node("span", `${origin}${time(snapshot.as_of)} 기준 · 대상 ${count(snapshot.member_count)}명 · 검사한 연락처 ${count(snapshot.counts.evaluated)}명 `));
         const view = node("button", "명단 보기", "secondary");
         view.type = "button";
         view.addEventListener("click", () => void open(snapshot.id));
@@ -174,18 +164,13 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
       const result = await api(`/api/contact-segments/${id}/snapshots`);
       if (current !== generation || request !== listRequest) return;
       render(result.snapshots, false);
-      status.textContent =
-        message ??
-        (result.snapshots.length
-          ? `이 필터로 고정한 대상 ${count(result.snapshots.length)}개. 고정한 명단은 바뀌지 않습니다.`
-          : "이 필터로 고정한 대상이 아직 없습니다.");
+      status.textContent = message ?? (result.snapshots.length ? `이 필터로 고정한 대상 ${count(result.snapshots.length)}개. 고정한 명단은 바뀌지 않습니다.` : "이 필터로 고정한 대상이 아직 없습니다.");
     } catch (error) {
       if (current === generation && request === listRequest) status.textContent = messages[error.code] || error.message;
     }
   }
   function appendMembers(page) {
-    for (const member of page)
-      members.append(node("li", `${connectionLabel(member.connection_id)} · 댓글 작성자 ${member.sender_id}`));
+    for (const member of page) members.append(node("li", `${connectionLabel(member.connection_id)} · 댓글 작성자 ${member.sender_id}`));
   }
   async function open(id) {
     if (busy) return;
@@ -202,9 +187,7 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
       const removed = snapshot.member_count - snapshot.stored_member_count;
       summary.textContent =
         `${time(snapshot.as_of)} 기준 "${snapshot.segment_name}" 필터에 맞은 ${count(snapshot.member_count)}명을 고정했습니다. ` +
-        (removed > 0
-          ? `계정이나 이용자 데이터 삭제로 ${count(removed)}명이 명단에서 빠져 ${count(snapshot.stored_member_count)}명이 남았습니다. 기록한 인원 수는 바꾸지 않습니다.`
-          : `명단에 ${count(snapshot.stored_member_count)}명이 있습니다.`);
+        (removed > 0 ? `계정이나 이용자 데이터 삭제로 ${count(removed)}명이 명단에서 빠져 ${count(snapshot.stored_member_count)}명이 남았습니다. 기록한 인원 수는 바꾸지 않습니다.` : `명단에 ${count(snapshot.stored_member_count)}명이 있습니다.`);
       appendMembers(result.members);
       more.hidden = !after;
       detail.hidden = false;
@@ -232,14 +215,11 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
         `${time(result.snapshot_as_of)} 고정 당시 버전 ${result.snapshot_segment_version} · 원래 ${count(counts.original)}명, 남은 기준 명단 ${count(counts.baseline)}명. ` +
         `${time(result.compared_at)} 현재 저장된 필터 버전 ${result.segment_version} · 현재 대상 ${count(counts.current)}명. ` +
         `추가 ${count(counts.added)}명 · 제외 ${count(counts.removed)}명 · 유지 ${count(counts.retained)}명. ` +
-        (result.snapshot_segment_version !== result.segment_version
-          ? "필터 버전이 달라 비교에는 필터 수정의 영향도 포함될 수 있습니다. "
-          : "") +
+        (result.snapshot_segment_version !== result.segment_version ? "필터 버전이 달라 비교에는 필터 수정의 영향도 포함될 수 있습니다. " : "") +
         "삭제 후 남은 명단과 현재 저장된 필터를 비교한 결과입니다. 발송 가능한 인원 수가 아닙니다.";
       status.textContent = "";
     } catch (error) {
-      if (current === generation && opened?.id === id && request === comparisonRequest)
-        status.textContent = messages[error.code] || error.message;
+      if (current === generation && opened?.id === id && request === comparisonRequest) status.textContent = messages[error.code] || error.message;
     } finally {
       if (current === generation && request === comparisonRequest) {
         comparing = false;
@@ -262,12 +242,7 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
     try {
       const saved = await api(`/api/contact-segments/${target.id}/snapshots`, "POST");
       if (current !== generation) return;
-      await Promise.all([
-        load(
-          `${time(saved.as_of)} 기준으로 ${count(saved.member_count)}명을 고정했습니다. 메시지는 보내지 않았으며, 발송할 때 수신 가능 여부를 다시 확인합니다.`,
-        ),
-        loadUsage(),
-      ]);
+      await Promise.all([load(`${time(saved.as_of)} 기준으로 ${count(saved.member_count)}명을 고정했습니다. 메시지는 보내지 않았으며, 발송할 때 수신 가능 여부를 다시 확인합니다.`), loadUsage()]);
     } catch (error) {
       if (current !== generation) return;
       status.textContent = messages[error.code] || error.message;

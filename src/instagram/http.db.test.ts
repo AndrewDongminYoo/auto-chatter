@@ -21,9 +21,7 @@ const ruleId = "33333333-3333-4333-8333-333333333333";
 let server: Server;
 let baseUrl: string;
 
-function commentBody(
-  options: { accountId?: string; commentId?: string; postId?: string; senderId?: string; text?: string } = {},
-): string {
+function commentBody(options: { accountId?: string; commentId?: string; postId?: string; senderId?: string; text?: string } = {}): string {
   return JSON.stringify({
     object: "instagram",
     entry: [
@@ -68,31 +66,19 @@ before(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query(
-    "TRUNCATE private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE",
-  );
+  await pool.query("TRUNCATE private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces CASCADE");
   await pool.query("INSERT INTO workspaces (id) VALUES ($1)", [workspaceId]);
-  await pool.query(
-    "INSERT INTO instagram_connections (id, workspace_id, account_id, active) VALUES ($1, $2, $3, true)",
-    [connectionId, workspaceId, "account-1"],
-  );
-  await pool.query(
-    "INSERT INTO instagram_comment_rules (id, workspace_id, connection_id, media_id, keyword, private_reply_text, enabled) VALUES ($1, $2, $3, $4, $5, $6, true)",
-    [ruleId, workspaceId, connectionId, "post-1", "자료", "자료 링크입니다"],
-  );
+  await pool.query("INSERT INTO instagram_connections (id, workspace_id, account_id, active) VALUES ($1, $2, $3, true)", [connectionId, workspaceId, "account-1"]);
+  await pool.query("INSERT INTO instagram_comment_rules (id, workspace_id, connection_id, media_id, keyword, private_reply_text, enabled) VALUES ($1, $2, $3, $4, $5, $6, true)", [ruleId, workspaceId, connectionId, "post-1", "자료", "자료 링크입니다"]);
 });
 
 after(async () => {
-  if (server)
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  if (server) await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   await pool.end();
 });
 
 test("configured keyword modes queue only matching comments and never replay stored comments", async () => {
-  await pool.query(
-    "UPDATE instagram_comment_rules SET keywords = $1, match_mode = 'exact', excluded_keywords = $2 WHERE id = $3",
-    [["LINK", "자료"], ["거절"], ruleId],
-  );
+  await pool.query("UPDATE instagram_comment_rules SET keywords = $1, match_mode = 'exact', excluded_keywords = $2 WHERE id = $3", [["LINK", "자료"], ["거절"], ruleId]);
   assert.equal((await signedPost(commentBody({ text: "send link" }))).status, 200);
   assert.equal(await rowCount("private_reply_outbox"), 0);
   await pool.query("UPDATE instagram_comment_rules SET match_mode='contains' WHERE id=$1", [ruleId]);
@@ -108,10 +94,7 @@ test("configured keyword modes queue only matching comments and never replay sto
 });
 
 test("all-comment rules still apply exclusions", async () => {
-  await pool.query("UPDATE instagram_comment_rules SET match_mode='all', excluded_keywords=$1 WHERE id=$2", [
-    ["skip"],
-    ruleId,
-  ]);
+  await pool.query("UPDATE instagram_comment_rules SET match_mode='all', excluded_keywords=$1 WHERE id=$2", [["skip"], ruleId]);
   await signedPost(commentBody({ text: "please SKIP" }));
   assert.equal(await rowCount("private_reply_outbox"), 0);
   await signedPost(commentBody({ commentId: "other", text: "unrelated comment" }));
@@ -119,36 +102,22 @@ test("all-comment rules still apply exclusions", async () => {
 });
 
 test("rule migration preserves legacy data and can be applied twice", async () => {
-  await pool.query(
-    "ALTER TABLE instagram_comment_rules DROP COLUMN keywords, DROP COLUMN match_mode, DROP COLUMN excluded_keywords",
-  );
-  const migration = await readFile(
-    new URL("../../db/migrations/003_comment_rule_matching.sql", import.meta.url),
-    "utf8",
-  );
+  await pool.query("ALTER TABLE instagram_comment_rules DROP COLUMN keywords, DROP COLUMN match_mode, DROP COLUMN excluded_keywords");
+  const migration = await readFile(new URL("../../db/migrations/003_comment_rule_matching.sql", import.meta.url), "utf8");
   await pool.query(migration);
   await pool.query(migration);
-  const rule = (
-    await pool.query(
-      "SELECT keyword, keywords, match_mode, excluded_keywords FROM instagram_comment_rules WHERE id=$1",
-      [ruleId],
-    )
-  ).rows[0];
+  const rule = (await pool.query("SELECT keyword, keywords, match_mode, excluded_keywords FROM instagram_comment_rules WHERE id=$1", [ruleId])).rows[0];
   assert.deepEqual(rule, { keyword: "자료", keywords: [], match_mode: "contains", excluded_keywords: [] });
   await signedPost(commentBody());
   assert.equal(await rowCount("private_reply_outbox"), 1);
 });
 
 test("subscription challenge accepts the configured token and rejects another", async () => {
-  const accepted = await fetch(
-    `${baseUrl}/webhooks/instagram?hub.mode=subscribe&hub.verify_token=test-verify-token&hub.challenge=challenge-123`,
-  );
+  const accepted = await fetch(`${baseUrl}/webhooks/instagram?hub.mode=subscribe&hub.verify_token=test-verify-token&hub.challenge=challenge-123`);
   assert.equal(accepted.status, 200);
   assert.equal(await accepted.text(), "challenge-123");
 
-  const rejected = await fetch(
-    `${baseUrl}/webhooks/instagram?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=challenge-123`,
-  );
+  const rejected = await fetch(`${baseUrl}/webhooks/instagram?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=challenge-123`);
   assert.equal(rejected.status, 403);
 });
 
@@ -158,8 +127,7 @@ test("invalid signature cannot create an event or a private reply request", asyn
   assert.equal(response.status, 403);
   const otherSecret = createHmac("sha256", "attacker-secret").update(body).digest("hex");
   const validDigest = createHmac("sha256", "test-app-secret").update(body).digest("hex");
-  for (const signature of [`sha256=${otherSecret}`, `sha1=${validDigest}`, validDigest, "sha256="])
-    assert.equal((await signedPost(body, signature)).status, 403, signature);
+  for (const signature of [`sha256=${otherSecret}`, `sha1=${validDigest}`, validDigest, "sha256="]) assert.equal((await signedPost(body, signature)).status, 403, signature);
   const unsigned = await fetch(`${baseUrl}/webhooks/instagram`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -227,27 +195,19 @@ test("the same comment identifier in another workspace remains separate", async 
   const otherWorkspaceId = "44444444-4444-4444-8444-444444444444";
   const otherConnectionId = "55555555-5555-4555-8555-555555555555";
   await pool.query("INSERT INTO workspaces (id) VALUES ($1)", [otherWorkspaceId]);
-  await pool.query(
-    "INSERT INTO instagram_connections (id, workspace_id, account_id, active) VALUES ($1, $2, $3, true)",
-    [otherConnectionId, otherWorkspaceId, "account-2"],
-  );
-  await pool.query(
-    "INSERT INTO instagram_comment_rules (id, workspace_id, connection_id, media_id, keyword, private_reply_text, enabled) VALUES ($1, $2, $3, $4, $5, $6, true)",
-    [
-      "66666666-6666-4666-8666-666666666666",
-      otherWorkspaceId,
-      otherConnectionId,
-      "post-1",
-      "자료",
-      "다른 작업 공간의 답장",
-    ],
-  );
+  await pool.query("INSERT INTO instagram_connections (id, workspace_id, account_id, active) VALUES ($1, $2, $3, true)", [otherConnectionId, otherWorkspaceId, "account-2"]);
+  await pool.query("INSERT INTO instagram_comment_rules (id, workspace_id, connection_id, media_id, keyword, private_reply_text, enabled) VALUES ($1, $2, $3, $4, $5, $6, true)", [
+    "66666666-6666-4666-8666-666666666666",
+    otherWorkspaceId,
+    otherConnectionId,
+    "post-1",
+    "자료",
+    "다른 작업 공간의 답장",
+  ]);
 
   assert.equal((await signedPost(commentBody())).status, 200);
   assert.equal((await signedPost(commentBody({ accountId: "account-2" }))).status, 200);
-  const result = await pool.query<{ workspace_id: string; private_reply_text: string }>(
-    "SELECT workspace_id, private_reply_text FROM private_reply_outbox ORDER BY workspace_id",
-  );
+  const result = await pool.query<{ workspace_id: string; private_reply_text: string }>("SELECT workspace_id, private_reply_text FROM private_reply_outbox ORDER BY workspace_id");
   assert.deepEqual(result.rows, [
     { workspace_id: workspaceId, private_reply_text: "자료 링크입니다" },
     { workspace_id: otherWorkspaceId, private_reply_text: "다른 작업 공간의 답장" },
@@ -280,10 +240,7 @@ test("a malformed comment in a batch prevents partial storage", async () => {
 });
 
 test("concurrent comments by one sender on one post queue only one reply", async () => {
-  const responses = await Promise.all([
-    signedPost(commentBody({ commentId: "comment-1" })),
-    signedPost(commentBody({ commentId: "comment-2" })),
-  ]);
+  const responses = await Promise.all([signedPost(commentBody({ commentId: "comment-1" })), signedPost(commentBody({ commentId: "comment-2" }))]);
   assert.deepEqual(
     responses.map((response) => response.status),
     [200, 200],
@@ -297,28 +254,26 @@ test("the database rejects an outbox rule from another workspace", async () => {
   const otherWorkspaceId = "44444444-4444-4444-8444-444444444444";
   const otherConnectionId = "55555555-5555-4555-8555-555555555555";
   await pool.query("INSERT INTO workspaces (id) VALUES ($1)", [otherWorkspaceId]);
-  await pool.query(
-    "INSERT INTO instagram_connections (id, workspace_id, account_id, active) VALUES ($1, $2, $3, true)",
-    [otherConnectionId, otherWorkspaceId, "account-2"],
-  );
-  const event = await pool.query<{ id: string }>(
-    "INSERT INTO instagram_comment_events (workspace_id, connection_id, comment_id, media_id, sender_id, comment_text) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
-    [otherWorkspaceId, otherConnectionId, "comment-2", "post-2", "sender-2", "자료"],
-  );
+  await pool.query("INSERT INTO instagram_connections (id, workspace_id, account_id, active) VALUES ($1, $2, $3, true)", [otherConnectionId, otherWorkspaceId, "account-2"]);
+  const event = await pool.query<{ id: string }>("INSERT INTO instagram_comment_events (workspace_id, connection_id, comment_id, media_id, sender_id, comment_text) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id", [
+    otherWorkspaceId,
+    otherConnectionId,
+    "comment-2",
+    "post-2",
+    "sender-2",
+    "자료",
+  ]);
   await assert.rejects(
-    pool.query(
-      "INSERT INTO private_reply_outbox (workspace_id, connection_id, event_id, rule_id, comment_id, media_id, sender_id, private_reply_text) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-      [
-        otherWorkspaceId,
-        otherConnectionId,
-        event.rows[0]!.id,
-        ruleId,
-        "comment-2",
-        "post-2",
-        "sender-2",
-        "잘못된 교차 참조",
-      ],
-    ),
+    pool.query("INSERT INTO private_reply_outbox (workspace_id, connection_id, event_id, rule_id, comment_id, media_id, sender_id, private_reply_text) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", [
+      otherWorkspaceId,
+      otherConnectionId,
+      event.rows[0]!.id,
+      ruleId,
+      "comment-2",
+      "post-2",
+      "sender-2",
+      "잘못된 교차 참조",
+    ]),
     /foreign key constraint/,
   );
 });
@@ -327,19 +282,26 @@ test("the database rejects an outbox event from another workspace", async () => 
   const otherWorkspaceId = "44444444-4444-4444-8444-444444444444";
   const otherConnectionId = "55555555-5555-4555-8555-555555555555";
   await pool.query("INSERT INTO workspaces (id) VALUES ($1)", [otherWorkspaceId]);
-  await pool.query(
-    "INSERT INTO instagram_connections (id, workspace_id, account_id, active) VALUES ($1, $2, $3, true)",
-    [otherConnectionId, otherWorkspaceId, "account-2"],
-  );
-  const event = await pool.query<{ id: string }>(
-    "INSERT INTO instagram_comment_events (workspace_id, connection_id, comment_id, media_id, sender_id, comment_text) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
-    [otherWorkspaceId, otherConnectionId, "comment-2", "post-2", "sender-2", "자료"],
-  );
+  await pool.query("INSERT INTO instagram_connections (id, workspace_id, account_id, active) VALUES ($1, $2, $3, true)", [otherConnectionId, otherWorkspaceId, "account-2"]);
+  const event = await pool.query<{ id: string }>("INSERT INTO instagram_comment_events (workspace_id, connection_id, comment_id, media_id, sender_id, comment_text) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id", [
+    otherWorkspaceId,
+    otherConnectionId,
+    "comment-2",
+    "post-2",
+    "sender-2",
+    "자료",
+  ]);
   await assert.rejects(
-    pool.query(
-      "INSERT INTO private_reply_outbox (workspace_id, connection_id, event_id, rule_id, comment_id, media_id, sender_id, private_reply_text) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-      [workspaceId, connectionId, event.rows[0]!.id, ruleId, "comment-2", "post-1", "sender-2", "잘못된 교차 참조"],
-    ),
+    pool.query("INSERT INTO private_reply_outbox (workspace_id, connection_id, event_id, rule_id, comment_id, media_id, sender_id, private_reply_text) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", [
+      workspaceId,
+      connectionId,
+      event.rows[0]!.id,
+      ruleId,
+      "comment-2",
+      "post-1",
+      "sender-2",
+      "잘못된 교차 참조",
+    ]),
     /foreign key constraint/,
   );
 });
@@ -347,9 +309,7 @@ test("the database rejects an outbox event from another workspace", async () => 
 // The DM start trigger, reply wait and follow confirmation paths need flows and rules this fixture does not create;
 // dm-start-trigger.db.test.ts and the Worker tests prove that a read reaches none of them.
 test("a signed messaging_seen event stores one read of a sent message and stores no inbox DM (#312)", async () => {
-  await pool.query("UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now() WHERE id=$1", [
-    connectionId,
-  ]);
+  await pool.query("UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now() WHERE id=$1", [connectionId]);
   const comment = await signedPost(commentBody());
   assert.equal(comment.status, 200);
   await pool.query("UPDATE private_reply_outbox SET status='sent',recipient_id='900',provider_message_id='sent-mid'");
@@ -373,25 +333,16 @@ test("a signed messaging_seen event stores one read of a sent message and stores
         },
       ],
     });
-  for (let attempt = 0; attempt < 2; attempt++)
-    assert.equal((await signedPost(seen("sent-mid"))).status, comment.status);
+  for (let attempt = 0; attempt < 2; attempt++) assert.equal((await signedPost(seen("sent-mid"))).status, comment.status);
   assert.equal((await signedPost(seen("app-sent-mid"))).status, comment.status);
-  assert.deepEqual(
-    (await pool.query("SELECT workspace_id,connection_id,recipient_id,message_id,read_at FROM instagram_message_reads"))
-      .rows,
-    [
-      {
-        workspace_id: workspaceId,
-        connection_id: connectionId,
-        recipient_id: "900",
-        message_id: "sent-mid",
-        read_at: new Date(readAt),
-      },
-    ],
-  );
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_messages")).rows[0].count,
-    0,
-    "the inbox must not store a read event",
-  );
+  assert.deepEqual((await pool.query("SELECT workspace_id,connection_id,recipient_id,message_id,read_at FROM instagram_message_reads")).rows, [
+    {
+      workspace_id: workspaceId,
+      connection_id: connectionId,
+      recipient_id: "900",
+      message_id: "sent-mid",
+      read_at: new Date(readAt),
+    },
+  ]);
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_messages")).rows[0].count, 0, "the inbox must not store a read event");
 });

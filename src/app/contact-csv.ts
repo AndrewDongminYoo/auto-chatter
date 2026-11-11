@@ -113,12 +113,7 @@ async function acquire(pool: Pool, milliseconds: number): Promise<PoolClient> {
 // With segmentId, only the contacts the saved segment selects are exported. The segment is read in the same
 // snapshot, one statement evaluates its predicate at exported_at and returns only the member keys, and the rows are
 // then read by key in batches.
-export async function exportContactCsv(
-  pool: Pool,
-  user: User,
-  options: Partial<ContactCsvLimits> = {},
-  segmentId: string | null = null,
-) {
+export async function exportContactCsv(pool: Pool, user: User, options: Partial<ContactCsvLimits> = {}, segmentId: string | null = null) {
   const limits = { ...CONTACT_CSV_LIMITS, ...options };
   const deadline = performance.now() + limits.timeoutMs;
   const remaining = () => {
@@ -128,42 +123,26 @@ export async function exportContactCsv(
   };
   const client = await acquire(pool, remaining());
   let destroy = false;
-  async function raw<R extends QueryResultRow = QueryResultRow>(
-    text: string,
-    values: unknown[] = [],
-  ): Promise<QueryResult<R>> {
+  async function raw<R extends QueryResultRow = QueryResultRow>(text: string, values: unknown[] = []): Promise<QueryResult<R>> {
     // pg supports per-query read timeout at runtime; its QueryConfig declarations omit this property.
     const config: QueryConfig & { query_timeout: number } = { text, values, query_timeout: remaining() };
     const result = await client.query<R>(config);
     remaining();
     return result;
   }
-  async function query<R extends QueryResultRow = QueryResultRow>(
-    text: string,
-    values: unknown[] = [],
-  ): Promise<QueryResult<R>> {
+  async function query<R extends QueryResultRow = QueryResultRow>(text: string, values: unknown[] = []): Promise<QueryResult<R>> {
     await raw("SELECT set_config('statement_timeout',$1,true)", [String(remaining())]);
     return raw<R>(text, values);
   }
   try {
     await raw("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
-    const membership = (
-      await query<{ workspace_id: string; role: WorkspaceRole }>(
-        "SELECT workspace_id,role FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL",
-        [user.id],
-      )
-    ).rows[0];
+    const membership = (await query<{ workspace_id: string; role: WorkspaceRole }>("SELECT workspace_id,role FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL", [user.id])).rows[0];
     if (!membership) throw new ApiError(403, "workspace_required");
     if (!roleAllows(membership.role, "admin")) throw new ApiError(403, "role_forbidden");
     const workspace = membership.workspace_id;
     const segment = segmentId === null ? null : await savedSegmentConditions({ query }, workspace, segmentId);
-    for (const condition of segment ? contactConditionFields(segment) : [])
-      await validateFieldCondition({ query }, workspace, condition);
-    const exportedAt = (
-      await query<{ exported_at: string }>(
-        `SELECT to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS exported_at`,
-      )
-    ).rows[0]!.exported_at;
+    for (const condition of segment ? contactConditionFields(segment) : []) await validateFieldCondition({ query }, workspace, condition);
+    const exportedAt = (await query<{ exported_at: string }>(`SELECT to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS exported_at`)).rows[0]!.exported_at;
     const buffer = new ContactCsvBuffer(limits.maxRows, limits.maxBytes);
     // The v1 rows of a contacts CTE, in the export order. $1 is the workspace.
     async function readRows(contacts: { text: string; values: unknown[] }) {
@@ -186,22 +165,7 @@ export async function exportContactCsv(
         )
       ).rows;
       for (const row of rows) {
-        buffer.add([
-          "1",
-          exportedAt,
-          workspace,
-          "instagram",
-          "comment_sender",
-          row.connection_id,
-          contactCsvScalar(row.sender_id, true),
-          contactCsvScalar(row.username),
-          row.first_at,
-          row.last_at,
-          row.comment_count,
-          row.paused ? "true" : "false",
-          row.tags_json,
-          row.fields_json,
-        ]);
+        buffer.add(["1", exportedAt, workspace, "instagram", "comment_sender", row.connection_id, contactCsvScalar(row.sender_id, true), contactCsvScalar(row.username), row.first_at, row.last_at, row.comment_count, row.paused ? "true" : "false", row.tags_json, row.fields_json]);
         remaining();
       }
       return rows;
@@ -262,12 +226,7 @@ export async function exportContactCsv(
     // The canonical lowercase form, as PostgreSQL prints the segment's uuid.
     return { body, exportedAt, segmentId: segmentId?.toLowerCase() ?? null };
   } catch (error) {
-    const timedOut =
-      performance.now() >= deadline ||
-      (isRecord(error) &&
-        (error.code === "57014" ||
-          error.message === "Query read timeout" ||
-          error.message === "contact_export_timeout"));
+    const timedOut = performance.now() >= deadline || (isRecord(error) && (error.code === "57014" || error.message === "Query read timeout" || error.message === "contact_export_timeout"));
     if (timedOut) {
       // Destroying the connection rolls back the read-only transaction and cancels any query still running.
       // Never return a pg client whose client-side timeout fired before the server finished to the pool.

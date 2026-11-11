@@ -10,8 +10,7 @@ import { lockContact } from "./contact-fields.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
 const testUrl = new URL(databaseUrl);
-if (!["localhost", "127.0.0.1"].includes(testUrl.hostname) || testUrl.pathname !== "/automations_test")
-  throw new Error("TEST_DATABASE_URL must point at the local automations_test database");
+if (!["localhost", "127.0.0.1"].includes(testUrl.hostname) || testUrl.pathname !== "/automations_test") throw new Error("TEST_DATABASE_URL must point at the local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const userId = "11111111-1111-4111-8111-111111111111";
@@ -46,8 +45,7 @@ function request(method: string, path: string, body?: unknown) {
     }),
     apiEnv,
     () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 
@@ -109,12 +107,7 @@ async function tag(senderId: string, tags: string[]) {
 }
 
 async function tagsOf(senderId: string): Promise<string[] | undefined> {
-  return (
-    await pool.query("SELECT tags FROM instagram_contact_tags WHERE connection_id=$1 AND sender_id=$2", [
-      connectionId,
-      senderId,
-    ])
-  ).rows[0]?.tags;
+  return (await pool.query("SELECT tags FROM instagram_contact_tags WHERE connection_id=$1 AND sender_id=$2", [connectionId, senderId])).rows[0]?.tags;
 }
 
 // Makes every waiting run due without waiting for the clock.
@@ -149,11 +142,7 @@ test("a comment stops at the delay as a waiting run due in UTC after the actions
   await comment("comment-1", "sender-1");
   assert.deepEqual(await tagsOf("sender-1"), ["lead"]);
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM private_reply_outbox")).rows[0].count, 0);
-  const stored = (
-    await pool.query(
-      "SELECT status,resume_node_id,extract(epoch FROM resume_at-created_at)::int AS seconds FROM flow_runs",
-    )
-  ).rows[0];
+  const stored = (await pool.query("SELECT status,resume_node_id,extract(epoch FROM resume_at-created_at)::int AS seconds FROM flow_runs")).rows[0];
   assert.equal(stored.status, "waiting");
   assert.equal(stored.resume_node_id, "wait");
   assert.ok(Math.abs(stored.seconds - 1800) <= 1, String(stored.seconds));
@@ -326,9 +315,7 @@ test("a resume waits for a lock on its connection before it locks the run", asyn
     await holder.query("SELECT 1 FROM instagram_connections WHERE id=$1 FOR UPDATE", [connectionId]);
     const resumed = resumeDueFlowRuns(pool);
     for (let attempt = 0; attempt < 60; attempt++) {
-      const waiting = await pool.query(
-        "SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%instagram_connections%FOR SHARE%'",
-      );
+      const waiting = await pool.query("SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%instagram_connections%FOR SHARE%'");
       if (waiting.rowCount) break;
       if (attempt === 59) assert.fail("the resume did not wait on the connection lock");
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -381,9 +368,7 @@ test("after the delay the reply still passes the opt-out, pause and comment wind
   let processed = 0;
   while (await processNextPrivateReply(pool, checked, () => now, connectionId)) processed++;
   assert.equal(processed, 3);
-  const outcomes = (
-    await pool.query("SELECT sender_id,status,failure_code FROM private_reply_outbox ORDER BY sender_id")
-  ).rows.map((row) => [row.sender_id, row.status, row.failure_code]);
+  const outcomes = (await pool.query("SELECT sender_id,status,failure_code FROM private_reply_outbox ORDER BY sender_id")).rows.map((row) => [row.sender_id, row.status, row.failure_code]);
   assert.deepEqual(outcomes, [
     ["eligible", "sent", null],
     ["expired", "blocked", "comment_expired"],
@@ -408,22 +393,10 @@ test("deleting a connection or a person removes their waiting runs", async () =>
   await enabledFlow();
   await comment("comment-a", "sender-a");
   await comment("comment-b", "sender-b");
-  const person = (
-    await pool.query<{ result: { deleted_counts: Record<string, number> } }>(
-      "SELECT public.delete_person_data($1,$2,$3,'comment_sender','sender-a') AS result",
-      [workspaceId, connectionId, userId],
-    )
-  ).rows[0]!.result;
+  const person = (await pool.query<{ result: { deleted_counts: Record<string, number> } }>("SELECT public.delete_person_data($1,$2,$3,'comment_sender','sender-a') AS result", [workspaceId, connectionId, userId])).rows[0]!.result;
   assert.equal(person.deleted_counts.flow_runs, 1);
-  await pool.query("UPDATE instagram_connections SET active=false,access_token_encrypted=NULL WHERE id=$1", [
-    connectionId,
-  ]);
-  const connection = (
-    await pool.query<{ result: { deleted_counts: Record<string, number> } }>(
-      "SELECT public.delete_connection_data($1,$2,$3,'owned-account') AS result",
-      [workspaceId, connectionId, userId],
-    )
-  ).rows[0]!.result;
+  await pool.query("UPDATE instagram_connections SET active=false,access_token_encrypted=NULL WHERE id=$1", [connectionId]);
+  const connection = (await pool.query<{ result: { deleted_counts: Record<string, number> } }>("SELECT public.delete_connection_data($1,$2,$3,'owned-account') AS result", [workspaceId, connectionId, userId])).rows[0]!.result;
   assert.equal(connection.deleted_counts.flow_runs, 1);
   await makeDue();
   assert.equal(await resumeDueFlowRuns(pool), 0);
@@ -441,7 +414,5 @@ test("migration 025 replays and only a waiting run carries a resume point", asyn
   await assert.rejects(pool.query("UPDATE flow_runs SET status='cancelled',resume_at=NULL,resume_node_id=NULL"), {
     code: "23514",
   });
-  await pool.query(
-    "UPDATE flow_runs SET status='cancelled',failure_code='inactive_flow',resume_at=NULL,resume_node_id=NULL",
-  );
+  await pool.query("UPDATE flow_runs SET status='cancelled',failure_code='inactive_flow',resume_at=NULL,resume_node_id=NULL");
 });

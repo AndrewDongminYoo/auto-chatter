@@ -20,20 +20,11 @@ function version(value: unknown): number {
 }
 export function parseCampaignDraft(input: unknown, editing = false) {
   const fields = [editing ? "expected_version" : "id", "snapshot_id", "name", "body"];
-  if (!isRecord(input) || Object.keys(input).length !== fields.length || !fields.every((key) => key in input))
-    invalid();
+  if (!isRecord(input) || Object.keys(input).length !== fields.length || !fields.every((key) => key in input)) invalid();
   if (typeof input.name !== "string" || /[\u0000-\u001f\u007f]/.test(input.name)) invalid();
   const name = input.name.normalize("NFC").trim();
   if (!name || [...name].length > 60) invalid();
-  if (
-    typeof input.body !== "string" ||
-    !input.body.trim() ||
-    input.body.length > 1000 ||
-    input.body.includes("\u0000") ||
-    input.body.includes("{{") ||
-    input.body.includes("}}")
-  )
-    invalid();
+  if (typeof input.body !== "string" || !input.body.trim() || input.body.length > 1000 || input.body.includes("\u0000") || input.body.includes("{{") || input.body.includes("}}")) invalid();
   return {
     id: editing ? null : uuid(input.id),
     snapshot_id: uuid(input.snapshot_id),
@@ -42,12 +33,7 @@ export function parseCampaignDraft(input: unknown, editing = false) {
     expected_version: editing ? version(input.expected_version) : null,
   };
 }
-export async function transaction<T>(
-  pool: Pool,
-  user: User,
-  write: boolean,
-  work: (client: PoolClient, workspace: string) => Promise<T>,
-) {
+export async function transaction<T>(pool: Pool, user: User, write: boolean, work: (client: PoolClient, workspace: string) => Promise<T>) {
   const client = await pool.connect();
   try {
     await client.query(write ? "BEGIN" : "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
@@ -80,20 +66,12 @@ async function detail(client: PoolClient, workspace: string, id: string) {
 // The draft as GET /api/campaign-drafts/:id returns it; an approval conflict answers with it.
 export { detail as campaignDraftDetail };
 async function requireSnapshot(client: PoolClient, workspace: string, id: string) {
-  const row = await client.query("SELECT id FROM instagram_segment_snapshots WHERE workspace_id=$1 AND id=$2", [
-    workspace,
-    id,
-  ]);
+  const row = await client.query("SELECT id FROM instagram_segment_snapshots WHERE workspace_id=$1 AND id=$2", [workspace, id]);
   if (!row.rows.length) throw new ApiError(404, "snapshot_not_found");
 }
 export async function listCampaignDrafts(pool: Pool, user: User) {
   return transaction(pool, user, false, async (client, workspace) => ({
-    drafts: (
-      await client.query(
-        `SELECT ${SUMMARY} FROM campaign_drafts d WHERE d.workspace_id=$1 ORDER BY d.created_at DESC,d.id LIMIT $2`,
-        [workspace, LIMIT],
-      )
-    ).rows,
+    drafts: (await client.query(`SELECT ${SUMMARY} FROM campaign_drafts d WHERE d.workspace_id=$1 ORDER BY d.created_at DESC,d.id LIMIT $2`, [workspace, LIMIT])).rows,
   }));
 }
 export async function getCampaignDraft(pool: Pool, user: User, id: string) {
@@ -101,23 +79,14 @@ export async function getCampaignDraft(pool: Pool, user: User, id: string) {
   return transaction(pool, user, false, (client, workspace) => detail(client, workspace, id));
 }
 // The preview reasons in evaluation order; each remaining member gets exactly one, the first that applies.
-export const CAMPAIGN_PREVIEW_REASONS = [
-  "connection_unavailable",
-  "contact_paused",
-  "no_dm_identity",
-  "opted_out",
-  "marketing_consent_required",
-  "reply_window_closed",
-  "candidate",
-] as const;
+export const CAMPAIGN_PREVIEW_REASONS = ["connection_unavailable", "contact_paused", "no_dm_identity", "opted_out", "marketing_consent_required", "reply_window_closed", "candidate"] as const;
 export const utc = (column: string) => `to_char(${column} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 // The member-level and recipient-level conditions of the preview, shared with the delivery worker's final guard
 // (#36), so the preview, the start and the guard read one text. Each refers to fixed aliases: `c` the connection,
 // `a` the member's instagram_contact_automation row, `v` one verified DM recipient (connection_id, sender_id,
 // recipient_id), `latest` that recipient's latest stored text DM (LATEST_TEXT), `evaluation.as_of` the clock, and $1
 // the workspace.
-export const CONNECTION_SENDABLE =
-  "coalesce(c.active AND c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>evaluation.as_of,false)";
+export const CONNECTION_SENDABLE = "coalesce(c.active AND c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>evaluation.as_of,false)";
 export const CONTACT_PAUSED = "coalesce(a.paused OR a.handoff_paused,false)";
 // Stages 4-7 of one verified DM recipient: 4 opted out (the recipient or its comment sender revoked marketing or
 // service replies), 5 no exact explicit marketing grant, 6 no stored text DM in the last 24 hours, 7 candidate.
@@ -248,20 +217,13 @@ export async function createCampaignDraft(pool: Pool, user: User, input: unknown
     .update(JSON.stringify([draft.id, draft.snapshot_id, draft.name, draft.body]))
     .digest("hex");
   return transaction(pool, user, true, async (client, workspace) => {
-    const current = (
-      await client.query("SELECT create_request_hash FROM campaign_drafts WHERE workspace_id=$1 AND id=$2", [
-        workspace,
-        draft.id,
-      ])
-    ).rows[0];
+    const current = (await client.query("SELECT create_request_hash FROM campaign_drafts WHERE workspace_id=$1 AND id=$2", [workspace, draft.id])).rows[0];
     if (current) {
       if (current.create_request_hash !== hash) throw new ApiError(409, "campaign_draft_conflict");
       return { draft: await detail(client, workspace, draft.id!), created: false };
     }
     await requireSnapshot(client, workspace, draft.snapshot_id);
-    const count = (
-      await client.query("SELECT count(*)::int AS total FROM campaign_drafts WHERE workspace_id=$1", [workspace])
-    ).rows[0]!.total;
+    const count = (await client.query("SELECT count(*)::int AS total FROM campaign_drafts WHERE workspace_id=$1", [workspace])).rows[0]!.total;
     if (count >= LIMIT) throw new ApiError(409, "campaign_draft_limit_reached");
     await client.query(
       `INSERT INTO campaign_drafts(id,workspace_id,snapshot_id,name,body,create_request_hash,created_by,updated_by)
@@ -283,24 +245,11 @@ export async function updateCampaignDraft(pool: Pool, user: User, id: string, in
     expected = draft.expected_version!;
   }
   return transaction(pool, user, true, async (client, workspace) => {
-    const current = (
-      await client.query("SELECT version,archived FROM campaign_drafts WHERE workspace_id=$1 AND id=$2 FOR UPDATE", [
-        workspace,
-        id,
-      ])
-    ).rows[0];
+    const current = (await client.query("SELECT version,archived FROM campaign_drafts WHERE workspace_id=$1 AND id=$2 FOR UPDATE", [workspace, id])).rows[0];
     if (!current) throw new ApiError(404, "campaign_draft_not_found");
     if (current.archived || current.version !== expected) throw new ApiError(409, "campaign_draft_conflict");
     // An approval in force freezes the draft; approval creation takes the same workspace and draft locks (#35).
-    if (
-      (
-        await client.query(
-          "SELECT 1 FROM campaign_approvals WHERE workspace_id=$1 AND draft_id=$2 AND status='approved'",
-          [workspace, id],
-        )
-      ).rowCount
-    )
-      throw new ApiError(409, "approval_active");
+    if ((await client.query("SELECT 1 FROM campaign_approvals WHERE workspace_id=$1 AND draft_id=$2 AND status='approved'", [workspace, id])).rowCount) throw new ApiError(409, "approval_active");
     if (draft) {
       await requireSnapshot(client, workspace, draft.snapshot_id);
       await client.query(

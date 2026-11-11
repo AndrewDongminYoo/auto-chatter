@@ -40,10 +40,7 @@ function flowIsTrigger(type) {
   return flowTriggerTypes.includes(type);
 }
 function flowTypeLabel(type) {
-  return (
-    flowCatalogEntry(type)?.label ??
-    (Object.hasOwn(flowDmTriggerLabels, type) ? flowDmTriggerLabels[type] : `지원하지 않는 단계(${type})`)
-  );
+  return flowCatalogEntry(type)?.label ?? (Object.hasOwn(flowDmTriggerLabels, type) ? flowDmTriggerLabels[type] : `지원하지 않는 단계(${type})`);
 }
 // The editor does not offer follows_account, but a draft saved through the API may hold it; its ports keep the
 // outline following every branch. The DM triggers are offered only as a flow's start (flowAddTrigger).
@@ -192,9 +189,7 @@ function flowReachable(document, start) {
 // Nodes after a reply wait, where the publish check refuses a message (message_after_wait).
 function flowAfterWait(document) {
   const after = new Set();
-  for (const node of document.nodes)
-    if (node.type === "wait_for_reply")
-      for (const id of flowReachable(document, node.id)) if (id !== node.id) after.add(id);
+  for (const node of document.nodes) if (node.type === "wait_for_reply") for (const id of flowReachable(document, node.id)) if (id !== node.id) after.add(id);
   return after;
 }
 function flowHasMessageFrom(document, start) {
@@ -344,8 +339,7 @@ function flowStepNumbers(outline) {
   const visit = (items) => {
     for (const item of items)
       if (item.kind === "step") {
-        if (!Object.hasOwn(numbers, item.id))
-          Object.defineProperty(numbers, item.id, { value: next++, enumerable: true });
+        if (!Object.hasOwn(numbers, item.id)) Object.defineProperty(numbers, item.id, { value: next++, enumerable: true });
         for (const branch of item.branches) visit(branch.items);
       }
   };
@@ -424,9 +418,7 @@ function flowMinutes(minutes) {
   const days = Math.floor(minutes / 1440);
   const hours = Math.floor((minutes % 1440) / 60);
   const rest = minutes % 60;
-  return [days ? `${days}일` : "", hours ? `${hours}시간` : "", rest || (!days && !hours) ? `${rest}분` : ""]
-    .filter(Boolean)
-    .join(" ");
+  return [days ? `${days}일` : "", hours ? `${hours}시간` : "", rest || (!days && !hours) ? `${rest}분` : ""].filter(Boolean).join(" ");
 }
 function flowValueText(value) {
   if (value === true) return "예";
@@ -441,15 +433,11 @@ function flowValueText(value) {
 function flowSummary(node, names) {
   const config = node.config ?? {};
   const field = (id) => (id ? (names.field(id) ?? "사용할 수 없는 필드") : "필드 미선택");
-  const account = () =>
-    config.connection_id ? (names.connection(config.connection_id) ?? "알 수 없는 계정") : "계정 미선택";
+  const account = () => (config.connection_id ? (names.connection(config.connection_id) ?? "알 수 없는 계정") : "계정 미선택");
   // The keyword condition of a comment or DM keyword trigger; `all` names what it matches.
   const match = (all) => {
     const keywords = flowStoredList(config.keywords);
-    const condition =
-      config.match_mode === "all"
-        ? all
-        : `${config.match_mode === "exact" ? "정확히 일치" : config.match_mode === "contains" ? "키워드 포함" : "조건 미선택"}: ${keywords.length ? keywords.join(", ") : "키워드 미입력"}`;
+    const condition = config.match_mode === "all" ? all : `${config.match_mode === "exact" ? "정확히 일치" : config.match_mode === "contains" ? "키워드 포함" : "조건 미선택"}: ${keywords.length ? keywords.join(", ") : "키워드 미입력"}`;
     const excluded = flowStoredList(config.excluded_keywords);
     return `${condition}${excluded.length ? ` · 제외 ${excluded.join(", ")}` : ""}`;
   };
@@ -509,8 +497,7 @@ var flowErrorMessages = {
   unknown_field: "보관됐거나 없는 필드를 사용합니다. 다른 필드를 선택해 주세요.",
   invalid_field_value: "선택한 필드의 종류에 맞는 값을 입력해 주세요.",
   invalid_field_type: "응답은 텍스트 필드에만 저장할 수 있습니다.",
-  reply_field_not_sendable:
-    "응답을 저장하는 필드는 외부로 보낼 수 없습니다. 이 플로나 다른 플로에서 응답 저장과 외부 전송에 같은 필드를 쓰고 있습니다.",
+  reply_field_not_sendable: "응답을 저장하는 필드는 외부로 보낼 수 없습니다. 이 플로나 다른 플로에서 응답 저장과 외부 전송에 같은 필드를 쓰고 있습니다.",
   endpoint_unavailable: "켜져 있는 외부 전송 주소를 선택해 주세요.",
   invalid_variable: "메시지 변수는 {{comment.text}}와 {{field:필드 ID}}만 쓸 수 있습니다.",
   trigger_count: "트리거가 정확히 하나 있어야 합니다.",
@@ -554,8 +541,7 @@ function flowPlaceErrors(document, errors) {
     let id = error.node_id;
     if (!exists(id) && Number.isInteger(error.edge_index)) {
       const edge = document.edges[error.edge_index];
-      if (edge)
-        id = /\.to$/.test(error.path ?? "") && exists(edge.to) ? edge.to : exists(edge.from) ? edge.from : edge.to;
+      if (edge) id = /\.to$/.test(error.path ?? "") && exists(edge.to) ? edge.to : exists(edge.from) ? edge.from : edge.to;
     }
     if (!exists(id)) {
       const index = /^nodes\[(\d+)\]/.exec(error.path ?? "");
@@ -601,10 +587,7 @@ function flowStepLabels(document) {
 function flowErrorsElsewhere(document, errors, source) {
   const label = flowStepLabels(document);
   const { placed, general } = flowPlaceErrors(flowReadable(document) ? document : { nodes: [], edges: [] }, errors);
-  return [
-    ...general.map((error) => ({ code: error.code, message: `${source}: ${error.message}` })),
-    ...placed.map((error) => ({ code: error.code, message: `${source}의 ${label(error.node_id)}: ${error.message}` })),
-  ];
+  return [...general.map((error) => ({ code: error.code, message: `${source}: ${error.message}` })), ...placed.map((error) => ({ code: error.code, message: `${source}의 ${label(error.node_id)}: ${error.message}` }))];
 }
 // The value a new "set field" step stores for its first field: a yes/no field starts at yes, as its
 // select shows; other types start empty, as their inputs show.

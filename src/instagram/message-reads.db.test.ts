@@ -9,8 +9,7 @@ import { ingestMessageReads, parseMessageReadEvents, type InstagramMessageRead }
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const workspaceId = "a1111111-1111-4111-8111-111111111111";
@@ -22,13 +21,7 @@ const otherConnectionId = "a6666666-6666-4666-8666-666666666666";
 const operatorId = "a9999999-9999-4999-8999-999999999999";
 const account = "17841400000000001";
 const otherAccount = "17841400000000002";
-const sendTables = [
-  "private_reply_outbox",
-  "instagram_follow_conversations",
-  "instagram_manual_replies",
-  "flow_dm_deliveries",
-  "campaign_deliveries",
-] as const;
+const sendTables = ["private_reply_outbox", "instagram_follow_conversations", "instagram_manual_replies", "flow_dm_deliveries", "campaign_deliveries"] as const;
 const mid = (table: string, owner: string) => `${table}-mid-${owner}`;
 
 before(async () => {
@@ -44,18 +37,9 @@ beforeEach(async () => {
     await seedWorkspace(pool, workspace, user, connection, owner);
     await pool.query("UPDATE instagram_connections SET active=true WHERE id=$1", [connection]);
     // One provider-acknowledged message per send table, each with its own provider message ID.
-    await pool.query(
-      "UPDATE private_reply_outbox SET provider_message_id=$2 WHERE connection_id=$1 AND status='sent'",
-      [connection, mid("private_reply_outbox", owner)],
-    );
-    await pool.query("UPDATE instagram_follow_conversations SET provider_message_id=$2 WHERE connection_id=$1", [
-      connection,
-      mid("instagram_follow_conversations", owner),
-    ]);
-    await pool.query(
-      "UPDATE instagram_manual_replies SET status='sent',provider_message_id=$2,sent_at=now() WHERE connection_id=$1",
-      [connection, mid("instagram_manual_replies", owner)],
-    );
+    await pool.query("UPDATE private_reply_outbox SET provider_message_id=$2 WHERE connection_id=$1 AND status='sent'", [connection, mid("private_reply_outbox", owner)]);
+    await pool.query("UPDATE instagram_follow_conversations SET provider_message_id=$2 WHERE connection_id=$1", [connection, mid("instagram_follow_conversations", owner)]);
+    await pool.query("UPDATE instagram_manual_replies SET status='sent',provider_message_id=$2,sent_at=now() WHERE connection_id=$1", [connection, mid("instagram_manual_replies", owner)]);
     for (const table of ["flow_dm_deliveries", "campaign_deliveries"])
       await pool.query(
         `UPDATE ${table} SET status='sent',attempt_id=gen_random_uuid(),attempt_started_at=now(),provider_message_id=$2,sent_at=now()
@@ -87,9 +71,7 @@ async function storedReads() {
       recipient_id: string;
       message_id: string;
       read_at: Date;
-    }>(
-      "SELECT workspace_id,connection_id,recipient_id,message_id,read_at FROM instagram_message_reads ORDER BY message_id,recipient_id",
-    )
+    }>("SELECT workspace_id,connection_id,recipient_id,message_id,read_at FROM instagram_message_reads ORDER BY message_id,recipient_id")
   ).rows;
 }
 
@@ -111,16 +93,10 @@ test("a read of each send table's message is stored once, and the first read tim
       .sort((left, right) => left.message_id.localeCompare(right.message_id)),
   );
   // A redelivered or repeated event, even with a later time, adds nothing and keeps the first read_at.
-  await ingestMessageReads(pool, [
-    read(mid("private_reply_outbox", account), { readAt: new Date("2026-11-10T02:00:00.000Z") }),
-    read(mid("private_reply_outbox", account)),
-  ]);
+  await ingestMessageReads(pool, [read(mid("private_reply_outbox", account), { readAt: new Date("2026-11-10T02:00:00.000Z") }), read(mid("private_reply_outbox", account))]);
   const rows = await storedReads();
   assert.equal(rows.length, sendTables.length);
-  assert.deepEqual(
-    rows.find((row) => row.message_id === mid("private_reply_outbox", account))?.read_at,
-    new Date("2026-11-10T01:00:00.000Z"),
-  );
+  assert.deepEqual(rows.find((row) => row.message_id === mid("private_reply_outbox", account))?.read_at, new Date("2026-11-10T01:00:00.000Z"));
 });
 
 test("reads of other messages, other connections and inactive connections leave no row", async () => {
@@ -171,13 +147,8 @@ test("a read whose recipient is not the entry account is never parsed, so it sto
 });
 
 test("out-of-order reads of different messages and different readers are independent", async () => {
-  await ingestMessageReads(pool, [
-    read(mid("campaign_deliveries", account), { readAt: new Date("2026-11-10T03:00Z") }),
-  ]);
-  await ingestMessageReads(pool, [
-    read(mid("private_reply_outbox", account), { readAt: new Date("2026-11-10T01:00Z") }),
-    read(mid("private_reply_outbox", account), { readerId: "901", readAt: new Date("2026-11-10T04:00Z") }),
-  ]);
+  await ingestMessageReads(pool, [read(mid("campaign_deliveries", account), { readAt: new Date("2026-11-10T03:00Z") })]);
+  await ingestMessageReads(pool, [read(mid("private_reply_outbox", account), { readAt: new Date("2026-11-10T01:00Z") }), read(mid("private_reply_outbox", account), { readerId: "901", readAt: new Date("2026-11-10T04:00Z") })]);
   assert.deepEqual(
     (await storedReads()).map((row) => [row.message_id, row.recipient_id, row.read_at.toISOString()]),
     [
@@ -189,43 +160,22 @@ test("out-of-order reads of different messages and different readers are indepen
 });
 
 async function seedReads() {
-  await ingestMessageReads(pool, [
-    read(mid("private_reply_outbox", account)),
-    read(mid("campaign_deliveries", account), { readerId: "777" }),
-    read(mid("private_reply_outbox", otherAccount), { accountId: otherAccount }),
-  ]);
+  await ingestMessageReads(pool, [read(mid("private_reply_outbox", account)), read(mid("campaign_deliveries", account), { readerId: "777" }), read(mid("private_reply_outbox", otherAccount), { accountId: otherAccount })]);
   assert.equal((await storedReads()).length, 3);
 }
 
 async function readCount(connection: string, recipient?: string): Promise<number> {
-  return Number(
-    (
-      await pool.query(
-        "SELECT count(*) FROM instagram_message_reads WHERE connection_id=$1 AND ($2::text IS NULL OR recipient_id=$2)",
-        [connection, recipient ?? null],
-      )
-    ).rows[0].count,
-  );
+  return Number((await pool.query("SELECT count(*) FROM instagram_message_reads WHERE connection_id=$1 AND ($2::text IS NULL OR recipient_id=$2)", [connection, recipient ?? null])).rows[0].count);
 }
 
 async function disconnect(connection: string) {
-  await pool.query(
-    "UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1",
-    [connection],
-  );
+  await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1", [connection]);
 }
 
 test("connection deletion removes the connection's reads and counts them", async () => {
   await seedReads();
   await disconnect(connectionId);
-  const { result } = (
-    await pool.query("SELECT public.delete_connection_data($1,$2,$3,$4) AS result", [
-      workspaceId,
-      connectionId,
-      operatorId,
-      account,
-    ])
-  ).rows[0];
+  const { result } = (await pool.query("SELECT public.delete_connection_data($1,$2,$3,$4) AS result", [workspaceId, connectionId, operatorId, account])).rows[0];
   assert.equal(result.deleted_counts.instagram_message_reads, 2);
   assert.equal(await readCount(connectionId), 0);
   assert.equal(await readCount(otherConnectionId), 1);
@@ -233,13 +183,7 @@ test("connection deletion removes the connection's reads and counts them", async
 
 test("person deletion by the DM recipient removes only that reader's reads", async () => {
   await seedReads();
-  const { result } = (
-    await pool.query("SELECT public.delete_person_data($1,$2,$3,'dm_recipient','777') AS result", [
-      workspaceId,
-      connectionId,
-      operatorId,
-    ])
-  ).rows[0];
+  const { result } = (await pool.query("SELECT public.delete_person_data($1,$2,$3,'dm_recipient','777') AS result", [workspaceId, connectionId, operatorId])).rows[0];
   assert.equal(result.deleted_counts.instagram_message_reads, 1);
   assert.equal(await readCount(connectionId, "777"), 0);
   assert.equal(await readCount(connectionId, "900"), 1);
@@ -249,9 +193,7 @@ test("person deletion by the DM recipient removes only that reader's reads", asy
 test("workspace deletion removes the workspace's reads and keeps other workspaces' reads", async () => {
   await seedReads();
   await disconnect(connectionId);
-  const { result } = (
-    await pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [workspaceId, operatorId])
-  ).rows[0];
+  const { result } = (await pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [workspaceId, operatorId])).rows[0];
   assert.equal(result.deleted_counts.instagram_message_reads, 2);
   assert.equal(await readCount(connectionId), 0);
   assert.equal(await readCount(otherConnectionId), 1);
@@ -259,44 +201,27 @@ test("workspace deletion removes the workspace's reads and keeps other workspace
 
 test("migration 070 replays over stored reads, keeps the canonical deletion functions and runs in the runner", async () => {
   await seedReads();
-  const definitions = async () =>
-    (
-      await pool.query(
-        "SELECT proname,pg_get_functiondef(oid) AS definition FROM pg_proc WHERE proname IN ('delete_person_data','delete_connection_data','delete_workspace_data') ORDER BY proname",
-      )
-    ).rows;
+  const definitions = async () => (await pool.query("SELECT proname,pg_get_functiondef(oid) AS definition FROM pg_proc WHERE proname IN ('delete_person_data','delete_connection_data','delete_workspace_data') ORDER BY proname")).rows;
   const canonical = await definitions();
   for (const { definition } of canonical) assert.match(definition, /instagram_message_reads/);
   const sql = await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8");
   await pool.query(sql);
   await pool.query(sql);
   // Migration 071 (#321) redefines the deletion functions after 070 in the runner.
-  await pool.query(
-    await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"),
-  );
+  await pool.query(await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"));
   assert.deepEqual(await definitions(), canonical);
   assert.equal((await storedReads()).length, 3);
   const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
-  assert.ok(
-    runner.indexOf("070_instagram_message_reads.sql") > runner.indexOf("069_dm_flow_delivery.sql") &&
-      runner.indexOf("070_instagram_message_reads.sql") < runner.indexOf("supabase-access.sql"),
-  );
+  assert.ok(runner.indexOf("070_instagram_message_reads.sql") > runner.indexOf("069_dm_flow_delivery.sql") && runner.indexOf("070_instagram_message_reads.sql") < runner.indexOf("supabase-access.sql"));
 });
 
 test("migration 071 copies each follow row's current message ID, replays and runs in the runner", async () => {
-  const definitions = async () =>
-    (
-      await pool.query(
-        "SELECT proname,pg_get_functiondef(oid) AS definition FROM pg_proc WHERE proname IN ('delete_person_data','delete_connection_data','delete_workspace_data') ORDER BY proname",
-      )
-    ).rows;
+  const definitions = async () => (await pool.query("SELECT proname,pg_get_functiondef(oid) AS definition FROM pg_proc WHERE proname IN ('delete_person_data','delete_connection_data','delete_workspace_data') ORDER BY proname")).rows;
   const canonical = await definitions();
   for (const { definition } of canonical) assert.match(definition, /instagram_follow_messages/);
   // A database before 071: no history rows, and one follow row without a sent message.
   await pool.query("TRUNCATE instagram_follow_messages");
-  await pool.query("UPDATE instagram_follow_conversations SET provider_message_id=NULL WHERE connection_id=$1", [
-    otherConnectionId,
-  ]);
+  await pool.query("UPDATE instagram_follow_conversations SET provider_message_id=NULL WHERE connection_id=$1", [otherConnectionId]);
   const copied = async () =>
     (
       await pool.query(
@@ -321,17 +246,12 @@ test("migration 071 copies each follow row's current message ID, replays and run
   assert.deepEqual(await copied(), expected);
   assert.deepEqual(await definitions(), canonical);
   // A read of the copied ID is stored once the follow row's own ID has moved on.
-  await pool.query("UPDATE instagram_follow_conversations SET provider_message_id='later-mid' WHERE connection_id=$1", [
-    connectionId,
-  ]);
+  await pool.query("UPDATE instagram_follow_conversations SET provider_message_id='later-mid' WHERE connection_id=$1", [connectionId]);
   await ingestMessageReads(pool, [read(mid("instagram_follow_conversations", account))]);
   assert.deepEqual(
     (await storedReads()).map((row) => row.message_id),
     [mid("instagram_follow_conversations", account)],
   );
   const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
-  assert.ok(
-    runner.indexOf("071_instagram_follow_messages.sql") > runner.indexOf("070_instagram_message_reads.sql") &&
-      runner.indexOf("071_instagram_follow_messages.sql") < runner.indexOf("supabase-access.sql"),
-  );
+  assert.ok(runner.indexOf("071_instagram_follow_messages.sql") > runner.indexOf("070_instagram_message_reads.sql") && runner.indexOf("071_instagram_follow_messages.sql") < runner.indexOf("supabase-access.sql"));
 });

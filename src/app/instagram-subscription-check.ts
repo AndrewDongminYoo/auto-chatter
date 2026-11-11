@@ -19,8 +19,7 @@ export const REQUIRED_SUBSCRIPTION_FIELDS = ["comments", "messages", "messaging_
 // (isMetaTokenRejection) on either call; account_mismatch is a token Meta accepted for another account.
 // unverified covers timeouts, network errors, 5xx, rate limits, unknown shapes and a remaining next page.
 // identityAccepted says Meta accepted the token for the stored account, which clears a token_rejected marker.
-export type SubscriptionCheckStatus =
-  "fields_present" | "fields_missing" | "token_rejected" | "account_mismatch" | "unverified" | "undecryptable";
+export type SubscriptionCheckStatus = "fields_present" | "fields_missing" | "token_rejected" | "account_mismatch" | "unverified" | "undecryptable";
 export interface SubscriptionCheck {
   status: SubscriptionCheckStatus;
   identityAccepted: boolean;
@@ -54,12 +53,7 @@ export function validGraphVersion(graphVersion: string | undefined): graphVersio
 
 // Decrypts the stored token and reads me?fields=user_id, then the account's subscribed_apps. The second call is
 // made only after Meta accepted the token for the stored account.
-export async function checkInstagramSubscription(
-  connection: { workspaceId: string; accountId: string; encryptedToken: string },
-  key: string,
-  graphVersion: string,
-  fetchImpl: typeof fetch,
-): Promise<SubscriptionCheck> {
+export async function checkInstagramSubscription(connection: { workspaceId: string; accountId: string; encryptedToken: string }, key: string, graphVersion: string, fetchImpl: typeof fetch): Promise<SubscriptionCheck> {
   let token: string;
   try {
     token = openSecret(connection.encryptedToken, key, `${connection.workspaceId}:${connection.accountId}`);
@@ -69,16 +63,10 @@ export async function checkInstagramSubscription(
   const base = `https://graph.instagram.com/${graphVersion}`;
   const identity = await providerGet(fetchImpl, `${base}/me?fields=user_id`, token);
   if (identity.status !== "ok") return { status: identity.status, identityAccepted: false };
-  const account =
-    isRecord(identity.value) && Array.isArray(identity.value.data) ? identity.value.data[0] : identity.value;
-  if (!isRecord(account) || typeof account.user_id !== "string")
-    return { status: "unverified", identityAccepted: false };
+  const account = isRecord(identity.value) && Array.isArray(identity.value.data) ? identity.value.data[0] : identity.value;
+  if (!isRecord(account) || typeof account.user_id !== "string") return { status: "unverified", identityAccepted: false };
   if (account.user_id !== connection.accountId) return { status: "account_mismatch", identityAccepted: false };
-  const subscription = await providerGet(
-    fetchImpl,
-    `${base}/${encodeURIComponent(connection.accountId)}/subscribed_apps`,
-    token,
-  );
+  const subscription = await providerGet(fetchImpl, `${base}/${encodeURIComponent(connection.accountId)}/subscribed_apps`, token);
   if (subscription.status !== "ok") return { status: subscription.status, identityAccepted: true };
   return { status: classifySubscribedApps(subscription.value), identityAccepted: true };
 }
@@ -105,12 +93,7 @@ export function classifySubscribedApps(value: unknown): "fields_present" | "fiel
 // token, present clears it. Returns whether the loss was newly recorded or cleared, or null when the token was
 // replaced meanwhile and nothing changed. One timestamp parameter is used for every column, so a newly set
 // subscription_missing_at equals subscription_checked_at.
-async function writeResult(
-  pool: Pick<Pool, "query">,
-  connectionId: string,
-  encryptedToken: string,
-  missing: boolean,
-): Promise<{ lost: boolean; restored: boolean } | null> {
+async function writeResult(pool: Pick<Pool, "query">, connectionId: string, encryptedToken: string, missing: boolean): Promise<{ lost: boolean; restored: boolean } | null> {
   const written = await pool.query<{ was_missing: boolean; is_missing: boolean }>(
     `UPDATE instagram_connections c SET subscription_checked_at=now_.at,
        subscription_missing_at=CASE WHEN NOT $3::boolean THEN NULL WHEN previous.was_missing
@@ -136,16 +119,9 @@ async function writeResult(
 // other results change no subscription column. Write failures are logged with fixed codes and never thrown;
 // the return value says whether every subscription write succeeded (reconnect marker writes are not counted, as
 // in token_refresh).
-export async function recordSubscriptionCheck(
-  pool: Pick<Pool, "query">,
-  connectionId: string,
-  encryptedToken: string,
-  check: SubscriptionCheck,
-  correlationId?: string,
-): Promise<boolean> {
+export async function recordSubscriptionCheck(pool: Pick<Pool, "query">, connectionId: string, encryptedToken: string, check: SubscriptionCheck, correlationId?: string): Promise<boolean> {
   try {
-    if (check.status === "token_rejected")
-      await markReauthRequired(pool, connectionId, encryptedToken, "token_rejected");
+    if (check.status === "token_rejected") await markReauthRequired(pool, connectionId, encryptedToken, "token_rejected");
     else if (check.identityAccepted) await clearReauthRequired(pool, connectionId, encryptedToken, "token_rejected");
   } catch (error) {
     logOperation({
@@ -191,17 +167,9 @@ export async function recordSubscriptionCheck(
 }
 
 // The manual check's attempt time, for scheduling only: the cron then waits a full interval for this token.
-export async function recordSubscriptionAttempt(
-  pool: Pick<Pool, "query">,
-  connectionId: string,
-  encryptedToken: string,
-  correlationId?: string,
-): Promise<boolean> {
+export async function recordSubscriptionAttempt(pool: Pick<Pool, "query">, connectionId: string, encryptedToken: string, correlationId?: string): Promise<boolean> {
   try {
-    await pool.query(
-      "UPDATE instagram_connections SET subscription_check_attempted_at=clock_timestamp() WHERE id=$1 AND access_token_encrypted=$2",
-      [connectionId, encryptedToken],
-    );
+    await pool.query("UPDATE instagram_connections SET subscription_check_attempted_at=clock_timestamp() WHERE id=$1 AND access_token_encrypted=$2", [connectionId, encryptedToken]);
     return true;
   } catch (error) {
     logOperation({
@@ -225,14 +193,7 @@ interface DueConnection {
 // failure is retried after the interval, not every run. A token that does not decrypt or a failed record write
 // counts as a failure and fails the step after every claimed connection was checked, as in token_refresh;
 // transient Meta results, a rejection and an account mismatch do not.
-export async function checkDueInstagramSubscriptions(
-  pool: Pool,
-  key: string | undefined,
-  fetchImpl: typeof fetch,
-  now: Date,
-  graphVersion: string | undefined,
-  correlationId?: string,
-): Promise<{ checked: number; failed: number }> {
+export async function checkDueInstagramSubscriptions(pool: Pool, key: string | undefined, fetchImpl: typeof fetch, now: Date, graphVersion: string | undefined, correlationId?: string): Promise<{ checked: number; failed: number }> {
   if (!key) throw new ConfigurationError("Token encryption not configured");
   if (!validGraphVersion(graphVersion)) throw new ConfigurationError("Graph API version not configured");
   try {
@@ -268,8 +229,7 @@ export async function checkDueInstagramSubscriptions(
       fetchImpl,
     );
     if (check.status === "undecryptable") failed++;
-    if (!(await recordSubscriptionCheck(pool, connection.id, connection.access_token_encrypted, check, correlationId)))
-      failed++;
+    if (!(await recordSubscriptionCheck(pool, connection.id, connection.access_token_encrypted, check, correlationId))) failed++;
   }
   return { checked, failed };
 }

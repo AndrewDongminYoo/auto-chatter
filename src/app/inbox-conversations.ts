@@ -43,12 +43,7 @@ export function conversationState(row: StateRow): ConversationState {
   };
 }
 
-export async function readConversationState(
-  db: Pick<Pool, "query">,
-  workspace: string,
-  connection: string,
-  recipient: string,
-): Promise<ConversationState> {
+export async function readConversationState(db: Pick<Pool, "query">, workspace: string, connection: string, recipient: string): Promise<ConversationState> {
   const result = await db.query<StateRow>(
     `SELECT ${STATE_COLUMNS} FROM (SELECT $1::uuid AS workspace_id,$2::uuid AS connection_id,$3::text AS recipient_id) target
      LEFT JOIN instagram_inbox_conversations state ON state.workspace_id=target.workspace_id
@@ -77,8 +72,7 @@ export async function listAssignees(pool: Pool, user: User) {
 }
 
 function parse(connection: string, recipient: string, query: URLSearchParams, input: unknown) {
-  if (!isUuid(connection) || !/^\d{1,40}$/.test(recipient) || query.size || !isRecord(input))
-    throw new ApiError(400, "invalid_conversation_request");
+  if (!isUuid(connection) || !/^\d{1,40}$/.test(recipient) || query.size || !isRecord(input)) throw new ApiError(400, "invalid_conversation_request");
   const keys = Object.keys(input);
   if (
     keys.some((key) => !["expected_version", "status", "assignee_user_id"].includes(key)) ||
@@ -106,14 +100,7 @@ function assignmentAllowed(role: WorkspaceRole, user: User, from: string | null,
 
 export type SaveConversationResult = { conflict: boolean; state: ConversationState };
 
-export async function saveConversationState(
-  pool: Pool,
-  user: User,
-  connection: string,
-  recipient: string,
-  query: URLSearchParams,
-  input: unknown,
-): Promise<SaveConversationResult> {
+export async function saveConversationState(pool: Pool, user: User, connection: string, recipient: string, query: URLSearchParams, input: unknown): Promise<SaveConversationResult> {
   const change = parse(connection, recipient, query, input);
   const { workspace_id: workspace } = await membershipFor(pool, user, "agent");
   const client = await pool.connect();
@@ -130,14 +117,7 @@ export async function saveConversationState(
   }
 }
 
-async function apply(
-  client: PoolClient,
-  user: User,
-  workspace: string,
-  connection: string,
-  recipient: string,
-  change: ReturnType<typeof parse>,
-): Promise<SaveConversationResult> {
+async function apply(client: PoolClient, user: User, workspace: string, connection: string, recipient: string, change: ReturnType<typeof parse>): Promise<SaveConversationResult> {
   // Lock order: the workspace row, membership rows, the connection, the conversation (lockConversation), then
   // the conversation row.
   // delete_workspace_data locks the workspace row first and deletes the members last, so taking the workspace
@@ -156,15 +136,9 @@ async function apply(
   ).rows;
   const caller = members.find((member) => member.user_id === user.id);
   if (!caller) throw new ApiError(403, "workspace_required");
-  const owned = await client.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR SHARE", [
-    connection,
-    workspace,
-  ]);
+  const owned = await client.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR SHARE", [connection, workspace]);
   if (!owned.rowCount) throw new ApiError(404, "connection_not_found");
-  const exists = await client.query(
-    "SELECT 1 FROM instagram_inbox_messages WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 LIMIT 1",
-    [workspace, connection, recipient],
-  );
+  const exists = await client.query("SELECT 1 FROM instagram_inbox_messages WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 LIMIT 1", [workspace, connection, recipient]);
   if (!exists.rowCount) throw new ApiError(404, "conversation_not_found");
   // A DM stored concurrently waits on this lock until the change commits and then reopens a closed conversation.
   await lockConversation(client, connection, recipient, "exclusive");
@@ -181,15 +155,12 @@ async function apply(
       [workspace, connection, recipient],
     )
   ).rows[0]!;
-  if (current.version !== change.expected)
-    return { conflict: true, state: await readConversationState(client, workspace, connection, recipient) };
+  if (current.version !== change.expected) return { conflict: true, state: await readConversationState(client, workspace, connection, recipient) };
   const status = change.status ?? current.status;
   const assignee = change.assignee === undefined ? current.assignee_user_id : change.assignee;
   if (assignee !== current.assignee_user_id) {
-    if (!assignmentAllowed(caller.role, user, current.assignee_user_id, assignee))
-      throw new ApiError(403, "role_forbidden");
-    if (assignee && !members.some((member) => member.user_id === assignee))
-      throw new ApiError(409, "assignee_unavailable");
+    if (!assignmentAllowed(caller.role, user, current.assignee_user_id, assignee)) throw new ApiError(403, "role_forbidden");
+    if (assignee && !members.some((member) => member.user_id === assignee)) throw new ApiError(409, "assignee_unavailable");
   }
   if (status !== current.status || assignee !== current.assignee_user_id) {
     const version = current.version + 1;
@@ -205,8 +176,7 @@ async function apply(
     );
     // Closing cancels every member's pending reminder on the conversation under the conversation lock taken above,
     // so a reminder write either committed before (and is cancelled here) or waits and then sees the closed status.
-    if (current.status === "open" && status === "closed")
-      await cancelClosedConversationReminders(client, workspace, connection, recipient);
+    if (current.status === "open" && status === "closed") await cancelClosedConversationReminders(client, workspace, connection, recipient);
   }
   return { conflict: false, state: await readConversationState(client, workspace, connection, recipient) };
 }
@@ -214,12 +184,7 @@ async function apply(
 // Called inside removeMember's transaction after it locked the workspace row and then the member row (the
 // same order as saveConversationState and delete_workspace_data): every conversation assigned to
 // the removed member becomes unassigned, with one audit row each. Status is kept.
-export async function unassignRemovedMember(
-  client: PoolClient,
-  workspace: string,
-  memberId: string,
-  actor: string,
-): Promise<number> {
+export async function unassignRemovedMember(client: PoolClient, workspace: string, memberId: string, actor: string): Promise<number> {
   // Connections first, in ID order, as the state change does, so a concurrent data deletion queues.
   await client.query(
     `SELECT 1 FROM instagram_connections WHERE workspace_id=$1 AND id IN (

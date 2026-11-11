@@ -14,18 +14,12 @@ function deferred() {
 
 function tabs(options: { locks?: boolean; storage?: boolean; readOnlyStorage?: boolean } = {}) {
   const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
-  const start = source.includes("function authSessionRevision(")
-    ? source.indexOf("function authSessionRevision(")
-    : source.indexOf("async function api(");
+  const start = source.includes("function authSessionRevision(") ? source.indexOf("function authSessionRevision(") : source.indexOf("async function api(");
   const block = source.slice(start, source.indexOf("\nasync function action(", start));
   const values = new Map<string, string>();
   let tail = Promise.resolve();
   const locks = {
-    request: (
-      _name: string,
-      options: { mode: string } | (() => Promise<unknown>),
-      callback?: () => Promise<unknown>,
-    ) => {
+    request: (_name: string, options: { mode: string } | (() => Promise<unknown>), callback?: () => Promise<unknown>) => {
       const run = typeof options === "function" ? options : callback!;
       const result = tail.then(run);
       tail = result.then(
@@ -47,8 +41,7 @@ function tabs(options: { locks?: boolean; storage?: boolean; readOnlyStorage?: b
           return values.get(key) ?? null;
         },
         setItem: (key: string, value: string) => {
-          if (++writes === failWrite || options.storage === false || options.readOnlyStorage)
-            throw new Error("Storage denied");
+          if (++writes === failWrite || options.storage === false || options.readOnlyStorage) throw new Error("Storage denied");
           values.set(key, value);
         },
       },
@@ -301,8 +294,7 @@ test("late protected error bodies do not expose another session's structured dat
     const rejected = assert.rejects(pending, (error: unknown) => {
       assert.ok(error && typeof error === "object");
       assert.match((error as Error).message, /로그인 상태가 변경/);
-      for (const key of ["segment", "reminder", "rows", "counts", "broadcast_limit"])
-        assert.equal(Reflect.get(error, key), undefined);
+      for (const key of ["segment", "reminder", "rows", "counts", "broadcast_limit"]) assert.equal(Reflect.get(error, key), undefined);
       return true;
     });
     void rejected.catch(() => {});
@@ -336,12 +328,7 @@ test("unchanged protected error responses retain their status and structured fie
   };
   for (const status of [401, 409, 422]) {
     const h = tabs();
-    const tab = h.make(async () =>
-      Response.json(
-        { broadcast_limit: broadcastLimit, error: "version_conflict", segment: { name: "current session" } },
-        { status },
-      ),
-    );
+    const tab = h.make(async () => Response.json({ broadcast_limit: broadcastLimit, error: "version_conflict", segment: { name: "current session" } }, { status }));
     await assert.rejects(tab.api("/api/protected-write", "POST", {}, false), (error: unknown) => {
       assert.ok(error && typeof error === "object");
       assert.equal(Reflect.get(error, "status"), status);

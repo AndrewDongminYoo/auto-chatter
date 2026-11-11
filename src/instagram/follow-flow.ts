@@ -9,11 +9,7 @@ import { resumeRepliedFlowRun } from "./store.ts";
 import { startDmTriggerFlow } from "./dm-start-trigger.ts";
 
 const normalized = (text: string) => text.normalize("NFC").trim().toLowerCase();
-export async function ingestMessages(
-  pool: Pool,
-  messages: readonly InstagramMessage[],
-  now = new Date(),
-): Promise<void> {
+export async function ingestMessages(pool: Pool, messages: readonly InstagramMessage[], now = new Date()): Promise<void> {
   if (!messages.length) return;
   const client = await pool.connect();
   try {
@@ -22,11 +18,7 @@ export async function ingestMessages(
     await lockInboxConversations(client, messages, now);
     for (const message of messages) {
       await storeInboxMessage(client, message, now);
-      if (
-        message.timestamp.getTime() > now.getTime() + 60000 ||
-        message.timestamp.getTime() <= now.getTime() - 24 * 3600000
-      )
-        continue;
+      if (message.timestamp.getTime() > now.getTime() + 60000 || message.timestamp.getTime() <= now.getTime() - 24 * 3600000) continue;
       // Read (and lock the connection) before the lookups: a reply recorded as sent between them would
       // otherwise leave this DM neither matched nor kept.
       const keeper = await sendingConnection(client, message);
@@ -85,16 +77,8 @@ async function offerMessage(client: PoolClient, message: InstagramMessage, early
     [message.accountId, message.senderId, message.timestamp, message.confirmationReplyId ?? null, message.messageId],
   );
   const row = result.rows[0];
-  if (
-    !row ||
-    (!message.confirmationReplyId && normalized(row.confirmation_keyword) !== normalized(message.text)) ||
-    (row.last_message_at && message.timestamp <= row.last_message_at)
-  )
-    return replied;
-  const receipt = await client.query(
-    `INSERT INTO instagram_message_receipts(connection_id,message_id,received_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING message_id`,
-    [row.connection_id, message.messageId, message.timestamp],
-  );
+  if (!row || (!message.confirmationReplyId && normalized(row.confirmation_keyword) !== normalized(message.text)) || (row.last_message_at && message.timestamp <= row.last_message_at)) return replied;
+  const receipt = await client.query(`INSERT INTO instagram_message_receipts(connection_id,message_id,received_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING message_id`, [row.connection_id, message.messageId, message.timestamp]);
   if (!receipt.rowCount || !row.automation_active) return true;
   await client.query(
     `UPDATE instagram_follow_conversations SET status='pending',confirmed_at=$2,last_message_at=$2,next_attempt_at=now(),failure_code=NULL,rate_limit_retries=0
@@ -136,15 +120,7 @@ async function keepUnmatched(client: PoolClient, keeper: Keeper, message: Instag
        AND NOT EXISTS(SELECT 1 FROM flow_runs WHERE connection_id=$2 AND reply_message_id=$4)
        AND NOT EXISTS(SELECT 1 FROM instagram_dm_start_events WHERE connection_id=$2 AND message_id=$4)
      ON CONFLICT(connection_id,message_id) DO NOTHING`,
-    [
-      keeper.workspace_id,
-      keeper.id,
-      message.senderId,
-      message.messageId,
-      message.text,
-      message.confirmationReplyId ?? null,
-      message.timestamp,
-    ],
+    [keeper.workspace_id, keeper.id, message.senderId, message.messageId, message.text, message.confirmationReplyId ?? null, message.timestamp],
   );
 }
 
@@ -161,11 +137,7 @@ async function keepUnmatched(client: PoolClient, keeper: Keeper, message: Instag
 // not at BEGIN, since the connection lock can wait). It is marked matched whether or not it advanced
 // anything; the follow receipts and flow_runs.reply_message_id keep a message from being used twice.
 // Returns how many DMs were checked.
-export async function reconcileUnmatchedReplies(
-  pool: Pool,
-  scope: { replyId?: string; connectionId?: string } = {},
-  limit = 100,
-): Promise<number> {
+export async function reconcileUnmatchedReplies(pool: Pool, scope: { replyId?: string; connectionId?: string } = {}, limit = 100): Promise<number> {
   const due = await pool.query<{ connection_id: string; message_id: string }>(
     `SELECT kept.connection_id::text,kept.message_id FROM instagram_unmatched_replies kept
      WHERE kept.matched_at IS NULL AND kept.message_text IS NOT NULL AND kept.received_at>now()-interval '15 minutes'
@@ -187,12 +159,7 @@ export async function reconcileUnmatchedReplies(
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      const connection = (
-        await client.query<{ account_id: string }>(
-          "SELECT account_id FROM instagram_connections WHERE id=$1 FOR SHARE",
-          [candidate.connection_id],
-        )
-      ).rows[0];
+      const connection = (await client.query<{ account_id: string }>("SELECT account_id FROM instagram_connections WHERE id=$1 FOR SHARE", [candidate.connection_id])).rows[0];
       const kept = connection
         ? (
             await client.query<{
@@ -222,10 +189,7 @@ export async function reconcileUnmatchedReplies(
           },
           true,
         );
-        await client.query(
-          "UPDATE instagram_unmatched_replies SET matched_at=now() WHERE connection_id=$1 AND message_id=$2",
-          [candidate.connection_id, candidate.message_id],
-        );
+        await client.query("UPDATE instagram_unmatched_replies SET matched_at=now() WHERE connection_id=$1 AND message_id=$2", [candidate.connection_id, candidate.message_id]);
         checked++;
       }
       await client.query("COMMIT");
@@ -252,15 +216,8 @@ export async function clearExpiredUnmatchedReplies(pool: Pool, connectionId?: st
   return result.rowCount ?? 0;
 }
 
-export async function processNextFollowReply(
-  pool: Pool,
-  connectionId: string,
-  transport: FollowTransport,
-  now: () => Date = () => new Date(),
-  environmentAccountId?: string,
-): Promise<boolean> {
-  if (environmentAccountId !== undefined && !/^\d+$/.test(environmentAccountId))
-    throw new Error("Invalid Instagram account ID");
+export async function processNextFollowReply(pool: Pool, connectionId: string, transport: FollowTransport, now: () => Date = () => new Date(), environmentAccountId?: string): Promise<boolean> {
+  if (environmentAccountId !== undefined && !/^\d+$/.test(environmentAccountId)) throw new Error("Invalid Instagram account ID");
   const attempt = randomUUID();
   const claimed = await pool.query(
     `WITH candidate AS (
@@ -277,12 +234,7 @@ export async function processNextFollowReply(
   );
   const row = claimed.rows[0];
   if (!row) return false;
-  const replyScope = (
-    await pool.query("SELECT workspace_id::text,sender_id FROM private_reply_outbox WHERE id=$1 AND connection_id=$2", [
-      row.reply_id,
-      connectionId,
-    ])
-  ).rows[0];
+  const replyScope = (await pool.query("SELECT workspace_id::text,sender_id FROM private_reply_outbox WHERE id=$1 AND connection_id=$2", [row.reply_id, connectionId])).rows[0];
   if (!replyScope) throw new Error("Claimed follow reply has no private reply");
   const optedOut = () =>
     deliveryRecipientOptedOut(pool, {
@@ -292,13 +244,7 @@ export async function processNextFollowReply(
     });
   // Like the private outbox, a row keeps its last claim time unless it goes back to pending, so an outcome
   // is dated by its attempt in the 24-hour operations counts (#59).
-  const update = async (
-    status: string,
-    code: string | null,
-    delay = 0,
-    followStatus = "unknown",
-    messageId: string | null = null,
-  ) => {
+  const update = async (status: string, code: string | null, delay = 0, followStatus = "unknown", messageId: string | null = null) => {
     // A sent reply's message ID is also appended to instagram_follow_messages in the same statement (#321): the
     // column keeps only the latest ID, and a read of an earlier reply must still match its own ID. The result has
     // one row only when the claim held; a history conflict must not undo the update of a sent reply. An ID that the
@@ -320,8 +266,7 @@ export async function processNextFollowReply(
     if (result.rowCount !== 1) throw new Error("Follow reply claim was lost");
   };
   const permitted = async () => {
-    if (!(row.confirmed_at instanceof Date) || now().getTime() - row.confirmed_at.getTime() >= 24 * 3600000)
-      return "denied";
+    if (!(row.confirmed_at instanceof Date) || now().getTime() - row.confirmed_at.getTime() >= 24 * 3600000) return "denied";
     try {
       if (await optedOut()) return "opted_out";
     } catch {
@@ -348,13 +293,7 @@ export async function processNextFollowReply(
     if (permission === "allowed") return true;
     await update(
       permission === "paused" || permission === "consent_unavailable" ? "pending" : "blocked",
-      permission === "paused"
-        ? "contact_paused"
-        : permission === "consent_unavailable"
-          ? "consent_unavailable"
-          : permission === "opted_out"
-            ? "recipient_opted_out"
-            : "delivery_not_permitted",
+      permission === "paused" ? "contact_paused" : permission === "consent_unavailable" ? "consent_unavailable" : permission === "opted_out" ? "recipient_opted_out" : "delivery_not_permitted",
       permission === "paused" || permission === "consent_unavailable" ? 60 : 0,
     );
     return false;
@@ -379,32 +318,19 @@ export async function processNextFollowReply(
     return true;
   }
   if (!(await checkPermission())) return true;
-  const pause = await pool.query(
-    "SELECT send_paused_until FROM instagram_connections WHERE id=$1 AND send_paused_until>now()",
-    [connectionId],
-  );
+  const pause = await pool.query("SELECT send_paused_until FROM instagram_connections WHERE id=$1 AND send_paused_until>now()", [connectionId]);
   if (pause.rows[0]) {
-    await update(
-      "pending",
-      "connection_paused",
-      Math.max(1, Math.ceil((pause.rows[0].send_paused_until.getTime() - now().getTime()) / 1000)),
-    );
+    await update("pending", "connection_paused", Math.max(1, Math.ceil((pause.rows[0].send_paused_until.getTime() - now().getTime()) / 1000)));
     return true;
   }
   const followStatus = follows ? "following" : "not_following";
   let messageId: string;
   try {
-    const sent = await transport.send(
-      row.recipient_id,
-      follows ? row.follower_reply_text : row.non_follower_reply_text,
-      {
-        replyId: row.reply_id,
-        attemptId: attempt,
-        ...(!follows && row.confirmation_button_title
-          ? { confirmationButtonTitle: row.confirmation_button_title }
-          : {}),
-      },
-    );
+    const sent = await transport.send(row.recipient_id, follows ? row.follower_reply_text : row.non_follower_reply_text, {
+      replyId: row.reply_id,
+      attemptId: attempt,
+      ...(!follows && row.confirmation_button_title ? { confirmationButtonTitle: row.confirmation_button_title } : {}),
+    });
     if (typeof sent.messageId !== "string" || !sent.messageId.trim()) throw new Error("Missing message ID");
     messageId = sent.messageId;
   } catch (error) {
@@ -435,8 +361,7 @@ export async function processNextFollowReply(
         writer.release();
       }
     } else if (error instanceof PreSendVerificationError) {
-      if (now().getTime() - row.confirmed_at.getTime() >= 24 * 3600000)
-        await update("waiting", "response_window_expired");
+      if (now().getTime() - row.confirmed_at.getTime() >= 24 * 3600000) await update("waiting", "response_window_expired");
       else await update(error.disposition === "retry" ? "pending" : "blocked", error.failureCode, 60, followStatus);
     } else if (error instanceof ProviderRejectedError) await update("failed", error.failureCode, 0, followStatus);
     else await update("unknown", "send_outcome_unknown", 0, followStatus);
@@ -447,8 +372,5 @@ export async function processNextFollowReply(
 }
 
 export async function recoverStaleFollowReplies(pool: Pool, olderThan: Date, connectionId?: string): Promise<void> {
-  await pool.query(
-    "UPDATE instagram_follow_conversations SET status='unknown',failure_code='worker_interrupted',recovered_at=clock_timestamp() WHERE status='sending' AND attempt_started_at<$1 AND ($2::uuid IS NULL OR connection_id=$2)",
-    [olderThan, connectionId ?? null],
-  );
+  await pool.query("UPDATE instagram_follow_conversations SET status='unknown',failure_code='worker_interrupted',recovered_at=clock_timestamp() WHERE status='sending' AND attempt_started_at<$1 AND ($2::uuid IS NULL OR connection_id=$2)", [olderThan, connectionId ?? null]);
 }

@@ -4,23 +4,12 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { CONTACT_CSV_HEADER, ContactCsvBuffer, contactCsvRow, contactCsvScalar } from "./contact-csv.ts";
 import { decodeContactScalar, parseContactCsv } from "./contact-csv-test-utils.ts";
-import {
-  parseImportCsv,
-  CONTACT_IMPORT_BYTES,
-  CONTACT_IMPORT_REQUEST_BYTES,
-  CONTACT_IMPORT_ROWS,
-} from "./contact-csv-preview.ts";
+import { parseImportCsv, CONTACT_IMPORT_BYTES, CONTACT_IMPORT_REQUEST_BYTES, CONTACT_IMPORT_ROWS } from "./contact-csv-preview.ts";
 import { applyContactCsv, CONTACT_IMPORT_APPLY_REQUEST_BYTES, parseImportApplyRequest } from "./contact-csv-import.ts";
 import { readJson } from "./auth.ts";
 import { CONTACT_TAG_LENGTH, CONTACT_TAG_LIMIT } from "./contacts.ts";
 
-function previewHarness(
-  api: (path: string, method?: string, body?: unknown) => Promise<unknown>,
-  channels: BroadcastChannel[],
-  channelAvailable = true,
-  reloadContacts?: () => unknown,
-  sessionSource?: string,
-) {
+function previewHarness(api: (path: string, method?: string, body?: unknown) => Promise<unknown>, channels: BroadcastChannel[], channelAvailable = true, reloadContacts?: () => unknown, sessionSource?: string) {
   class Element extends EventTarget {
     textContent = "";
     value = "selected.csv";
@@ -84,9 +73,7 @@ function previewHarness(
 const appliedRows = {
   applied_at: "2026-10-17T00:01:00Z",
   counts: { total: 1, applied: 1, unchanged: 0 },
-  rows: [
-    { row: 1, status: "applied", connection_id: "dummy", sender_id: "private-A", previous_tags: ["private"], tags: [] },
-  ],
+  rows: [{ row: 1, status: "applied", connection_id: "dummy", sender_id: "private-A", previous_tags: ["private"], tags: [] }],
 };
 const previewRows = {
   checked_at: "2026-10-17T00:00:00Z",
@@ -118,11 +105,7 @@ test("CSV preview clears another tab's file and rows when the authenticated sess
     channels.push(sender);
     sender.postMessage("changed");
     await waitForPreview(() => a.get("contacts-import-rows").children.length === 0);
-    assert.equal(
-      a.get("contacts-import-rows").children.length,
-      0,
-      "session change must erase the previous account's rows",
-    );
+    assert.equal(a.get("contacts-import-rows").children.length, 0, "session change must erase the previous account's rows");
     assert.equal(a.get("contacts-import-file").value, "");
     assert.equal(a.get("contacts-import").hidden, true);
     b.controller.configure("admin");
@@ -308,10 +291,7 @@ test("CSV apply says so when the host skipped the contacts reload over an unsave
     h.acknowledge();
     h.apply();
     await waitForPreview(() => h.get("contacts-import-status").textContent.startsWith("태그 교체 완료"));
-    assert.match(
-      h.get("contacts-import-status").textContent,
-      /적용 1 · 변경 없음 0.*편집 중인 연락처가 있어 목록은 새로 고치지 않았습니다/,
-    );
+    assert.match(h.get("contacts-import-status").textContent, /적용 1 · 변경 없음 0.*편집 중인 연락처가 있어 목록은 새로 고치지 않았습니다/);
     assert.equal(h.get("contacts-import-rows").children.length, 1, "the applied rows are still listed");
   } finally {
     for (const channel of channels) channel.close();
@@ -406,10 +386,7 @@ test("CSV apply request shape is checked with the derived body limit and the sha
   ])
     assert.throws(() => parseImportApplyRequest(input), { status: 400, message: "invalid_contact_import_request" });
   // The limit admits a maximal CSV plus 500 fully escaped expected rows, and is derived, not typed in.
-  assert.equal(
-    CONTACT_IMPORT_APPLY_REQUEST_BYTES,
-    CONTACT_IMPORT_REQUEST_BYTES + 32 + CONTACT_IMPORT_ROWS * (32 + CONTACT_TAG_LIMIT * (6 * CONTACT_TAG_LENGTH + 3)),
-  );
+  assert.equal(CONTACT_IMPORT_APPLY_REQUEST_BYTES, CONTACT_IMPORT_REQUEST_BYTES + 32 + CONTACT_IMPORT_ROWS * (32 + CONTACT_TAG_LIMIT * (6 * CONTACT_TAG_LENGTH + 3)));
   const escaped = "\u0001".repeat(CONTACT_TAG_LENGTH);
   const maximal = JSON.stringify({
     csv: "\u0001".repeat(CONTACT_IMPORT_BYTES),
@@ -425,17 +402,11 @@ test("CSV apply request shape is checked with the derived body limit and the sha
       headers: { "content-type": "application/json" },
       body,
     });
-  assert.equal(
-    ((await readJson(request(maximal), CONTACT_IMPORT_APPLY_REQUEST_BYTES)) as { csv: string }).csv.length,
-    CONTACT_IMPORT_BYTES,
-  );
-  await assert.rejects(
-    readJson(request("x".repeat(CONTACT_IMPORT_APPLY_REQUEST_BYTES + 1)), CONTACT_IMPORT_APPLY_REQUEST_BYTES),
-    {
-      status: 413,
-      message: "request_too_large",
-    },
-  );
+  assert.equal(((await readJson(request(maximal), CONTACT_IMPORT_APPLY_REQUEST_BYTES)) as { csv: string }).csv.length, CONTACT_IMPORT_BYTES);
+  await assert.rejects(readJson(request("x".repeat(CONTACT_IMPORT_APPLY_REQUEST_BYTES + 1)), CONTACT_IMPORT_APPLY_REQUEST_BYTES), {
+    status: 413,
+    message: "request_too_large",
+  });
   // A broken CSV is refused by the shared parser before any connection is taken.
   let connected = 0;
   const pool = {
@@ -454,18 +425,12 @@ test("CSV apply request shape is checked with the derived body limit and the sha
     status: 422,
     message: "contact_import_too_large",
   });
-  await assert.rejects(
-    applyContactCsv(pool, user, { csv: contactCsvRow(CONTACT_CSV_HEADER), expected: [{ row: 1, current_tags: [] }] }),
-    { status: 400, message: "invalid_contact_import_request" },
-  );
+  await assert.rejects(applyContactCsv(pool, user, { csv: contactCsvRow(CONTACT_CSV_HEADER), expected: [{ row: 1, current_tags: [] }] }), { status: 400, message: "invalid_contact_import_request" });
   assert.equal(connected, 0);
 });
 
 test("CSV import parser counts quoted records and preserves escapes Unicode and identifier text", () => {
-  const rows = [
-    Array.from({ length: 14 }, () => ""),
-    Array.from({ length: 14 }, (_, i) => (i === 6 ? "'0000123" : i === 7 ? '한글\r\n"quoted", 😀' : "x")),
-  ];
+  const rows = [Array.from({ length: 14 }, () => ""), Array.from({ length: 14 }, (_, i) => (i === 6 ? "'0000123" : i === 7 ? '한글\r\n"quoted", 😀' : "x"))];
   const text = "\ufeff" + contactCsvRow(CONTACT_CSV_HEADER) + rows.map(contactCsvRow).join("");
   assert.deepEqual(parseImportCsv(text), rows);
   assert.deepEqual(parseImportCsv(CONTACT_CSV_HEADER.join(",") + "\n"), []);
@@ -536,8 +501,7 @@ test("account text markers cover hidden and full-width formula prefixes while sa
     assert.equal(decodeContactScalar(contactCsvScalar(value)), value);
   }
   assert.equal(contactCsvScalar(null), "");
-  for (const value of ["shop", "한글상점", " normal-name", 'safe,\";=next', "name\nline"])
-    assert.equal(contactCsvScalar(value), value);
+  for (const value of ["shop", "한글상점", " normal-name", 'safe,\";=next', "name\nline"]) assert.equal(contactCsvScalar(value), value);
 });
 
 test("JSON cells retain typed zero false empty strings and quoted injection-like nested values", () => {
@@ -619,9 +583,7 @@ test("same-document login broadcasts do not invalidate the dashboard bootstrap b
   try {
     const preview = previewHarness(async () => previewRows, channels, true, undefined, "document-a");
     const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
-    const block = source.match(
-      /\/\/ Invalidate contact disclosures on cross-tab sessions and BFCache restoration\.[\s\S]*?\/\/ End contact session listeners\./,
-    )?.[0];
+    const block = source.match(/\/\/ Invalidate contact disclosures on cross-tab sessions and BFCache restoration\.[\s\S]*?\/\/ End contact session listeners\./)?.[0];
     assert.ok(block);
     const context = vm.createContext({
       contactSessionSource: "document-a",
@@ -739,11 +701,7 @@ test("retired session requests do not automatically replay after a 401 or shared
     finishRefresh();
     if (transition === "unchanged") {
       await pending;
-      assert.deepEqual(requests, [
-        "/api/campaign-drafts/draft/archive",
-        "/api/auth/refresh",
-        "/api/campaign-drafts/draft/archive",
-      ]);
+      assert.deepEqual(requests, ["/api/campaign-drafts/draft/archive", "/api/auth/refresh", "/api/campaign-drafts/draft/archive"]);
     } else {
       await assert.rejects(pending, /로그인 상태가 변경/);
       assert.equal(requests.filter((path) => path.endsWith("/archive")).length, 1);

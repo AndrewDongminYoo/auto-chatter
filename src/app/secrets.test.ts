@@ -15,6 +15,5 @@ test("encrypted tokens are randomized and bound to their workspace and Instagram
   assert.throws(() => openSecret(encrypted.slice(0, -4) + "AAAA", key, context));
 });
 test("invalid encryption keys are rejected", () => {
-  for (const key of ["", "short", Buffer.alloc(16).toString("base64")])
-    assert.throws(() => sealSecret("token", key, "scope"));
+  for (const key of ["", "short", Buffer.alloc(16).toString("base64")]) assert.throws(() => sealSecret("token", key, "scope"));
 });

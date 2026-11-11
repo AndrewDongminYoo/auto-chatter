@@ -46,15 +46,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function parseComment(value: unknown, accountId: string): InstagramComment {
-  if (
-    !isRecord(value) ||
-    !isNonEmptyString(value.id) ||
-    !isRecord(value.from) ||
-    !isNonEmptyString(value.from.id) ||
-    !isRecord(value.media) ||
-    !isNonEmptyString(value.media.id) ||
-    typeof value.text !== "string"
-  ) {
+  if (!isRecord(value) || !isNonEmptyString(value.id) || !isRecord(value.from) || !isNonEmptyString(value.from.id) || !isRecord(value.media) || !isNonEmptyString(value.media.id) || typeof value.text !== "string") {
     throw new Error("Invalid Instagram comment event");
   }
   if (value.parent_id !== undefined && !isNonEmptyString(value.parent_id)) {

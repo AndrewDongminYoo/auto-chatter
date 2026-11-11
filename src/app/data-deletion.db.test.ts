@@ -8,8 +8,7 @@ import { deliveryRecipientOptedOut } from "../instagram/channel-consent.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const userId = "11111111-1111-4111-8111-111111111111";
@@ -62,8 +61,7 @@ async function seedConnection(connection: string, workspace: string, account: st
      VALUES(gen_random_uuid(),$1,$2,'1789','link','{link}','reply text',false)`,
     [workspace, connection],
   );
-  const rule = (await pool.query("SELECT id FROM instagram_comment_rules WHERE connection_id=$1", [connection])).rows[0]
-    .id;
+  const rule = (await pool.query("SELECT id FROM instagram_comment_rules WHERE connection_id=$1", [connection])).rows[0].id;
   const event = (
     await pool.query(
       `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
@@ -88,10 +86,7 @@ async function seedConnection(connection: string, workspace: string, account: st
      VALUES($1,$2,'follow-mid-1','not_following',now()),($1,$2,'follow-mid-2','following',now())`,
     [connection, reply],
   );
-  await pool.query(
-    "INSERT INTO instagram_message_receipts(connection_id,message_id,received_at) VALUES($1,'m-1',now())",
-    [connection],
-  );
+  await pool.query("INSERT INTO instagram_message_receipts(connection_id,message_id,received_at) VALUES($1,'m-1',now())", [connection]);
   await pool.query(
     `INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at)
      VALUES($1,$2,'900','dm-1','personal dm text','text',now())`,
@@ -102,18 +97,9 @@ async function seedConnection(connection: string, workspace: string, account: st
      VALUES($1,$2,'900','kept-1','kept dm text',now())`,
     [workspace, connection],
   );
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused,handoff_paused) VALUES($1,$2,'123',false,true)",
-    [workspace, connection],
-  );
-  await pool.query(
-    "INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'123','{vip}')",
-    [workspace, connection],
-  );
-  await pool.query(
-    `INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,'123',$3,'"Seoul"')`,
-    [workspace, connection, workspace === workspaceId ? fieldId : otherFieldId],
-  );
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused,handoff_paused) VALUES($1,$2,'123',false,true)", [workspace, connection]);
+  await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'123','{vip}')", [workspace, connection]);
+  await pool.query(`INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,'123',$3,'"Seoul"')`, [workspace, connection, workspace === workspaceId ? fieldId : otherFieldId]);
   await pool.query(
     `INSERT INTO instagram_inbox_handoffs(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,updated_by)
      VALUES($1,$2,'900','123',$3,true,1,$4)`,
@@ -139,13 +125,7 @@ async function seedConnection(connection: string, workspace: string, account: st
      VALUES($1,$2,'900',$3,1)`,
     [workspace, connection, userId],
   );
-  const label = (
-    await pool.query("INSERT INTO instagram_inbox_labels(workspace_id,name,created_by) VALUES($1,$2,$3) RETURNING id", [
-      workspace,
-      `vip ${account}`,
-      userId,
-    ])
-  ).rows[0].id;
+  const label = (await pool.query("INSERT INTO instagram_inbox_labels(workspace_id,name,created_by) VALUES($1,$2,$3) RETURNING id", [workspace, `vip ${account}`, userId])).rows[0].id;
   await pool.query(
     `INSERT INTO instagram_inbox_conversation_labels(workspace_id,connection_id,recipient_id,label_ids,version,updated_by)
      VALUES($1,$2,'900',ARRAY[$3::uuid],1,$4)`,
@@ -156,10 +136,7 @@ async function seedConnection(connection: string, workspace: string, account: st
      VALUES($1,$2,'900',1,ARRAY[$3::uuid],'{}',$4)`,
     [workspace, connection, label, userId],
   );
-  await pool.query(
-    "INSERT INTO instagram_inbox_notes(workspace_id,connection_id,recipient_id,author_id,body) VALUES($1,$2,'900',$3,'note text')",
-    [workspace, connection, userId],
-  );
+  await pool.query("INSERT INTO instagram_inbox_notes(workspace_id,connection_id,recipient_id,author_id,body) VALUES($1,$2,'900',$3,'note text')", [workspace, connection, userId]);
   // The seeded conversation is closed, so its reminder was cancelled by the close.
   const reminder = (
     await pool.query(
@@ -199,15 +176,7 @@ async function seedConnection(connection: string, workspace: string, account: st
       await pool.query(
         `INSERT INTO channel_consent_events(request_key,workspace_id,connection_id,channel,identity_kind,identity_value,purpose,decision,evidence_kind,evidence_reference,occurred_at,actor_id)
          VALUES($1::uuid,$2,$3,'instagram','comment_sender',$4,$5,$6,'explicit','ref',now(),$7) RETURNING id`,
-        [
-          key.slice(0, 34) + key.slice(-1) + connection.slice(-1),
-          workspace,
-          connection,
-          identity,
-          purpose,
-          decision,
-          userId,
-        ],
+        [key.slice(0, 34) + key.slice(-1) + connection.slice(-1), workspace, connection, identity, purpose, decision, userId],
       )
     ).rows[0];
     await pool.query(
@@ -224,16 +193,8 @@ async function seedConnection(connection: string, workspace: string, account: st
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspaceId, otherWorkspaceId]);
-  await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2),($3,$4)", [
-    workspaceId,
-    userId,
-    otherWorkspaceId,
-    otherUserId,
-  ]);
-  await pool.query(
-    "INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'city','text'),($3,$4,'city','text')",
-    [fieldId, workspaceId, otherFieldId, otherWorkspaceId],
-  );
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2),($3,$4)", [workspaceId, userId, otherWorkspaceId, otherUserId]);
+  await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'city','text'),($3,$4,'city','text')", [fieldId, workspaceId, otherFieldId, otherWorkspaceId]);
   await seedConnection(connectionId, workspaceId, "account-deleted");
   await seedConnection(keptConnectionId, workspaceId, "account-kept");
   await seedConnection(foreignConnectionId, otherWorkspaceId, "account-foreign");
@@ -250,17 +211,13 @@ function request(method: string, path: string, body?: unknown, actorId = userId)
     }),
     apiEnv,
     () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: actorId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actorId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 
 async function counts(connection: string) {
   const result: Record<string, number> = {};
-  for (const table of connectionTables)
-    result[table] = Number(
-      (await pool.query(`SELECT count(*) FROM ${table} WHERE connection_id=$1`, [connection])).rows[0].count,
-    );
+  for (const table of connectionTables) result[table] = Number((await pool.query(`SELECT count(*) FROM ${table} WHERE connection_id=$1`, [connection])).rows[0].count);
   return result;
 }
 
@@ -287,16 +244,9 @@ test("connection deletion removes personal data, keeps revokes and records evide
   });
   assert.ok(Object.values(await counts(connectionId)).every((count) => count === 0));
 
-  const consent = await pool.query(
-    "SELECT identity_value,decision FROM channel_consent_state WHERE connection_id=$1 ORDER BY identity_value",
-    [connectionId],
-  );
+  const consent = await pool.query("SELECT identity_value,decision FROM channel_consent_state WHERE connection_id=$1 ORDER BY identity_value", [connectionId]);
   assert.deepEqual(consent.rows, [{ identity_value: "456", decision: "revoke" }]);
-  assert.equal(
-    (await pool.query("SELECT count(*) FROM channel_consent_events WHERE connection_id=$1", [connectionId])).rows[0]
-      .count,
-    "1",
-  );
+  assert.equal((await pool.query("SELECT count(*) FROM channel_consent_events WHERE connection_id=$1", [connectionId])).rows[0].count, "1");
   const kept = await pool.query(
     `SELECT (SELECT count(*) FROM instagram_connections WHERE id=$1)::int AS connection,
             (SELECT count(*) FROM instagram_comment_rules WHERE connection_id=$1)::int AS rules,
@@ -312,16 +262,7 @@ test("connection deletion removes personal data, keeps revokes and records evide
   const record = await pool.query("SELECT * FROM data_deletion_records");
   assert.equal(record.rowCount, 1);
   assert.equal(record.rows[0].requested_by, userId);
-  assert.deepEqual(Object.keys(record.rows[0]).sort(), [
-    "completed_at",
-    "connection_id",
-    "deleted_counts",
-    "id",
-    "requested_by",
-    "retained_counts",
-    "scope",
-    "workspace_id",
-  ]);
+  assert.deepEqual(Object.keys(record.rows[0]).sort(), ["completed_at", "connection_id", "deleted_counts", "id", "requested_by", "retained_counts", "scope", "workspace_id"]);
   assert.equal(record.rows[0].scope, "connection");
 
   const list = (await (await request("GET", `/api/connections/${connectionId}/data-deletions`)).json()) as {
@@ -336,9 +277,7 @@ test("connection deletion removes personal data, keeps revokes and records evide
 test("deletion refuses connected, confirmation-mismatched, in-flight and foreign connections", async () => {
   await pool.query("UPDATE instagram_connections SET active=true WHERE id=$1", [connectionId]);
   assert.deepEqual(await (await deleteData()).json(), { error: "connection_active" });
-  await pool.query("UPDATE instagram_connections SET active=false,access_token_encrypted='token' WHERE id=$1", [
-    connectionId,
-  ]);
+  await pool.query("UPDATE instagram_connections SET active=false,access_token_encrypted='token' WHERE id=$1", [connectionId]);
   const tokened = await deleteData();
   assert.equal(tokened.status, 409);
   assert.deepEqual(await tokened.json(), { error: "connection_active" });
@@ -348,10 +287,7 @@ test("deletion refuses connected, confirmation-mismatched, in-flight and foreign
   assert.equal(mismatch.status, 409);
   assert.deepEqual(await mismatch.json(), { error: "confirmation_mismatch" });
 
-  await pool.query(
-    "UPDATE instagram_manual_replies SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE connection_id=$1 AND retry_of IS NOT NULL",
-    [connectionId],
-  );
+  await pool.query("UPDATE instagram_manual_replies SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE connection_id=$1 AND retry_of IS NOT NULL", [connectionId]);
   const sending = await deleteData();
   assert.equal(sending.status, 409);
   assert.deepEqual(await sending.json(), { error: "sending_in_progress" });
@@ -371,12 +307,7 @@ test("repeating a completed deletion succeeds with zero counts and a second reco
 });
 
 test("invalid deletion requests are rejected before touching data", async () => {
-  for (const body of [
-    {},
-    { confirm_account_id: "" },
-    { confirm_account_id: 1 },
-    { confirm_account_id: "x", extra: 1 },
-  ]) {
+  for (const body of [{}, { confirm_account_id: "" }, { confirm_account_id: 1 }, { confirm_account_id: "x", extra: 1 }]) {
     const response = await request("POST", `/api/connections/${connectionId}/data-deletion`, body);
     assert.equal(response.status, 400);
   }
@@ -392,17 +323,11 @@ test("deletion migration replays and the function stays owned outside server rol
   }
   // Migration 071 (#321) holds the latest body; the 023 body would leave instagram_follow_messages rows that block
   // the follow rows' DELETE.
-  await pool.query(
-    await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"),
-  );
-  const body = await pool.query(
-    "SELECT pg_get_functiondef('public.delete_connection_data(uuid,uuid,uuid,text)'::regprocedure) AS body",
-  );
+  await pool.query(await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"));
+  const body = await pool.query("SELECT pg_get_functiondef('public.delete_connection_data(uuid,uuid,uuid,text)'::regprocedure) AS body");
   assert.match(body.rows[0].body, /ORDER BY id FOR UPDATE/);
   assert.match(body.rows[0].body, /flow_step_runs/);
-  const definer = await pool.query(
-    "SELECT prosecdef, pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE proname='delete_connection_data'",
-  );
+  const definer = await pool.query("SELECT prosecdef, pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE proname='delete_connection_data'");
   assert.equal(definer.rows[0].prosecdef, true);
   assert.equal((await deleteData()).status, 200);
 });
@@ -427,11 +352,7 @@ test("a DM-recipient opt-out keeps blocking the bridged comment sender after del
   assert.equal(response.status, 200);
   const body = (await response.json()) as { retained_counts: Record<string, number> };
   assert.equal(body.retained_counts.carried_comment_sender_revokes, 1);
-  assert.equal(
-    (await pool.query("SELECT count(*) FROM private_reply_outbox WHERE connection_id=$1", [connectionId])).rows[0]
-      .count,
-    "0",
-  );
+  assert.equal((await pool.query("SELECT count(*) FROM private_reply_outbox WHERE connection_id=$1", [connectionId])).rows[0].count, "0");
   assert.equal(await deliveryRecipientOptedOut(pool, scope), true);
 });
 
@@ -442,15 +363,11 @@ test("contact writes wait for an in-progress deletion and then find no contact",
     await deletion.query("SELECT id FROM instagram_connections WHERE id=$1 FOR NO KEY UPDATE", [connectionId]);
     await deletion.query("DELETE FROM instagram_contact_tags WHERE connection_id=$1", [connectionId]);
     let settled = false;
-    const pending = request("PATCH", `/api/connections/${connectionId}/contacts/123`, { tags: ["late"] }).finally(
-      () => {
-        settled = true;
-      },
-    );
+    const pending = request("PATCH", `/api/connections/${connectionId}/contacts/123`, { tags: ["late"] }).finally(() => {
+      settled = true;
+    });
     for (let attempt = 0; attempt < 100 && !settled; attempt += 1) {
-      const waiting = await pool.query(
-        "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()",
-      );
+      const waiting = await pool.query("SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()");
       if (waiting.rows[0].waiting > 0) break;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
@@ -474,11 +391,7 @@ test("contact writes wait for an in-progress deletion and then find no contact",
   } finally {
     deletion.release();
   }
-  assert.equal(
-    (await pool.query("SELECT count(*) FROM instagram_contact_tags WHERE connection_id=$1", [connectionId])).rows[0]
-      .count,
-    "0",
-  );
+  assert.equal((await pool.query("SELECT count(*) FROM instagram_contact_tags WHERE connection_id=$1", [connectionId])).rows[0].count, "0");
 });
 
 test("deletion waits for an uncommitted claim and refuses once it commits as sending", async () => {
@@ -486,25 +399,18 @@ test("deletion waits for an uncommitted claim and refuses once it commits as sen
   const claim = await pool.connect();
   try {
     await claim.query("BEGIN");
-    await claim.query(
-      "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE connection_id=$1",
-      [connectionId],
+    await claim.query("UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE connection_id=$1", [connectionId]);
+    const outcome = pool.query("SELECT public.delete_connection_data($1,$2,$3,'account-deleted')", [workspaceId, connectionId, userId]).then(
+      () => "deleted",
+      (error: { code?: string }) => error.code,
     );
-    const outcome = pool
-      .query("SELECT public.delete_connection_data($1,$2,$3,'account-deleted')", [workspaceId, connectionId, userId])
-      .then(
-        () => "deleted",
-        (error: { code?: string }) => error.code,
-      );
     await new Promise((resolve) => setTimeout(resolve, 300));
     await claim.query("COMMIT");
     assert.equal(await outcome, "AC003");
   } finally {
     claim.release();
   }
-  const kept = await pool.query("SELECT DISTINCT status FROM private_reply_outbox WHERE connection_id=$1", [
-    connectionId,
-  ]);
+  const kept = await pool.query("SELECT DISTINCT status FROM private_reply_outbox WHERE connection_id=$1", [connectionId]);
   assert.deepEqual(
     kept.rows.map((row) => row.status),
     ["sending"],
@@ -512,8 +418,7 @@ test("deletion waits for an uncommitted claim and refuses once it commits as sen
 });
 
 test("deletion waits for a concurrently inserted delivery row and refuses once it commits as sending", async () => {
-  const rule = (await pool.query("SELECT id FROM instagram_comment_rules WHERE connection_id=$1", [connectionId]))
-    .rows[0].id;
+  const rule = (await pool.query("SELECT id FROM instagram_comment_rules WHERE connection_id=$1", [connectionId])).rows[0].id;
   const event = (
     await pool.query(
       `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
@@ -529,12 +434,10 @@ test("deletion waits for a concurrently inserted delivery row and refuses once i
        VALUES($1,$2,$3,$4,'late-comment','1789','late-sender','late reply','sending',gen_random_uuid(),now())`,
       [workspaceId, connectionId, event, rule],
     );
-    const outcome = pool
-      .query("SELECT public.delete_connection_data($1,$2,$3,'account-deleted')", [workspaceId, connectionId, userId])
-      .then(
-        () => "deleted",
-        (error: { code?: string }) => error.code,
-      );
+    const outcome = pool.query("SELECT public.delete_connection_data($1,$2,$3,'account-deleted')", [workspaceId, connectionId, userId]).then(
+      () => "deleted",
+      (error: { code?: string }) => error.code,
+    );
     await new Promise((resolve) => setTimeout(resolve, 300));
     await ingress.query("COMMIT");
     assert.equal(await outcome, "AC003");
@@ -549,8 +452,7 @@ test("deletion waits for a concurrently inserted delivery row and refuses once i
 });
 
 test("deletion refuses instead of deadlocking with a follow-gated send being finalized", async () => {
-  const rule = (await pool.query("SELECT id FROM instagram_comment_rules WHERE connection_id=$1", [connectionId]))
-    .rows[0].id;
+  const rule = (await pool.query("SELECT id FROM instagram_comment_rules WHERE connection_id=$1", [connectionId])).rows[0].id;
   const event = (
     await pool.query(
       `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
@@ -569,16 +471,11 @@ test("deletion refuses instead of deadlocking with a follow-gated send being fin
   const finalize = await pool.connect();
   try {
     await finalize.query("BEGIN");
-    await finalize.query(
-      "UPDATE private_reply_outbox SET status='sent',attempt_id=NULL,attempt_started_at=NULL,sent_at=now(),recipient_id='901' WHERE id=$1",
-      [reply],
+    await finalize.query("UPDATE private_reply_outbox SET status='sent',attempt_id=NULL,attempt_started_at=NULL,sent_at=now(),recipient_id='901' WHERE id=$1", [reply]);
+    const outcome = pool.query("SELECT public.delete_connection_data($1,$2,$3,'account-deleted')", [workspaceId, connectionId, userId]).then(
+      () => "deleted",
+      (error: { code?: string }) => error.code,
     );
-    const outcome = pool
-      .query("SELECT public.delete_connection_data($1,$2,$3,'account-deleted')", [workspaceId, connectionId, userId])
-      .then(
-        () => "deleted",
-        (error: { code?: string }) => error.code,
-      );
     await new Promise((resolve) => setTimeout(resolve, 300));
     const inserted = await finalize
       .query(
@@ -596,8 +493,5 @@ test("deletion refuses instead of deadlocking with a follow-gated send being fin
   } finally {
     finalize.release();
   }
-  assert.equal(
-    (await pool.query("SELECT status FROM private_reply_outbox WHERE id=$1", [reply])).rows[0].status,
-    "sent",
-  );
+  assert.equal((await pool.query("SELECT status FROM private_reply_outbox WHERE id=$1", [reply])).rows[0].status, "sent");
 });

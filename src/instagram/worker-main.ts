@@ -1,9 +1,6 @@
 import { Pool } from "pg";
 import { FacebookPrivateReplyTransport, type FacebookPrivateReplyConfig } from "./facebook-private-reply.ts";
-import {
-  InstagramLoginPrivateReplyTransport,
-  type InstagramLoginPrivateReplyConfig,
-} from "./instagram-login-private-reply.ts";
+import { InstagramLoginPrivateReplyTransport, type InstagramLoginPrivateReplyConfig } from "./instagram-login-private-reply.ts";
 import { createNodeFollowTransport, assertNodePrivateReplyAllowed } from "./node-delivery.ts";
 import { runPrivateReplyWorker, type PrivateReplyRequest } from "./reply-worker.ts";
 
@@ -19,15 +16,7 @@ if (mode !== "--check-permissions" && mode !== "--run") {
   const names = [
     "META_GRAPH_VERSION",
     "META_INSTAGRAM_ACCOUNT_ID",
-    ...(loginMode === "facebook"
-      ? [
-          "META_APP_ID",
-          "META_APP_ACCESS_TOKEN",
-          "META_USER_ACCESS_TOKEN",
-          "META_PAGE_ID",
-          "META_INSTAGRAM_CONNECTION_ID",
-        ]
-      : ["META_INSTAGRAM_ACCESS_TOKEN"]),
+    ...(loginMode === "facebook" ? ["META_APP_ID", "META_APP_ACCESS_TOKEN", "META_USER_ACCESS_TOKEN", "META_PAGE_ID", "META_INSTAGRAM_CONNECTION_ID"] : ["META_INSTAGRAM_ACCESS_TOKEN"]),
     ...(mode === "--run" && loginMode === "instagram" ? ["META_INSTAGRAM_CONNECTION_ID"] : []),
     ...(mode === "--run" ? ["DATABASE_URL"] : []),
   ];
@@ -68,18 +57,10 @@ if (mode !== "--check-permissions" && mode !== "--run") {
               accountId: process.env.META_INSTAGRAM_ACCOUNT_ID!,
               connectionId: process.env.META_INSTAGRAM_CONNECTION_ID!,
             } satisfies FacebookPrivateReplyConfig);
-      const inspection =
-        loginMode === "instagram"
-          ? await (transport as InstagramLoginPrivateReplyTransport).inspectAccount()
-          : await (transport as FacebookPrivateReplyTransport).inspectPermissions();
+      const inspection = loginMode === "instagram" ? await (transport as InstagramLoginPrivateReplyTransport).inspectAccount() : await (transport as FacebookPrivateReplyTransport).inspectPermissions();
       if (!inspection.verified) {
-        const missingPermissions =
-          "missingPermissions" in inspection && Array.isArray(inspection.missingPermissions)
-            ? inspection.missingPermissions.join(", ")
-            : undefined;
-        process.stderr.write(
-          `Meta access not verified: ${inspection.reason}${missingPermissions ? ` (${missingPermissions})` : ""}\n`,
-        );
+        const missingPermissions = "missingPermissions" in inspection && Array.isArray(inspection.missingPermissions) ? inspection.missingPermissions.join(", ") : undefined;
+        process.stderr.write(`Meta access not verified: ${inspection.reason}${missingPermissions ? ` (${missingPermissions})` : ""}\n`);
         process.exitCode = 1;
       } else if (mode === "--check-permissions") {
         process.stdout.write(
@@ -91,17 +72,9 @@ if (mode !== "--check-permissions" && mode !== "--run") {
         const pool = new Pool({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 10_000 });
         workerPool = pool;
         try {
-          const connection = await pool.query<{ account_id: string; active: boolean }>(
-            "SELECT account_id, active FROM instagram_connections WHERE id = $1 AND send_enabled AND access_token_encrypted IS NULL",
-            [process.env.META_INSTAGRAM_CONNECTION_ID],
-          );
-          if (
-            connection.rows[0]?.account_id !== process.env.META_INSTAGRAM_ACCOUNT_ID ||
-            connection.rows[0].active !== true
-          ) {
-            process.stderr.write(
-              "Configured Instagram connection must be active, send-enabled, account-matched and environment-managed\n",
-            );
+          const connection = await pool.query<{ account_id: string; active: boolean }>("SELECT account_id, active FROM instagram_connections WHERE id = $1 AND send_enabled AND access_token_encrypted IS NULL", [process.env.META_INSTAGRAM_CONNECTION_ID]);
+          if (connection.rows[0]?.account_id !== process.env.META_INSTAGRAM_ACCOUNT_ID || connection.rows[0].active !== true) {
+            process.stderr.write("Configured Instagram connection must be active, send-enabled, account-matched and environment-managed\n");
             process.exitCode = 1;
           } else {
             const controller = new AbortController();
@@ -109,9 +82,7 @@ if (mode !== "--check-permissions" && mode !== "--run") {
             process.once("SIGINT", stop);
             process.once("SIGTERM", stop);
             try {
-              process.stdout.write(
-                `Instagram private reply worker started for connection ${process.env.META_INSTAGRAM_CONNECTION_ID}\n`,
-              );
+              process.stdout.write(`Instagram private reply worker started for connection ${process.env.META_INSTAGRAM_CONNECTION_ID}\n`);
               await runPrivateReplyWorker(
                 pool,
                 transport,
@@ -142,11 +113,7 @@ if (mode !== "--check-permissions" && mode !== "--run") {
         }
       }
     } catch (error) {
-      const message =
-        error instanceof Error &&
-        (/^(Invalid Meta|Meta Graph)/.test(error.message) || error.message === "Invalid Instagram account ID")
-          ? error.message
-          : "Instagram worker failed";
+      const message = error instanceof Error && (/^(Invalid Meta|Meta Graph)/.test(error.message) || error.message === "Invalid Instagram account ID") ? error.message : "Instagram worker failed";
       process.stderr.write(`${message}\n`);
       process.exitCode = 1;
     }

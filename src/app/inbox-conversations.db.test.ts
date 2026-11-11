@@ -13,8 +13,7 @@ import type { InstagramMessage } from "../instagram/message-events.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const owner = { id: "11111111-1111-4111-8111-111111111111", email: "owner@example.test" };
@@ -45,20 +44,7 @@ beforeEach(async () => {
   await pool.query(
     `INSERT INTO workspace_members(workspace_id,user_id,role,email)
      VALUES($1,$2,'owner',$3),($1,$4,'admin',$5),($1,$6,'agent',$7),($1,$8,'agent',$9),($10,$11,'owner',$12)`,
-    [
-      workspaceId,
-      owner.id,
-      owner.email,
-      admin.id,
-      admin.email,
-      agent.id,
-      agent.email,
-      other.id,
-      other.email,
-      otherWorkspaceId,
-      outsider.id,
-      outsider.email,
-    ],
+    [workspaceId, owner.id, owner.email, admin.id, admin.email, agent.id, agent.email, other.id, other.email, otherWorkspaceId, outsider.id, outsider.email],
   );
   await pool.query(
     `INSERT INTO instagram_connections(id,workspace_id,account_id,username,active,access_token_encrypted,inbox_enabled,inbox_enabled_at)
@@ -133,9 +119,7 @@ async function finishedWithoutWaiting(operation: Promise<unknown>): Promise<bool
   let settled = false;
   void operation.finally(() => (settled = true)).catch(() => undefined);
   for (let attempt = 0; attempt < 200 && !settled; attempt += 1) {
-    const waiting = await pool.query(
-      "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()",
-    );
+    const waiting = await pool.query("SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()");
     if (waiting.rows[0].waiting >= 1) return false;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -143,8 +127,7 @@ async function finishedWithoutWaiting(operation: Promise<unknown>): Promise<bool
 }
 
 const statePath = (recipient = "456") => `/api/inbox/conversations/${connectionId}/${recipient}/state`;
-const save = (actor: Actor, change: Record<string, unknown>, recipient = "456") =>
-  request(actor, "PUT", statePath(recipient), change);
+const save = (actor: Actor, change: Record<string, unknown>, recipient = "456") => request(actor, "PUT", statePath(recipient), change);
 
 async function saved(actor: Actor, change: Record<string, unknown>, recipient = "456"): Promise<State> {
   const response = await save(actor, change, recipient);
@@ -175,9 +158,7 @@ async function events() {
 
 async function waitForLockWaiters(count: number) {
   for (let attempt = 0; attempt < 200; attempt += 1) {
-    const waiting = await pool.query(
-      "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()",
-    );
+    const waiting = await pool.query("SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()");
     if (waiting.rows[0].waiting >= count) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -216,18 +197,13 @@ function saveHeldBeforeCommit(actor: Actor, change: Record<string, unknown>, rec
 async function dmDuringClose(change: Record<string, unknown>, messageId: string) {
   const close = saveHeldBeforeCommit(agent, change);
   try {
-    await Promise.race([
-      close.atCommit,
-      close.response.then((response) => assert.fail(`the close finished before COMMIT with ${response.status}`)),
-    ]);
+    await Promise.race([close.atCommit, close.response.then((response) => assert.fail(`the close finished before COMMIT with ${response.status}`))]);
     let settled = false;
     const ingestion = dm("456", messageId).finally(() => (settled = true));
     // The DM either finishes without waiting or waits for the close; release the close in both cases so a
     // failure comes from the state assertions, not from a lock-wait timeout.
     for (let attempt = 0; attempt < 200 && !settled; attempt += 1) {
-      const waiting = await pool.query(
-        "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()",
-      );
+      const waiting = await pool.query("SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()");
       if (waiting.rows[0].waiting >= 1) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
@@ -244,8 +220,7 @@ test("a conversation without a state row is open and unassigned at version 0 in 
   assert.deepEqual(row!.state, { status: "open", assignee: null, version: 0, updated_by: null, updated_at: null });
   assert.deepEqual(await detail(agent), row!.state);
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_conversations")).rows[0].count, 0);
-  for (const query of ["?status=done", "?assignee=someone", "?status=open&status=closed", "?unknown=1"])
-    assert.equal((await request(agent, "GET", `/api/inbox${query}`)).status, 400, query);
+  for (const query of ["?status=done", "?assignee=someone", "?status=open&status=closed", "?unknown=1"]) assert.equal((await request(agent, "GET", `/api/inbox${query}`)).status, 400, query);
 });
 
 test("status and assignment changes are audited, filtered and answered with the new state", async () => {
@@ -331,10 +306,7 @@ test("agents only claim unassigned conversations or release their own; admins as
   assert.equal((await saved(owner, { expected_version: 3, assignee_user_id: owner.id })).assignee?.user_id, owner.id);
   assert.equal((await saved(owner, { expected_version: 4, assignee_user_id: null })).assignee, null);
 
-  await pool.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [
-    other.id,
-    owner.id,
-  ]);
+  await pool.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [other.id, owner.id]);
   for (const assignee of [other.id, outsider.id, "99999999-9999-4999-8999-999999999999"]) {
     const refused = await save(admin, { expected_version: 5, assignee_user_id: assignee });
     assert.equal(refused.status, 409, assignee);
@@ -355,20 +327,9 @@ test("agents only claim unassigned conversations or release their own; admins as
 });
 
 test("requests are validated before any change", async () => {
-  for (const change of [
-    {},
-    { expected_version: 0 },
-    { status: "closed" },
-    { expected_version: -1, status: "closed" },
-    { expected_version: 0, status: "archived" },
-    { expected_version: 0, assignee_user_id: "not-a-uuid" },
-    { expected_version: 0, status: "closed", extra: true },
-  ])
+  for (const change of [{}, { expected_version: 0 }, { status: "closed" }, { expected_version: -1, status: "closed" }, { expected_version: 0, status: "archived" }, { expected_version: 0, assignee_user_id: "not-a-uuid" }, { expected_version: 0, status: "closed", extra: true }])
     assert.equal((await save(agent, change)).status, 400, JSON.stringify(change));
-  assert.equal(
-    (await request(agent, "PUT", `${statePath()}?x=1`, { expected_version: 0, status: "closed" })).status,
-    400,
-  );
+  assert.equal((await request(agent, "PUT", `${statePath()}?x=1`, { expected_version: 0, status: "closed" })).status, 400);
   const missing = await save(agent, { expected_version: 0, status: "closed" }, "999");
   assert.equal(missing.status, 404);
   assert.equal((await body<{ error: string }>(missing)).error, "conversation_not_found");
@@ -398,17 +359,11 @@ test("a stale version returns 409 with the current state and who changed it", as
 });
 
 test("concurrent claims of the same version serialize on the conversation row: one wins, one conflicts", async () => {
-  await pool.query(
-    "INSERT INTO instagram_inbox_conversations(workspace_id,connection_id,recipient_id) VALUES($1,$2,'456')",
-    [workspaceId, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_inbox_conversations(workspace_id,connection_id,recipient_id) VALUES($1,$2,'456')", [workspaceId, connectionId]);
   const holder = await pool.connect();
   try {
     await holder.query("BEGIN");
-    await holder.query(
-      "SELECT 1 FROM instagram_inbox_conversations WHERE connection_id=$1 AND recipient_id='456' FOR UPDATE",
-      [connectionId],
-    );
+    await holder.query("SELECT 1 FROM instagram_inbox_conversations WHERE connection_id=$1 AND recipient_id='456' FOR UPDATE", [connectionId]);
     const first = save(agent, { expected_version: 0, assignee_user_id: agent.id });
     const second = save(other, { expected_version: 0, assignee_user_id: other.id });
     await waitForLockWaiters(2);
@@ -430,10 +385,7 @@ test("an assignment that waits on a member's removal is refused once the removal
   try {
     await removal.query("BEGIN");
     await removal.query("SELECT 1 FROM workspace_members WHERE user_id=$1 FOR UPDATE", [agent.id]);
-    await removal.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [
-      agent.id,
-      owner.id,
-    ]);
+    await removal.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [agent.id, owner.id]);
     const pending = save(admin, { expected_version: 0, assignee_user_id: agent.id });
     await waitForLockWaiters(1);
     await removal.query("COMMIT");
@@ -475,13 +427,7 @@ test("removing a member unassigns their conversations with audit and keeps statu
   assert.equal((await detail(owner, "790")).assignee?.user_id, other.id);
   const removals = (await events()).filter((event) => event.reason === "member_removed");
   assert.deepEqual(
-    removals.map((event) => [
-      event.recipient_id,
-      event.from_status,
-      event.to_status,
-      event.from_assignee,
-      event.actor_id,
-    ]),
+    removals.map((event) => [event.recipient_id, event.from_status, event.to_status, event.from_assignee, event.actor_id]),
     [
       ["456", "closed", "closed", agent.id, owner.id],
       ["789", "open", "open", agent.id, owner.id],
@@ -522,11 +468,7 @@ test("a new DM reopens a closed conversation once and keeps its assignee; a rede
   ]);
   // A message for a conversation without a state row creates none.
   await dm("791", "new-person");
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_conversations WHERE recipient_id='791'"))
-      .rows[0].count,
-    0,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_conversations WHERE recipient_id='791'")).rows[0].count, 0);
 });
 
 // A sent private reply bridges comment sender 888 to DM recipient, which lets a handoff start.
@@ -539,9 +481,7 @@ async function handoffReady(recipient = "456") {
      ON CONFLICT DO NOTHING`,
     [workspaceId, connectionId],
   );
-  await ingestComments(pool, [
-    { accountId: "123", commentId: `bridge-${recipient}`, postId: "1001", senderId: "888", text: "link please" },
-  ]);
+  await ingestComments(pool, [{ accountId: "123", commentId: `bridge-${recipient}`, postId: "1001", senderId: "888", text: "link please" }]);
   const reply = (
     await pool.query(
       `UPDATE private_reply_outbox SET status='sent',recipient_id=$2,provider_message_id='mid-bridge',sent_at=now()-interval '10 minutes'
@@ -606,16 +546,11 @@ test("a DM of one conversation waits for an uncommitted earlier DM, so a read ma
   let waited = false;
   let later: Promise<void> | undefined;
   try {
-    await Promise.race([
-      held.atPause,
-      held.done.then(() => assert.fail("the earlier DM committed without reaching COMMIT")),
-    ]);
+    await Promise.race([held.atPause, held.done.then(() => assert.fail("the earlier DM committed without reaching COMMIT"))]);
     later = dm("456", "later");
     waited = !(await finishedWithoutWaiting(later));
     // The reader marks the newest message it can see while the earlier DM is still uncommitted.
-    const newest = (
-      await pool.query("SELECT max(id)::text AS id FROM instagram_inbox_messages WHERE recipient_id='456'")
-    ).rows[0].id as string;
+    const newest = (await pool.query("SELECT max(id)::text AS id FROM instagram_inbox_messages WHERE recipient_id='456'")).rows[0].id as string;
     const mark = await request(agent, "POST", `/api/inbox/conversations/${connectionId}/456/read`, {
       message_id: newest,
     });
@@ -625,11 +560,7 @@ test("a DM of one conversation waits for an uncommitted earlier DM, so a read ma
   }
   await held.done;
   await later;
-  const [row] = (
-    await body<{ conversations: { recipient_id: string; message_count: number; unread_count: number }[] }>(
-      await request(agent, "GET", "/api/inbox"),
-    )
-  ).conversations;
+  const [row] = (await body<{ conversations: { recipient_id: string; message_count: number; unread_count: number }[] }>(await request(agent, "GET", "/api/inbox"))).conversations;
   assert.deepEqual([row!.message_count, row!.unread_count], [3, 2], "both DMs stored after the read mark are unread");
   assert.ok(waited, "the later DM did not wait for the earlier one");
 });
@@ -637,10 +568,7 @@ test("a DM of one conversation waits for an uncommitted earlier DM, so a read ma
 test("two DM batches with their senders in opposite orders both complete", async () => {
   // Batch A stops after its first conversation lock, before its second.
   let locks = 0;
-  const first = ingestHeld(
-    [message("456", "batch-a-1"), message("789", "batch-a-2")],
-    (text) => text.includes("'inbox-conversation:'") && ++locks === 2,
-  );
+  const first = ingestHeld([message("456", "batch-a-1"), message("789", "batch-a-2")], (text) => text.includes("'inbox-conversation:'") && ++locks === 2);
   const settle = (promise: Promise<void>) =>
     promise.then(
       () => null,
@@ -655,20 +583,13 @@ test("two DM batches with their senders in opposite orders both complete", async
     first.release();
   }
   assert.deepEqual(await Promise.all([settle(first.done), second]), [null, null]);
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_messages WHERE message_id LIKE 'batch-%'"))
-      .rows[0].count,
-    4,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_messages WHERE message_id LIKE 'batch-%'")).rows[0].count, 4);
 });
 
 test("DMs of different conversations do not wait on each other", async () => {
   const held = ingestHeld([message("456", "held")], (text) => text === "COMMIT");
   try {
-    await Promise.race([
-      held.atPause,
-      held.done.then(() => assert.fail("the held DM committed without reaching COMMIT")),
-    ]);
+    await Promise.race([held.atPause, held.done.then(() => assert.fail("the held DM committed without reaching COMMIT"))]);
     assert.equal(await finishedWithoutWaiting(dm("789", "elsewhere")), true);
   } finally {
     held.release();
@@ -709,12 +630,8 @@ test("status and assignment never change the handoff or the automation pause", a
 test("a handoff started while a private reply is already in send() cannot recall that send", async () => {
   await handoffReady();
   // A second comment from the same person queues another automated reply.
-  await ingestComments(pool, [
-    { accountId: "123", commentId: "in-flight", postId: "1002", senderId: "888", text: "link again" },
-  ]);
-  await ingestComments(pool, [
-    { accountId: "123", commentId: "after-handoff", postId: "1003", senderId: "888", text: "link third" },
-  ]);
+  await ingestComments(pool, [{ accountId: "123", commentId: "in-flight", postId: "1002", senderId: "888", text: "link again" }]);
+  await ingestComments(pool, [{ accountId: "123", commentId: "after-handoff", postId: "1003", senderId: "888", text: "link third" }]);
   let handoffStatus = 0;
   const transport: PrivateReplyTransport = {
     verify: async () => ({ commentCreatedAt: new Date(), authorizationVerified: true, mediaOwned: true }),
@@ -726,27 +643,19 @@ test("a handoff started while a private reply is already in send() cannot recall
   };
   assert.equal(await processNextPrivateReply(pool, transport, () => new Date(), connectionId), true);
   assert.equal(handoffStatus, 200);
-  const rows = (
-    await pool.query("SELECT comment_id,status FROM private_reply_outbox WHERE comment_id<>'bridge-456' ORDER BY id")
-  ).rows;
+  const rows = (await pool.query("SELECT comment_id,status FROM private_reply_outbox WHERE comment_id<>'bridge-456' ORDER BY id")).rows;
   assert.deepEqual(rows, [
     { comment_id: "in-flight", status: "sent" },
     { comment_id: "after-handoff", status: "pending" },
   ]);
   // The next automated reply for the same person is held by the handoff pause.
   assert.equal(await processNextPrivateReply(pool, transport, () => new Date(), connectionId), false);
-  assert.equal(
-    (await pool.query("SELECT status FROM private_reply_outbox WHERE comment_id='after-handoff'")).rows[0].status,
-    "pending",
-  );
+  assert.equal((await pool.query("SELECT status FROM private_reply_outbox WHERE comment_id='after-handoff'")).rows[0].status, "pending");
 });
 
 test("member removal, reassignment and closing during a manual send() recall neither it nor the queued replies", async () => {
   await handoffReady();
-  await pool.query(
-    "UPDATE instagram_connections SET send_enabled=true,token_expires_at=now()+interval '30 days' WHERE id=$1",
-    [connectionId],
-  );
+  await pool.query("UPDATE instagram_connections SET send_enabled=true,token_expires_at=now()+interval '30 days' WHERE id=$1", [connectionId]);
   await saved(agent, { expected_version: 0, assignee_user_id: agent.id });
   assert.equal((await startHandoff(agent)).status, 200);
   // The agent queued two manual replies; the first is sent below, the second waits behind it.
@@ -757,12 +666,8 @@ test("member removal, reassignment and closing during a manual send() recall nei
     [workspaceId, connectionId, agent.id],
   );
   // An automated reply for the same person is queued and held by the handoff pause.
-  await ingestComments(pool, [
-    { accountId: "123", commentId: "held", postId: "1002", senderId: "888", text: "link again" },
-  ]);
-  const heldBefore = (
-    await pool.query("SELECT status,attempt_id,next_attempt_at FROM private_reply_outbox WHERE comment_id='held'")
-  ).rows[0];
+  await ingestComments(pool, [{ accountId: "123", commentId: "held", postId: "1002", senderId: "888", text: "link again" }]);
+  const heldBefore = (await pool.query("SELECT status,attempt_id,next_attempt_at FROM private_reply_outbox WHERE comment_id='held'")).rows[0];
   assert.equal(heldBefore.status, "pending");
 
   const statuses: number[] = [];
@@ -775,9 +680,7 @@ test("member removal, reassignment and closing during a manual send() recall nei
         statuses.push((await request(owner, "DELETE", `/api/workspace/members/${agent.id}`)).status);
         statuses.push((await save(admin, { expected_version: 2, assignee_user_id: other.id })).status);
         statuses.push((await save(other, { expected_version: 3, status: "closed" })).status);
-        sendingDuringChanges = (
-          await pool.query("SELECT status FROM instagram_manual_replies ORDER BY created_at,id")
-        ).rows.map((row) => row.status);
+        sendingDuringChanges = (await pool.query("SELECT status FROM instagram_manual_replies ORDER BY created_at,id")).rows.map((row) => row.status);
       }
       return { messageId: `mid-${text.replace(" ", "-")}` };
     },
@@ -803,17 +706,10 @@ test("member removal, reassignment and closing during a manual send() recall nei
     { text: "queued", status: "pending" },
   ]);
   assert.equal((await pool.query("SELECT active FROM instagram_inbox_handoffs")).rows[0].active, true);
-  assert.deepEqual(
-    (await pool.query("SELECT status,attempt_id,next_attempt_at FROM private_reply_outbox WHERE comment_id='held'"))
-      .rows[0],
-    heldBefore,
-  );
+  assert.deepEqual((await pool.query("SELECT status,attempt_id,next_attempt_at FROM private_reply_outbox WHERE comment_id='held'")).rows[0], heldBefore);
   // The removed member's queued reply is still delivered after the removal and the reassignment.
   assert.equal(await processNextManualReply(pool, connectionId, transport, "token"), true);
-  assert.equal(
-    (await pool.query("SELECT status FROM instagram_manual_replies WHERE text='queued'")).rows[0].status,
-    "sent",
-  );
+  assert.equal((await pool.query("SELECT status FROM instagram_manual_replies WHERE text='queued'")).rows[0].status, "sent");
 });
 
 test("a DM that reopens a closed conversation queues behind person deletion instead of deadlocking", async () => {
@@ -822,21 +718,11 @@ test("a DM that reopens a closed conversation queues behind person deletion inst
   const ingestion = await pool.connect();
   try {
     await ingestion.query("BEGIN");
-    await storeInboxMessage(
-      ingestion,
-      { accountId: "123", senderId: "456", messageId: "reopen", text: "again", timestamp: new Date(Date.now() - 1000) },
-      new Date(),
+    await storeInboxMessage(ingestion, { accountId: "123", senderId: "456", messageId: "reopen", text: "again", timestamp: new Date(Date.now() - 1000) }, new Date());
+    const deletion = pool.query("SELECT public.delete_person_data($1,$2,$3,'dm_recipient','456') AS result", [workspaceId, connectionId, owner.id]).then(
+      (result) => result.rows[0].result,
+      (error: unknown) => error,
     );
-    const deletion = pool
-      .query("SELECT public.delete_person_data($1,$2,$3,'dm_recipient','456') AS result", [
-        workspaceId,
-        connectionId,
-        owner.id,
-      ])
-      .then(
-        (result) => result.rows[0].result,
-        (error: unknown) => error,
-      );
     await waitForLockWaiters(1);
     // Later in the same batch, ingestion takes the connection FOR SHARE (sendingConnection, the reply wait).
     await ingestion.query("SELECT 1 FROM instagram_connections WHERE id=$1 FOR SHARE", [connectionId]);
@@ -858,13 +744,7 @@ test("person deletion removes only the deleted DM recipient's conversation state
   await saved(agent, { expected_version: 0, assignee_user_id: agent.id });
   await saved(agent, { expected_version: 1, status: "closed" });
   await saved(agent, { expected_version: 0, assignee_user_id: agent.id }, "789");
-  const result = (
-    await pool.query("SELECT public.delete_person_data($1,$2,$3,'dm_recipient','456') AS result", [
-      workspaceId,
-      connectionId,
-      owner.id,
-    ])
-  ).rows[0].result;
+  const result = (await pool.query("SELECT public.delete_person_data($1,$2,$3,'dm_recipient','456') AS result", [workspaceId, connectionId, owner.id])).rows[0].result;
   assert.equal(result.deleted_counts.instagram_inbox_conversations, 1);
   assert.equal(result.deleted_counts.instagram_inbox_conversation_events, 2);
   assert.deepEqual(
@@ -879,19 +759,11 @@ test("person deletion removes only the deleted DM recipient's conversation state
 
 for (const deletion of ["connection", "person"] as const)
   test(`a state change waiting on ${deletion} data deletion leaves no conversation rows behind`, async () => {
-    await pool.query(
-      "UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1",
-      [connectionId],
-    );
+    await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1", [connectionId]);
     const holder = await pool.connect();
     try {
       await holder.query("BEGIN");
-      await holder.query(
-        deletion === "connection"
-          ? "SELECT public.delete_connection_data($1,$2,$3,'123')"
-          : "SELECT public.delete_person_data($1,$2,$3,'dm_recipient','456')",
-        [workspaceId, connectionId, owner.id],
-      );
+      await holder.query(deletion === "connection" ? "SELECT public.delete_connection_data($1,$2,$3,'123')" : "SELECT public.delete_person_data($1,$2,$3,'dm_recipient','456')", [workspaceId, connectionId, owner.id]);
       const pending = save(agent, { expected_version: 0, status: "closed" });
       await waitForLockWaiters(1);
       await holder.query("COMMIT");
@@ -902,10 +774,7 @@ for (const deletion of ["connection", "person"] as const)
       await holder.query("ROLLBACK").catch(() => undefined);
       holder.release();
     }
-    assert.equal(
-      (await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_conversations")).rows[0].count,
-      0,
-    );
+    assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_conversations")).rows[0].count, 0);
     assert.deepEqual(await events(), []);
   });
 
@@ -914,19 +783,13 @@ for (const deletion of ["connection", "person"] as const)
 for (const operation of ["state change", "member removal"] as const)
   test(`a ${operation} and workspace deletion queue on the workspace row instead of deadlocking`, async () => {
     await saved(agent, { expected_version: 0, assignee_user_id: agent.id });
-    await pool.query(
-      "UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1",
-      [connectionId],
-    );
+    await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1", [connectionId]);
     const holder = await pool.connect();
     try {
       // Hold the agent's member row so the operation stops at it, then let the deletion run up to its waits.
       await holder.query("BEGIN");
       await holder.query("SELECT 1 FROM workspace_members WHERE user_id=$1 FOR UPDATE", [agent.id]);
-      const pending =
-        operation === "state change"
-          ? save(agent, { expected_version: 1, status: "closed" })
-          : request(owner, "DELETE", `/api/workspace/members/${agent.id}`);
+      const pending = operation === "state change" ? save(agent, { expected_version: 1, status: "closed" }) : request(owner, "DELETE", `/api/workspace/members/${agent.id}`);
       await waitForLockWaiters(1);
       const deletion = pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [workspaceId, owner.id]).then(
         (result) => result.rows[0].result,
@@ -943,23 +806,12 @@ for (const operation of ["state change", "member removal"] as const)
       await holder.query("ROLLBACK").catch(() => undefined);
       holder.release();
     }
-    assert.equal(
-      (await pool.query("SELECT count(*)::int AS count FROM workspaces WHERE id=$1", [workspaceId])).rows[0].count,
-      0,
-    );
+    assert.equal((await pool.query("SELECT count(*)::int AS count FROM workspaces WHERE id=$1", [workspaceId])).rows[0].count, 0);
   });
 
 test("migration 029 replays and every deletion function removes conversation state", async () => {
-  const migration = await readFile(
-    new URL("../../db/migrations/029_conversation_assignment.sql", import.meta.url),
-    "utf8",
-  );
+  const migration = await readFile(new URL("../../db/migrations/029_conversation_assignment.sql", import.meta.url), "utf8");
   await pool.query(migration);
   await pool.query(migration);
-  for (const name of ["delete_connection_data", "delete_person_data", "delete_workspace_data"])
-    assert.match(
-      (await pool.query("SELECT prosrc FROM pg_proc WHERE proname=$1", [name])).rows[0].prosrc,
-      /DELETE FROM public\.instagram_inbox_conversations\b/,
-      name,
-    );
+  for (const name of ["delete_connection_data", "delete_person_data", "delete_workspace_data"]) assert.match((await pool.query("SELECT prosrc FROM pg_proc WHERE proname=$1", [name])).rows[0].prosrc, /DELETE FROM public\.instagram_inbox_conversations\b/, name);
 });

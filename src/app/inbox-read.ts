@@ -9,28 +9,12 @@ export type ReadPosition = { last_read_message_id: string | null; read_at: Date 
 const MAX_BIGINT = 9223372036854775807n;
 
 function parse(connection: string, recipient: string, query: URLSearchParams, input: unknown): string {
-  if (
-    !isUuid(connection) ||
-    !/^\d{1,40}$/.test(recipient) ||
-    query.size ||
-    !isRecord(input) ||
-    Object.keys(input).length !== 1 ||
-    typeof input.message_id !== "string" ||
-    !/^[1-9]\d{0,18}$/.test(input.message_id) ||
-    BigInt(input.message_id) > MAX_BIGINT
-  )
+  if (!isUuid(connection) || !/^\d{1,40}$/.test(recipient) || query.size || !isRecord(input) || Object.keys(input).length !== 1 || typeof input.message_id !== "string" || !/^[1-9]\d{0,18}$/.test(input.message_id) || BigInt(input.message_id) > MAX_BIGINT)
     throw new ApiError(400, "invalid_read_request");
   return input.message_id;
 }
 
-export async function markInboxRead(
-  pool: Pool,
-  user: User,
-  connection: string,
-  recipient: string,
-  query: URLSearchParams,
-  input: unknown,
-): Promise<ReadPosition> {
+export async function markInboxRead(pool: Pool, user: User, connection: string, recipient: string, query: URLSearchParams, input: unknown): Promise<ReadPosition> {
   const messageId = parse(connection, recipient, query, input);
   const { workspace_id: workspace } = await membershipFor(pool, user, "agent");
   const client = await pool.connect();
@@ -49,14 +33,7 @@ export async function markInboxRead(
   return readPosition(pool, workspace, connection, recipient, user.id);
 }
 
-async function apply(
-  client: PoolClient,
-  user: User,
-  workspace: string,
-  connection: string,
-  recipient: string,
-  messageId: string,
-): Promise<void> {
+async function apply(client: PoolClient, user: User, workspace: string, connection: string, recipient: string, messageId: string): Promise<void> {
   // The lock order of the conversation state change (saveConversationState): the workspace row, the caller's
   // membership row, then the connection. delete_workspace_data takes the workspace row FOR UPDATE first and
   // removeMember takes it FOR SHARE before the member row, so the three queue instead of deadlocking; a removal
@@ -64,15 +41,9 @@ async function apply(
   // serializes with the connection and person deletion functions, so no read row is written after they
   // removed the conversation's messages.
   await client.query("SELECT 1 FROM workspaces WHERE id=$1 FOR SHARE", [workspace]);
-  const member = await client.query(
-    "SELECT 1 FROM workspace_members WHERE workspace_id=$1 AND user_id=$2 AND removed_at IS NULL FOR SHARE",
-    [workspace, user.id],
-  );
+  const member = await client.query("SELECT 1 FROM workspace_members WHERE workspace_id=$1 AND user_id=$2 AND removed_at IS NULL FOR SHARE", [workspace, user.id]);
   if (!member.rowCount) throw new ApiError(403, "workspace_required");
-  const owned = await client.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR SHARE", [
-    connection,
-    workspace,
-  ]);
+  const owned = await client.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR SHARE", [connection, workspace]);
   if (!owned.rowCount) throw new ApiError(404, "connection_not_found");
   const message = await client.query(
     `SELECT 1 FROM instagram_inbox_messages
@@ -92,13 +63,7 @@ async function apply(
   );
 }
 
-async function readPosition(
-  db: Pick<Pool, "query">,
-  workspace: string,
-  connection: string,
-  recipient: string,
-  userId: string,
-): Promise<ReadPosition> {
+async function readPosition(db: Pick<Pool, "query">, workspace: string, connection: string, recipient: string, userId: string): Promise<ReadPosition> {
   const result = await db.query<{ last_read_message_id: string | null; read_at: Date | null; unread_count: number }>(
     `SELECT reads.last_read_message_id::text,reads.read_at,
        (SELECT count(*)::integer FROM instagram_inbox_messages m

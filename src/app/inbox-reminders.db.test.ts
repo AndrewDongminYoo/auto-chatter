@@ -10,8 +10,7 @@ import { ingestMessages } from "../instagram/follow-flow.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const owner = { id: "11111111-1111-4111-8111-111111111111", email: "owner@example.test" };
@@ -55,20 +54,7 @@ beforeEach(async () => {
   await pool.query(
     `INSERT INTO workspace_members(workspace_id,user_id,role,email)
      VALUES($1,$2,'owner',$3),($1,$4,'admin',$5),($1,$6,'agent',$7),($1,$8,'agent',$9),($10,$11,'owner',$12)`,
-    [
-      workspaceId,
-      owner.id,
-      owner.email,
-      admin.id,
-      admin.email,
-      agent.id,
-      agent.email,
-      other.id,
-      other.email,
-      otherWorkspaceId,
-      outsider.id,
-      outsider.email,
-    ],
+    [workspaceId, owner.id, owner.email, admin.id, admin.email, agent.id, agent.email, other.id, other.email, otherWorkspaceId, outsider.id, outsider.email],
   );
   await pool.query(
     `INSERT INTO instagram_connections(id,workspace_id,account_id,username,active,inbox_enabled,inbox_enabled_at)
@@ -82,14 +68,7 @@ after(async () => pool.end());
 
 type Connect = () => Promise<unknown>;
 
-function request(
-  actor: Actor,
-  method: string,
-  path: string,
-  body?: unknown,
-  connect: Connect = pool.connect.bind(pool),
-  origin = "https://app.test",
-) {
+function request(actor: Actor, method: string, path: string, body?: unknown, connect: Connect = pool.connect.bind(pool), origin = "https://app.test") {
   return appApi(
     new Request(`https://app.test${path}`, {
       method,
@@ -123,12 +102,10 @@ async function seed(recipient: string, text = "hello", at = "2026-10-01T00:00:01
 
 // The wall-clock minute `offset` from now in a time zone, as the screen's datetime-local input sends it.
 async function localIn(offset: string, zone = "Asia/Seoul"): Promise<string> {
-  return (await pool.query(`SELECT ${dueLocalSql("now()+$1::interval", "$2::text")} AS local`, [offset, zone])).rows[0]
-    .local;
+  return (await pool.query(`SELECT ${dueLocalSql("now()+$1::interval", "$2::text")} AS local`, [offset, zone])).rows[0].local;
 }
 
-const remindersPath = (recipient = "456", connection = connectionId) =>
-  `/api/inbox/conversations/${connection}/${recipient}/reminders`;
+const remindersPath = (recipient = "456", connection = connectionId) => `/api/inbox/conversations/${connection}/${recipient}/reminders`;
 const create = (actor: Actor, dueLocal: unknown, note?: unknown, recipient = "456", connection = connectionId) =>
   request(actor, "POST", remindersPath(recipient, connection), {
     due_local: dueLocal,
@@ -137,12 +114,9 @@ const create = (actor: Actor, dueLocal: unknown, note?: unknown, recipient = "45
 async function created(actor: Actor, recipient = "456", offset = "1 day", connection = connectionId) {
   return body<Reminder>(await create(actor, await localIn(offset), undefined, recipient, connection), 201);
 }
-const patch = (actor: Actor, id: string, input: unknown) =>
-  request(actor, "PATCH", `/api/inbox/reminders/${id}`, input);
-const finish = (actor: Actor, id: string, action: "complete" | "cancel", version: number) =>
-  request(actor, "POST", `/api/inbox/reminders/${id}/${action}`, { expected_version: version });
-const setState = (actor: Actor, input: unknown, recipient = "456") =>
-  request(actor, "PUT", `/api/inbox/conversations/${connectionId}/${recipient}/state`, input);
+const patch = (actor: Actor, id: string, input: unknown) => request(actor, "PATCH", `/api/inbox/reminders/${id}`, input);
+const finish = (actor: Actor, id: string, action: "complete" | "cancel", version: number) => request(actor, "POST", `/api/inbox/reminders/${id}/${action}`, { expected_version: version });
+const setState = (actor: Actor, input: unknown, recipient = "456") => request(actor, "PUT", `/api/inbox/conversations/${connectionId}/${recipient}/state`, input);
 
 async function reminderRows() {
   return (
@@ -167,9 +141,7 @@ async function settledOrWaiting(operation: Promise<unknown>, count = 1) {
   let settled = false;
   void operation.finally(() => (settled = true)).catch(() => undefined);
   for (let attempt = 0; attempt < 200 && !settled; attempt += 1) {
-    const waiting = await pool.query(
-      "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()",
-    );
+    const waiting = await pool.query("SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()");
     if (waiting.rows[0].waiting >= count) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -204,29 +176,21 @@ function heldBeforeCommit(actor: Actor, method: string, path: string, payload: u
 }
 
 async function reachCommit(held: ReturnType<typeof heldBeforeCommit>) {
-  await Promise.race([
-    held.atCommit,
-    held.response.then((response) => assert.fail(`the request finished before COMMIT with ${response.status}`)),
-  ]);
+  await Promise.race([held.atCommit, held.response.then((response) => assert.fail(`the request finished before COMMIT with ${response.status}`))]);
 }
 
 const deletionSql = {
   connection: ["SELECT public.delete_connection_data($1,$2,$3,'123') AS result", [workspaceId, connectionId, owner.id]],
-  person: [
-    "SELECT public.delete_person_data($1,$2,$3,'dm_recipient','456') AS result",
-    [workspaceId, connectionId, owner.id],
-  ],
+  person: ["SELECT public.delete_person_data($1,$2,$3,'dm_recipient','456') AS result", [workspaceId, connectionId, owner.id]],
   workspace: ["SELECT public.delete_workspace_data($1,$2) AS result", [workspaceId, owner.id]],
 } as const;
-const runDeletion = (deletion: keyof typeof deletionSql) =>
-  pool.query(deletionSql[deletion][0], [...deletionSql[deletion][1]]);
+const runDeletion = (deletion: keyof typeof deletionSql) => pool.query(deletionSql[deletion][0], [...deletionSql[deletion][1]]);
 
 test("a member's reminder is private: other members neither see nor change it", async () => {
   await seed("456");
   const local = await localIn("1 day");
   const reminder = await body<Reminder>(await create(agent, local, "  배송 확인  "), 201);
-  const expectedDue = (await pool.query(`SELECT ${localDueSql("$1", "'Asia/Seoul'")} AS due_at`, [`${local}:00`]))
-    .rows[0].due_at as Date;
+  const expectedDue = (await pool.query(`SELECT ${localDueSql("$1", "'Asia/Seoul'")} AS due_at`, [`${local}:00`])).rows[0].due_at as Date;
   assert.equal(reminder.due_at, expectedDue.toISOString());
   assert.equal(reminder.due_local, local);
   assert.equal(reminder.time_zone, "Asia/Seoul");
@@ -234,9 +198,7 @@ test("a member's reminder is private: other members neither see nor change it", 
   assert.equal(reminder.note, "배송 확인");
   assert.equal(reminder.status, "pending");
   assert.equal(reminder.version, 1);
-  assert.deepEqual(await eventRows(), [
-    { recipient_id: "456", version: 1, kind: "created", reason: null, note: "배송 확인", actor_id: agent.id },
-  ]);
+  assert.deepEqual(await eventRows(), [{ recipient_id: "456", version: 1, kind: "created", reason: null, note: "배송 확인", actor_id: agent.id }]);
 
   const mine = await body<InboxPage>(await request(agent, "GET", "/api/inbox"), 200);
   assert.deepEqual(mine.conversations[0]!.reminder, {
@@ -253,25 +215,16 @@ test("a member's reminder is private: other members neither see nor change it", 
   const thread = (actor: Actor) => request(actor, "GET", `/api/connections/${connectionId}/inbox/456`);
   assert.equal((await body<{ reminder: Reminder | null }>(await thread(agent), 200)).reminder?.id, reminder.id);
   assert.equal((await body<{ reminder: Reminder | null }>(await thread(other), 200)).reminder, null);
-  const listed = await body<{ reminders: (Reminder & { username: string })[] }>(
-    await request(agent, "GET", "/api/inbox/reminders"),
-    200,
-  );
+  const listed = await body<{ reminders: (Reminder & { username: string })[] }>(await request(agent, "GET", "/api/inbox/reminders"), 200);
   assert.deepEqual(
     listed.reminders.map((row) => [row.id, row.username]),
     [[reminder.id, "shop"]],
   );
-  assert.deepEqual(
-    (await body<{ reminders: Reminder[] }>(await request(other, "GET", "/api/inbox/reminders"), 200)).reminders,
-    [],
-  );
+  assert.deepEqual((await body<{ reminders: Reminder[] }>(await request(other, "GET", "/api/inbox/reminders"), 200)).reminders, []);
 
   // Another member, an admin, the owner and a member of another workspace are all answered as if it did not exist.
   for (const actor of [other, admin, owner, outsider]) {
-    assert.equal(
-      await errorCode(await patch(actor, reminder.id, { expected_version: 1, note: "x" }), 404),
-      "reminder_not_found",
-    );
+    assert.equal(await errorCode(await patch(actor, reminder.id, { expected_version: 1, note: "x" }), 404), "reminder_not_found");
     assert.equal(await errorCode(await finish(actor, reminder.id, "complete", 1), 404), "reminder_not_found");
     assert.equal(await errorCode(await finish(actor, reminder.id, "cancel", 1), 404), "reminder_not_found");
   }
@@ -297,22 +250,10 @@ test("local times convert with the workspace time zone; DST gaps and overlaps fo
   };
   // A time skipped by the spring-forward gap is read with the offset before the change, so it is stored one hour
   // later on the wall clock; a repeated time in the fall-back overlap is read as the later occurrence.
-  assert.deepEqual(await convert("2026-03-08T02:30:00", "America/New_York"), [
-    "2026-03-08T07:30:00.000Z",
-    "2026-03-08T03:30",
-  ]);
-  assert.deepEqual(await convert("2026-11-01T01:30:00", "America/New_York"), [
-    "2026-11-01T06:30:00.000Z",
-    "2026-11-01T01:30",
-  ]);
-  assert.deepEqual(await convert("2027-03-28T02:30:00", "Europe/Berlin"), [
-    "2027-03-28T01:30:00.000Z",
-    "2027-03-28T03:30",
-  ]);
-  assert.deepEqual(await convert("2026-10-25T02:30:00", "Europe/Berlin"), [
-    "2026-10-25T01:30:00.000Z",
-    "2026-10-25T02:30",
-  ]);
+  assert.deepEqual(await convert("2026-03-08T02:30:00", "America/New_York"), ["2026-03-08T07:30:00.000Z", "2026-03-08T03:30"]);
+  assert.deepEqual(await convert("2026-11-01T01:30:00", "America/New_York"), ["2026-11-01T06:30:00.000Z", "2026-11-01T01:30"]);
+  assert.deepEqual(await convert("2027-03-28T02:30:00", "Europe/Berlin"), ["2027-03-28T01:30:00.000Z", "2027-03-28T03:30"]);
+  assert.deepEqual(await convert("2026-10-25T02:30:00", "Europe/Berlin"), ["2026-10-25T01:30:00.000Z", "2026-10-25T02:30"]);
 
   // The API converts with the zone the workspace has when the reminder is written.
   await seed("456");
@@ -324,77 +265,36 @@ test("local times convert with the workspace time zone; DST gaps and overlaps fo
   assert.equal(reminder.due_at, (await convert(`${local}:00`, "America/New_York"))[0]);
   // A later time zone change moves no stored reminder; it is only shown in the new zone.
   await pool.query("UPDATE workspaces SET time_zone='Asia/Seoul' WHERE id=$1", [workspaceId]);
-  const reread = (
-    await body<{ reminder: Reminder }>(await request(agent, "GET", `/api/connections/${connectionId}/inbox/456`), 200)
-  ).reminder;
+  const reread = (await body<{ reminder: Reminder }>(await request(agent, "GET", `/api/connections/${connectionId}/inbox/456`), 200)).reminder;
   assert.equal(reread.due_at, reminder.due_at);
   assert.equal(reread.time_zone, "Asia/Seoul");
-  assert.equal(
-    reread.due_local,
-    (await pool.query(`SELECT ${dueLocalSql("$1::timestamptz", "'Asia/Seoul'")} AS shown`, [reminder.due_at])).rows[0]
-      .shown,
-  );
+  assert.equal(reread.due_local, (await pool.query(`SELECT ${dueLocalSql("$1::timestamptz", "'Asia/Seoul'")} AS shown`, [reminder.due_at])).rows[0].shown);
 });
 
 test("the due time must be 1 minute to 90 days ahead, and the request is validated", async () => {
   for (const recipient of ["456", "457", "458"]) await seed(recipient);
   assert.equal(await errorCode(await create(agent, await localIn("0 minutes")), 400), "reminder_due_out_of_range");
   assert.equal(await errorCode(await create(agent, await localIn("-1 day")), 400), "reminder_due_out_of_range");
-  assert.equal(
-    await errorCode(await create(agent, await localIn("2160 hours 2 minutes")), 400),
-    "reminder_due_out_of_range",
-  );
+  assert.equal(await errorCode(await create(agent, await localIn("2160 hours 2 minutes")), 400), "reminder_due_out_of_range");
   await body<Reminder>(await create(agent, await localIn("2 minutes")), 201);
   await body<Reminder>(await create(agent, await localIn("2160 hours -1 minute"), undefined, "457"), 201);
 
-  for (const value of ["2026-02-30T10:00", "2026-10-05 10:00", "2026-10-05T24:00", "1999-12-31T10:00", 10, null])
-    assert.equal(
-      await errorCode(await create(agent, value, undefined, "458"), 400),
-      "invalid_reminder_due",
-      String(value),
-    );
+  for (const value of ["2026-02-30T10:00", "2026-10-05 10:00", "2026-10-05T24:00", "1999-12-31T10:00", 10, null]) assert.equal(await errorCode(await create(agent, value, undefined, "458"), 400), "invalid_reminder_due", String(value));
   const local = await localIn("1 day");
   assert.equal(await errorCode(await create(agent, local, "가".repeat(201), "458"), 400), "invalid_reminder_note");
   assert.equal(await errorCode(await create(agent, local, 5, "458"), 400), "invalid_reminder_note");
-  assert.equal(
-    await errorCode(await request(agent, "POST", remindersPath("458"), { due_local: local, extra: 1 }), 400),
-    "invalid_reminder_request",
-  );
-  assert.equal(
-    await errorCode(await request(agent, "POST", `${remindersPath("458")}?x=1`, { due_local: local }), 400),
-    "invalid_reminder_request",
-  );
+  assert.equal(await errorCode(await request(agent, "POST", remindersPath("458"), { due_local: local, extra: 1 }), 400), "invalid_reminder_request");
+  assert.equal(await errorCode(await request(agent, "POST", `${remindersPath("458")}?x=1`, { due_local: local }), 400), "invalid_reminder_request");
   assert.equal(await errorCode(await create(agent, local, undefined, "999"), 404), "conversation_not_found");
-  assert.equal(
-    await errorCode(await create(agent, local, undefined, "456", foreignConnectionId), 404),
-    "connection_not_found",
-  );
+  assert.equal(await errorCode(await create(agent, local, undefined, "456", foreignConnectionId), 404), "connection_not_found");
   // 200 code points after trimming fit (an emoji is one code point but two UTF-16 units); blank text is no note.
   const longest = await body<Reminder>(await create(agent, local, ` ${"😀".repeat(200)} `, "458"), 201);
   assert.equal([...longest.note!].length, 200);
-  assert.equal(
-    (await body<Reminder>(await patch(agent, longest.id, { expected_version: 1, note: "   " }), 200)).note,
-    null,
-  );
-  for (const input of [
-    { expected_version: 2 },
-    { expected_version: 0, note: "x" },
-    { expected_version: "2", note: "x" },
-    { expected_version: 2, note: "x", status: "done" },
-  ])
-    assert.equal(
-      await errorCode(await patch(agent, longest.id, input), 400),
-      "invalid_reminder_request",
-      JSON.stringify(input),
-    );
-  assert.equal(
-    await errorCode(await request(agent, "POST", `/api/inbox/reminders/${longest.id}/complete`, {}), 400),
-    "invalid_reminder_request",
-  );
-  assert.equal(
-    await errorCode(await request(agent, "GET", "/api/inbox/reminders?due=yes"), 400),
-    "invalid_reminder_request",
-  );
+  assert.equal((await body<Reminder>(await patch(agent, longest.id, { expected_version: 1, note: "   " }), 200)).note, null);
+  for (const input of [{ expected_version: 2 }, { expected_version: 0, note: "x" }, { expected_version: "2", note: "x" }, { expected_version: 2, note: "x", status: "done" }])
+    assert.equal(await errorCode(await patch(agent, longest.id, input), 400), "invalid_reminder_request", JSON.stringify(input));
+  assert.equal(await errorCode(await request(agent, "POST", `/api/inbox/reminders/${longest.id}/complete`, {}), 400), "invalid_reminder_request");
+  assert.equal(await errorCode(await request(agent, "GET", "/api/inbox/reminders?due=yes"), 400), "invalid_reminder_request");
   assert.equal(await errorCode(await request(agent, "GET", "/api/inbox?reminder=all"), 400), "invalid_inbox_query");
 });
 
@@ -439,21 +339,12 @@ test("changes need the expected version and write one audit row per version", as
   await seed("456");
   const reminder = await created(agent);
   const later = await localIn("3 days");
-  const changed = await body<Reminder>(
-    await patch(agent, reminder.id, { expected_version: 1, due_local: later, note: "재고 확인" }),
-    200,
-  );
+  const changed = await body<Reminder>(await patch(agent, reminder.id, { expected_version: 1, due_local: later, note: "재고 확인" }), 200);
   assert.deepEqual([changed.version, changed.due_local, changed.note], [2, later, "재고 확인"]);
   // The same due time and note store nothing.
-  const same = await body<Reminder>(
-    await patch(agent, reminder.id, { expected_version: 2, due_local: later, note: " 재고 확인 " }),
-    200,
-  );
+  const same = await body<Reminder>(await patch(agent, reminder.id, { expected_version: 2, due_local: later, note: " 재고 확인 " }), 200);
   assert.equal(same.version, 2);
-  const stale = await body<{ error: string; reminder: Reminder }>(
-    await patch(agent, reminder.id, { expected_version: 1, note: "old" }),
-    409,
-  );
+  const stale = await body<{ error: string; reminder: Reminder }>(await patch(agent, reminder.id, { expected_version: 1, note: "old" }), 409);
   assert.equal(stale.error, "reminder_conflict");
   assert.equal(stale.reminder.version, 2);
   assert.equal(stale.reminder.note, "재고 확인");
@@ -461,10 +352,7 @@ test("changes need the expected version and write one audit row per version", as
   assert.deepEqual([cleared.version, cleared.note], [3, null]);
   const cancelled = await body<Reminder>(await finish(agent, reminder.id, "cancel", 3), 200);
   assert.deepEqual([cancelled.status, cancelled.cancel_reason, cancelled.version], ["cancelled", "manual", 4]);
-  assert.equal(
-    await errorCode(await patch(agent, reminder.id, { expected_version: 4, note: "x" }), 409),
-    "reminder_not_pending",
-  );
+  assert.equal(await errorCode(await patch(agent, reminder.id, { expected_version: 4, note: "x" }), 409), "reminder_not_pending");
   assert.equal(await errorCode(await finish(agent, reminder.id, "complete", 4), 409), "reminder_not_pending");
   assert.equal(await errorCode(await finish(agent, reminder.id, "complete", 3), 409), "reminder_conflict");
   assert.deepEqual(
@@ -513,13 +401,8 @@ test("closing a conversation cancels every member's pending reminders; a reopen 
   await body(await setState(agent, { expected_version: 3, status: "closed" }), 200);
   // A new DM reopens the conversation (auto_reopen) and revives nothing either.
   await pool.query("UPDATE instagram_connections SET active=true WHERE id=$1", [connectionId]);
-  await ingestMessages(pool, [
-    { accountId: "123", senderId: "456", messageId: "reopen-1", text: "again", timestamp: new Date(Date.now() - 1000) },
-  ]);
-  const state = await pool.query(
-    "SELECT status,version FROM instagram_inbox_conversations WHERE connection_id=$1 AND recipient_id='456'",
-    [connectionId],
-  );
+  await ingestMessages(pool, [{ accountId: "123", senderId: "456", messageId: "reopen-1", text: "again", timestamp: new Date(Date.now() - 1000) }]);
+  const state = await pool.query("SELECT status,version FROM instagram_inbox_conversations WHERE connection_id=$1 AND recipient_id='456'", [connectionId]);
   assert.deepEqual(state.rows[0], { status: "open", version: 5 });
   assert.deepEqual(
     (await reminderRows()).filter((row) => row.recipient_id === "456").map((row) => row.status),
@@ -535,10 +418,7 @@ test("removing a member cancels only that member's pending reminders", async () 
   await created(agent);
   await created(agent, "457");
   await created(other);
-  const removed = await body<{ cancelled_reminders: number }>(
-    await request(owner, "DELETE", `/api/workspace/members/${agent.id}`),
-    200,
-  );
+  const removed = await body<{ cancelled_reminders: number }>(await request(owner, "DELETE", `/api/workspace/members/${agent.id}`), 200);
   assert.equal(removed.cancelled_reminders, 2);
   assert.deepEqual(
     (await reminderRows()).map((row) => [row.recipient_id, row.creator_id, row.status, row.cancel_reason]),
@@ -560,29 +440,13 @@ test("removing a member cancels only that member's pending reminders", async () 
 test("reminder writes need the same origin and a membership; every role can keep its own", async () => {
   await seed("456");
   const local = await localIn("1 day");
-  const crossOrigin = await request(
-    agent,
-    "POST",
-    remindersPath(),
-    { due_local: local },
-    pool.connect.bind(pool),
-    "https://evil.test",
-  );
+  const crossOrigin = await request(agent, "POST", remindersPath(), { due_local: local }, pool.connect.bind(pool), "https://evil.test");
   assert.equal(crossOrigin.status, 403);
   assert.equal(await errorCode(await create(stranger, local), 403), "workspace_required");
   assert.equal(await errorCode(await request(stranger, "GET", "/api/inbox/reminders"), 403), "workspace_required");
   for (const actor of [owner, admin, agent]) await created(actor);
-  const reminder = (
-    await body<{ reminder: Reminder }>(await request(agent, "GET", `/api/connections/${connectionId}/inbox/456`), 200)
-  ).reminder;
-  const crossPatch = await request(
-    agent,
-    "PATCH",
-    `/api/inbox/reminders/${reminder.id}`,
-    { expected_version: 1, note: "x" },
-    pool.connect.bind(pool),
-    "https://evil.test",
-  );
+  const reminder = (await body<{ reminder: Reminder }>(await request(agent, "GET", `/api/connections/${connectionId}/inbox/456`), 200)).reminder;
+  const crossPatch = await request(agent, "PATCH", `/api/inbox/reminders/${reminder.id}`, { expected_version: 1, note: "x" }, pool.connect.bind(pool), "https://evil.test");
   assert.equal(crossPatch.status, 403);
   assert.equal((await reminderRows()).length, 3);
 });
@@ -613,10 +477,7 @@ test("reminder=due lists the caller's due reminders, pages with the cursor and c
   assert.equal(first.conversations.length, 50);
   assert.equal(first.due_reminder_count, 53);
   assert.ok(first.conversations.every((row) => row.reminder?.due === true));
-  const second = await body<InboxPage>(
-    await page(agent, `reminder=due&after=${encodeURIComponent(first.after!)}`),
-    200,
-  );
+  const second = await body<InboxPage>(await page(agent, `reminder=due&after=${encodeURIComponent(first.after!)}`), 200);
   assert.equal(second.after, null);
   const recipients = [...first.conversations, ...second.conversations].map((row) => row.recipient_id);
   assert.equal(new Set(recipients).size, 53);
@@ -639,15 +500,9 @@ test("reminder=due lists the caller's due reminders, pages with the cursor and c
   assert.equal(theirs.due_reminder_count, 1);
 
   // The reminder list orders by due time and pages too; due=true leaves out the later ones.
-  const listed = await body<{ reminders: Reminder[]; after: string | null }>(
-    await request(agent, "GET", "/api/inbox/reminders?due=true"),
-    200,
-  );
+  const listed = await body<{ reminders: Reminder[]; after: string | null }>(await request(agent, "GET", "/api/inbox/reminders?due=true"), 200);
   assert.equal(listed.reminders.length, 50);
-  const rest = await body<{ reminders: Reminder[]; after: string | null }>(
-    await request(agent, "GET", `/api/inbox/reminders?due=true&after=${encodeURIComponent(listed.after!)}`),
-    200,
-  );
+  const rest = await body<{ reminders: Reminder[]; after: string | null }>(await request(agent, "GET", `/api/inbox/reminders?due=true&after=${encodeURIComponent(listed.after!)}`), 200);
   assert.equal(rest.reminders.length, 3);
   assert.equal(rest.after, null);
   const times = [...listed.reminders, ...rest.reminders].map((row) => Date.parse(row.due_at));
@@ -656,10 +511,7 @@ test("reminder=due lists the caller's due reminders, pages with the cursor and c
     [...times].sort((a, b) => a - b),
   );
   assert.ok([...listed.reminders, ...rest.reminders].every((row) => row.due));
-  assert.equal(
-    (await body<{ reminders: Reminder[] }>(await request(agent, "GET", "/api/inbox/reminders"), 200)).reminders.length,
-    50,
-  );
+  assert.equal((await body<{ reminders: Reminder[] }>(await request(agent, "GET", "/api/inbox/reminders"), 200)).reminders.length, 50);
 });
 
 test("the deletion functions remove reminders: person deletion only that DM recipient's", async () => {

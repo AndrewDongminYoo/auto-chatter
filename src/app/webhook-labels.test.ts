@@ -35,30 +35,12 @@ const delivery = (fields: Partial<Delivery>): Delivery => ({
 });
 
 test("every stored delivery status and failure code has a Korean label", () => {
-  for (const status of ["pending", "sending", "sent", "retry", "dead"])
-    assert.doesNotMatch(labels.webhookStatusLabel(status), /[a-z_]/);
-  const codes = [
-    "endpoint_inactive",
-    "url_refused",
-    "signing_unavailable",
-    "dns_failed",
-    "dns_no_address",
-    "address_refused",
-    "timeout",
-    "redirect_refused",
-    "http_error",
-    "request_failed",
-    "worker_interrupted",
-  ];
+  for (const status of ["pending", "sending", "sent", "retry", "dead"]) assert.doesNotMatch(labels.webhookStatusLabel(status), /[a-z_]/);
+  const codes = ["endpoint_inactive", "url_refused", "signing_unavailable", "dns_failed", "dns_no_address", "address_refused", "timeout", "redirect_refused", "http_error", "request_failed", "worker_interrupted"];
   for (const code of codes) assert.doesNotMatch(labels.webhookFailureLabel(code), /[a-z_]/, code);
   // The delivery module stores the `code` of a failed attempt and the SQL failure_code literals.
   const source = readFileSync(new URL("./webhook-delivery.ts", import.meta.url), "utf8");
-  const stored = new Set([
-    ...[...source.matchAll(/sent: false, code: ([^}]*)/g)].flatMap((line) =>
-      [...line[1]!.matchAll(/"([a-z_]+)"/g)].map((match) => match[1]),
-    ),
-    ...[...source.matchAll(/failure_code='([a-z_]+)'/g)].map((match) => match[1]),
-  ]);
+  const stored = new Set([...[...source.matchAll(/sent: false, code: ([^}]*)/g)].flatMap((line) => [...line[1]!.matchAll(/"([a-z_]+)"/g)].map((match) => match[1])), ...[...source.matchAll(/failure_code='([a-z_]+)'/g)].map((match) => match[1])]);
   assert.deepEqual([...stored].sort(), [...codes].sort());
 });
 
@@ -70,36 +52,18 @@ test("unknown values fall back without hiding the code", () => {
 
 test("attempt summary shows the count, the last HTTP status and the reason", () => {
   assert.equal(labels.webhookAttemptSummary(delivery({})), "아직 시도하지 않았습니다");
-  assert.equal(
-    labels.webhookAttemptSummary(delivery({ attempt_count: 6, last_status_code: 503, failure_code: "http_error" })),
-    "시도 6회 · 마지막 HTTP 상태 503 · 실패 사유: 수신 서버가 오류로 응답",
-  );
-  assert.equal(
-    labels.webhookAttemptSummary(delivery({ attempt_count: 1, last_status_code: 204 })),
-    "시도 1회 · 마지막 HTTP 상태 204",
-  );
+  assert.equal(labels.webhookAttemptSummary(delivery({ attempt_count: 6, last_status_code: 503, failure_code: "http_error" })), "시도 6회 · 마지막 HTTP 상태 503 · 실패 사유: 수신 서버가 오류로 응답");
+  assert.equal(labels.webhookAttemptSummary(delivery({ attempt_count: 1, last_status_code: 204 })), "시도 1회 · 마지막 HTTP 상태 204");
   // An inactive endpoint ends the delivery without an attempt.
-  assert.equal(
-    labels.webhookAttemptSummary(delivery({ failure_code: "endpoint_inactive" })),
-    "시도 0회 · HTTP 응답 없음 · 실패 사유: 주소가 꺼져 있어 보내지 않음",
-  );
+  assert.equal(labels.webhookAttemptSummary(delivery({ failure_code: "endpoint_inactive" })), "시도 0회 · HTTP 응답 없음 · 실패 사유: 주소가 꺼져 있어 보내지 않음");
 });
 
 test("delivery times use the given formatter", () => {
   const format = (value: string) => `<${value}>`;
-  assert.equal(
-    labels.webhookDeliveryTimes(delivery({}), format),
-    "생성 <2026-10-02T01:00:00.000Z> · 아직 전송하지 않음",
-  );
-  assert.equal(
-    labels.webhookDeliveryTimes(delivery({ sent_at: "2026-10-02T01:01:00.000Z" }), format),
-    "생성 <2026-10-02T01:00:00.000Z> · 전송 <2026-10-02T01:01:00.000Z>",
-  );
+  assert.equal(labels.webhookDeliveryTimes(delivery({}), format), "생성 <2026-10-02T01:00:00.000Z> · 아직 전송하지 않음");
+  assert.equal(labels.webhookDeliveryTimes(delivery({ sent_at: "2026-10-02T01:01:00.000Z" }), format), "생성 <2026-10-02T01:00:00.000Z> · 전송 <2026-10-02T01:01:00.000Z>");
   // A dead row never gets sent_at, and it is not going to be sent later either.
-  assert.equal(
-    labels.webhookDeliveryTimes(delivery({ status: "dead" }), format),
-    "생성 <2026-10-02T01:00:00.000Z> · 보내지 못함",
-  );
+  assert.equal(labels.webhookDeliveryTimes(delivery({ status: "dead" }), format), "생성 <2026-10-02T01:00:00.000Z> · 보내지 못함");
 });
 
 test("key state marks a rotation in progress", () => {

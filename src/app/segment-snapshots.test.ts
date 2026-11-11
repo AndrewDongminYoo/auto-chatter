@@ -76,8 +76,7 @@ const comparison = {
 async function comparisonHarness(read: () => Promise<unknown>) {
   const h = harness(async (path) => {
     if (path.endsWith("/comparison")) return read();
-    if (path === "/api/segment-snapshots/s2")
-      return { snapshot: { ...summary("s2", "VIP"), stored_member_count: 2 }, members: [], after: null };
+    if (path === "/api/segment-snapshots/s2") return { snapshot: { ...summary("s2", "VIP"), stored_member_count: 2 }, members: [], after: null };
     return workspaceList;
   });
   h.controller.configure("admin", "Asia/Seoul");
@@ -98,8 +97,7 @@ test("comparison shows added and removed members, the remaining baseline and bot
   await h.get("segment-snapshot-compare").dispatch("click");
   assert.equal(calls, 1);
   const text = h.get("segment-snapshot-comparison").textContent;
-  for (const pattern of [/추가 1명/, /제외 1명/, /유지 1명/, /원래 3명/, /남은.*2명/, /현재.*2명/, /버전 1/, /버전 2/])
-    assert.match(text, pattern);
+  for (const pattern of [/추가 1명/, /제외 1명/, /유지 1명/, /원래 3명/, /남은.*2명/, /현재.*2명/, /버전 1/, /버전 2/]) assert.match(text, pattern);
   fail = true;
   await h.get("segment-snapshot-compare").dispatch("click");
   assert.equal(h.get("segment-snapshot-comparison").textContent, "");
@@ -200,12 +198,7 @@ test("the dashboard name input invalidates comparison through the real segment c
     activeSegmentId: segmentA.id,
     contactSegments: [{ ...segmentA, version: 1 }],
   });
-  vm.runInContext(
-    part("function segmentEditChanged()", "// True when the draft's group") +
-      part("function segmentControls()", "// Leaves edit mode.") +
-      part('byId("segment-save").addEventListener("input"', 'byId("segment-save").addEventListener("submit"'),
-    context,
-  );
+  vm.runInContext(part("function segmentEditChanged()", "// True when the draft's group") + part("function segmentControls()", "// Leaves edit mode.") + part('byId("segment-save").addEventListener("input"', 'byId("segment-save").addEventListener("submit"'), context);
   form.elements.name.value = "Renamed";
   onInput();
   assert.equal(h.get("segment-snapshot-compare").disabled, true, "editing only the name must block comparison");
@@ -230,8 +223,7 @@ test("with no saved segment selected, admins see every workspace snapshot, archi
   const h = harness(async (path) => {
     requests.push(path);
     if (path === "/api/segment-snapshots") return workspaceList;
-    if (path === "/api/segment-snapshots/s1")
-      return { snapshot: { ...summary("s1", "Old"), stored_member_count: 2 }, members: [], after: null };
+    if (path === "/api/segment-snapshots/s1") return { snapshot: { ...summary("s1", "Old"), stored_member_count: 2 }, members: [], after: null };
     throw new Error(`unexpected ${path}`);
   });
   h.controller.configure("admin", "UTC");
@@ -318,11 +310,7 @@ test("agents get no request; a freeze shows the usage, and a limit refusal says 
   await settle();
   requests.length = 0;
   await h.get("segment-snapshot-create").dispatch("click");
-  assert.deepEqual(requests.sort(), [
-    "GET /api/contact-segments/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/snapshots",
-    "GET /api/segment-snapshots",
-    "POST /api/contact-segments/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/snapshots",
-  ]);
+  assert.deepEqual(requests.sort(), ["GET /api/contact-segments/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/snapshots", "GET /api/segment-snapshots", "POST /api/contact-segments/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/snapshots"]);
   assert.match(h.get("segment-snapshot-status").textContent, /2명을 고정했습니다/);
   assert.equal(h.get("segment-snapshot-usage").textContent, "고정한 대상 2/200개 · 저장한 명단 4/20,000행");
   refuse = "snapshot_members_limit_reached";

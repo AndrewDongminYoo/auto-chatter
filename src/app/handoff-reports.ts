@@ -5,8 +5,7 @@ import { workspaceFor } from "./settings.ts";
 function dateValue(value: string | null): number {
   if (!value || !/^[1-9]\d{3}-\d{2}-\d{2}$/.test(value)) throw new ApiError(400, "invalid_report_query");
   const date = new Date(`${value}T00:00:00.000Z`);
-  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value)
-    throw new ApiError(400, "invalid_report_query");
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value) throw new ApiError(400, "invalid_report_query");
   return date.getTime();
 }
 
@@ -24,15 +23,13 @@ interface ReportRow {
 export async function handoffReport(pool: Pool, user: User, query: URLSearchParams) {
   const workspace = await workspaceFor(pool, user, "admin");
   const allowed = new Set(["from", "before", "expected_time_zone", "connection_id"]);
-  for (const key of query.keys())
-    if (!allowed.has(key) || query.getAll(key).length !== 1) throw new ApiError(400, "invalid_report_query");
+  for (const key of query.keys()) if (!allowed.has(key) || query.getAll(key).length !== 1) throw new ApiError(400, "invalid_report_query");
   const from = query.get("from");
   const before = query.get("before");
   const days = (dateValue(before) - dateValue(from)) / 86_400_000;
   const zone = query.get("expected_time_zone");
   const connection = query.get("connection_id");
-  if (days <= 0 || days > 366 || !zone || zone.length > 100 || (connection !== null && !isUuid(connection)))
-    throw new ApiError(400, "invalid_report_query");
+  if (days <= 0 || days > 366 || !zone || zone.length > 100 || (connection !== null && !isUuid(connection))) throw new ApiError(400, "invalid_report_query");
   const row = (
     await pool.query<ReportRow>(
       `WITH context AS (

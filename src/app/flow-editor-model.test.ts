@@ -6,10 +6,7 @@ import { flowExecutionErrors, planFlowRun } from "./flow-runtime.ts";
 import { validateFlowForPublish, type FlowDocument, type FlowError, type PublishContext } from "./flow-schema.ts";
 
 type Doc = FlowDocument;
-type Item =
-  | { kind: "step"; id: string; branches: { port: string; items: Item[] }[] }
-  | { kind: "link"; id: string; from: string; port: string }
-  | { kind: "empty"; from: string; port: string };
+type Item = { kind: "step"; id: string; branches: { port: string; items: Item[] }[] } | { kind: "link"; id: string; from: string; port: string } | { kind: "empty"; from: string; port: string };
 interface FlowModel {
   flowTypes(): string[];
   flowTrigger(document: Doc): { id: string } | undefined;
@@ -26,13 +23,7 @@ interface FlowModel {
   flowSlotTypes(document: Doc, from: string, port: string): string[];
   flowLinkTargets(document: Doc, from: string): string[];
   flowAddTrigger(document: Doc, config: Record<string, unknown>, type?: string): { document: Doc; id: string };
-  flowInsert(
-    document: Doc,
-    from: string,
-    port: string,
-    type: string,
-    config: Record<string, unknown>,
-  ): { document: Doc; id: string };
+  flowInsert(document: Doc, from: string, port: string, type: string, config: Record<string, unknown>): { document: Doc; id: string };
   flowConnect(document: Doc, from: string, port: string, to: string): Doc;
   flowDisconnect(document: Doc, from: string, port: string): Doc;
   flowRemove(document: Doc, id: string): Doc;
@@ -46,16 +37,10 @@ interface FlowModel {
     width: number;
     height: number;
   };
-  flowSummary(
-    node: Doc["nodes"][number],
-    names: Record<"field" | "endpoint" | "connection", (id: string) => string | null>,
-  ): string;
+  flowSummary(node: Doc["nodes"][number], names: Record<"field" | "endpoint" | "connection", (id: string) => string | null>): string;
   flowErrorMessage(code: string): string;
   flowKnownError(code: string): boolean;
-  flowPlaceErrors(
-    document: Doc,
-    errors: FlowError[],
-  ): { placed: { node_id: string; code: string; message: string }[]; general: { code: string; message: string }[] };
+  flowPlaceErrors(document: Doc, errors: FlowError[]): { placed: { node_id: string; code: string; message: string }[]; general: { code: string; message: string }[] };
   flowTestStatus(status: string): string;
   flowFailureMessage(code: string | null): string;
   flowOutcome(outcome: string): string;
@@ -64,11 +49,7 @@ interface FlowModel {
   flowPathEdges(steps: { node_id: string; node_type: string; outcome: string }[]): string[];
   flowSameDocument(left: unknown, right: unknown): boolean;
   flowStepLabels(document: Doc | null | undefined): (id: string) => string;
-  flowErrorsElsewhere(
-    document: Doc | null | undefined,
-    errors: FlowError[],
-    source: string,
-  ): { code: string; message: string }[];
+  flowErrorsElsewhere(document: Doc | null | undefined, errors: FlowError[], source: string): { code: string; message: string }[];
   flowFieldDefault(field: { type: string } | undefined): unknown;
   flowUnavailableFieldIds(ids: unknown[] | undefined, fields: { id: string }[]): string[];
   flowCheckedFieldIds(boxes: { value: string; checked: boolean }[]): string[];
@@ -154,8 +135,7 @@ test("a flow with a DM trigger is edited like any flow and its outline starts at
     endpoint: () => null,
     connection: (id: string) => (id === connection ? "shop" : null),
   };
-  const summary = (type: string, config: Record<string, unknown>) =>
-    model.flowSummary({ id: "x", type, config }, names);
+  const summary = (type: string, config: Record<string, unknown>) => model.flowSummary({ id: "x", type, config }, names);
   assert.equal(
     summary("instagram_dm_keyword", {
       connection_id: connection,
@@ -167,14 +147,8 @@ test("a flow with a DM trigger is edited like any flow and its outline starts at
   );
   assert.equal(summary("instagram_dm_keyword", { match_mode: "all" }), "계정 미선택 · 모든 DM");
   assert.equal(summary("instagram_dm_keyword", { match_mode: "contains" }), "계정 미선택 · 키워드 포함: 키워드 미입력");
-  assert.equal(
-    summary("instagram_dm_default", { connection_id: connection }),
-    "shop · 키워드 트리거에 맞지 않은 DM에 답장",
-  );
-  assert.equal(
-    summary("instagram_dm_default", { connection_id: "55555555-5555-4555-8555-555555555555" }),
-    "알 수 없는 계정 · 키워드 트리거에 맞지 않은 DM에 답장",
-  );
+  assert.equal(summary("instagram_dm_default", { connection_id: connection }), "shop · 키워드 트리거에 맞지 않은 DM에 답장");
+  assert.equal(summary("instagram_dm_default", { connection_id: "55555555-5555-4555-8555-555555555555" }), "알 수 없는 계정 · 키워드 트리거에 맞지 않은 DM에 답장");
 });
 
 test("DM trigger configs keep the schema's keys and pass the publish and execution checks with one message", () => {
@@ -182,9 +156,7 @@ test("DM trigger configs keep the schema's keys and pass the publish and executi
   assert.deepEqual(plain(model.flowConfig("instagram_dm_default", { connection_id: connection, media_id: "1" })), {
     connection_id: connection,
   });
-  const keywordConfig = plain(
-    model.flowConfig("instagram_dm_keyword", { connection_id: connection, media_id: "1", keywords: ["가격"] }),
-  );
+  const keywordConfig = plain(model.flowConfig("instagram_dm_keyword", { connection_id: connection, media_id: "1", keywords: ["가격"] }));
   assert.deepEqual(keywordConfig, {
     connection_id: connection,
     keywords: ["가격"],
@@ -226,12 +198,7 @@ test("a DM flow offers only one message after its trigger and links to nothing e
   // A draft saved through the API may hold other steps; the trigger links only to an unconnected message.
   const saved: Doc = plain({
     ...document,
-    nodes: [
-      ...document.nodes,
-      { id: "tag", type: "add_tag", config: { tag: "a" } },
-      { id: "spare", type: "instagram_message", config: { text: "other" } },
-      { id: "other", type: "instagram_dm_default", config: { connection_id: connection } },
-    ],
+    nodes: [...document.nodes, { id: "tag", type: "add_tag", config: { tag: "a" } }, { id: "spare", type: "instagram_message", config: { text: "other" } }, { id: "other", type: "instagram_dm_default", config: { connection_id: connection } }],
     edges: [],
   });
   assert.deepEqual(plain(model.flowLinkTargets(saved, trigger)), [message.id, "spare"]);
@@ -290,8 +257,7 @@ test("the offered types are the executable types with the ports of the schema", 
       type,
     );
   for (const type of model.flowTypes()) assert.doesNotMatch(model.flowTypeLabel(type), /[a-z_]/, type);
-  for (const port of ["next", "true", "false", "replied", "timeout"])
-    assert.doesNotMatch(model.flowPortLabel(port), /[a-z_]/, port);
+  for (const port of ["next", "true", "false", "replied", "timeout"]) assert.doesNotMatch(model.flowPortLabel(port), /[a-z_]/, port);
 });
 
 test("a document built with the editor operations passes the publish and execution checks", () => {
@@ -386,11 +352,7 @@ test("insert, connect, disconnect and remove keep the edges consistent", () => {
   assert.equal(document.edges.length, 2);
   document = model.flowRemove(document, inserted.id);
   assert.deepEqual(plain(document.edges), []);
-  assert.deepEqual(
-    plain(document.nodes.map((node) => node.id)),
-    [trigger, first.id],
-    "the steps after a removed node stay, unconnected",
-  );
+  assert.deepEqual(plain(document.nodes.map((node) => node.id)), [trigger, first.id], "the steps after a removed node stay, unconnected");
   assert.equal(model.flowChildCount(document, trigger), 0);
   assert.equal(model.flowRemovable(document, first.id), true);
   assert.equal(model.flowRemovable(document, trigger), false, "the only trigger stays");
@@ -554,8 +516,7 @@ test("every publish and execution error code has a Korean message", () => {
 });
 
 test("every test-run status, failure code and step outcome has a Korean label", () => {
-  for (const status of ["not_matched", "ended", "delivering", "failed"])
-    assert.doesNotMatch(model.flowTestStatus(status), /[a-z_]/, status);
+  for (const status of ["not_matched", "ended", "delivering", "failed"]) assert.doesNotMatch(model.flowTestStatus(status), /[a-z_]/, status);
   const runtime = source("./flow-runtime.ts");
   const failures = new Set([
     ...[...runtime.matchAll(/fail\(node, "([a-z_]+)"\)/g)].map((match) => match[1]!),
@@ -567,16 +528,7 @@ test("every test-run status, failure code and step outcome has a Korean label", 
   assert.ok(failures.size >= 9, `found ${failures.size} failure codes`);
   for (const code of failures) assert.doesNotMatch(model.flowFailureMessage(code), /[a-z_]/, code);
   // Outcomes are literals, String(boolean) of a condition, or the port a reply wait resumes on.
-  const outcomes = new Set([
-    ...[...runtime.matchAll(/outcome(?: =|:) ([^;,}]*)/g)].flatMap((line) =>
-      [...line[1]!.matchAll(/"([a-z_]+)"/g)].map((match) => match[1]!),
-    ),
-    "true",
-    "false",
-    "replied",
-    "timeout",
-    ...failures,
-  ]);
+  const outcomes = new Set([...[...runtime.matchAll(/outcome(?: =|:) ([^;,}]*)/g)].flatMap((line) => [...line[1]!.matchAll(/"([a-z_]+)"/g)].map((match) => match[1]!)), "true", "false", "replied", "timeout", ...failures]);
   assert.ok(outcomes.size >= 20, `found ${outcomes.size} outcomes`);
   for (const outcome of outcomes) assert.doesNotMatch(model.flowOutcome(outcome), /[a-z_]/, outcome);
   assert.equal(model.flowOutcome("new_outcome"), "기타 결과(new_outcome)");
@@ -632,8 +584,7 @@ test("summaries, waits and paths read as Korean text", () => {
     endpoint: (id: string) => (id === endpoint ? "CRM" : null),
     connection: (id: string) => (id === connection ? "shop" : null),
   };
-  const summary = (type: string, config: Record<string, unknown>) =>
-    model.flowSummary({ id: "x", type, config }, names);
+  const summary = (type: string, config: Record<string, unknown>) => model.flowSummary({ id: "x", type, config }, names);
   assert.equal(
     summary("instagram_comment", {
       connection_id: connection,
@@ -645,48 +596,22 @@ test("summaries, waits and paths read as Korean text", () => {
     "shop · 게시물 1789 · 키워드 포함: 가격, 링크 · 제외 광고",
   );
   assert.equal(summary("instagram_comment", { match_mode: "all" }), "계정 미선택 · 게시물 미입력 · 모든 댓글");
-  assert.equal(
-    summary("field_equals", { field_id: textField, field_operator: "eq", field_value: "" }),
-    "관심사 = 빈 텍스트",
-  );
-  assert.equal(
-    summary("field_equals", { field_id: numberField, field_operator: "is_set" }),
-    "사용할 수 없는 필드 값이 있는지",
-  );
+  assert.equal(summary("field_equals", { field_id: textField, field_operator: "eq", field_value: "" }), "관심사 = 빈 텍스트");
+  assert.equal(summary("field_equals", { field_id: numberField, field_operator: "is_set" }), "사용할 수 없는 필드 값이 있는지");
   assert.equal(summary("set_field", { field_id: textField, value: false }), "관심사에 아니오 저장");
   assert.equal(summary("delay", { minutes: 1500 }), "1일 1시간 기다림");
   assert.equal(summary("delay", { minutes: null }), "시간 미입력 기다림");
   assert.equal(summary("delay", { minutes: "" }), "시간 미입력 기다림");
-  for (const minutes of [0, -3, 1.5, "abc"])
-    assert.equal(summary("delay", { minutes }), "잘못된 시간 기다림", String(minutes));
+  for (const minutes of [0, -3, 1.5, "abc"]) assert.equal(summary("delay", { minutes }), "잘못된 시간 기다림", String(minutes));
   assert.equal(summary("wait_for_reply", { timeout_minutes: 0 }), "잘못된 시간 동안 응답을 기다림");
-  assert.equal(
-    summary("wait_for_reply", { timeout_minutes: 60, save_field_id: textField }),
-    "1시간 동안 응답을 기다림 · 응답을 관심사에 저장",
-  );
-  assert.equal(
-    summary("webhook", { endpoint_id: endpoint, field_ids: [textField], include_tags: true }),
-    "CRM로 태그, 관심사 전송",
-  );
-  assert.equal(
-    summary("webhook", { endpoint_id: "x", field_ids: [], include_tags: false }),
-    "등록한 주소로 처리 정보만 전송",
-  );
+  assert.equal(summary("wait_for_reply", { timeout_minutes: 60, save_field_id: textField }), "1시간 동안 응답을 기다림 · 응답을 관심사에 저장");
+  assert.equal(summary("webhook", { endpoint_id: endpoint, field_ids: [textField], include_tags: true }), "CRM로 태그, 관심사 전송");
+  assert.equal(summary("webhook", { endpoint_id: "x", field_ids: [], include_tags: false }), "등록한 주소로 처리 정보만 전송");
   assert.equal(summary("instagram_message", { text: " " }), "메시지 미입력");
-  assert.equal(
-    model.flowWaitText({ node_type: "delay", delay_minutes: 90 }),
-    "1시간 30분 지난 것으로 보고 다음으로 이어 갔습니다.",
-  );
-  assert.equal(
-    model.flowWaitText({ node_type: "wait_until", until_time: "09:00" }),
-    "09:00이 된 것으로 보고 다음으로 이어 갔습니다.",
-  );
+  assert.equal(model.flowWaitText({ node_type: "delay", delay_minutes: 90 }), "1시간 30분 지난 것으로 보고 다음으로 이어 갔습니다.");
+  assert.equal(model.flowWaitText({ node_type: "wait_until", until_time: "09:00" }), "09:00이 된 것으로 보고 다음으로 이어 갔습니다.");
   assert.equal(model.flowWaitText({ node_type: "wait_for_reply", port: "timeout" }), "시간 초과 가지로 이어 갔습니다.");
-  assert.deepEqual(plain(model.flowPathIds([{ node_id: "a" }, { node_id: "w" }, { node_id: "w" }, { node_id: "b" }])), [
-    "a",
-    "w",
-    "b",
-  ]);
+  assert.deepEqual(plain(model.flowPathIds([{ node_id: "a" }, { node_id: "w" }, { node_id: "w" }, { node_id: "b" }])), ["a", "w", "b"]);
 });
 
 test("a test-run path marks the branch it took, not another branch that meets it", () => {
@@ -718,13 +643,7 @@ test("a test-run path marks the branch it took, not another branch that meets it
     ["next", "true", "added", "queued", "replied", "set", "absent"],
   );
   const edges = plain(model.flowPathEdges(steps));
-  assert.deepEqual(edges, [
-    `${trigger}:next:${condition}`,
-    `${condition}:true:${tagged}`,
-    `${tagged}:next:${message}`,
-    `${message}:next:${wait}`,
-    `${wait}:replied:${after}`,
-  ]);
+  assert.deepEqual(edges, [`${trigger}:next:${condition}`, `${condition}:true:${tagged}`, `${tagged}:next:${message}`, `${message}:next:${wait}`, `${wait}:replied:${after}`]);
   // Every key names an edge the graph draws, and the branches that did not run stay unmarked.
   const drawn = model.flowLayout(document).edges.map((edge) => `${edge.from}:${edge.port}:${edge.to}`);
   assert.deepEqual(
@@ -784,16 +703,7 @@ test("a published version that differs from the draft keeps its own step names a
     ],
   );
   // Without the published document nothing is placed and the step is named by its ID.
-  assert.deepEqual(
-    plain(
-      model.flowErrorsElsewhere(
-        null,
-        [{ code: "invalid_config", node_id: "s2", path: "nodes[1].config" }],
-        "발행 버전",
-      ),
-    ),
-    [{ code: "invalid_config", message: `발행 버전: ${model.flowErrorMessage("invalid_config")}` }],
-  );
+  assert.deepEqual(plain(model.flowErrorsElsewhere(null, [{ code: "invalid_config", node_id: "s2", path: "nodes[1].config" }], "발행 버전")), [{ code: "invalid_config", message: `발행 버전: ${model.flowErrorMessage("invalid_config")}` }]);
 });
 
 test("documents compare by content whatever the key order the server returns", () => {
@@ -823,13 +733,7 @@ test("a new set-field step stores the value its control shows", () => {
   assert.equal(model.flowFieldDefault({ type: "number" }), "");
   assert.equal(model.flowFieldDefault(undefined), "");
   const { document, id: trigger } = triggerDoc();
-  const added = model.flowInsert(
-    document,
-    trigger,
-    "next",
-    "set_field",
-    model.flowConfig("set_field", { field_id: booleanField, value: model.flowFieldDefault({ type: "boolean" }) }),
-  );
+  const added = model.flowInsert(document, trigger, "next", "set_field", model.flowConfig("set_field", { field_id: booleanField, value: model.flowFieldDefault({ type: "boolean" }) }));
   const context = { ...publishContext(), fields: new Map([[booleanField, "boolean"]]) };
   assert.deepEqual(validateFlowForPublish(plain(added.document), context), []);
   // The value it replaces: an empty text for a yes/no field fails publish.
@@ -851,27 +755,12 @@ test("a cleared or wrong duration is stored as typed and publish names its step"
   assert.deepEqual(plain(model.flowConfig("delay", {})), { minutes: 60 });
   assert.deepEqual(plain(model.flowConfig("wait_for_reply", {})), { timeout_minutes: 1440 });
   assert.deepEqual(plain(model.flowConfig("delay", { minutes: model.flowTypedNumber("") })), { minutes: "" });
-  assert.deepEqual(
-    plain(model.flowConfig("wait_for_reply", { timeout_minutes: model.flowTypedNumber("0"), save_field_id: "" })),
-    { timeout_minutes: 0 },
-  );
+  assert.deepEqual(plain(model.flowConfig("wait_for_reply", { timeout_minutes: model.flowTypedNumber("0"), save_field_id: "" })), { timeout_minutes: 0 });
   const { document: start, id: trigger } = triggerDoc();
   for (const typed of ["", "0", "1.5", "-3"]) {
-    const delay = model.flowInsert(
-      start,
-      trigger,
-      "next",
-      "delay",
-      model.flowConfig("delay", { minutes: model.flowTypedNumber(typed) }),
-    );
+    const delay = model.flowInsert(start, trigger, "next", "delay", model.flowConfig("delay", { minutes: model.flowTypedNumber(typed) }));
     const message = model.flowInsert(delay.document, delay.id, "next", "instagram_message", { text: "안녕하세요" });
-    const wait = model.flowInsert(
-      message.document,
-      message.id,
-      "next",
-      "wait_for_reply",
-      model.flowConfig("wait_for_reply", { timeout_minutes: model.flowTypedNumber(typed) }),
-    );
+    const wait = model.flowInsert(message.document, message.id, "next", "wait_for_reply", model.flowConfig("wait_for_reply", { timeout_minutes: model.flowTypedNumber(typed) }));
     const document = plain(wait.document);
     const errors = validateFlowForPublish(document, publishContext());
     assert.deepEqual(
@@ -895,10 +784,7 @@ test("a webhook step that names an archived field can be repaired by unchecking 
   const archived = "66666666-6666-4666-8666-66666666666A";
   const listed = [{ id: textField }, { id: numberField }];
   // Stored spelling and order are kept, listed fields and repeats are left out.
-  assert.deepEqual(
-    plain(model.flowUnavailableFieldIds([archived, textField.toUpperCase(), archived.toLowerCase()], listed)),
-    [archived],
-  );
+  assert.deepEqual(plain(model.flowUnavailableFieldIds([archived, textField.toUpperCase(), archived.toLowerCase()], listed)), [archived]);
   assert.deepEqual(plain(model.flowUnavailableFieldIds(undefined, listed)), []);
   const { document, id: trigger } = triggerDoc();
   const step = (fieldIds: string[]) =>
@@ -915,10 +801,7 @@ test("a webhook step that names an archived field can be repaired by unchecking 
     ["unknown_field"],
   );
   // The editor's boxes: the unavailable field first, then the listed fields.
-  const boxes = (uncheck: string[]) => [
-    ...model.flowUnavailableFieldIds(stored, listed).map((value) => ({ value, checked: !uncheck.includes(value) })),
-    ...listed.map(({ id }) => ({ value: id, checked: stored.includes(id) })),
-  ];
+  const boxes = (uncheck: string[]) => [...model.flowUnavailableFieldIds(stored, listed).map((value) => ({ value, checked: !uncheck.includes(value) })), ...listed.map(({ id }) => ({ value: id, checked: stored.includes(id) }))];
   // Left checked, the field stays and publish still names the step.
   assert.deepEqual(plain(model.flowCheckedFieldIds(boxes([]))), stored);
   // Unchecked, it is gone and the step publishes.
@@ -948,9 +831,7 @@ test("a saved draft whose list values are not arrays still renders and publish n
   assert.equal(model.flowSummary(trigger, names), "shop · 게시물 1789 · 키워드 포함: hello");
   // A webhook step that stores one field ID as a string shows it as an unavailable, checked field.
   const archived = "66666666-6666-4666-8666-66666666666A";
-  assert.deepEqual(plain(model.flowUnavailableFieldIds(archived as unknown as unknown[], [{ id: textField }])), [
-    archived,
-  ]);
+  assert.deepEqual(plain(model.flowUnavailableFieldIds(archived as unknown as unknown[], [{ id: textField }])), [archived]);
   assert.deepEqual(plain(model.flowUnavailableFieldIds({} as unknown as unknown[], [{ id: textField }])), []);
   const document: Doc = { schema_version: 1, nodes: [trigger], edges: [] };
   assert.ok(

@@ -11,17 +11,7 @@ function createContactIdentityLinks({ api, node, contact, isCurrent }) {
   more.hidden = true;
   const controls = node("div", "", "contact-detail-controls");
   controls.append(refresh, more);
-  section.append(
-    node("h4", "운영자가 확인한 식별자 연결"),
-    node(
-      "p",
-      "확인과 해제는 운영자의 기록만 바꿉니다. 기존 대화·공급자 연결 근거·수신 거부는 유지되며, 동의나 발송 권한을 부여하지 않습니다.",
-      "hint",
-    ),
-    status,
-    controls,
-    list,
-  );
+  section.append(node("h4", "운영자가 확인한 식별자 연결"), node("p", "확인과 해제는 운영자의 기록만 바꿉니다. 기존 대화·공급자 연결 근거·수신 거부는 유지되며, 동의나 발송 권한을 부여하지 않습니다.", "hint"), status, controls, list);
   const base = `/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}/identity-links`;
   let requestId = 0;
   let after = null;
@@ -39,27 +29,9 @@ function createContactIdentityLinks({ api, node, contact, isCurrent }) {
       if (!current()) return;
       for (const link of result.links) {
         const row = node("article", "", "contact-detail-conversation");
-        const state =
-          link.state === "confirmed"
-            ? "운영자 확인됨"
-            : link.state === "detached"
-              ? "운영자 확인 해제됨"
-              : "운영자 확인 없음";
-        row.append(
-          node("h5", `DM 상대 ${link.recipient_id}`),
-          node("p", state),
-          node(
-            "p",
-            link.current_evidence_reply_id
-              ? `현재 공급자 근거 ${link.current_evidence_reply_id}`
-              : "현재 유효한 공급자 근거 없음",
-            "hint",
-          ),
-        );
-        if (link.state === "confirmed" && !link.evidence_valid)
-          row.append(
-            node("p", "확인 당시의 근거가 달라졌거나 유효하지 않습니다. 과거 확인 기록으로만 표시합니다.", "hint"),
-          );
+        const state = link.state === "confirmed" ? "운영자 확인됨" : link.state === "detached" ? "운영자 확인 해제됨" : "운영자 확인 없음";
+        row.append(node("h5", `DM 상대 ${link.recipient_id}`), node("p", state), node("p", link.current_evidence_reply_id ? `현재 공급자 근거 ${link.current_evidence_reply_id}` : "현재 유효한 공급자 근거 없음", "hint"));
+        if (link.state === "confirmed" && !link.evidence_valid) row.append(node("p", "확인 당시의 근거가 달라졌거나 유효하지 않습니다. 과거 확인 기록으로만 표시합니다.", "hint"));
         if (link.blocked) row.append(node("p", "다른 댓글 연락처의 확인을 먼저 해제해야 합니다.", "hint"));
         const buttons = [];
         function actionButton(action, label) {
@@ -69,16 +41,8 @@ function createContactIdentityLinks({ api, node, contact, isCurrent }) {
           let body;
           button.addEventListener("click", async () => {
             if (busy || !current()) return;
-            const explanation =
-              action === "confirm"
-                ? "이 두 식별자의 연결을 확인하시겠습니까? 수신 동의나 발송 권한은 바뀌지 않습니다."
-                : "운영자의 확인을 해제하시겠습니까? 기존 대화·공급자 근거·수신 거부는 유지됩니다.";
-            if (
-              !confirm(
-                `연결 ${contact.connection_id}\n댓글 ${contact.sender_id} · DM ${link.recipient_id}\n${explanation}`,
-              )
-            )
-              return;
+            const explanation = action === "confirm" ? "이 두 식별자의 연결을 확인하시겠습니까? 수신 동의나 발송 권한은 바뀌지 않습니다." : "운영자의 확인을 해제하시겠습니까? 기존 대화·공급자 근거·수신 거부는 유지됩니다.";
+            if (!confirm(`연결 ${contact.connection_id}\n댓글 ${contact.sender_id} · DM ${link.recipient_id}\n${explanation}`)) return;
             body ??= {
               action,
               request_key: crypto.randomUUID(),
@@ -94,12 +58,7 @@ function createContactIdentityLinks({ api, node, contact, isCurrent }) {
             try {
               await api(`${base}/${encodeURIComponent(link.recipient_id)}`, "POST", body);
               if (!current()) return;
-              await load(
-                null,
-                action === "confirm"
-                  ? "연결 확인을 기록했습니다."
-                  : "운영자 확인을 해제했습니다. 기존 공급자 근거는 유지됩니다.",
-              );
+              await load(null, action === "confirm" ? "연결 확인을 기록했습니다." : "운영자 확인을 해제했습니다. 기존 공급자 근거는 유지됩니다.");
             } catch (error) {
               if (!current()) return;
               if (error.status === 409) {
@@ -125,8 +84,7 @@ function createContactIdentityLinks({ api, node, contact, isCurrent }) {
           row.append(button);
         }
         if (result.can_edit === true) {
-          if (link.current_evidence_reply_id && !link.evidence_valid && !link.blocked)
-            actionButton("confirm", "연결 확인");
+          if (link.current_evidence_reply_id && !link.evidence_valid && !link.blocked) actionButton("confirm", "연결 확인");
           if (link.state === "confirmed") actionButton("detach", "확인 해제");
         }
         list.append(row);

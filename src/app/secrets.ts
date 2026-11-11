@@ -11,12 +11,7 @@ export function sealSecret(value: string, masterKey: string, context: string): s
   const cipher = createCipheriv("aes-256-gcm", decodeKey(masterKey), iv);
   cipher.setAAD(Buffer.from(context));
   const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
-  return [
-    "v1",
-    iv.toString("base64url"),
-    cipher.getAuthTag().toString("base64url"),
-    ciphertext.toString("base64url"),
-  ].join(".");
+  return ["v1", iv.toString("base64url"), cipher.getAuthTag().toString("base64url"), ciphertext.toString("base64url")].join(".");
 }
 
 export function openSecret(value: string, masterKey: string, context: string): string {

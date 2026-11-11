@@ -5,13 +5,7 @@ import { after, before, beforeEach, mock, test } from "node:test";
 import { Pool, type PoolClient, type QueryConfig } from "pg";
 import { cancelCampaignRun, startDueCampaignRuns } from "../app/campaign-runs.ts";
 import { connectionAlerts, connectionMetrics, evaluateAlerts } from "../app/operations-health.ts";
-import {
-  assertCampaignDeliveryAllowed,
-  completeCampaignRuns,
-  endUnreachableCampaignDeliveries,
-  processNextCampaignDelivery,
-  recoverStaleCampaignDeliveries,
-} from "./campaign-delivery-worker.ts";
+import { assertCampaignDeliveryAllowed, completeCampaignRuns, endUnreachableCampaignDeliveries, processNextCampaignDelivery, recoverStaleCampaignDeliveries } from "./campaign-delivery-worker.ts";
 import { recordChannelConsentEvent } from "./channel-consent.ts";
 import { InstagramFollowTransport } from "./follow-transport.ts";
 import { CAMPAIGN_HOURLY_BUDGET } from "./send-quota.ts";
@@ -21,8 +15,7 @@ import { CAMPAIGN_HOURLY_BUDGET } from "./send-quota.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: databaseUrl, max: 12 });
 const W = "11111111-1111-4111-8111-111111111111";
 const C = "33333333-3333-4333-8333-333333333333";
@@ -47,11 +40,7 @@ beforeEach(async () => {
   mock.restoreAll();
   await pool.query("TRUNCATE workspaces,workspace_deletion_records,scheduled_steps CASCADE");
   await pool.query("INSERT INTO workspaces(id,time_zone,plan) VALUES($1,'UTC','advanced')", [W]);
-  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'admin')", [
-    W,
-    owner,
-    admin,
-  ]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'admin')", [W, owner, admin]);
   await pool.query(
     `INSERT INTO instagram_connections(id,workspace_id,account_id,inbox_enabled,inbox_enabled_at,active,send_enabled,access_token_encrypted,token_expires_at)
      VALUES($1,$2,'100',true,now()-interval '1 day',true,true,$3,now()+interval '30 days')`,
@@ -86,12 +75,7 @@ async function bridge(sender: string, recipient: string) {
     [W, C, event.id, rule, event.comment_id, event.media_id, sender, recipient],
   );
 }
-async function consent(
-  kind: "comment_sender" | "dm_recipient",
-  value: string,
-  purpose: "marketing" | "service_reply",
-  decision: "grant" | "revoke",
-) {
+async function consent(kind: "comment_sender" | "dm_recipient", value: string, purpose: "marketing" | "service_reply", decision: "grant" | "revoke") {
   await recordChannelConsentEvent(pool, {
     requestKey: randomUUID(),
     workspaceId: W,
@@ -121,12 +105,7 @@ async function qualifying(sender: string, recipient: string) {
 // Approves (directly, approved by the admin) and starts one campaign whose members are all candidates.
 async function campaign(members: Array<[string, string]>, body = "Campaign body") {
   for (const [sender, recipient] of members) await qualifying(sender, recipient);
-  const segment = (
-    await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,$2) RETURNING id", [
-      W,
-      `Audience ${++sequence}`,
-    ])
-  ).rows[0].id;
+  const segment = (await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,$2) RETURNING id", [W, `Audience ${++sequence}`])).rows[0].id;
   const snapshot = (
     await pool.query(
       `INSERT INTO instagram_segment_snapshots(workspace_id,segment_id,created_by,as_of,definition,segment_name,counts,member_count)
@@ -134,11 +113,7 @@ async function campaign(members: Array<[string, string]>, body = "Campaign body"
       [W, segment, admin, members.length],
     )
   ).rows[0].id;
-  for (const [sender] of members)
-    await pool.query(
-      "INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,$4)",
-      [snapshot, W, C, sender],
-    );
+  for (const [sender] of members) await pool.query("INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,$4)", [snapshot, W, C, sender]);
   const draft = (
     await pool.query(
       `INSERT INTO campaign_drafts(id,workspace_id,snapshot_id,name,body,create_request_hash,created_by,updated_by)
@@ -156,10 +131,7 @@ async function campaign(members: Array<[string, string]>, body = "Campaign body"
   ).rows[0].id;
   await startDueCampaignRuns(pool);
   const run = (await pool.query("SELECT id FROM campaign_runs WHERE approval_id=$1", [approval])).rows[0].id as string;
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS n FROM campaign_deliveries WHERE run_id=$1", [run])).rows[0].n,
-    members.length,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM campaign_deliveries WHERE run_id=$1", [run])).rows[0].n, members.length);
   return run;
 }
 
@@ -298,9 +270,7 @@ test("a claimed row is sent once as plain text to its stored recipient, and its 
   const run = await campaign([["1001", "2001"]], "Hello from the campaign");
   const seen = graph();
   assert.equal(await deliver(seen), true);
-  assert.deepEqual(seen.posts, [
-    { path: "/v24.0/100/messages", body: { recipient: { id: "2001" }, message: { text: "Hello from the campaign" } } },
-  ]);
+  assert.deepEqual(seen.posts, [{ path: "/v24.0/100/messages", body: { recipient: { id: "2001" }, message: { text: "Hello from the campaign" } } }]);
   assert.deepEqual(await rows(run), [
     {
       sender_id: "1001",
@@ -312,11 +282,7 @@ test("a claimed row is sent once as plain text to its stored recipient, and its 
       deferred: false,
     },
   ]);
-  assert.equal(
-    (await pool.query("SELECT sent_at IS NOT NULL AS sent FROM campaign_deliveries WHERE run_id=$1", [run])).rows[0]
-      .sent,
-    true,
-  );
+  assert.equal((await pool.query("SELECT sent_at IS NOT NULL AS sent FROM campaign_deliveries WHERE run_id=$1", [run])).rows[0].sent, true);
   assert.deepEqual(await runState(run), { status: "completed", version: 2 });
   // Nothing is left to claim, and nothing else reached Graph.
   assert.equal(await deliver(seen), false);
@@ -330,18 +296,9 @@ test("the claim takes the oldest due row first and skips deferred, paused-contac
     ["1002", "2002"],
     ["1003", "2003"],
   ]);
-  await pool.query(
-    "UPDATE campaign_deliveries SET next_attempt_at=now()-interval '5 minutes' WHERE run_id=$1 AND sender_id='1003'",
-    [run],
-  );
-  await pool.query(
-    "UPDATE campaign_deliveries SET next_attempt_at=now()+interval '5 minutes' WHERE run_id=$1 AND sender_id='1002'",
-    [run],
-  );
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'1001',true)",
-    [W, C],
-  );
+  await pool.query("UPDATE campaign_deliveries SET next_attempt_at=now()-interval '5 minutes' WHERE run_id=$1 AND sender_id='1003'", [run]);
+  await pool.query("UPDATE campaign_deliveries SET next_attempt_at=now()+interval '5 minutes' WHERE run_id=$1 AND sender_id='1002'", [run]);
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'1001',true)", [W, C]);
   const seen = graph();
   assert.equal(await deliver(seen), true);
   assert.deepEqual(
@@ -378,10 +335,7 @@ test("two workers claim one row each, and a held row is skipped rather than wait
     await holder.query("BEGIN");
     await holder.query("SELECT id FROM campaign_deliveries WHERE run_id=$1 AND sender_id='1001' FOR UPDATE", [run]);
     const seen = graph();
-    const claimed = await Promise.race([
-      deliver(seen),
-      new Promise<string>((resolve) => setTimeout(() => resolve("waited"), 5_000).unref()),
-    ]);
+    const claimed = await Promise.race([deliver(seen), new Promise<string>((resolve) => setTimeout(() => resolve("waited"), 5_000).unref())]);
     assert.equal(claimed, true, "the claim must skip the locked row");
     assert.deepEqual(
       seen.posts.map((post) => (post.body as { recipient: { id: string } }).recipient.id),
@@ -401,10 +355,7 @@ test("two workers claim one row each, and a held row is skipped rather than wait
   // The two oldest due rows, one each: the released 1001 and the second run's first row.
   assert.equal(first.posts.length, 1);
   assert.equal(second.posts.length, 1);
-  assert.deepEqual(
-    [...first.posts, ...second.posts].map((post) => (post.body as { recipient: { id: string } }).recipient.id).sort(),
-    ["2001", "2011"],
-  );
+  assert.deepEqual([...first.posts, ...second.posts].map((post) => (post.body as { recipient: { id: string } }).recipient.id).sort(), ["2001", "2011"]);
   assert.deepEqual(
     [...(await rows(run)), ...(await rows(other))].map((row) => [row.sender_id, row.status]),
     [
@@ -455,20 +406,12 @@ const guardCases: Array<{ name: string; change: () => Promise<unknown>; expect: 
   },
   {
     name: "the contact was paused",
-    change: () =>
-      pool.query(
-        "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'1001',true)",
-        [W, C],
-      ),
+    change: () => pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'1001',true)", [W, C]),
     expect: ["pending", "contact_paused"],
   },
   {
     name: "a handoff paused the contact",
-    change: () =>
-      pool.query(
-        "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,handoff_paused) VALUES($1,$2,'1001',true)",
-        [W, C],
-      ),
+    change: () => pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,handoff_paused) VALUES($1,$2,'1001',true)", [W, C]),
     expect: ["pending", "contact_paused"],
   },
   {
@@ -493,8 +436,7 @@ const guardCases: Array<{ name: string; change: () => Promise<unknown>; expect: 
   },
   {
     name: "the approving admin was removed",
-    change: () =>
-      pool.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [admin, owner]),
+    change: () => pool.query("UPDATE workspace_members SET removed_at=now(),removed_by=$2 WHERE user_id=$1", [admin, owner]),
     expect: ["blocked", "approver_unavailable"],
   },
   {
@@ -505,10 +447,7 @@ const guardCases: Array<{ name: string; change: () => Promise<unknown>; expect: 
   {
     name: "a block reason wins over a retry reason",
     change: async () => {
-      await pool.query(
-        "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'1001',true)",
-        [W, C],
-      );
+      await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'1001',true)", [W, C]);
       await pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours'");
     },
     expect: ["blocked", "reply_window_closed"],
@@ -536,31 +475,18 @@ for (const { name, change, expect } of guardCases)
 test("the guard immediately before the POST sees a change made after the second guard", async () => {
   const run = await campaign([["1001", "2001"]]);
   const seen = graph();
-  const source = hookedPool(/SET provider_called_at/, () =>
-    pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours'"),
-  );
+  const source = hookedPool(/SET provider_called_at/, () => pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours'"));
   assert.equal(await deliver(seen, {}, source), true);
   assert.deepEqual(seen.posts, []);
   const [row] = await rows(run);
   // Migration 067 lets a blocked row have no attempt, so this row's attempt is asserted here, not by the CHECK.
-  assert.deepEqual(
-    [row.status, row.failure_code, row.called, row.attempted],
-    ["blocked", "reply_window_closed", true, true],
-  );
+  assert.deepEqual([row.status, row.failure_code, row.called, row.attempted], ["blocked", "reply_window_closed", true, true]);
 });
 
 // Security audit #62, fourth pass: CLAUDE.md requires every automated send path to recheck the contact pause and the
 // service revokes after the claim and immediately before the POST. Each change is made after the worker's own
 // guards, when it stamps provider_called_at, so only the transport's beforeSend guard can see it.
-for (const { name, change, expect } of guardCases.filter((guard) =>
-  [
-    "the marketing grant was revoked",
-    "the comment sender opted out",
-    "another DM recipient bridged to the sender opted out",
-    "the contact was paused",
-    "a handoff paused the contact",
-  ].includes(guard.name),
-))
+for (const { name, change, expect } of guardCases.filter((guard) => ["the marketing grant was revoked", "the comment sender opted out", "another DM recipient bridged to the sender opted out", "the contact was paused", "a handoff paused the contact"].includes(guard.name)))
   test(`the guard immediately before the POST: ${name}`, async () => {
     const run = await campaign([["1001", "2001"]]);
     const seen = graph();
@@ -605,18 +531,14 @@ test("with the global send switch off the guard defers without any Graph call", 
   assert.equal(await deliver(seen, { globalSendEnabled: false }), true);
   assert.deepEqual(seen, { posts: [], gets: [] });
   const [row] = await rows(run);
-  assert.deepEqual(
-    [row.status, row.failure_code, row.attempted, row.deferred],
-    ["pending", "global_send_disabled", false, true],
-  );
+  assert.deepEqual([row.status, row.failure_code, row.attempted, row.deferred], ["pending", "global_send_disabled", false, true]);
 });
 
 test("a consent read failure defers the row as consent_unavailable", async () => {
   const run = await campaign([["1001", "2001"]]);
   const original = Pool.prototype.query;
   mock.method(Pool.prototype, "query", async function (this: Pool, sql: unknown, values?: unknown[]) {
-    if (typeof sql === "string" && sql.includes("FROM channel_consent_state state"))
-      throw new Error("consent database unavailable");
+    if (typeof sql === "string" && sql.includes("FROM channel_consent_state state")) throw new Error("consent database unavailable");
     return Reflect.apply(original, this, [sql, values]);
   });
   const seen = graph();
@@ -685,11 +607,7 @@ test("a rate limit returns the row to pending at the pause end and holds the con
   const seen = graph();
   assert.equal(
     await deliver(seen, {
-      post: () =>
-        Response.json(
-          { error: { code: 4, message: "Too many calls" } },
-          { status: 400, headers: { "retry-after": "1200" } },
-        ),
+      post: () => Response.json({ error: { code: 4, message: "Too many calls" } }, { status: 400, headers: { "retry-after": "1200" } }),
     }),
     true,
   );
@@ -718,23 +636,14 @@ test("a rate limit returns the row to pending at the pause end and holds the con
   assert.equal(seen.posts.length, 1);
   // A shorter Retry-After still pauses for at least 15 minutes.
   await pool.query("UPDATE instagram_connections SET send_paused_until=NULL");
-  await pool.query(
-    "UPDATE campaign_deliveries SET next_attempt_at=now()+interval '1 hour' WHERE failure_code IS NOT NULL",
-  );
+  await pool.query("UPDATE campaign_deliveries SET next_attempt_at=now()+interval '1 hour' WHERE failure_code IS NOT NULL");
   assert.equal(
     await deliver(seen, {
       post: () => Response.json({ error: { code: 613, message: "Throttled" } }, { status: 400 }),
     }),
     true,
   );
-  assert.equal(
-    (
-      await pool.query(
-        "SELECT extract(epoch FROM send_paused_until-clock_timestamp()) BETWEEN 800 AND 900 AS ok FROM instagram_connections",
-      )
-    ).rows[0].ok,
-    true,
-  );
+  assert.equal((await pool.query("SELECT extract(epoch FROM send_paused_until-clock_timestamp()) BETWEEN 800 AND 900 AS ok FROM instagram_connections")).rows[0].ok, true);
   assert.deepEqual(await runState(run), { status: "running", version: 1 });
 });
 
@@ -750,9 +659,7 @@ test("a connection at its hourly campaign budget is not claimed until a call lea
   );
   const seen = graph();
   assert.equal(await deliver(seen), false);
-  await pool.query(
-    "UPDATE campaign_deliveries SET provider_called_at=now()-interval '61 minutes' WHERE sender_id='budget-1'",
-  );
+  await pool.query("UPDATE campaign_deliveries SET provider_called_at=now()-interval '61 minutes' WHERE sender_id='budget-1'");
   assert.equal(await deliver(seen), true);
   assert.equal((await rows(run))[0].status, "sent");
 });
@@ -769,10 +676,7 @@ test("stale sending rows become unknown, and the cron completion then completes 
   );
   // A recent sending row is left alone.
   const fresh = await campaign([["1003", "2003"]]);
-  await pool.query(
-    "UPDATE campaign_deliveries SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE run_id=$1",
-    [fresh],
-  );
+  await pool.query("UPDATE campaign_deliveries SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE run_id=$1", [fresh]);
   await recoverStaleCampaignDeliveries(pool);
   assert.deepEqual(
     (await rows(stale)).map((row) => [row.status, row.failure_code, row.attempted]),
@@ -813,12 +717,7 @@ for (const outcome of ["sent", "retried"] as const) {
     const cancel = cancelCampaignRun(gated.pool, adminUser, run, { expected_version: 1 });
     await gated.held;
     const seen = graph();
-    const delivered = deliver(
-      seen,
-      outcome === "sent"
-        ? {}
-        : { post: () => Response.json({ error: { code: 4, message: "Too many calls" } }, { status: 400 }) },
-    );
+    const delivered = deliver(seen, outcome === "sent" ? {} : { post: () => Response.json({ error: { code: 4, message: "Too many calls" } }, { status: 400 }) });
     // The finish waits on the run lock while the cancel holds it.
     await waitForLock("FOR SHARE");
     gated.release();
@@ -826,10 +725,7 @@ for (const outcome of ["sent", "retried"] as const) {
     assert.equal(cancelled.error, null);
     assert.equal(sent, true);
     const [row] = await rows(run);
-    assert.deepEqual(
-      [row.status, row.failure_code],
-      outcome === "sent" ? ["sent", null] : ["cancelled", "run_cancelled"],
-    );
+    assert.deepEqual([row.status, row.failure_code], outcome === "sent" ? ["sent", null] : ["cancelled", "run_cancelled"]);
     assert.equal((await runState(run)).status, "cancelled");
   });
 }
@@ -837,11 +733,7 @@ test("a finish that holds the run first, then a cancel, cancels the row the fini
   const run = await campaign([["1001", "2001"]]);
   const gated = pausingPool(FINISH_LOCK);
   const seen = graph();
-  const delivered = deliver(
-    seen,
-    { post: () => Response.json({ error: { code: 4, message: "Too many calls" } }, { status: 400 }) },
-    gated.pool,
-  );
+  const delivered = deliver(seen, { post: () => Response.json({ error: { code: 4, message: "Too many calls" } }, { status: 400 }) }, gated.pool);
   await gated.held;
   const cancel = cancelCampaignRun(pool, adminUser, run, { expected_version: 1 });
   await waitForLock("FOR UPDATE");
@@ -894,21 +786,14 @@ test("operations health counts campaign rows in the due, sending and outcome met
   await outcome("1003", "failed", "meta_error_100");
   await outcome("1004", "blocked", "reply_window_closed");
   // A contact pause holds the last pending row, so nothing counts as waiting.
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'1005',true)",
-    [W, C],
-  );
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id,paused) VALUES($1,$2,'1005',true)", [W, C]);
   const [metrics] = await connectionMetrics(pool, W);
   assert.equal(metrics!.oldest_due_pending_seconds, null);
   assert.ok(metrics!.longest_sending_seconds! >= 719, String(metrics!.longest_sending_seconds));
   assert.deepEqual([metrics!.unknown_24h, metrics!.failed_24h, metrics!.blocked_24h], [1, 1, 1]);
   mock.method(console, "warn", () => undefined);
   await evaluateAlerts(pool, true, "campaign-health-test");
-  const alerts = (
-    await pool.query(
-      "SELECT name,alert_seen_count FROM scheduled_steps WHERE alert_active AND name<>'alert_cron_stale' ORDER BY name",
-    )
-  ).rows;
+  const alerts = (await pool.query("SELECT name,alert_seen_count FROM scheduled_steps WHERE alert_active AND name<>'alert_cron_stale' ORDER BY name")).rows;
   assert.deepEqual(alerts, [
     { name: "alert_sending_dwell", alert_seen_count: null },
     { name: "alert_unknown_outcome", alert_seen_count: "1" },
@@ -930,10 +815,7 @@ test("a budget-limited campaign's wait counts from its last provider call or the
   );
   const wait = async () => (await connectionMetrics(pool, W))[0]!;
   const reopened = await wait();
-  assert.ok(
-    reopened.oldest_due_pending_seconds! >= 59 && reopened.oldest_due_pending_seconds! < 120,
-    String(reopened.oldest_due_pending_seconds),
-  );
+  assert.ok(reopened.oldest_due_pending_seconds! >= 59 && reopened.oldest_due_pending_seconds! < 120, String(reopened.oldest_due_pending_seconds));
   assert.equal(connectionAlerts(reopened, true).includes("oldest_pending"), false);
   // While the run makes progress, the wait counts from the last call.
   await pool.query(
@@ -944,9 +826,7 @@ test("a budget-limited campaign's wait counts from its last provider call or the
   const progressing = await wait();
   assert.ok(progressing.oldest_due_pending_seconds! < 60, String(progressing.oldest_due_pending_seconds));
   // A queue that stopped after the budget reopened still raises the alert.
-  await pool.query("UPDATE campaign_deliveries SET provider_called_at=now()-interval '2 hours' WHERE run_id=$1", [
-    filler,
-  ]);
+  await pool.query("UPDATE campaign_deliveries SET provider_called_at=now()-interval '2 hours' WHERE run_id=$1", [filler]);
   const stuck = await wait();
   assert.ok(stuck.oldest_due_pending_seconds! >= 3599, String(stuck.oldest_due_pending_seconds));
   assert.equal(connectionAlerts(stuck, true).includes("oldest_pending"), true);
@@ -961,10 +841,7 @@ const pauseContact = (sender: string) =>
      ON CONFLICT(workspace_id,connection_id,sender_id) DO UPDATE SET paused=true`,
     [W, C, sender],
   );
-const closeWindow = (recipient: string) =>
-  pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours' WHERE recipient_id=$1", [
-    recipient,
-  ]);
+const closeWindow = (recipient: string) => pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours' WHERE recipient_id=$1", [recipient]);
 for (const { name, change, expect } of guardCases)
   test(`the sweep gives a paused contact's row the guard's outcome: ${name}`, async () => {
     const run = await campaign([["1001", "2001"]]);
@@ -1023,10 +900,7 @@ test("the sweep leaves reachable rows and the rows of runs that are not running"
   const cancelled = await campaign([["1002", "2002"]]);
   await pauseContact("1002");
   await closeWindow("2002");
-  await pool.query("UPDATE campaign_runs SET status='cancelled',cancelled_by=$2,cancelled_at=now() WHERE id=$1", [
-    cancelled,
-    admin,
-  ]);
+  await pool.query("UPDATE campaign_runs SET status='cancelled',cancelled_by=$2,cancelled_at=now() WHERE id=$1", [cancelled, admin]);
   const completed = await campaign([["1003", "2003"]]);
   await pauseContact("1003");
   await closeWindow("2003");
@@ -1057,10 +931,7 @@ test("the sweep ends at most its limit, oldest first, counting only rows it ends
   for (const sender of ["1001", "1002", "1003", "1004"]) await pauseContact(sender);
   for (const recipient of ["2002", "2003", "2004"]) await closeWindow(recipient);
   // 1001 is the oldest and only paused (stage 7), so it never takes a place in the batch.
-  await pool.query(
-    `UPDATE campaign_deliveries SET created_at=now()-make_interval(mins=>10-(sender_id::int-1000)) WHERE run_id=$1`,
-    [run],
-  );
+  await pool.query(`UPDATE campaign_deliveries SET created_at=now()-make_interval(mins=>10-(sender_id::int-1000)) WHERE run_id=$1`, [run]);
   const statuses = async () => (await rows(run)).map((row) => [row.sender_id, row.status]);
   assert.equal(await endUnreachableCampaignDeliveries(pool, { limit: 2 }), 2);
   assert.deepEqual(await statuses(), [
@@ -1128,12 +999,5 @@ test("a campaign row recovered from a stale sending counts from its recovery, no
   assert.deepEqual([metrics!.unknown_24h, metrics!.failed_24h, metrics!.blocked_24h], [1, 0, 0]);
   mock.method(console, "warn", () => undefined);
   await evaluateAlerts(pool, true, "campaign-recovered-test");
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT alert_seen_count FROM scheduled_steps WHERE name='alert_unknown_outcome' AND alert_active",
-      )
-    ).rows,
-    [{ alert_seen_count: "2" }],
-  );
+  assert.deepEqual((await pool.query("SELECT alert_seen_count FROM scheduled_steps WHERE name='alert_unknown_outcome' AND alert_active")).rows, [{ alert_seen_count: "2" }]);
 });

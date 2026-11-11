@@ -1,24 +1,13 @@
 import type { Pool } from "pg";
 import { ApiError, isRecord, type User } from "./auth.ts";
-import {
-  applyImportSnapshot,
-  classifyImportRecords,
-  countImportRows,
-  CONTACT_IMPORT_REQUEST_BYTES,
-  CONTACT_IMPORT_ROWS,
-  parseImportCsv,
-  readImportSnapshot,
-  type ImportCounts,
-  type ImportResultRow,
-} from "./contact-csv-preview.ts";
+import { applyImportSnapshot, classifyImportRecords, countImportRows, CONTACT_IMPORT_REQUEST_BYTES, CONTACT_IMPORT_ROWS, parseImportCsv, readImportSnapshot, type ImportCounts, type ImportResultRow } from "./contact-csv-preview.ts";
 import { CONTACT_TAG_LENGTH, CONTACT_TAG_LIMIT, lockContactConnection } from "./contacts.ts";
 import { workspaceFor } from "./settings.ts";
 
 // One expected row is `{"row":500,"current_tags":[...]},` around stored tags, each JSON-escaped to at most six
 // bytes per character (`\uXXXX`) plus its quotes and comma; the preview's CSV allowance covers the `csv` key.
 const EXPECTED_ROW_BYTES = 32 + CONTACT_TAG_LIMIT * (6 * CONTACT_TAG_LENGTH + 3);
-export const CONTACT_IMPORT_APPLY_REQUEST_BYTES =
-  CONTACT_IMPORT_REQUEST_BYTES + 32 + CONTACT_IMPORT_ROWS * EXPECTED_ROW_BYTES;
+export const CONTACT_IMPORT_APPLY_REQUEST_BYTES = CONTACT_IMPORT_REQUEST_BYTES + 32 + CONTACT_IMPORT_ROWS * EXPECTED_ROW_BYTES;
 
 export type AppliedRow = {
   row: number;
@@ -45,14 +34,7 @@ export type ImportApplyOutcome =
 
 // `expected` carries the preview's current tags of every changed row (sorted here), the optimistic check of #25.
 export function parseImportApplyRequest(input: unknown): { csv: string; expected: Map<number, string[]> } {
-  if (
-    !isRecord(input) ||
-    Object.keys(input).length !== 2 ||
-    typeof input.csv !== "string" ||
-    !Array.isArray(input.expected) ||
-    input.expected.length > CONTACT_IMPORT_ROWS
-  )
-    throw new ApiError(400, "invalid_contact_import_request");
+  if (!isRecord(input) || Object.keys(input).length !== 2 || typeof input.csv !== "string" || !Array.isArray(input.expected) || input.expected.length > CONTACT_IMPORT_ROWS) throw new ApiError(400, "invalid_contact_import_request");
   const expected = new Map<number, string[]>();
   for (const entry of input.expected) {
     if (
@@ -80,15 +62,13 @@ export async function applyContactCsv(pool: Pool, user: User, input: unknown): P
   const workspace = await workspaceFor(pool, user, "admin");
   const { csv, expected } = parseImportApplyRequest(input);
   const records = parseImportCsv(csv);
-  for (const row of expected.keys())
-    if (row > records.length) throw new ApiError(400, "invalid_contact_import_request");
+  for (const row of expected.keys()) if (row > records.length) throw new ApiError(400, "invalid_contact_import_request");
   const { rows, unique } = classifyImportRecords(records, workspace);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended('contact-import:' || $1::text, 0))", [workspace]);
-    for (const connectionId of [...new Set(unique.map((row) => row.connection_id))].sort())
-      await lockContactConnection(client, workspace, connectionId);
+    for (const connectionId of [...new Set(unique.map((row) => row.connection_id))].sort()) await lockContactConnection(client, workspace, connectionId);
     // The ordered subquery is not flattened, so the locks are taken in that order; the key is lockContact's.
     await client.query(
       `SELECT pg_advisory_xact_lock(hashtextextended(input.connection_id || ':' || input.sender_id, 0))

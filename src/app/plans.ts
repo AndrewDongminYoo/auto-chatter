@@ -71,8 +71,7 @@ export async function workspaceEntitlements(db: Db, workspace: string) {
 // zone expression. The reference defaults to statement_timestamp(), not now(): every caller runs its statement after
 // taking the workspace lock, and now() is the transaction start, which can fall in the previous month when the lock
 // wait crosses midnight in the workspace time zone.
-export const campaignDueMonthSql = (due: string, zone: string, reference = "statement_timestamp()") =>
-  `date_trunc('month',greatest(coalesce(${due},${reference}),${reference}) AT TIME ZONE ${zone})`;
+export const campaignDueMonthSql = (due: string, zone: string, reference = "statement_timestamp()") => `date_trunc('month',greatest(coalesce(${due},${reference}),${reference}) AT TIME ZONE ${zone})`;
 
 // The allowance's reference time, read once in the `reference` CTE: the caller's post-lock clock when it passes one (a
 // run start passes its as_of), otherwise the allowance statement's own start, which runs after the workspace lock.
@@ -108,21 +107,8 @@ export interface CampaignSendAllowance {
 // workspace row FOR UPDATE, so two writers never count the same month at once. `reference` is the post-lock clock that
 // places immediate and past-due approvals in a month; a run start passes its as_of so the run, its used rows and the
 // other approvals' reservations fall in one month.
-export async function campaignSendAllowance(
-  db: Db,
-  workspace: string,
-  due: string | null,
-  excludedApproval: string | null = null,
-  reference: string | null = null,
-): Promise<CampaignSendAllowance> {
-  const row = (
-    await db.query<{ plan: PlanKey; month: string; used: string; reserved: string }>(ALLOWANCE_SQL, [
-      workspace,
-      due,
-      excludedApproval,
-      reference,
-    ])
-  ).rows[0];
+export async function campaignSendAllowance(db: Db, workspace: string, due: string | null, excludedApproval: string | null = null, reference: string | null = null): Promise<CampaignSendAllowance> {
+  const row = (await db.query<{ plan: PlanKey; month: string; used: string; reserved: string }>(ALLOWANCE_SQL, [workspace, due, excludedApproval, reference])).rows[0];
   if (!row) throw new ApiError(403, "workspace_required");
   return {
     month: row.month,
@@ -152,8 +138,7 @@ export function campaignAllowanceBody(allowance: CampaignSendAllowance) {
 // Creating an invite takes a seat. The caller holds the workspace row FOR UPDATE.
 export async function requireInviteSeat(db: Db, workspace: string): Promise<void> {
   const current = await usage(db, workspace);
-  if (current.members + current.open_invites >= planLimits(current.plan).seats)
-    throw new ApiError(409, "seat_limit_reached");
+  if (current.members + current.open_invites >= planLimits(current.plan).seats) throw new ApiError(409, "seat_limit_reached");
 }
 
 // Accepting turns a counted invite into a member, but a downgrade or invites from before the limit can leave

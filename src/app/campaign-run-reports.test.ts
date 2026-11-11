@@ -58,11 +58,7 @@ test("campaign report query accepts exactly the known keys, a 1-366 day period, 
     draft: null,
   });
   assert.equal(parseCampaignRunReportQuery(new URLSearchParams(`${base}&draft_id=${draft}`)).draft, draft);
-  assert.equal(
-    parseCampaignRunReportQuery(new URLSearchParams("from=2025-10-01&before=2026-10-02&expected_time_zone=UTC")).from,
-    "2025-10-01",
-    "366 days is allowed",
-  );
+  assert.equal(parseCampaignRunReportQuery(new URLSearchParams("from=2025-10-01&before=2026-10-02&expected_time_zone=UTC")).from, "2025-10-01", "366 days is allowed");
   for (const query of [
     "",
     `${base}&extra=1`,
@@ -220,10 +216,7 @@ test("campaign report renders three partitions with run-screen labels and export
   h.inputs.before.value = "2026-10-02";
   h.inputs.draft_id.value = draft;
   await h.form.dispatch("submit");
-  assert.equal(
-    requests.at(-1),
-    `/api/reports/campaign-runs?from=2026-10-01&before=2026-10-02&expected_time_zone=Factory&draft_id=${draft}`,
-  );
+  assert.equal(requests.at(-1), `/api/reports/campaign-runs?from=2026-10-01&before=2026-10-02&expected_time_zone=Factory&draft_id=${draft}`);
   const runs = h.get("campaign-report-run-counts").children;
   const starts = h.get("campaign-report-start-counts").children;
   const deliveries = h.get("campaign-report-delivery-counts").children;
@@ -254,18 +247,7 @@ test("campaign report renders three partitions with run-screen labels and export
     .split("\r\n")
     .map((line) => line.replace(/^"|"$/g, "").split('","'));
   assert.equal(rows.length, 26);
-  assert.deepEqual(rows[0], [
-    "group",
-    "metric",
-    "count",
-    "from_date",
-    "before_date_exclusive",
-    "time_zone",
-    "period_from_utc",
-    "period_before_utc",
-    "checked_at_utc",
-    "draft_id",
-  ]);
+  assert.deepEqual(rows[0], ["group", "metric", "count", "from_date", "before_date_exclusive", "time_zone", "period_from_utc", "period_before_utc", "checked_at_utc", "draft_id"]);
   for (const [group, values] of [
     ["run", snapshot.run_counts],
     ["start", snapshot.start_counts],
@@ -308,11 +290,7 @@ test("campaign report keeps a malformed count off screen and parses counts beyon
   await h.controller.configure("owner", "Factory");
   await h.form.dispatch("submit");
   assert.equal(h.get("campaign-report-delivery-counts").children[0]!.children[1]!.textContent, "9,007,199,254,740,993");
-  const broken = harness(async (url) =>
-    url === "/api/campaign-drafts"
-      ? { drafts: [] }
-      : { ...snapshot, start_counts: { ...snapshot.start_counts, candidate: "1.5" } },
-  );
+  const broken = harness(async (url) => (url === "/api/campaign-drafts" ? { drafts: [] } : { ...snapshot, start_counts: { ...snapshot.start_counts, candidate: "1.5" } }));
   await broken.controller.configure("owner", "Factory");
   await broken.form.dispatch("submit");
   assert.equal(broken.get("campaign-report-run-counts").children.length, 0);
@@ -396,6 +374,5 @@ test("the app's other-tab session signal and BFCache restoration reset every rep
   });
   vm.runInContext(`${source.slice(start, end + 3)}\nglobalThis.invalidate = invalidateContactSession;`, context);
   context.invalidate();
-  for (const name of ["manualReports", "flowReports", "handoffReports", "campaignReports"])
-    assert.ok(resets.includes(name), `${name}.reset() must run on session invalidation`);
+  for (const name of ["manualReports", "flowReports", "handoffReports", "campaignReports"]) assert.ok(resets.includes(name), `${name}.reset() must run on session invalidation`);
 });

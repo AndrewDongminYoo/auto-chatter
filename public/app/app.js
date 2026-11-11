@@ -96,12 +96,7 @@ const fieldRowSuffixes = ["", "_2", "_3"];
 // Group editor changes do not count as inputs; the tree is compared with the loaded one in order, so moving a group
 // or a condition is a change and moving it back is not.
 function segmentEditChanged() {
-  return (
-    Boolean(editingSegment) &&
-    (segmentConditionInputs !== editingSegment.inputs ||
-      byId("segment-save").elements.name.value !== editingSegment.loadedName ||
-      !segmentTreeSame(draftConditionTree, editingSegment.loadedTree, contactFields))
-  );
+  return Boolean(editingSegment) && (segmentConditionInputs !== editingSegment.inputs || byId("segment-save").elements.name.value !== editingSegment.loadedName || !segmentTreeSame(draftConditionTree, editingSegment.loadedTree, contactFields));
 }
 // True when the draft's group conditions would be lost by discarding them, because no saved filter holds that tree.
 // It protects a tree built outside edit mode, which no input counter records, wherever the draft can be discarded.
@@ -143,9 +138,7 @@ const mediaCache = new Map();
 // The manual Meta status result per connection, handed to the one list refresh that follows the check and removed
 // there, so a later refresh (disconnect, toggles) does not show a result for a changed account.
 const healthResults = new Map();
-function editorState(
-  message = dirty ? "저장하지 않은 변경 사항이 있습니다." : "새 댓글부터 저장한 설정이 적용됩니다.",
-) {
+function editorState(message = dirty ? "저장하지 않은 변경 사항이 있습니다." : "새 댓글부터 저장한 설정이 적용됩니다.") {
   byId("editor-title").textContent = editingRuleId ? "규칙 수정" : "새 규칙 만들기";
   byId("edit-state").textContent = dirty ? "저장 전" : editingRuleId ? "저장됨" : "작성 전";
   byId("edit-state").className = `badge${dirty ? " warning" : ""}`;
@@ -153,15 +146,7 @@ function editorState(
 }
 function canDiscard() {
   return (
-    (!dirty &&
-      !contactsDirty.size &&
-      !segmentNameDirty &&
-      !segmentEditChanged() &&
-      !conditionTreeUnsaved() &&
-      !fieldNameDirty &&
-      !inbox.hasDrafts() &&
-      !campaignDrafts.hasChanges() &&
-      !flowEditor.hasChanges()) ||
+    (!dirty && !contactsDirty.size && !segmentNameDirty && !segmentEditChanged() && !conditionTreeUnsaved() && !fieldNameDirty && !inbox.hasDrafts() && !campaignDrafts.hasChanges() && !flowEditor.hasChanges()) ||
     confirm("저장하지 않은 규칙·연락처·필터·플로 변경 사항과 답장·캠페인 초안을 버릴까요?")
   );
 }
@@ -169,9 +154,7 @@ function canDiscardRule() {
   return !dirty || confirm("저장하지 않은 규칙 변경 사항을 버릴까요?");
 }
 function focusEditor() {
-  const target = editingRuleId
-    ? form.elements[form.elements.match_mode.value === "all" ? "private_reply_text" : "keywords"]
-    : byId("media-title");
+  const target = editingRuleId ? form.elements[form.elements.match_mode.value === "all" ? "private_reply_text" : "keywords"] : byId("media-title");
   target.focus({ preventScroll: true });
   target.scrollIntoView({
     behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
@@ -191,12 +174,8 @@ function updatePreview() {
   const fields = form.elements;
   const account = fields.connection_id.selectedOptions[0]?.textContent;
   byId("preview-account").textContent = account || "연결할 계정";
-  byId("preview-comment").textContent =
-    fields.match_mode.value === "all"
-      ? "모든 댓글에 반응합니다"
-      : list(fields.keywords.value)[0] || "키워드를 입력하세요";
-  byId("preview-message").textContent =
-    fields.private_reply_text.value.trim() || "작성한 첫 메시지가 여기에 표시됩니다.";
+  byId("preview-comment").textContent = fields.match_mode.value === "all" ? "모든 댓글에 반응합니다" : list(fields.keywords.value)[0] || "키워드를 입력하세요";
+  byId("preview-message").textContent = fields.private_reply_text.value.trim() || "작성한 첫 메시지가 여기에 표시됩니다.";
   const button = fields.follow_gate_enabled.checked && fields.confirmation_button_enabled.checked;
   for (const id of ["preview-first-button", "preview-retry-button"]) {
     byId(id).hidden = !button;
@@ -205,31 +184,26 @@ function updatePreview() {
   byId("preview-follow").hidden = !fields.follow_gate_enabled.checked;
   byId("preview-confirmation").textContent = fields.confirmation_keyword.value.trim() || "확인 단어를 입력하세요";
   byId("preview-follower").textContent = fields.follower_reply_text.value.trim() || "팔로우한 사람에게 보낼 답장";
-  byId("preview-non-follower").textContent =
-    fields.non_follower_reply_text.value.trim() || "팔로우하지 않은 사람에게 보낼 답장";
+  byId("preview-non-follower").textContent = fields.non_follower_reply_text.value.trim() || "팔로우하지 않은 사람에게 보낼 답장";
 }
 function formConditions() {
   const follow = form.elements.follow_gate_enabled.checked;
   byId("follow-settings").hidden = !follow;
-  for (const name of ["confirmation_keyword", "follower_reply_text", "non_follower_reply_text"])
-    form.elements[name].required = follow;
+  for (const name of ["confirmation_keyword", "follower_reply_text", "non_follower_reply_text"]) form.elements[name].required = follow;
   const button = follow && form.elements.confirmation_button_enabled.checked;
   byId("confirmation-button-settings").hidden = !button;
   form.elements.confirmation_button_title.required = button;
   for (const name of ["private_reply_text", "non_follower_reply_text"]) {
     const field = form.elements[name];
     field.maxLength = button ? 640 : 1000;
-    field.setCustomValidity(
-      button && field.value.length > 640 ? "버튼이 있는 메시지는 640자 이내로 작성해 주세요." : "",
-    );
+    field.setCustomValidity(button && field.value.length > 640 ? "버튼이 있는 메시지는 640자 이내로 작성해 주세요." : "");
   }
   const all = form.elements.match_mode.value === "all";
   byId("include-keywords").hidden = all;
   form.elements.keywords.required = !all;
   form.elements.keywords.setCustomValidity("");
   form.elements.excluded_keywords.setCustomValidity("");
-  byId("message-count").textContent =
-    `${form.elements.private_reply_text.value.length.toLocaleString("ko-KR")} / ${button ? "640" : "1,000"}`;
+  byId("message-count").textContent = `${form.elements.private_reply_text.value.length.toLocaleString("ko-KR")} / ${button ? "640" : "1,000"}`;
   updatePreview();
 }
 function markDirty() {
@@ -242,17 +216,7 @@ function markDirty() {
 form.addEventListener("input", markDirty);
 form.addEventListener("change", markDirty);
 window.addEventListener("beforeunload", (event) => {
-  if (
-    dirty ||
-    contactsDirty.size ||
-    segmentNameDirty ||
-    segmentEditChanged() ||
-    conditionTreeUnsaved() ||
-    fieldNameDirty ||
-    inbox.hasDrafts() ||
-    campaignDrafts.hasChanges() ||
-    flowEditor.hasChanges()
-  ) {
+  if (dirty || contactsDirty.size || segmentNameDirty || segmentEditChanged() || conditionTreeUnsaved() || fieldNameDirty || inbox.hasDrafts() || campaignDrafts.hasChanges() || flowEditor.hasChanges()) {
     event.preventDefault();
     event.returnValue = "";
   }
@@ -402,26 +366,21 @@ const errors = {
   workspace_required: "작업 공간에 참여하고 있지 않습니다. 페이지를 새로 고치거나 새 초대를 요청해 주세요.",
   invalid_email: "초대할 이메일 주소를 확인해 주세요.",
   invalid_role: "역할을 다시 선택해 주세요.",
-  invalid_time_zone:
-    "시간대 이름을 확인해 주세요. 목록에 있는 Asia/Seoul 같은 이름을 대소문자까지 그대로 입력해야 합니다.",
+  invalid_time_zone: "시간대 이름을 확인해 주세요. 목록에 있는 Asia/Seoul 같은 이름을 대소문자까지 그대로 입력해야 합니다.",
   already_member: "이미 작업 공간의 멤버입니다.",
   conversation_conflict: "다른 요청으로 대화 상태나 담당자가 먼저 바뀌었습니다. 최신 상태를 확인해 주세요.",
   assignee_unavailable: "작업 공간에서 제거되었거나 다른 작업 공간의 멤버에게는 배정할 수 없습니다.",
   invalid_conversation_request: "대화 상태 요청을 확인해 주세요. 새로고침한 뒤 다시 시도해 주세요.",
   invite_limit_reached: "대기 중인 초대가 너무 많습니다. 사용하지 않는 초대를 취소한 뒤 다시 시도해 주세요.",
-  seat_limit_reached:
-    "요금제의 멤버 자리를 모두 쓰고 있습니다. 대기 중인 초대를 취소하거나 멤버를 제거한 뒤 다시 시도해 주세요.",
-  connection_limit_reached:
-    "요금제에서 연결할 수 있는 Instagram 계정 수를 모두 썼습니다. 새 계정을 연결하려면 다른 계정의 연결을 먼저 해제해 주세요.",
-  broadcast_limit_reached:
-    "요금제의 이번 달 캠페인 발송 한도를 넘어 승인할 수 없습니다. 실행 시점을 다른 달로 옮기거나 다른 승인을 취소해 주세요.",
+  seat_limit_reached: "요금제의 멤버 자리를 모두 쓰고 있습니다. 대기 중인 초대를 취소하거나 멤버를 제거한 뒤 다시 시도해 주세요.",
+  connection_limit_reached: "요금제에서 연결할 수 있는 Instagram 계정 수를 모두 썼습니다. 새 계정을 연결하려면 다른 계정의 연결을 먼저 해제해 주세요.",
+  broadcast_limit_reached: "요금제의 이번 달 캠페인 발송 한도를 넘어 승인할 수 없습니다. 실행 시점을 다른 달로 옮기거나 다른 승인을 취소해 주세요.",
   invite_not_found: "초대 링크를 확인할 수 없습니다. 링크 전체를 복사했는지 확인하거나 새 초대를 요청해 주세요.",
   invite_used: "이미 사용한 초대 링크입니다. 새 초대를 요청해 주세요.",
   invite_revoked: "취소된 초대 링크입니다. 새 초대를 요청해 주세요.",
   invite_expired: "만료된 초대 링크입니다. 새 초대를 요청해 주세요.",
   invite_email_mismatch: "초대받은 이메일과 로그인한 계정의 이메일이 다릅니다. 초대받은 이메일로 로그인해 주세요.",
-  workspace_not_empty:
-    "지금 작업 공간에 데이터나 다른 멤버가 있어 초대를 수락할 수 없습니다. 기존 작업 공간을 정리한 뒤 다시 시도해 주세요.",
+  workspace_not_empty: "지금 작업 공간에 데이터나 다른 멤버가 있어 초대를 수락할 수 없습니다. 기존 작업 공간을 정리한 뒤 다시 시도해 주세요.",
   cannot_change_self: "자신의 역할은 바꾸거나 제거할 수 없습니다.",
   cannot_change_owner: "소유자의 역할은 바꾸거나 제거할 수 없습니다.",
   member_not_found: "멤버를 찾을 수 없습니다. 목록을 새로 고쳐 주세요.",
@@ -432,11 +391,9 @@ const errors = {
   origin_rejected: "이 페이지에서 다시 시도해 주세요.",
   connection_not_found: "접근할 수 있는 Instagram 계정을 선택해 주세요.",
   connection_unavailable: "계정 연결 상태와 토큰 유효기간을 확인해 주세요.",
-  connection_active:
-    "이 계정은 아직 연결되어 있습니다. '연결 해제'로 수신·발송을 중지하고 토큰을 삭제한 뒤 다시 시도해 주세요.",
+  connection_active: "이 계정은 아직 연결되어 있습니다. '연결 해제'로 수신·발송을 중지하고 토큰을 삭제한 뒤 다시 시도해 주세요.",
   sending_in_progress: "이 계정에 발송 중인 메시지가 있어 지금은 삭제할 수 없습니다. 몇 분 뒤 다시 시도해 주세요.",
-  confirmation_mismatch:
-    "입력한 계정 ID가 이 연결의 Instagram 계정 ID와 다릅니다. 표시된 숫자 ID를 그대로 입력해 주세요.",
+  confirmation_mismatch: "입력한 계정 ID가 이 연결의 Instagram 계정 ID와 다릅니다. 표시된 숫자 ID를 그대로 입력해 주세요.",
   invalid_data_deletion: "삭제를 확인할 Instagram 계정 ID를 입력해 주세요.",
   keywords_required: "키워드를 하나 이상 입력해 주세요.",
   invalid_contact_automation: "연락처 자동화 설정을 확인해 주세요.",
@@ -446,8 +403,7 @@ const errors = {
   contact_export_rate_limited: "연락처 내보내기 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
   contact_export_unavailable: "지금은 연락처를 내보낼 수 없습니다. 잠시 후 다시 시도해 주세요.",
   contact_export_timeout: "내보내기 처리 시간 한도를 넘었습니다. 파일을 만들지 않았습니다. 잠시 후 다시 시도해 주세요.",
-  workspace_export_too_large:
-    "작업 공간 내보내기 한도(데이터 50,000건 또는 20 MiB)를 넘었습니다. 파일을 만들지 않았습니다. 서비스 운영자에게 문의해 주세요.",
+  workspace_export_too_large: "작업 공간 내보내기 한도(데이터 50,000건 또는 20 MiB)를 넘었습니다. 파일을 만들지 않았습니다. 서비스 운영자에게 문의해 주세요.",
   workspace_export_rate_limited: "데이터 내보내기 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
   workspace_export_unavailable: "지금은 데이터를 내보낼 수 없습니다. 잠시 후 다시 시도해 주세요.",
   invalid_identity_link_request: "식별자 연결 요청을 확인한 뒤 다시 불러와 주세요.",
@@ -472,8 +428,7 @@ const errors = {
   label_rule_limit_reached: "사용 중인 라벨 규칙은 최대 50개입니다. 쓰지 않는 규칙을 보관해 주세요.",
   label_rule_archived: "보관한 라벨 규칙은 수정할 수 없습니다.",
   label_rule_not_found: "라벨 규칙을 찾을 수 없습니다. 목록을 다시 불러왔습니다.",
-  label_rule_conflict:
-    "다른 화면에서 이 규칙이 먼저 바뀌어 최신 내용을 다시 불러왔습니다. 확인한 뒤 다시 저장해 주세요.",
+  label_rule_conflict: "다른 화면에서 이 규칙이 먼저 바뀌어 최신 내용을 다시 불러왔습니다. 확인한 뒤 다시 저장해 주세요.",
   invalid_note: "메모는 1–2,000자로 입력해 주세요.",
   invalid_note_request: "메모 요청을 확인해 주세요. 새로고침한 뒤 다시 시도해 주세요.",
   conversation_not_found: "대화를 찾을 수 없습니다. 삭제되었을 수 있으니 인박스를 새로고침해 주세요.",
@@ -491,10 +446,8 @@ const errors = {
   invalid_contact_import_request: "CSV 검사 요청을 확인해 주세요.",
   invalid_contact_import_format: "v1 CSV 헤더와 인용 형식을 확인해 주세요.",
   contact_import_too_large: "CSV 파일은 128KiB, 500행까지 검사할 수 있습니다.",
-  contact_import_rejected:
-    "오류·중복·조회 불가 행이 있어 태그를 저장하지 않았습니다. 아래 결과를 고친 뒤 다시 검사해 주세요.",
-  contact_import_stale:
-    "검사 후 태그가 바뀐 연락처가 있어 저장하지 않았습니다. 현재 결과를 확인하고 다시 검사해 주세요.",
+  contact_import_rejected: "오류·중복·조회 불가 행이 있어 태그를 저장하지 않았습니다. 아래 결과를 고친 뒤 다시 검사해 주세요.",
+  contact_import_stale: "검사 후 태그가 바뀐 연락처가 있어 저장하지 않았습니다. 현재 결과를 확인하고 다시 검사해 주세요.",
   invalid_field_condition: "추가 정보의 필드·조건·찾을 값을 확인해 주세요.",
   invalid_contact_condition: "OR 결합에는 태그와 추가 정보 조건이 모두 필요합니다.",
   invalid_contact_activity: "UTC 시작·종료를 함께 지정하거나 최근 일수 1~366 또는 달력 기간 중 하나를 선택해 주세요.",
@@ -513,21 +466,17 @@ const errors = {
   media_not_owned: "선택한 계정의 게시물만 사용할 수 있습니다. 게시물을 다시 선택해 주세요.",
   media_unsupported: "이 게시물은 댓글 자동화를 지원하지 않습니다. 피드 게시물이나 릴스를 선택해 주세요.",
   media_rate_limited: "게시물 조회 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
-  remote_logout_unconfirmed:
-    "브라우저에서 로그아웃했습니다. 서버 세션 종료를 확인하지 못했으니 다시 로그인해 로그아웃하거나 운영자에게 문의해 주세요.",
+  remote_logout_unconfirmed: "브라우저에서 로그아웃했습니다. 서버 세션 종료를 확인하지 못했으니 다시 로그인해 로그아웃하거나 운영자에게 문의해 주세요.",
   instagram_not_configured: "Instagram 연결 서비스를 준비 중입니다.",
   instagram_connect_rate_limited: "계정 연결 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
   instagram_connect_unavailable: "지금은 계정 연결을 시작할 수 없습니다. 잠시 후 다시 시도해 주세요.",
-  instagram_public_access_restricted:
-    "일반 사용자의 Instagram 연결에 필요한 Meta 승인을 확인하지 못해 계정 연결을 제한합니다. 검수에 참여하는 계정만 연결할 수 있습니다.",
+  instagram_public_access_restricted: "일반 사용자의 Instagram 연결에 필요한 Meta 승인을 확인하지 못해 계정 연결을 제한합니다. 검수에 참여하는 계정만 연결할 수 있습니다.",
   instagram_authorization_denied: "Instagram 연결이 완료되지 않았습니다. 권한 동의를 취소했거나 요청이 거부됐습니다.",
   instagram_permissions_required: "필수 Instagram 권한을 받지 못했습니다. 계정과 앱 권한을 확인해 주세요.",
   health_rate_limited: "상태 확인 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
   health_unavailable: "지금은 Meta 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.",
-  invalid_webhook_endpoint:
-    "주소 이름은 1–60자로 입력하고, 줄바꿈이나 보이지 않는 문자(여러 이모지를 이어 붙인 기호 등)는 빼 주세요. 계속 실패하면 목록을 새로 고친 뒤 다시 시도해 주세요.",
-  invalid_webhook_url:
-    "443 포트를 쓰는 https:// 주소만 등록할 수 있습니다. IP 주소, localhost와 .local·.internal 주소, 사용자 정보가 들어간 주소는 쓸 수 없습니다.",
+  invalid_webhook_endpoint: "주소 이름은 1–60자로 입력하고, 줄바꿈이나 보이지 않는 문자(여러 이모지를 이어 붙인 기호 등)는 빼 주세요. 계속 실패하면 목록을 새로 고친 뒤 다시 시도해 주세요.",
+  invalid_webhook_url: "443 포트를 쓰는 https:// 주소만 등록할 수 있습니다. IP 주소, localhost와 .local·.internal 주소, 사용자 정보가 들어간 주소는 쓸 수 없습니다.",
   webhooks_unavailable: "지금은 주소를 추가하거나 키를 교체할 수 없습니다. 서비스 운영자에게 문의해 주세요.",
   webhook_endpoint_not_found: "주소를 찾을 수 없습니다. 목록을 새로 고쳐 주세요.",
   webhook_endpoint_limit_reached: "켜 둘 수 있는 주소는 최대 5개입니다. 사용하지 않는 주소를 끈 뒤 다시 시도해 주세요.",
@@ -552,8 +501,7 @@ const errors = {
   invalid_recovery_link: "변경 링크를 다시 요청해 주세요.",
   recovery_link_invalid: "변경 링크가 만료되었거나 유효하지 않습니다. 새 링크를 요청해 주세요.",
   password_rejected: "새 비밀번호가 보안 기준을 충족하지 않습니다. 다른 비밀번호로 다시 시도해 주세요.",
-  password_updated_logout_unconfirmed:
-    "비밀번호는 변경됐지만 다른 세션 종료를 확인하지 못했습니다. 새 비밀번호로 로그인한 뒤 계정 상태를 확인해 주세요.",
+  password_updated_logout_unconfirmed: "비밀번호는 변경됐지만 다른 세션 종료를 확인하지 못했습니다. 새 비밀번호로 로그인한 뒤 계정 상태를 확인해 주세요.",
 };
 
 function authSessionRevision() {
@@ -572,17 +520,10 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
   const requestSession = workspaceGeneration;
   const requestRevision = acceptedAuthRevision;
   const requireCurrentSession = () => {
-    if (
-      requestSession !== workspaceGeneration ||
-      requestRevision !== authSessionRevision() ||
-      requestRevision?.startsWith("pending:")
-    )
-      throw new Error("로그인 상태가 변경되었습니다. 작업 공간을 다시 불러온 뒤 시도해 주세요.");
+    if (requestSession !== workspaceGeneration || requestRevision !== authSessionRevision() || requestRevision?.startsWith("pending:")) throw new Error("로그인 상태가 변경되었습니다. 작업 공간을 다시 불러온 뒤 시도해 주세요.");
   };
   const refresh = path === "/api/auth/refresh";
-  const changesCookies =
-    method === "POST" &&
-    ["/api/auth/login", "/api/auth/refresh", "/api/auth/logout", "/api/auth/reset-password"].includes(path);
+  const changesCookies = method === "POST" && ["/api/auth/login", "/api/auth/refresh", "/api/auth/logout", "/api/auth/reset-password"].includes(path);
   const protectedRequest = !path.startsWith("/api/auth/");
   const locks = globalThis.navigator?.locks;
   const storageUnavailable = () => {
@@ -643,10 +584,7 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
   }
   // Fetch resolves after the browser applies response headers, including Set-Cookie.
   // Do not cancel an older fetch and assume its cookie effects have been cancelled.
-  const response =
-    (changesCookies || protectedRequest) && locks?.request
-      ? await locks.request("auto-chatter-auth-cookies", { mode: changesCookies ? "exclusive" : "shared" }, send)
-      : await send();
+  const response = (changesCookies || protectedRequest) && locks?.request ? await locks.request("auto-chatter-auth-cookies", { mode: changesCookies ? "exclusive" : "shared" }, send) : await send();
   if (response.status === 401 && retry && !path.startsWith("/api/auth/")) {
     await response.body?.cancel();
     requireCurrentSession();
@@ -700,10 +638,7 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
 
 async function action(button, task) {
   if (button.disabled) return;
-  const relatedControls =
-    button === byId("save-rule")
-      ? document.querySelectorAll("#workspace button, #logout")
-      : (button.closest("form")?.querySelectorAll("button") ?? []);
+  const relatedControls = button === byId("save-rule") ? document.querySelectorAll("#workspace button, #logout") : (button.closest("form")?.querySelectorAll("button") ?? []);
   const controls = [...new Set([button, ...relatedControls])];
   const original = controls.map((control) => [control, control.disabled]);
   const label = button.textContent;
@@ -793,19 +728,10 @@ function countSummary(counts, labels) {
 function deletionRecord(record) {
   const item = node("li", "");
   const scope = record.scope === "person" ? "이용자 단위 삭제(운영자 처리)" : "연결 단위 삭제";
-  const requester =
-    record.scope === "person" ? "" : record.requested_by === currentUserId ? " · 내 요청" : " · 다른 관리자 요청";
+  const requester = record.scope === "person" ? "" : record.requested_by === currentUserId ? " · 내 요청" : " · 다른 관리자 요청";
   item.append(node("strong", `${new Date(record.completed_at).toLocaleString("ko-KR")} · ${scope}${requester}`));
   const deleted = countSummary(record.deleted_counts, deletedLabels);
-  item.append(
-    node(
-      "p",
-      deleted
-        ? `삭제 ${countTotal(record.deleted_counts).toLocaleString("ko-KR")}건 · ${deleted}`
-        : "삭제할 기록이 없었습니다.",
-      "hint",
-    ),
-  );
+  item.append(node("p", deleted ? `삭제 ${countTotal(record.deleted_counts).toLocaleString("ko-KR")}건 · ${deleted}` : "삭제할 기록이 없었습니다.", "hint"));
   const retained = countSummary(record.retained_counts, retainedLabels);
   if (retained) item.append(node("p", `보관 · ${retained}`, "hint"));
   return item;
@@ -815,21 +741,16 @@ function deletionRecord(record) {
 function forgetDeletedConnection(connectionId) {
   contactCsvPreview.invalidate();
   invalidateSegmentPreview();
-  invalidateContactExport(
-    "연락처 기록이 삭제되어 진행 중인 내보내기를 취소했습니다. 다시 요청하면 현재 저장된 정보로 만듭니다.",
-  );
+  invalidateContactExport("연락처 기록이 삭제되어 진행 중인 내보내기를 취소했습니다. 다시 요청하면 현재 저장된 정보로 만듭니다.");
   purgedContactConnections.add(connectionId);
   for (const key of contactsDirty) if (key.startsWith(`${connectionId}:`)) contactsDirty.delete(key);
-  for (const card of byId("contacts-list").querySelectorAll(".contact-row"))
-    if (card.dataset.connectionId === connectionId) card.remove();
+  for (const card of byId("contacts-list").querySelectorAll(".contact-row")) if (card.dataset.connectionId === connectionId) card.remove();
   inbox.forgetConnection(connectionId);
   if (!contactsDirty.size && !contactsSaving) void loadContacts();
   const generation = segmentsGeneration;
   loadActivity().catch(() => {
     if (generation !== segmentsGeneration) return;
-    byId("activity").replaceChildren(
-      emptyState("처리 내역을 불러오지 못했습니다", "새로고침을 눌러 다시 시도해 주세요."),
-    );
+    byId("activity").replaceChildren(emptyState("처리 내역을 불러오지 못했습니다", "새로고침을 눌러 다시 시도해 주세요."));
   });
 }
 
@@ -849,9 +770,7 @@ function connectionData(account, generation) {
       const result = await api(`/api/connections/${account.id}/data-deletions`);
       if (generation !== segmentsGeneration || request !== historyRequest) return;
       records.replaceChildren(...result.deletions.map(deletionRecord));
-      historyStatus.textContent = result.deletions.length
-        ? `최근 ${result.deletions.length}건 · 댓글·메시지 내용과 이용자 식별자는 기록하지 않습니다.`
-        : "이 연결의 삭제 기록이 없습니다.";
+      historyStatus.textContent = result.deletions.length ? `최근 ${result.deletions.length}건 · 댓글·메시지 내용과 이용자 식별자는 기록하지 않습니다.` : "이 연결의 삭제 기록이 없습니다.";
     } catch (error) {
       if (generation !== segmentsGeneration || request !== historyRequest) return;
       historyStatus.textContent = error.message;
@@ -907,9 +826,7 @@ function connectionData(account, generation) {
           removal.open = false;
           // The focused control is now inside a closed <details>; keep keyboard users on the records that open next.
           history.querySelector("summary").focus();
-          notice(
-            `${account.username ?? account.account_id} 연결의 기록 ${countTotal(result.deleted_counts).toLocaleString("ko-KR")}건을 삭제했습니다. 항목별 건수는 삭제 기록에서 확인할 수 있습니다.`,
-          );
+          notice(`${account.username ?? account.account_id} 연결의 기록 ${countTotal(result.deleted_counts).toLocaleString("ko-KR")}건을 삭제했습니다. 항목별 건수는 삭제 기록에서 확인할 수 있습니다.`);
           if (history.open) void loadHistory();
           else history.open = true;
           forgetDeletedConnection(account.id);
@@ -977,9 +894,7 @@ function memberItem(member) {
     role.disabled = true;
     try {
       await api(`/api/workspace/members/${member.user_id}`, "PATCH", { role: role.value });
-      notice(
-        `멤버(${member.email ?? "이메일 미기록"})의 역할을 ${roleLabelsAs[role.value]} 바꿨습니다. 다음 요청부터 적용됩니다.`,
-      );
+      notice(`멤버(${member.email ?? "이메일 미기록"})의 역할을 ${roleLabelsAs[role.value]} 바꿨습니다. 다음 요청부터 적용됩니다.`);
     } catch (error) {
       role.value = member.role;
       notice(error.message, true);
@@ -991,18 +906,9 @@ function memberItem(member) {
   const remove = node("button", "멤버 제거", "secondary danger");
   remove.addEventListener("click", () =>
     action(remove, async () => {
-      if (
-        !confirm(
-          `이 멤버(${member.email ?? "이메일 미기록"})를 작업 공간에서 제거할까요? 다음 요청부터 접근할 수 없고, 담당한 대화는 미배정으로 바뀝니다. 이미 예약한 답장과 시작한 상담은 취소되지 않습니다.`,
-        )
-      )
-        return;
+      if (!confirm(`이 멤버(${member.email ?? "이메일 미기록"})를 작업 공간에서 제거할까요? 다음 요청부터 접근할 수 없고, 담당한 대화는 미배정으로 바뀝니다. 이미 예약한 답장과 시작한 상담은 취소되지 않습니다.`)) return;
       const removed = await api(`/api/workspace/members/${member.user_id}`, "DELETE");
-      notice(
-        removed.unassigned_conversations
-          ? `멤버를 작업 공간에서 제거하고 담당하던 대화 ${removed.unassigned_conversations}개를 미배정으로 바꿨습니다.`
-          : "멤버를 작업 공간에서 제거했습니다.",
-      );
+      notice(removed.unassigned_conversations ? `멤버를 작업 공간에서 제거하고 담당하던 대화 ${removed.unassigned_conversations}개를 미배정으로 바꿨습니다.` : "멤버를 작업 공간에서 제거했습니다.");
       await loadMembers();
     }),
   );
@@ -1014,13 +920,7 @@ function inviteItem(invite) {
   const item = node("div", "", "item");
   item.append(node("strong", invite.email));
   const badges = node("div", "", "badges");
-  badges.append(
-    badge(roleLabels[invite.role] ?? invite.role),
-    badge(
-      invite.expired ? "만료됨" : `${new Date(invite.expires_at).toLocaleDateString("ko-KR")}까지`,
-      invite.expired ? "warning" : "",
-    ),
-  );
+  badges.append(badge(roleLabels[invite.role] ?? invite.role), badge(invite.expired ? "만료됨" : `${new Date(invite.expires_at).toLocaleDateString("ko-KR")}까지`, invite.expired ? "warning" : ""));
   const revoke = node("button", "초대 취소", "secondary");
   revoke.addEventListener("click", () =>
     action(revoke, async () => {
@@ -1042,9 +942,7 @@ async function loadMembers() {
     workspacePlan = { plan: members.plan, limits: members.limits, usage: members.usage };
     planControls();
     byId("members").replaceChildren(...members.members.map(memberItem));
-    byId("invites").replaceChildren(
-      ...(invites.invites.length ? invites.invites.map(inviteItem) : [node("p", "대기 중인 초대가 없습니다.", "hint")]),
-    );
+    byId("invites").replaceChildren(...(invites.invites.length ? invites.invites.map(inviteItem) : [node("p", "대기 중인 초대가 없습니다.", "hint")]));
   } catch (error) {
     if (generation === segmentsGeneration) notice(error.message, true);
   }
@@ -1114,13 +1012,8 @@ async function loadOperations() {
     const health = await api("/api/workspace/health");
     if (generation !== segmentsGeneration) return;
     const limits = health.thresholds;
-    const cron = health.last_cron_success_at
-      ? new Date(health.last_cron_success_at).toLocaleString("ko-KR")
-      : "기록 없음";
-    const summary = [
-      `${new Date(health.checked_at).toLocaleTimeString("ko-KR")} 확인 · 마지막 정기 작업 성공: ${cron}`,
-      ...(health.global_send_enabled ? [] : ["전체 발송이 중지되어 있어 발송 대기 경보는 표시하지 않습니다."]),
-    ].join(" · ");
+    const cron = health.last_cron_success_at ? new Date(health.last_cron_success_at).toLocaleString("ko-KR") : "기록 없음";
+    const summary = [`${new Date(health.checked_at).toLocaleTimeString("ko-KR")} 확인 · 마지막 정기 작업 성공: ${cron}`, ...(health.global_send_enabled ? [] : ["전체 발송이 중지되어 있어 발송 대기 경보는 표시하지 않습니다."])].join(" · ");
     byId("operations-summary").textContent = summary;
     byId("operations-alerts").replaceChildren(...health.alerts.map((name) => operationAlert(name, limits)));
     byId("operations").replaceChildren(
@@ -1128,37 +1021,17 @@ async function loadOperations() {
         ? health.connections.map((connection) => {
             const item = node("div", "", "item");
             const badges = node("div", "", "badges");
-            badges.append(
-              ...(connection.alerts.length
-                ? connection.alerts.map((name) => operationAlert(name, limits))
-                : [badge("경보 없음")]),
-            );
+            badges.append(...(connection.alerts.length ? connection.alerts.map((name) => operationAlert(name, limits)) : [badge("경보 없음")]));
             item.append(
               node("strong", connection.username ?? "이름 없는 계정"),
               badges,
-              node(
-                "p",
-                `가장 오래 기다린 발송: ${operationDuration(connection.oldest_due_pending_seconds)} · 가장 오래 처리 중인 발송: ${operationDuration(connection.longest_sending_seconds)}`,
-                "hint",
-              ),
-              node(
-                "p",
-                `최근 24시간: 결과 확인 필요 ${connection.unknown_24h}건 · 실패 ${connection.failed_24h}건 · 차단 ${connection.blocked_24h}건`,
-                "hint",
-              ),
+              node("p", `가장 오래 기다린 발송: ${operationDuration(connection.oldest_due_pending_seconds)} · 가장 오래 처리 중인 발송: ${operationDuration(connection.longest_sending_seconds)}`, "hint"),
+              node("p", `최근 24시간: 결과 확인 필요 ${connection.unknown_24h}건 · 실패 ${connection.failed_24h}건 · 차단 ${connection.blocked_24h}건`, "hint"),
               node(
                 "p",
                 [
-                  connection.token_expires_in_days === null
-                    ? "연결 토큰 없음"
-                    : connection.token_expires_in_days < 0
-                      ? "토큰 만료됨"
-                      : `토큰 만료까지 ${connection.token_expires_in_days}일`,
-                  ...(connection.send_paused_until
-                    ? [
-                        `발송 제한으로 ${new Date(connection.send_paused_until).toLocaleTimeString("ko-KR")}까지 일시 중지`,
-                      ]
-                    : []),
+                  connection.token_expires_in_days === null ? "연결 토큰 없음" : connection.token_expires_in_days < 0 ? "토큰 만료됨" : `토큰 만료까지 ${connection.token_expires_in_days}일`,
+                  ...(connection.send_paused_until ? [`발송 제한으로 ${new Date(connection.send_paused_until).toLocaleTimeString("ko-KR")}까지 일시 중지`] : []),
                 ].join(" · "),
                 "hint",
               ),
@@ -1183,8 +1056,7 @@ function webhookSecretLocked() {
 function webhookSecretControls() {
   const locked = webhookSecretLocked();
   byId("webhook-form").querySelector("button[type=submit]").disabled = locked;
-  for (const rotate of document.querySelectorAll("#webhook-endpoints button[data-key-count]"))
-    rotate.disabled = locked || Number(rotate.dataset.keyCount) >= 2;
+  for (const rotate of document.querySelectorAll("#webhook-endpoints button[data-key-count]")) rotate.disabled = locked || Number(rotate.dataset.keyCount) >= 2;
 }
 async function webhookSecretAction(button, task) {
   if (webhookSecretLocked()) return;
@@ -1202,8 +1074,7 @@ async function webhookSecretAction(button, task) {
 }
 function showWebhookSecret(endpointName, key) {
   byId("webhook-secret-value").value = key.secret;
-  byId("webhook-secret-help").textContent =
-    `"${endpointName}" 주소의 키 ${key.id} 비밀입니다. 지금 한 번만 보여 주며 닫거나 새로 고치면 다시 볼 수 없으니 수신 서버에 저장한 뒤 닫아 주세요. 닫기 전에는 주소를 추가하거나 키를 교체할 수 없습니다.`;
+  byId("webhook-secret-help").textContent = `"${endpointName}" 주소의 키 ${key.id} 비밀입니다. 지금 한 번만 보여 주며 닫거나 새로 고치면 다시 볼 수 없으니 수신 서버에 저장한 뒤 닫아 주세요. 닫기 전에는 주소를 추가하거나 키를 교체할 수 없습니다.`;
   byId("webhook-secret").hidden = false;
   byId("webhook-secret-value").select();
   webhookSecretControls();
@@ -1217,13 +1088,9 @@ function hideWebhookSecret() {
 function webhookEndpointItem(endpoint) {
   const item = node("div", "", "item");
   const badges = node("div", "", "badges");
-  badges.append(
-    badge(endpoint.active ? "켜짐" : "꺼짐", endpoint.active ? "success" : "warning"),
-    badge(webhookKeyState(endpoint.keys)),
-  );
+  badges.append(badge(endpoint.active ? "켜짐" : "꺼짐", endpoint.active ? "success" : "warning"), badge(webhookKeyState(endpoint.keys)));
   item.append(node("strong", endpoint.name), badges, node("p", endpoint.url, "hint"));
-  for (const key of endpoint.keys)
-    item.append(node("p", `키 ${key.id} · ${new Date(key.created_at).toLocaleString("ko-KR")} 발급`, "hint"));
+  for (const key of endpoint.keys) item.append(node("p", `키 ${key.id} · ${new Date(key.created_at).toLocaleString("ko-KR")} 발급`, "hint"));
   const rotate = node("button", "키 교체", "secondary");
   rotate.dataset.loadingLabel = "발급 중…";
   rotate.dataset.keyCount = String(endpoint.keys.length);
@@ -1243,12 +1110,7 @@ function webhookEndpointItem(endpoint) {
   retire.disabled = endpoint.keys.length < 2;
   retire.addEventListener("click", () =>
     action(retire, async () => {
-      if (
-        !confirm(
-          `"${endpoint.name}" 주소의 이전 키를 폐기할까요? 폐기하면 그 키로 서명하지 않으므로, 수신 서버가 새 비밀로 검증하는지 먼저 확인해 주세요.`,
-        )
-      )
-        return;
+      if (!confirm(`"${endpoint.name}" 주소의 이전 키를 폐기할까요? 폐기하면 그 키로 서명하지 않으므로, 수신 서버가 새 비밀로 검증하는지 먼저 확인해 주세요.`)) return;
       await api(`/api/webhooks/endpoints/${endpoint.id}/retire`, "POST");
       notice("이전 키를 폐기했습니다. 이제 새 키로만 서명합니다.");
       await loadWebhooks();
@@ -1257,13 +1119,7 @@ function webhookEndpointItem(endpoint) {
   const toggle = node("button", endpoint.active ? "끄기" : "켜기", "secondary");
   toggle.addEventListener("click", () =>
     action(toggle, async () => {
-      if (
-        endpoint.active &&
-        !confirm(
-          `"${endpoint.name}" 주소를 끌까요? 꺼진 동안 이 주소로 보낼 전송은 보내지 않고 중단됩니다. 다시 켜도 자동으로 다시 보내지 않습니다.`,
-        )
-      )
-        return;
+      if (endpoint.active && !confirm(`"${endpoint.name}" 주소를 끌까요? 꺼진 동안 이 주소로 보낼 전송은 보내지 않고 중단됩니다. 다시 켜도 자동으로 다시 보내지 않습니다.`)) return;
       await api(`/api/webhooks/endpoints/${endpoint.id}/${endpoint.active ? "disable" : "enable"}`, "POST");
       notice(endpoint.active ? "주소를 껐습니다." : "주소를 켰습니다.");
       await loadWebhooks();
@@ -1290,12 +1146,7 @@ function webhookDeliveryItem(delivery, endpointName) {
   const redeliver = node("button", "다시 보내기", "secondary");
   redeliver.addEventListener("click", () =>
     action(redeliver, async () => {
-      if (
-        !confirm(
-          "이 전송을 같은 이벤트 ID로 다시 보낼까요? 수신 서버가 이미 받은 이벤트라면 이벤트 ID로 중복을 걸러야 합니다.",
-        )
-      )
-        return;
+      if (!confirm("이 전송을 같은 이벤트 ID로 다시 보낼까요? 수신 서버가 이미 받은 이벤트라면 이벤트 ID로 중복을 걸러야 합니다.")) return;
       await api(`/api/webhooks/deliveries/${delivery.event_id}/redeliver`, "POST");
       notice("전송을 다시 대기열에 넣었습니다. 전체 발송이 켜져 있으면 다음 정기 작업에서 보냅니다.");
       await loadWebhooks();
@@ -1307,22 +1158,11 @@ function webhookDeliveryItem(delivery, endpointName) {
 async function loadWebhooks() {
   const generation = segmentsGeneration;
   try {
-    const [endpoints, deliveries] = await Promise.all([
-      api("/api/webhooks/endpoints"),
-      api("/api/webhooks/deliveries"),
-    ]);
+    const [endpoints, deliveries] = await Promise.all([api("/api/webhooks/endpoints"), api("/api/webhooks/deliveries")]);
     if (generation !== segmentsGeneration) return;
     const names = new Map(endpoints.endpoints.map((endpoint) => [endpoint.id, endpoint.name]));
-    byId("webhook-endpoints").replaceChildren(
-      ...(endpoints.endpoints.length
-        ? endpoints.endpoints.map(webhookEndpointItem)
-        : [node("p", "등록한 주소가 없습니다.", "hint")]),
-    );
-    byId("webhook-deliveries").replaceChildren(
-      ...(deliveries.deliveries.length
-        ? deliveries.deliveries.map((delivery) => webhookDeliveryItem(delivery, names.get(delivery.endpoint_id)))
-        : [node("p", "아직 전송 기록이 없습니다.", "hint")]),
-    );
+    byId("webhook-endpoints").replaceChildren(...(endpoints.endpoints.length ? endpoints.endpoints.map(webhookEndpointItem) : [node("p", "등록한 주소가 없습니다.", "hint")]));
+    byId("webhook-deliveries").replaceChildren(...(deliveries.deliveries.length ? deliveries.deliveries.map((delivery) => webhookDeliveryItem(delivery, names.get(delivery.endpoint_id))) : [node("p", "아직 전송 기록이 없습니다.", "hint")]));
   } catch (error) {
     if (generation === segmentsGeneration) notice(error.message, true);
   }
@@ -1382,8 +1222,7 @@ function renderGettingStarted(rules, globalSendEnabled, connectAvailable) {
     ["step-rule", rules.length > 0, connected, ""],
     ["step-send", sendSet && globalSendEnabled, connected, sendSet && !globalSendEnabled ? "전체 발송 재개 대기" : ""],
   ];
-  byId("getting-started").hidden =
-    (currentRole !== "owner" && currentRole !== "admin") || steps.every(([, done]) => done);
+  byId("getting-started").hidden = (currentRole !== "owner" && currentRole !== "admin") || steps.every(([, done]) => done);
   for (const [id, done, available, waiting] of steps) {
     const step = byId(id);
     step.classList.toggle("done", done);
@@ -1392,12 +1231,8 @@ function renderGettingStarted(rules, globalSendEnabled, connectAvailable) {
     state.className = `step-state${done ? " badge success" : !available || waiting ? " badge" : ""}`;
     step.querySelector(".step-action").hidden = done || !available || waiting !== "";
   }
-  byId("step-connect-help").textContent = connectAvailable
-    ? "관리하는 전문 계정을 연결합니다."
-    : "새 Instagram 계정 연결이 현재 제한되어 있습니다. 연결이 열리면 이 단계부터 시작할 수 있습니다.";
-  byId("step-send-help").textContent = globalSendEnabled
-    ? "계정의 발송 설정을 켜면 규칙에 맞는 댓글에 DM을 보냅니다."
-    : "전체 발송이 중지되어 있어, 계정의 발송 설정을 켜도 재개되기 전에는 메시지가 전송되지 않습니다.";
+  byId("step-connect-help").textContent = connectAvailable ? "관리하는 전문 계정을 연결합니다." : "새 Instagram 계정 연결이 현재 제한되어 있습니다. 연결이 열리면 이 단계부터 시작할 수 있습니다.";
+  byId("step-send-help").textContent = globalSendEnabled ? "계정의 발송 설정을 켜면 규칙에 맞는 댓글에 DM을 보냅니다." : "전체 발송이 중지되어 있어, 계정의 발송 설정을 켜도 재개되기 전에는 메시지가 전송되지 않습니다.";
 }
 
 async function loadWorkspace() {
@@ -1461,9 +1296,7 @@ async function loadWorkspace() {
   byId("save-rule").disabled = connections.length === 0;
   byId("new-rule").disabled = connections.length === 0;
   byId("editor-empty").hidden = connections.length > 0;
-  byId("delivery-title").textContent = me.global_send_enabled
-    ? "자동 발송을 시작할 수 있습니다"
-    : "전체 발송이 중지되어 있습니다";
+  byId("delivery-title").textContent = me.global_send_enabled ? "자동 발송을 시작할 수 있습니다" : "전체 발송이 중지되어 있습니다";
   byId("delivery-banner").classList.toggle("enabled", me.global_send_enabled);
   renderGettingStarted(settings.rules, me.global_send_enabled, me.instagram_connect_available === true);
 
@@ -1483,23 +1316,12 @@ async function loadWorkspace() {
   byId("connect-help").textContent = connectAvailable ? "" : errors.instagram_public_access_restricted;
   byId("connections").replaceChildren();
   form.elements.connection_id.replaceChildren();
-  if (!connections.length)
-    byId("connections").append(
-      connectAvailable
-        ? emptyState("첫 Instagram 계정을 연결하세요", "관리하는 전문 계정을 연결하면 댓글 자동화를 만들 수 있습니다.")
-        : emptyState("새 Instagram 계정을 연결할 수 없습니다", "위의 연결 제한 사유를 확인해 주세요."),
-    );
+  if (!connections.length) byId("connections").append(connectAvailable ? emptyState("첫 Instagram 계정을 연결하세요", "관리하는 전문 계정을 연결하면 댓글 자동화를 만들 수 있습니다.") : emptyState("새 Instagram 계정을 연결할 수 없습니다", "위의 연결 제한 사유를 확인해 주세요."));
   for (const account of connections) {
     const item = node("div", "");
     item.className = "item";
     item.append(node("strong", account.username ?? account.account_id));
-    const credentialStatus = ["missing", "expired", "valid"].includes(account.credential_status)
-      ? account.credential_status
-      : !account.token_registered
-        ? "missing"
-        : Date.parse(account.token_expires_at) > Date.now()
-          ? "valid"
-          : "expired";
+    const credentialStatus = ["missing", "expired", "valid"].includes(account.credential_status) ? account.credential_status : !account.token_registered ? "missing" : Date.parse(account.token_expires_at) > Date.now() ? "valid" : "expired";
     // Meta rejected the stored token (refresh, pre-send identity check or subscription check); the server records
     // it, display only.
     const reauthReason = {
@@ -1508,32 +1330,17 @@ async function loadWorkspace() {
     }[account.reauth_reason];
     const state = node("div", "", "badges");
     state.append(
-      badge(
-        credentialStatus === "valid" ? "토큰 만료 전" : credentialStatus === "expired" ? "토큰 만료" : "토큰 없음",
-        credentialStatus === "valid" ? "" : "warning",
-      ),
+      badge(credentialStatus === "valid" ? "토큰 만료 전" : credentialStatus === "expired" ? "토큰 만료" : "토큰 없음", credentialStatus === "valid" ? "" : "warning"),
       ...(reauthReason ? [badge("재연결 필요", "warning")] : []),
       ...(account.subscription_missing_at ? [badge("웹후크 구독 유실", "warning")] : []),
       ...(account.deauthorized_at ? [badge("Instagram에서 권한 해제됨", "warning")] : []),
-      badge(
-        account.active ? "수신 설정 켜짐" : "수신 설정 꺼짐",
-        account.active && credentialStatus === "valid" ? "success" : "",
-      ),
-      badge(
-        account.send_enabled ? "발송 설정 켜짐" : "발송 설정 꺼짐",
-        account.send_enabled && credentialStatus === "valid" ? "success" : "",
-      ),
+      badge(account.active ? "수신 설정 켜짐" : "수신 설정 꺼짐", account.active && credentialStatus === "valid" ? "success" : ""),
+      badge(account.send_enabled ? "발송 설정 켜짐" : "발송 설정 꺼짐", account.send_enabled && credentialStatus === "valid" ? "success" : ""),
     );
     item.append(state);
     const inboxToggle = node("button", account.inbox_enabled ? "DM 보관 끄기" : "DM 보관 켜기", "secondary");
     inboxToggle.addEventListener("click", () => {
-      if (
-        !account.inbox_enabled &&
-        !confirm(
-          "지금부터 받은 텍스트 DM과 확인 버튼 응답을 인박스에 보관할까요? 기존 수동 삭제 정책이 적용됩니다. 과거 메시지는 가져오지 않습니다.",
-        )
-      )
-        return;
+      if (!account.inbox_enabled && !confirm("지금부터 받은 텍스트 DM과 확인 버튼 응답을 인박스에 보관할까요? 기존 수동 삭제 정책이 적용됩니다. 과거 메시지는 가져오지 않습니다.")) return;
       const generation = segmentsGeneration,
         workspaceSession = workspaceGeneration;
       void action(inboxToggle, async () => {
@@ -1542,14 +1349,11 @@ async function loadWorkspace() {
         account.inbox_enabled = result.enabled;
         notice(result.enabled ? "이 계정의 새 DM 보관을 켰습니다." : "새 DM 보관을 껐습니다. 기존 기록은 유지됩니다.");
       }).then(() => {
-        if (generation === segmentsGeneration)
-          inboxToggle.textContent = account.inbox_enabled ? "DM 보관 끄기" : "DM 보관 켜기";
+        if (generation === segmentsGeneration) inboxToggle.textContent = account.inbox_enabled ? "DM 보관 끄기" : "DM 보관 켜기";
       });
     });
     item.append(inboxToggle);
-    const unconfirmed = account.subscription_checked_at
-      ? "철회·권한 여부는 확인되지 않았습니다."
-      : "철회·권한·구독 여부는 확인되지 않았습니다.";
+    const unconfirmed = account.subscription_checked_at ? "철회·권한 여부는 확인되지 않았습니다." : "철회·권한·구독 여부는 확인되지 않았습니다.";
     item.append(
       node(
         "p",
@@ -1561,19 +1365,10 @@ async function loadWorkspace() {
         "hint",
       ),
     );
-    if (reauthReason)
-      item.append(
-        node(
-          "p",
-          `${new Date(account.reauth_required_at).toLocaleString("ko-KR")} · ${reauthReason} 다시 연결하기 전까지 대기 중인 답장이 발송 전 확인에서 차단될 수 있습니다. 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`,
-          "hint",
-        ),
-      );
+    if (reauthReason) item.append(node("p", `${new Date(account.reauth_required_at).toLocaleString("ko-KR")} · ${reauthReason} 다시 연결하기 전까지 대기 중인 답장이 발송 전 확인에서 차단될 수 있습니다. 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`, "hint"));
     // The periodic or manual check found a required webhook subscription field missing for the stored token;
     // the server records it, display only.
-    const subscriptionChecked = account.subscription_checked_at
-      ? ` 마지막 확인: ${new Date(account.subscription_checked_at).toLocaleString("ko-KR")}.`
-      : "";
+    const subscriptionChecked = account.subscription_checked_at ? ` 마지막 확인: ${new Date(account.subscription_checked_at).toLocaleString("ko-KR")}.` : "";
     if (account.subscription_missing_at)
       item.append(
         node(
@@ -1582,8 +1377,7 @@ async function loadWorkspace() {
           "hint",
         ),
       );
-    else if (account.subscription_checked_at)
-      item.append(node("p", `Meta가 필수 웹후크 구독 필드를 반환했습니다.${subscriptionChecked}`, "hint"));
+    else if (account.subscription_checked_at) item.append(node("p", `Meta가 필수 웹후크 구독 필드를 반환했습니다.${subscriptionChecked}`, "hint"));
     // Meta reported that the account owner removed the app in Instagram; the server disconnected the account.
     if (account.deauthorized_at)
       item.append(
@@ -1593,11 +1387,7 @@ async function loadWorkspace() {
           "hint",
         ),
       );
-    const healthStatus = node(
-      "p",
-      healthResults.get(account.id) ?? "Meta 계정과 웹훅 구독 상태는 아직 확인하지 않았습니다.",
-      "hint",
-    );
+    const healthStatus = node("p", healthResults.get(account.id) ?? "Meta 계정과 웹훅 구독 상태는 아직 확인하지 않았습니다.", "hint");
     healthResults.delete(account.id);
     healthStatus.setAttribute("role", "status");
     const healthButton = node("button", "Meta 상태 확인", "secondary");
@@ -1607,19 +1397,14 @@ async function loadWorkspace() {
       action(healthButton, async () => {
         const result = await api(`/api/connections/${account.id}/health`);
         const message = {
-          fields_present:
-            "Meta가 이 계정의 댓글·DM·확인 버튼 구독 필드를 반환했습니다. 이 앱으로 실제 이벤트가 오는지는 별도로 확인해야 합니다.",
-          fields_missing:
-            "Meta 응답에서 필수 웹훅 구독 필드가 모두 확인되지 않았습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
-          reconnect_required:
-            "Meta가 계정 접근이나 앱 권한을 거부했습니다. 앱 권한을 확인하고 필요한 경우 같은 Instagram 계정을 다시 연결해 주세요.",
+          fields_present: "Meta가 이 계정의 댓글·DM·확인 버튼 구독 필드를 반환했습니다. 이 앱으로 실제 이벤트가 오는지는 별도로 확인해야 합니다.",
+          fields_missing: "Meta 응답에서 필수 웹훅 구독 필드가 모두 확인되지 않았습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
+          reconnect_required: "Meta가 계정 접근이나 앱 권한을 거부했습니다. 앱 권한을 확인하고 필요한 경우 같은 Instagram 계정을 다시 연결해 주세요.",
           unverified: "Meta 상태를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.",
           expired: "연결 토큰이 만료됐습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
           missing: "연결 토큰이 없습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
         }[result.status];
-        healthStatus.textContent = message
-          ? `${new Date(result.checked_at).toLocaleTimeString("ko-KR")} 확인 · ${message}`
-          : "Meta 상태 응답을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.";
+        healthStatus.textContent = message ? `${new Date(result.checked_at).toLocaleTimeString("ko-KR")} 확인 · ${message}` : "Meta 상태 응답을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.";
         // The check also stores the subscription record and the reconnect marker; reload so the badges match.
         healthResults.set(account.id, healthStatus.textContent);
         await loadWorkspace();
@@ -1645,12 +1430,7 @@ async function loadWorkspace() {
     disconnect.className = "secondary danger";
     disconnect.addEventListener("click", () =>
       action(disconnect, async () => {
-        if (
-          !confirm(
-            "이 계정의 수신·발송을 중지하고 저장한 토큰을 삭제할까요? 해제한 뒤에는 이 계정의 '데이터 삭제'에서 기존 기록을 삭제할 수 있습니다.",
-          )
-        )
-          return;
+        if (!confirm("이 계정의 수신·발송을 중지하고 저장한 토큰을 삭제할까요? 해제한 뒤에는 이 계정의 '데이터 삭제'에서 기존 기록을 삭제할 수 있습니다.")) return;
         await api(`/api/connections/${account.id}`, "DELETE");
         await loadWorkspace();
       }),
@@ -1661,18 +1441,9 @@ async function loadWorkspace() {
     option.value = account.id;
     form.elements.connection_id.append(option);
   }
-  if (connections.some((account) => account.id === selectedConnection))
-    form.elements.connection_id.value = selectedConnection;
+  if (connections.some((account) => account.id === selectedConnection)) form.elements.connection_id.value = selectedConnection;
   byId("rules").replaceChildren();
-  if (!settings.rules.length)
-    byId("rules").append(
-      emptyState(
-        "아직 만든 규칙이 없습니다",
-        connections.length
-          ? "오른쪽 설정에서 첫 규칙을 만들어 보세요. 모바일에서는 아래로 내려가면 됩니다."
-          : "계정을 먼저 연결한 뒤 첫 규칙을 만들어 보세요.",
-      ),
-    );
+  if (!settings.rules.length) byId("rules").append(emptyState("아직 만든 규칙이 없습니다", connections.length ? "오른쪽 설정에서 첫 규칙을 만들어 보세요. 모바일에서는 아래로 내려가면 됩니다." : "계정을 먼저 연결한 뒤 첫 규칙을 만들어 보세요."));
   for (const rule of settings.rules) {
     const item = node("div", "");
     item.className = "item";
@@ -1683,20 +1454,8 @@ async function loadWorkspace() {
     item.append(target);
     observeRuleMedia(target, rule);
     const state = node("div", "", "badges");
-    state.append(
-      badge(rule.enabled ? "활성" : "중지", rule.enabled ? "success" : ""),
-      badge(rule.follow_gate_enabled ? "팔로우 확인" : "바로 답장"),
-    );
-    item.append(
-      state,
-      node(
-        "p",
-        rule.match_mode === "all"
-          ? "모든 댓글"
-          : `${rule.match_mode === "exact" ? "정확히 일치" : "키워드 포함"} · ${(rule.keywords.length ? rule.keywords : [rule.keyword]).join(", ")}`,
-        "rule-summary",
-      ),
-    );
+    state.append(badge(rule.enabled ? "활성" : "중지", rule.enabled ? "success" : ""), badge(rule.follow_gate_enabled ? "팔로우 확인" : "바로 답장"));
+    item.append(state, node("p", rule.match_mode === "all" ? "모든 댓글" : `${rule.match_mode === "exact" ? "정확히 일치" : "키워드 포함"} · ${(rule.keywords.length ? rule.keywords : [rule.keyword]).join(", ")}`, "rule-summary"));
     const button = node("button", "수정");
     button.className = "secondary";
     button.addEventListener("click", () => {
@@ -1705,16 +1464,7 @@ async function loadWorkspace() {
       editingRuleId = rule.id;
       form.elements.connection_id.disabled = true;
 
-      for (const name of [
-        "connection_id",
-        "media_id",
-        "match_mode",
-        "private_reply_text",
-        "follower_reply_text",
-        "non_follower_reply_text",
-        "confirmation_keyword",
-      ])
-        form.elements[name].value = rule[name];
+      for (const name of ["connection_id", "media_id", "match_mode", "private_reply_text", "follower_reply_text", "non_follower_reply_text", "confirmation_keyword"]) form.elements[name].value = rule[name];
       form.elements.confirmation_button_title.value = rule.confirmation_button_title || "확인";
       form.elements.confirmation_button_enabled.checked = Boolean(rule.confirmation_button_title);
       form.elements.keywords.value = (rule.keywords.length ? rule.keywords : [rule.keyword]).join("\n");
@@ -1723,8 +1473,7 @@ async function loadWorkspace() {
       form.elements.follow_gate_enabled.checked = rule.follow_gate_enabled;
       formConditions();
       editorState("계정과 게시물은 고정됩니다. 댓글 조건과 문구를 수정하세요.");
-      for (const element of byId("rules").children)
-        element.classList.toggle("active-rule", element.dataset.ruleId === rule.id);
+      for (const element of byId("rules").children) element.classList.toggle("active-rule", element.dataset.ruleId === rule.id);
       void loadMedia();
       focusEditor();
     });
@@ -1745,12 +1494,7 @@ async function loadWorkspace() {
   } catch (error) {
     if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
     if (error.status === 401) throw error;
-    byId("activity").replaceChildren(
-      emptyState(
-        "처리 내역을 불러오지 못했습니다",
-        "새로고침을 눌러 다시 시도해 주세요. 계정과 규칙 설정은 계속할 수 있습니다.",
-      ),
-    );
+    byId("activity").replaceChildren(emptyState("처리 내역을 불러오지 못했습니다", "새로고침을 눌러 다시 시도해 주세요. 계정과 규칙 설정은 계속할 수 있습니다."));
   }
   if (firstDisplay) scrollToSectionHash();
 }
@@ -1830,19 +1574,13 @@ const ruleMediaObserver = new IntersectionObserver(
         .catch((error) => {
           if (!target.isConnected) return;
           if (error.code === "media_rate_limited") {
-            target.replaceChildren(
-              node("strong", "게시물 정보 조회가 잠시 제한되었습니다"),
-              node("span", "1분 뒤 자동으로 다시 확인합니다."),
-            );
+            target.replaceChildren(node("strong", "게시물 정보 조회가 잠시 제한되었습니다"), node("span", "1분 뒤 자동으로 다시 확인합니다."));
             setTimeout(() => {
               if (target.isConnected) ruleMediaObserver.observe(target);
             }, 60_000);
             return;
           }
-          target.replaceChildren(
-            node("strong", "게시물 정보를 확인할 수 없습니다"),
-            node("span", "규칙 수정에서 다시 확인하세요."),
-          );
+          target.replaceChildren(node("strong", "게시물 정보를 확인할 수 없습니다"), node("span", "규칙 수정에서 다시 확인하세요."));
         });
     }
   },
@@ -1872,9 +1610,7 @@ async function loadMedia(more = false, force = false) {
       byId("media-status").textContent = "이 규칙의 게시물은 고정됩니다.";
       return;
     }
-    const page = await api(
-      `/api/connections/${connectionId}/media${more ? `?after=${encodeURIComponent(mediaAfter)}` : ""}`,
-    );
+    const page = await api(`/api/connections/${connectionId}/media${more ? `?after=${encodeURIComponent(mediaAfter)}` : ""}`);
     if (generation !== mediaGeneration) return;
     for (const media of page.media) {
       mediaCache.set(mediaKey(connectionId, media.id), media);
@@ -1887,8 +1623,7 @@ async function loadMedia(more = false, force = false) {
       button.addEventListener("click", () => {
         if (editingRuleId || form.elements.connection_id.value !== connectionId) return;
         form.elements.media_id.value = media.id;
-        for (const option of byId("media-list").children)
-          option.setAttribute("aria-pressed", String(option === button));
+        for (const option of byId("media-list").children) option.setAttribute("aria-pressed", String(option === button));
         showSelected(media);
         byId("media-status").textContent = "게시물을 선택했습니다. 댓글 조건과 메시지를 작성하세요.";
         markDirty();
@@ -1913,9 +1648,7 @@ async function loadMedia(more = false, force = false) {
       target.replaceChildren(node("strong", "현재 규칙에 저장한 게시물"), identity);
       target.hidden = false;
     }
-    byId("media-status").textContent = editingRuleId
-      ? `${error.message} 저장한 대상과 입력 내용은 유지됩니다.`
-      : error.message;
+    byId("media-status").textContent = editingRuleId ? `${error.message} 저장한 대상과 입력 내용은 유지됩니다.` : error.message;
   } finally {
     if (generation === mediaGeneration) {
       mediaBusy = false;
@@ -1979,8 +1712,7 @@ function showAuthMode(mode) {
   byId("login-form").hidden = mode !== "login";
   byId("recovery-request-form").hidden = mode !== "recover";
   byId("password-reset-form").hidden = mode !== "reset";
-  byId("auth-title").textContent =
-    mode === "reset" ? "새 비밀번호 설정" : mode === "recover" ? "비밀번호 찾기" : "내 계정으로 로그인";
+  byId("auth-title").textContent = mode === "reset" ? "새 비밀번호 설정" : mode === "recover" ? "비밀번호 찾기" : "내 계정으로 로그인";
 }
 byId("forgot-password").addEventListener("click", () => {
   byId("recovery-request-form").elements.email.value = byId("login-form").elements.email.value;
@@ -2047,8 +1779,7 @@ byId("connect").addEventListener("click", (event) =>
     if (!canDiscard()) return;
     const result = await api("/api/instagram/connect", "POST");
     const url = new URL(result.url);
-    if (url.protocol !== "https:" || url.hostname !== "www.instagram.com" || url.pathname !== "/oauth/authorize")
-      throw new Error("계정 연결 주소를 확인할 수 없습니다.");
+    if (url.protocol !== "https:" || url.hostname !== "www.instagram.com" || url.pathname !== "/oauth/authorize") throw new Error("계정 연결 주소를 확인할 수 없습니다.");
     dirty = false;
     location.assign(url.href);
   }),
@@ -2154,8 +1885,7 @@ const contactExportLabels = {
 function contactExportControls() {
   byId("contacts-export").disabled = contactsExportBusy;
   // The saved definition is exported, so an edit with unsaved changes must be saved or cancelled first.
-  byId("contacts-segment-export").disabled =
-    contactsExportBusy || segmentBusy || !activeSegmentId || Boolean(editingSegment && segmentEditChanged());
+  byId("contacts-segment-export").disabled = contactsExportBusy || segmentBusy || !activeSegmentId || Boolean(editingSegment && segmentEditChanged());
 }
 function invalidateContactExport(message = "") {
   contactsExportGeneration++;
@@ -2267,11 +1997,7 @@ form.addEventListener("submit", (event) => {
     ["excluded_keywords", excluded],
   ]) {
     const required = name === "keywords" && data.match_mode !== "all";
-    form.elements[name].setCustomValidity(
-      (required && !values.length) || values.length > 20 || values.some((value) => value.length > 100)
-        ? "키워드를 한 줄에 하나씩, 각각 100자 이내로 최대 20개 입력해 주세요."
-        : "",
-    );
+    form.elements[name].setCustomValidity((required && !values.length) || values.length > 20 || values.some((value) => value.length > 100) ? "키워드를 한 줄에 하나씩, 각각 100자 이내로 최대 20개 입력해 주세요." : "");
   }
   if (!form.elements.media_id.value) {
     byId("media-status").textContent = "답장할 게시물을 먼저 선택해 주세요.";
@@ -2288,10 +2014,7 @@ form.addEventListener("submit", (event) => {
     enabled: form.elements.enabled.checked,
     follow_gate_enabled: form.elements.follow_gate_enabled.checked,
     confirmation_keyword: form.elements.follow_gate_enabled.checked ? data.confirmation_keyword : "확인",
-    confirmation_button_title:
-      form.elements.follow_gate_enabled.checked && form.elements.confirmation_button_enabled.checked
-        ? data.confirmation_button_title
-        : "",
+    confirmation_button_title: form.elements.follow_gate_enabled.checked && form.elements.confirmation_button_enabled.checked ? data.confirmation_button_title : "",
   };
   action(byId("save-rule"), async () => {
     byId("rule-fields").disabled = true;
@@ -2318,11 +2041,7 @@ form.addEventListener("submit", (event) => {
   });
 });
 // Refusals the OAuth callback sends back to the dashboard as ?instagram=<code> (src/app/api.ts).
-const instagramErrors = [
-  "instagram_authorization_denied",
-  "instagram_permissions_required",
-  "connection_limit_reached",
-];
+const instagramErrors = ["instagram_authorization_denied", "instagram_permissions_required", "connection_limit_reached"];
 async function start() {
   if (acceptedAuthRevision !== authSessionRevision()) {
     // An explicit reload discards the previous account's entire UI before adopting
@@ -2351,16 +2070,13 @@ async function start() {
     if (fragment.get("type") === "recovery" && fragment.get("access_token")) {
       recoveryToken = fragment.get("access_token");
       showAuthMode("reset");
-    } else if (fragment.has("error") || (fragment.get("type") === "signup" && !fragment.get("access_token")))
-      authLinkNotice =
-        "인증 또는 변경 링크가 만료되었거나 유효하지 않습니다. 인증 메일을 다시 받거나 비밀번호 변경 링크를 요청해 주세요.";
+    } else if (fragment.has("error") || (fragment.get("type") === "signup" && !fragment.get("access_token"))) authLinkNotice = "인증 또는 변경 링크가 만료되었거나 유효하지 않습니다. 인증 메일을 다시 받거나 비밀번호 변경 링크를 요청해 주세요.";
     else if (fragment.get("type") === "signup") authLinkNotice = "인증 링크를 처리했습니다. 로그인해 주세요.";
   }
   byId("retry-load").hidden = true;
   byId("startup").hidden = false;
   try {
-    if (location.protocol === "file:")
-      throw new Error("미리보기에서는 로그인할 수 없습니다. 서비스 웹사이트에서 이용해 주세요.");
+    if (location.protocol === "file:") throw new Error("미리보기에서는 로그인할 수 없습니다. 서비스 웹사이트에서 이용해 주세요.");
     if (recoveryToken) {
       byId("auth").hidden = false;
       byId("new-password").focus();
@@ -2373,16 +2089,10 @@ async function start() {
       byId("retry-load").hidden = location.protocol !== "file:" ? false : true;
     }
     byId("auth").hidden = false;
-    if (error.status === 401 && pendingInvite)
-      authLinkNotice ??=
-        "초대 링크를 받았습니다. 초대받은 이메일로 로그인하면 작업 공간에 참여합니다. 새로 가입했다면 이메일 인증을 마친 뒤 초대 링크를 다시 열어 주세요.";
+    if (error.status === 401 && pendingInvite) authLinkNotice ??= "초대 링크를 받았습니다. 초대받은 이메일로 로그인하면 작업 공간에 참여합니다. 새로 가입했다면 이메일 인증을 마친 뒤 초대 링크를 다시 열어 주세요.";
   } finally {
     byId("startup").hidden = true;
-    if (authLinkNotice)
-      notice(
-        authLinkNotice,
-        authLinkNotice.startsWith("인증 또는 변경 링크") || instagramErrors.includes(instagramResult),
-      );
+    if (authLinkNotice) notice(authLinkNotice, authLinkNotice.startsWith("인증 또는 변경 링크") || instagramErrors.includes(instagramResult));
   }
 }
 byId("retry-load").addEventListener("click", (event) => action(event.currentTarget, start));
@@ -2408,26 +2118,11 @@ async function loadActivity() {
     not_following: "미팔로우 확인",
   };
   byId("activity").replaceChildren();
-  if (!result.activity.length)
-    byId("activity").append(
-      emptyState(
-        "첫 댓글을 기다리고 있습니다",
-        "활성 규칙에 맞는 댓글을 받으면 첫 DM과 후속 메시지의 처리 상태가 여기에 표시됩니다.",
-      ),
-    );
+  if (!result.activity.length) byId("activity").append(emptyState("첫 댓글을 기다리고 있습니다", "활성 규칙에 맞는 댓글을 받으면 첫 DM과 후속 메시지의 처리 상태가 여기에 표시됩니다."));
   for (const row of result.activity) {
-    const item = node(
-      "div",
-      `게시물 ${row.media_id} · 첫 DM: ${labels[row.first_reply_status] ?? row.first_reply_status}`,
-    );
+    const item = node("div", `게시물 ${row.media_id} · 첫 DM: ${labels[row.first_reply_status] ?? row.first_reply_status}`);
     item.className = "item";
-    if (row.follow_reply_status)
-      item.append(
-        node(
-          "p",
-          `후속 DM: ${labels[row.follow_reply_status] ?? row.follow_reply_status} · ${row.follow_status === "unknown" ? "팔로우 확인 전 또는 확인 불가" : labels[row.follow_status]}`,
-        ),
-      );
+    if (row.follow_reply_status) item.append(node("p", `후속 DM: ${labels[row.follow_reply_status] ?? row.follow_reply_status} · ${row.follow_status === "unknown" ? "팔로우 확인 전 또는 확인 불가" : labels[row.follow_status]}`));
     const reason = row.follow_reply_error ?? row.first_reply_error;
     if (reason) {
       const reasons = {
@@ -2443,15 +2138,7 @@ async function loadActivity() {
         contact_paused: "이 연락처의 자동화가 중지되어 대기합니다.",
         connection_changed: "계정 연결 설정이 변경되어 중지됐습니다.",
       };
-      item.append(
-        node(
-          "p",
-          reasons[reason] ??
-            (reason.startsWith("meta_error_")
-              ? "Instagram이 요청을 제한하거나 거절했습니다."
-              : "발송 조건을 확인할 수 없습니다. 연결과 규칙을 확인해 주세요."),
-        ),
-      );
+      item.append(node("p", reasons[reason] ?? (reason.startsWith("meta_error_") ? "Instagram이 요청을 제한하거나 거절했습니다." : "발송 조건을 확인할 수 없습니다. 연결과 규칙을 확인해 주세요.")));
     }
     byId("activity").append(item);
   }
@@ -2463,30 +2150,17 @@ function initializeContacts() {
   const select = byId("contacts-filter").elements.connection_id;
   const previous = select.value;
   select.replaceChildren(new Option("모든 계정", ""));
-  for (const connection of connections)
-    select.add(new Option(connection.username || connection.account_id, connection.id));
+  for (const connection of connections) select.add(new Option(connection.username || connection.account_id, connection.id));
   if (connections.some((connection) => connection.id === previous)) select.value = previous;
 }
 function canReloadContacts() {
-  return (
-    !segmentBusy &&
-    !fieldBusy &&
-    !contactsSaving &&
-    (!contactsDirty.size || confirm("저장하지 않은 연락처 변경 사항을 버릴까요?"))
-  );
+  return !segmentBusy && !fieldBusy && !contactsSaving && (!contactsDirty.size || confirm("저장하지 않은 연락처 변경 사항을 버릴까요?"));
 }
 function contactCard(contact) {
   const item = node("article", "", "contact-row");
   item.dataset.connectionId = contact.connection_id;
   const summary = node("div", "", "contact-summary");
-  summary.append(
-    node("h3", `참여자 ${contact.sender_id}`),
-    node(
-      "p",
-      `연결 계정 ${contact.username ? `@${contact.username}` : "이름 확인 전"} · 댓글 ${contact.comment_count}개`,
-      "hint",
-    ),
-  );
+  summary.append(node("h3", `참여자 ${contact.sender_id}`), node("p", `연결 계정 ${contact.username ? `@${contact.username}` : "이름 확인 전"} · 댓글 ${contact.comment_count}개`, "hint"));
   const automation = node("div");
   const automationStatus = badge("");
   const toggle = node("button", "", "secondary");
@@ -2502,28 +2176,16 @@ function contactCard(contact) {
   toggle.addEventListener("click", () => {
     if (contactsSaving || contactsBusy || fieldBusy || segmentBusy) return;
     const paused = !contact.automation_paused;
-    if (
-      !paused &&
-      !confirm("자동화를 재개할까요? 응답 가능 시간이 남은 대기 메시지는 다음 워커 실행에서 발송될 수 있습니다.")
-    )
-      return;
+    if (!paused && !confirm("자동화를 재개할까요? 응답 가능 시간이 남은 대기 메시지는 다음 워커 실행에서 발송될 수 있습니다.")) return;
     const generation = contactsGeneration;
     void action(toggle, async () => {
       contactsSaving = true;
       try {
-        const saved = await api(
-          `/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}/automation`,
-          "PUT",
-          { paused },
-        );
+        const saved = await api(`/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}/automation`, "PUT", { paused });
         if (generation !== contactsGeneration) return;
         contact.automation_paused = saved.automation_paused;
         renderAutomation();
-        notice(
-          paused
-            ? "자동화를 중지했습니다. 이미 전송 중인 메시지는 취소할 수 없습니다."
-            : "자동화를 재개했습니다. 대기 메시지는 기존 발송 정책을 다시 확인합니다.",
-        );
+        notice(paused ? "자동화를 중지했습니다. 이미 전송 중인 메시지는 취소할 수 없습니다." : "자동화를 재개했습니다. 대기 메시지는 기존 발송 정책을 다시 확인합니다.");
       } catch (error) {
         if (generation === contactsGeneration) throw error;
       } finally {
@@ -2533,11 +2195,7 @@ function contactCard(contact) {
       if (generation === contactsGeneration) renderAutomation();
     });
   });
-  automation.append(
-    automationStatus,
-    node("p", "중지 중에는 새 확인 답장을 자동 처리하지 않습니다. 대기 발송은 보관됩니다.", "hint"),
-    toggle,
-  );
+  automation.append(automationStatus, node("p", "중지 중에는 새 확인 답장을 자동 처리하지 않습니다. 대기 발송은 보관됩니다.", "hint"), toggle);
   summary.append(automation);
   const date = new Date(contact.last_comment_at);
   summary.append(node("p", `최근 댓글 · ${date.toLocaleString("ko-KR")}`, "hint"));
@@ -2554,11 +2212,7 @@ function contactCard(contact) {
   input.maxLength = 1000;
   input.value = contact.tags.join("\n");
   label.append(input);
-  const hint = node(
-    "p",
-    "한 줄에 하나씩, 최대 20개·각 40자. 대소문자는 구분하지 않습니다. 모두 지우고 저장하면 태그가 제거됩니다.",
-    "hint",
-  );
+  const hint = node("p", "한 줄에 하나씩, 최대 20개·각 40자. 대소문자는 구분하지 않습니다. 모두 지우고 저장하면 태그가 제거됩니다.", "hint");
   const hintId = `contact-help-${contact.connection_id}-${contact.sender_id}`;
   hint.id = hintId;
   input.setAttribute("aria-describedby", hintId);
@@ -2586,13 +2240,9 @@ function contactCard(contact) {
       contactsSaving = true;
       input.disabled = true;
       try {
-        const result = await api(
-          `/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}`,
-          "PATCH",
-          {
-            tags: values,
-          },
-        );
+        const result = await api(`/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}`, "PATCH", {
+          tags: values,
+        });
         if (generation !== contactsGeneration) return;
         contact.tags = result.tags;
         input.value = result.tags.join("\n");
@@ -2654,42 +2304,21 @@ function contactDetail(contact) {
     ]) {
       const record = records.find((item) => item.purpose === purpose);
       const entry = node("li");
-      entry.append(
-        node(
-          "strong",
-          `${label} · ${record ? (record.decision === "revoke" ? "철회 기록" : "동의 기록") : "기록 없음"}`,
-        ),
-      );
-      if (record)
-        entry.append(
-          node(
-            "p",
-            `근거 종류: ${evidence[record.evidence_kind] || "확인 전"} · 근거 발생: ${date(record.occurred_at)} · 서버 기록: ${date(record.recorded_at)}`,
-            "hint",
-          ),
-        );
+      entry.append(node("strong", `${label} · ${record ? (record.decision === "revoke" ? "철회 기록" : "동의 기록") : "기록 없음"}`));
+      if (record) entry.append(node("p", `근거 종류: ${evidence[record.evidence_kind] || "확인 전"} · 근거 발생: ${date(record.occurred_at)} · 서버 기록: ${date(record.recorded_at)}`, "hint"));
       list.append(entry);
     }
     return list;
   }
   function render(detail) {
     const facts = section("저장된 연락처 정보");
-    facts.append(
-      node("p", `댓글 참여자 ${detail.sender_id} · 댓글 ${detail.comment_count}개`),
-      node("p", `첫 댓글 ${date(detail.first_comment_at)} · 최근 댓글 ${date(detail.last_comment_at)}`, "hint"),
-    );
+    facts.append(node("p", `댓글 참여자 ${detail.sender_id} · 댓글 ${detail.comment_count}개`), node("p", `첫 댓글 ${date(detail.first_comment_at)} · 최근 댓글 ${date(detail.last_comment_at)}`, "hint"));
     const tags = node("div", "", "badges");
     for (const tag of detail.tags) tags.append(badge(tag));
     if (!detail.tags.length) tags.append(node("span", "태그 없음", "hint"));
     facts.append(tags);
     const fields = section("추가 정보");
-    for (const field of detail.fields)
-      fields.append(
-        node(
-          "p",
-          `${field.name} · ${fieldTypeLabels[field.type]} · ${field.value === null ? "미설정" : displayFieldValue(field.value)}`,
-        ),
-      );
+    for (const field of detail.fields) fields.append(node("p", `${field.name} · ${fieldTypeLabels[field.type]} · ${field.value === null ? "미설정" : displayFieldValue(field.value)}`));
     if (!detail.fields.length) fields.append(node("p", "활성 필드가 없습니다.", "hint"));
     const pause = section("자동화 중지 사유");
     const reasons = [];
@@ -2697,35 +2326,15 @@ function contactDetail(contact) {
     if (detail.automation.handoff_paused) reasons.push("상담 전환으로 중지");
     pause.append(node("p", reasons.length ? reasons.join(" · ") : "연락처 중지 설정 없음"));
     const consent = section("댓글 참여자의 동의 기록");
-    consent.append(
-      consentRecords(detail.consent),
-      node(
-        "p",
-        "같은 작업 공간·연결·식별자·목적의 현재 기록입니다. 기록 없음이나 다른 식별자의 동의를 발송 허가로 보지 않습니다.",
-        "hint",
-      ),
-    );
+    consent.append(consentRecords(detail.consent), node("p", "같은 작업 공간·연결·식별자·목적의 현재 기록입니다. 기록 없음이나 다른 식별자의 동의를 발송 허가로 보지 않습니다.", "hint"));
     const conversations = section("연결 근거가 확인된 DM 대화");
-    conversations.append(
-      node(
-        "p",
-        "현재 연결 근거가 확인된 저장 대화만 표시합니다. 전체 대화 이력이나 발송 가능 여부를 뜻하지 않습니다. 대화마다 동의 범위를 따로 표시합니다.",
-        "hint",
-      ),
-    );
+    conversations.append(node("p", "현재 연결 근거가 확인된 저장 대화만 표시합니다. 전체 대화 이력이나 발송 가능 여부를 뜻하지 않습니다. 대화마다 동의 범위를 따로 표시합니다.", "hint"));
     for (const conversation of detail.conversations) {
       const row = node("article", "", "contact-detail-conversation");
       row.append(
         node("h5", `DM 상대 ${conversation.recipient_id}`),
-        node(
-          "p",
-          `저장 메시지 ${conversation.message_count}개 · ${conversation.state === "closed" ? "종료된 대화" : "열린 대화"} · ${conversation.handoff_active ? "상담 전환 중" : "상담 전환 없음"}`,
-        ),
-        node(
-          "p",
-          `첫 수신 ${date(conversation.first_message_at)} · 최근 수신 ${date(conversation.last_message_at)}`,
-          "hint",
-        ),
+        node("p", `저장 메시지 ${conversation.message_count}개 · ${conversation.state === "closed" ? "종료된 대화" : "열린 대화"} · ${conversation.handoff_active ? "상담 전환 중" : "상담 전환 없음"}`),
+        node("p", `첫 수신 ${date(conversation.first_message_at)} · 최근 수신 ${date(conversation.last_message_at)}`, "hint"),
         node("p", `연결 근거 답장 기록 ${conversation.evidence_reply_id}`, "hint"),
         consentRecords(conversation.consent),
       );
@@ -2737,8 +2346,7 @@ function contactDetail(contact) {
       api,
       node,
       contact,
-      isCurrent: () =>
-        identityRequest === requestId && generation === contactsGeneration && details.isConnected && details.open,
+      isCurrent: () => identityRequest === requestId && generation === contactsGeneration && details.isConnected && details.open,
     });
     content.replaceChildren(facts, fields, pause, consent, conversations, identityLinks);
   }
@@ -2753,9 +2361,7 @@ function contactDetail(contact) {
     details.setAttribute("aria-busy", "true");
     status.textContent = "상세 정보를 불러오고 있습니다…";
     try {
-      const detail = await api(
-        `/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}${cursor ? `?after=${encodeURIComponent(cursor)}` : ""}`,
-      );
+      const detail = await api(`/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}${cursor ? `?after=${encodeURIComponent(cursor)}` : ""}`);
       if (!current()) return;
       render(detail);
       after = detail.after;
@@ -2822,8 +2428,7 @@ function contactActivityWindow() {
   }
   if (fields.activity_mode.value === "relative") {
     const days = fields.last_comment_days.value;
-    if (!/^[1-9][0-9]{0,2}$/.test(days) || !fields.last_comment_days.validity.valid || Number(days) > 366)
-      throw new Error(errors.invalid_contact_activity);
+    if (!/^[1-9][0-9]{0,2}$/.test(days) || !fields.last_comment_days.validity.valid || Number(days) > 366) throw new Error(errors.invalid_contact_activity);
     return { last_comment_days: Number(days) };
   }
   const from = fields.last_comment_from.value,
@@ -2831,16 +2436,7 @@ function contactActivityWindow() {
   if (!from && !before) return null;
   const start = new Date(`${from}Z`),
     end = new Date(`${before}Z`);
-  if (
-    !from ||
-    !before ||
-    !fields.last_comment_from.validity.valid ||
-    !fields.last_comment_before.validity.valid ||
-    !Number.isFinite(start.getTime()) ||
-    !Number.isFinite(end.getTime()) ||
-    start >= end
-  )
-    throw new Error(errors.invalid_contact_activity);
+  if (!from || !before || !fields.last_comment_from.validity.valid || !fields.last_comment_before.validity.valid || !Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start >= end) throw new Error(errors.invalid_contact_activity);
   return { last_comment_from: start.toISOString(), last_comment_before: end.toISOString() };
 }
 // label names the window in its text: empty for comment activity, "DM " for the recent received DM window.
@@ -2848,30 +2444,14 @@ function relativeActivitySummary(window, days, label = "") {
   if (!days) return "";
   const valid = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(value);
   const milliseconds = (value) => Date.parse(value.slice(0, -4) + "Z");
-  if (
-    !valid(window?.from) ||
-    !valid(window?.before) ||
-    milliseconds(window.before) - milliseconds(window.from) !== Number(days) * 86400000
-  )
-    throw new Error(`최근 ${label}활동의 조회 기간을 확인할 수 없습니다.`);
+  if (!valid(window?.from) || !valid(window?.before) || milliseconds(window.before) - milliseconds(window.from) !== Number(days) * 86400000) throw new Error(`최근 ${label}활동의 조회 기간을 확인할 수 없습니다.`);
   return ` 이번 ${label}조회 기간(UTC): ${window.from} 이상, ${window.before} 미만. 조회와 다음 페이지마다 다시 계산합니다.`;
 }
 function calendarActivitySummary(window, period) {
   if (!period) return "";
   const valid = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(value);
-  if (
-    !Object.hasOwn(calendarPeriodLabels, period) ||
-    !valid(window?.from) ||
-    !valid(window?.before) ||
-    window.from >= window.before ||
-    typeof window.time_zone !== "string" ||
-    !window.time_zone
-  )
-    throw new Error("달력 기간의 조회 경계를 확인할 수 없습니다.");
-  return (
-    ` 이번 조회 기간: ${window.time_zone} 시간대의 ${calendarPeriodLabels[period]}, UTC ${window.from} 이상 ${window.before} 미만.` +
-    " 조회와 다음 페이지마다 작업 공간 시간대로 다시 계산합니다."
-  );
+  if (!Object.hasOwn(calendarPeriodLabels, period) || !valid(window?.from) || !valid(window?.before) || window.from >= window.before || typeof window.time_zone !== "string" || !window.time_zone) throw new Error("달력 기간의 조회 경계를 확인할 수 없습니다.");
+  return ` 이번 조회 기간: ${window.time_zone} 시간대의 ${calendarPeriodLabels[period]}, UTC ${window.from} 이상 ${window.before} 미만.` + " 조회와 다음 페이지마다 작업 공간 시간대로 다시 계산합니다.";
 }
 function contactTagInputs() {
   const fields = byId("contacts-filter").elements;
@@ -2914,8 +2494,7 @@ function contactConsentCondition() {
   const purpose = fields.consent_purpose.value,
     state = fields.consent_state.value;
   if (!purpose && !state) return null;
-  if (!["service_reply", "marketing"].includes(purpose) || !["granted", "revoked", "no_record"].includes(state))
-    throw new Error(errors.invalid_contact_consent);
+  if (!["service_reply", "marketing"].includes(purpose) || !["granted", "revoked", "no_record"].includes(state)) throw new Error(errors.invalid_contact_consent);
   return { consent_purpose: purpose, consent_state: state };
 }
 // The recorded state of the contact's verified DM conversations; the server checks the same pair.
@@ -2924,8 +2503,7 @@ function contactDmConsentCondition() {
   const purpose = fields.dm_consent_purpose.value,
     state = fields.dm_consent_state.value;
   if (!purpose && !state) return null;
-  if (!["service_reply", "marketing"].includes(purpose) || !["granted", "revoked", "no_record"].includes(state))
-    throw new Error(errors.invalid_contact_consent);
+  if (!["service_reply", "marketing"].includes(purpose) || !["granted", "revoked", "no_record"].includes(state)) throw new Error(errors.invalid_contact_consent);
   return { dm_consent_purpose: purpose, dm_consent_state: state };
 }
 // Recent received DMs of the contact's verified DM conversations; an empty field means no condition. A number
@@ -2934,8 +2512,7 @@ function contactDmActivityCondition() {
   const input = byId("contacts-filter").elements.last_dm_days;
   const days = input.value;
   if (!days && !input.validity.badInput) return null;
-  if (!/^[1-9][0-9]{0,2}$/.test(days) || !input.validity.valid || Number(days) > 366)
-    throw new Error("최근 받은 DM 일수는 1~366 사이의 정수로 입력하거나 비워 주세요.");
+  if (!/^[1-9][0-9]{0,2}$/.test(days) || !input.validity.valid || Number(days) > 366) throw new Error("최근 받은 DM 일수는 1~366 사이의 정수로 입력하거나 비워 주세요.");
   return { last_dm_days: Number(days) };
 }
 function contactDraftQuery() {
@@ -2959,8 +2536,7 @@ function contactDraftQuery() {
   if (consent) for (const [key, value] of Object.entries(consent)) query.set(key, value);
   if (dmConsent) for (const [key, value] of Object.entries(dmConsent)) query.set(key, value);
   if (dmActivity) query.set("last_dm_days", dmActivity.last_dm_days);
-  for (const [key, value] of Object.entries(fieldKeys))
-    query.set(key, key === "field_value" || key === "field_conditions" ? JSON.stringify(value) : value);
+  for (const [key, value] of Object.entries(fieldKeys)) query.set(key, key === "field_value" || key === "field_conditions" ? JSON.stringify(value) : value);
   return query;
 }
 async function loadContacts(more = false) {
@@ -2972,10 +2548,7 @@ async function loadContacts(more = false) {
     } catch (error) {
       // As before the field rows, an empty or unknown first field clears the list; a later row clears it only for an unknown field.
       const rows = fieldFilterRows();
-      if (
-        !contactFields.some((field) => field.id === rows[0].field.value) ||
-        rows.some((row) => row.shown && row.field.value && !contactFields.some((field) => field.id === row.field.value))
-      ) {
+      if (!contactFields.some((field) => field.id === rows[0].field.value) || rows.some((row) => row.shown && row.field.value && !contactFields.some((field) => field.id === row.field.value))) {
         clearContactResults();
       }
       byId("contacts-status").textContent = error.message;
@@ -3004,24 +2577,14 @@ async function loadContacts(more = false) {
     const days = query.get("last_comment_days") || segment?.last_comment_days;
     const calendar = query.get("last_comment_period") || segment?.last_comment_period;
     const dmDays = query.get("last_dm_days") || segment?.last_dm_days;
-    const period =
-      relativeActivitySummary(page.activity_window, days) +
-      calendarActivitySummary(page.activity_window, calendar) +
-      relativeActivitySummary(page.dm_activity_window, dmDays, "DM ");
-    for (const contact of page.contacts)
-      if (!purgedContactConnections.has(contact.connection_id)) byId("contacts-list").append(contactCard(contact));
+    const period = relativeActivitySummary(page.activity_window, days) + calendarActivitySummary(page.activity_window, calendar) + relativeActivitySummary(page.dm_activity_window, dmDays, "DM ");
+    for (const contact of page.contacts) if (!purgedContactConnections.has(contact.connection_id)) byId("contacts-list").append(contactCard(contact));
     contactsAfter = page.after;
     byId("contacts-more").hidden = !contactsAfter;
-    byId("contacts-status").textContent =
-      `연락처 ${byId("contacts-list").children.length}명을 표시합니다. 같은 계정의 반복 댓글은 한 명으로 묶습니다.` +
-      period;
-    if (!byId("contacts-list").children.length)
-      byId("contacts-list").append(
-        emptyState("표시할 연락처가 없습니다", "댓글을 받거나 태그·계정 필터를 바꾼 뒤 다시 불러와 주세요."),
-      );
+    byId("contacts-status").textContent = `연락처 ${byId("contacts-list").children.length}명을 표시합니다. 같은 계정의 반복 댓글은 한 명으로 묶습니다.` + period;
+    if (!byId("contacts-list").children.length) byId("contacts-list").append(emptyState("표시할 연락처가 없습니다", "댓글을 받거나 태그·계정 필터를 바꾼 뒤 다시 불러와 주세요."));
   } catch (error) {
-    if (generation === contactsGeneration)
-      byId("contacts-status").textContent = `${error.message} 새로고침으로 다시 시도할 수 있습니다.`;
+    if (generation === contactsGeneration) byId("contacts-status").textContent = `${error.message} 새로고침으로 다시 시도할 수 있습니다.`;
   } finally {
     if (generation === contactsGeneration) {
       contactsBusy = false;
@@ -3070,17 +2633,10 @@ byId("segment-preview").addEventListener("click", async () => {
     status.textContent = "현재 조건에 맞는 연락처를 확인하고 있습니다…";
     const page = await api(`/api/contacts?${query}`);
     if (!current()) return;
-    const period =
-      relativeActivitySummary(page.activity_window, query.get("last_comment_days")) +
-      calendarActivitySummary(page.activity_window, query.get("last_comment_period")) +
-      relativeActivitySummary(page.dm_activity_window, query.get("last_dm_days"), "DM ");
-    const activityCount =
-      query.has("last_comment_from") || query.has("last_comment_days") || query.has("last_comment_period")
-        ? page.excluded?.activity
-        : "0";
+    const period = relativeActivitySummary(page.activity_window, query.get("last_comment_days")) + calendarActivitySummary(page.activity_window, query.get("last_comment_period")) + relativeActivitySummary(page.dm_activity_window, query.get("last_dm_days"), "DM ");
+    const activityCount = query.has("last_comment_from") || query.has("last_comment_days") || query.has("last_comment_period") ? page.excluded?.activity : "0";
     const consentCount = query.has("consent_purpose") ? page.excluded?.consent : "0";
-    const dmIdentityCount =
-      query.has("dm_consent_purpose") || query.has("last_dm_days") ? page.excluded?.dm_identity : "0";
+    const dmIdentityCount = query.has("dm_consent_purpose") || query.has("last_dm_days") ? page.excluded?.dm_identity : "0";
     const dmConsentCount = query.has("dm_consent_purpose") ? page.excluded?.dm_consent : "0";
     const dmActivityCount = query.has("last_dm_days") ? page.excluded?.dm_activity : "0";
     // A tree has one reason after the limits; the other forms split tag and field mismatches.
@@ -3091,49 +2647,17 @@ byId("segment-preview").addEventListener("click", async () => {
           [page.excluded?.field, "추가 정보 조건만 불일치"],
           [page.excluded?.both, "태그·추가 정보 조건 모두 불일치"],
         ];
-    const counts = [
-      page.total,
-      page.evaluated,
-      ...conditionReasons.map(([count]) => count),
-      activityCount,
-      consentCount,
-      dmIdentityCount,
-      dmConsentCount,
-      dmActivityCount,
-    ];
-    if (counts.some((value) => typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)))
-      throw new Error("대상 수와 제외 사유를 확인할 수 없습니다.");
-    const excludedTotal =
-      BigInt(activityCount) +
-      BigInt(consentCount) +
-      BigInt(dmIdentityCount) +
-      BigInt(dmConsentCount) +
-      BigInt(dmActivityCount) +
-      conditionReasons.reduce((total, [count]) => total + BigInt(count), 0n);
-    if (BigInt(page.evaluated) !== BigInt(page.total) + excludedTotal)
-      throw new Error("대상 수와 제외 사유를 확인할 수 없습니다.");
-    status.textContent =
-      `조회 시점의 대상은 총 ${page.total}명입니다. 선택 계정 범위 ${page.evaluated}명 중 ${excludedTotal}명이 조건과 맞지 않습니다.` +
-      (page.total === "0" ? " 조건에 맞는 연락처가 없습니다." : " 아래에 최대 5명의 예시를 표시합니다.") +
-      period;
-    for (const [count, label] of [
-      [activityCount, "활동 기간 밖 (먼저 제외)"],
-      [consentCount, "동의 기록 조건 불일치"],
-      [dmIdentityCount, "확인된 DM 대화 없음"],
-      [dmConsentCount, "DM 동의 기록 조건 불일치"],
-      [dmActivityCount, "최근 받은 DM 없음"],
-      ...conditionReasons,
-    ]) {
+    const counts = [page.total, page.evaluated, ...conditionReasons.map(([count]) => count), activityCount, consentCount, dmIdentityCount, dmConsentCount, dmActivityCount];
+    if (counts.some((value) => typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value))) throw new Error("대상 수와 제외 사유를 확인할 수 없습니다.");
+    const excludedTotal = BigInt(activityCount) + BigInt(consentCount) + BigInt(dmIdentityCount) + BigInt(dmConsentCount) + BigInt(dmActivityCount) + conditionReasons.reduce((total, [count]) => total + BigInt(count), 0n);
+    if (BigInt(page.evaluated) !== BigInt(page.total) + excludedTotal) throw new Error("대상 수와 제외 사유를 확인할 수 없습니다.");
+    status.textContent = `조회 시점의 대상은 총 ${page.total}명입니다. 선택 계정 범위 ${page.evaluated}명 중 ${excludedTotal}명이 조건과 맞지 않습니다.` + (page.total === "0" ? " 조건에 맞는 연락처가 없습니다." : " 아래에 최대 5명의 예시를 표시합니다.") + period;
+    for (const [count, label] of [[activityCount, "활동 기간 밖 (먼저 제외)"], [consentCount, "동의 기록 조건 불일치"], [dmIdentityCount, "확인된 DM 대화 없음"], [dmConsentCount, "DM 동의 기록 조건 불일치"], [dmActivityCount, "최근 받은 DM 없음"], ...conditionReasons]) {
       if (count !== "0") byId("segment-preview-exclusions").append(node("li", `${label}: ${count}명`));
     }
     for (const contact of page.contacts.slice(0, 5)) {
       const item = node("li");
-      item.append(
-        node(
-          "p",
-          `참여자 ${contact.sender_id} · 연결 계정 ${contact.username ? `@${contact.username}` : "이름 확인 전"}`,
-        ),
-      );
+      item.append(node("p", `참여자 ${contact.sender_id} · 연결 계정 ${contact.username ? `@${contact.username}` : "이름 확인 전"}`));
       byId("segment-preview-list").append(item);
     }
   } catch (error) {
@@ -3156,8 +2680,7 @@ function segmentControls() {
   byId("segment-save").elements.name.disabled = segmentBusy;
   byId("segment-save").querySelector("button").disabled = segmentBusy;
   // While a save is in flight, action() shows the loading label; the trailing segmentControls() call restores it.
-  if (!segmentBusy)
-    byId("segment-save").querySelector("button").textContent = editingSegment ? "변경 저장" : "필터 저장";
+  if (!segmentBusy) byId("segment-save").querySelector("button").textContent = editingSegment ? "변경 저장" : "필터 저장";
   byId("segment-edit-cancel").hidden = !editingSegment;
   byId("segment-edit-cancel").disabled = segmentBusy;
   byId("segment-edit-reload").disabled = segmentBusy;
@@ -3166,10 +2689,7 @@ function segmentControls() {
   byId("contacts-filter-fields").disabled = segmentBusy;
   contactExportControls();
   // Like the segment export, a freeze uses the saved definition, so an unsaved edit must be saved or cancelled first.
-  segmentSnapshots.sync(
-    contactSegments.find((segment) => segment.id === activeSegmentId) ?? null,
-    segmentBusy || Boolean(editingSegment && segmentEditChanged()),
-  );
+  segmentSnapshots.sync(contactSegments.find((segment) => segment.id === activeSegmentId) ?? null, segmentBusy || Boolean(editingSegment && segmentEditChanged()));
 }
 // Leaves edit mode. By default the user's draft stays: the filter form keeps its conditions, the name field keeps
 // its value, and a changed draft stays marked unsaved, because segmentEditChanged() ends with edit mode.
@@ -3194,16 +2714,13 @@ function conditionTreeControls() {
   const tree = Boolean(draftConditionTree);
   const fields = byId("contacts-filter").elements;
   for (const input of contactTagInputs()) input.disabled = tree;
-  for (const row of fieldFilterRows())
-    row.field.disabled = row.operator.disabled = row.value.disabled = row.boolean.disabled = tree;
+  for (const row of fieldFilterRows()) row.field.disabled = row.operator.disabled = row.value.disabled = row.boolean.disabled = tree;
   for (const id of ["field-filter-add", "field-filter-remove-2", "field-filter-remove-3"]) byId(id).disabled = tree;
   if (tree) for (const name of ["tag_mode", "field_mode", "condition_operator"]) fields[name].disabled = true;
   byId("contact-condition-tree").hidden = !tree;
   byId("contact-condition-tree-start").hidden = tree;
   byId("contact-condition-tree-clear").disabled = segmentBusy;
-  byId("contact-condition-tree-status").textContent = tree
-    ? segmentTreeBuild(draftConditionTree, contactFields).error
-    : "";
+  byId("contact-condition-tree-status").textContent = tree ? segmentTreeBuild(draftConditionTree, contactFields).error : "";
 }
 // The tree of the draft for a request, or null without one; an incomplete draft throws the model's reason.
 function conditionTreeRequest() {
@@ -3214,11 +2731,7 @@ function conditionTreeRequest() {
 const conditionTreeKindLabels = { tag: "태그 있음", no_tag: "태그 없음", field: "추가 정보 조건" };
 // An operator's label for a field type, the words of the field rows.
 function conditionTreeOperatorLabel(type, operator) {
-  return (
-    { eq: "값이 같음", is_set: "입력됨", is_unset: "미입력" }[operator] ??
-    orderedOperatorLabels(type)[operator] ??
-    operator
-  );
+  return { eq: "값이 같음", is_set: "입력됨", is_unset: "미입력" }[operator] ?? orderedOperatorLabels(type)[operator] ?? operator;
 }
 function conditionTreeSelect(label, options, value, data) {
   const wrapper = node("label", label);
@@ -3333,27 +2846,10 @@ function conditionTreeGroupBox(draft, group, groupIndex) {
   const reasonId = `contact-condition-tree-group-${groupIndex + 1}-reason`;
   const actions = node("div", "", "condition-tree-actions");
   actions.append(
-    conditionTreeButton(
-      "조건 추가",
-      `${title}에 조건 추가`,
-      { ...data, treeAction: "leaf-add" },
-      Boolean(addBlock),
-      addBlock ? reasonId : "",
-    ),
+    conditionTreeButton("조건 추가", `${title}에 조건 추가`, { ...data, treeAction: "leaf-add" }, Boolean(addBlock), addBlock ? reasonId : ""),
     conditionTreeButton("그룹 위로", `${title} 위로 이동`, { ...data, treeAction: "group-up" }, groupIndex === 0),
-    conditionTreeButton(
-      "그룹 아래로",
-      `${title} 아래로 이동`,
-      { ...data, treeAction: "group-down" },
-      groupIndex === draft.groups.length - 1,
-    ),
-    conditionTreeButton(
-      "그룹 삭제",
-      `${title} 삭제`,
-      { ...data, treeAction: "group-remove" },
-      Boolean(removeBlock),
-      removeBlock ? reasonId : "",
-    ),
+    conditionTreeButton("그룹 아래로", `${title} 아래로 이동`, { ...data, treeAction: "group-down" }, groupIndex === draft.groups.length - 1),
+    conditionTreeButton("그룹 삭제", `${title} 삭제`, { ...data, treeAction: "group-remove" }, Boolean(removeBlock), removeBlock ? reasonId : ""),
   );
   box.append(actions);
   const reasons = [addBlock, removeBlock].filter(Boolean);
@@ -3416,11 +2912,7 @@ function fillSegmentConditions(segment) {
   fields.condition_operator.value = segment?.condition_operator || "and";
   fields.last_comment_from.value = segment?.last_comment_from?.slice(0, -1) || "";
   fields.last_comment_before.value = segment?.last_comment_before?.slice(0, -1) || "";
-  fields.activity_mode.value = segment?.last_comment_period
-    ? "calendar"
-    : segment?.last_comment_days
-      ? "relative"
-      : "fixed";
+  fields.activity_mode.value = segment?.last_comment_period ? "calendar" : segment?.last_comment_days ? "relative" : "fixed";
   fields.last_comment_days.value = segment?.last_comment_days || "7";
   fields.last_comment_period.value = segment?.last_comment_period || "today";
   contactActivityControls();
@@ -3440,9 +2932,7 @@ function fillSegmentConditions(segment) {
 // A segment's field conditions as a list: its set, its one legacy condition, or none.
 function segmentFieldConditions(segment) {
   if (segment?.field_conditions) return segment.field_conditions;
-  return segment?.field_id
-    ? [{ field_id: segment.field_id, field_operator: segment.field_operator, field_value: segment.field_value }]
-    : [];
+  return segment?.field_id ? [{ field_id: segment.field_id, field_operator: segment.field_operator, field_value: segment.field_value }] : [];
 }
 function optionLabel(select, value) {
   return [...select.options].find((option) => option.value === value)?.textContent ?? String(value);
@@ -3462,34 +2952,17 @@ function segmentSummary(segment) {
   const parts = [
     `이름 ${segment.name}`,
     `계정 ${segment.connection_id ? account?.username || account?.account_id || "확인할 수 없는 계정" : "모든 계정"}`,
-    segment.condition_tree
-      ? `그룹 조건 ${segmentTreeSummary(segment.condition_tree, fieldConditionSummary)}`
-      : segment.tags
-        ? `태그 ${segment.tags.join(", ")} (${segment.tag_mode === "any" ? "하나 이상 포함" : "모두 포함"})`
-        : `태그 ${segment.tag || "조건 없음"}`,
+    segment.condition_tree ? `그룹 조건 ${segmentTreeSummary(segment.condition_tree, fieldConditionSummary)}` : segment.tags ? `태그 ${segment.tags.join(", ")} (${segment.tag_mode === "any" ? "하나 이상 포함" : "모두 포함"})` : `태그 ${segment.tag || "조건 없음"}`,
   ];
   const savedFields = segmentFieldConditions(segment).map(fieldConditionSummary);
-  if (savedFields.length > 1)
-    parts.push(
-      `추가 정보 ${savedFields.join(", ")} (${segment.field_mode === "any" ? "하나 이상 만족" : "모두 만족"})`,
-    );
+  if (savedFields.length > 1) parts.push(`추가 정보 ${savedFields.join(", ")} (${segment.field_mode === "any" ? "하나 이상 만족" : "모두 만족"})`);
   else if (savedFields.length) parts.push(`추가 정보 ${savedFields[0]}`);
   if (segment.condition_operator === "or") parts.push("태그와 추가 정보 중 하나만 맞아도 포함");
-  if (segment.last_comment_period)
-    parts.push(
-      `달력 기간 ${calendarPeriodLabels[segment.last_comment_period] ?? segment.last_comment_period} (작업 공간 시간대)`,
-    );
+  if (segment.last_comment_period) parts.push(`달력 기간 ${calendarPeriodLabels[segment.last_comment_period] ?? segment.last_comment_period} (작업 공간 시간대)`);
   else if (segment.last_comment_days) parts.push(`최근 ${segment.last_comment_days}일 활동`);
-  else if (segment.last_comment_from)
-    parts.push(`활동 기간(UTC) ${segment.last_comment_from} 이상 ${segment.last_comment_before} 미만`);
-  if (segment.consent_purpose)
-    parts.push(
-      `동의 기록 ${optionLabel(fields.consent_purpose, segment.consent_purpose)} ${optionLabel(fields.consent_state, segment.consent_state)}`,
-    );
-  if (segment.dm_consent_purpose)
-    parts.push(
-      `DM 동의 기록 ${optionLabel(fields.dm_consent_purpose, segment.dm_consent_purpose)} ${optionLabel(fields.dm_consent_state, segment.dm_consent_state)}`,
-    );
+  else if (segment.last_comment_from) parts.push(`활동 기간(UTC) ${segment.last_comment_from} 이상 ${segment.last_comment_before} 미만`);
+  if (segment.consent_purpose) parts.push(`동의 기록 ${optionLabel(fields.consent_purpose, segment.consent_purpose)} ${optionLabel(fields.consent_state, segment.consent_state)}`);
+  if (segment.dm_consent_purpose) parts.push(`DM 동의 기록 ${optionLabel(fields.dm_consent_purpose, segment.dm_consent_purpose)} ${optionLabel(fields.dm_consent_state, segment.dm_consent_state)}`);
   if (segment.last_dm_days) parts.push(`최근 ${segment.last_dm_days}일 안에 받은 DM`);
   return parts.join(" · ");
 }
@@ -3511,19 +2984,15 @@ async function loadContactSegments(force = false) {
     }
     select.value = activeSegmentId;
     segmentControls();
-    byId("segments-status").textContent = contactSegments.length
-      ? `저장된 필터 ${contactSegments.length}개. 조건에 맞는 연락처는 조회할 때 갱신됩니다.`
-      : "자주 쓰는 계정·태그 조건을 필터로 저장해 보세요.";
+    byId("segments-status").textContent = contactSegments.length ? `저장된 필터 ${contactSegments.length}개. 조건에 맞는 연락처는 조회할 때 갱신됩니다.` : "자주 쓰는 계정·태그 조건을 필터로 저장해 보세요.";
   } catch (error) {
-    if (generation === segmentsGeneration && request === segmentsRequest)
-      byId("segments-status").textContent = `${error.message} 새로고침으로 다시 시도해 주세요.`;
+    if (generation === segmentsGeneration && request === segmentsRequest) byId("segments-status").textContent = `${error.message} 새로고침으로 다시 시도해 주세요.`;
   }
 }
 byId("contacts-filter").addEventListener("input", (event) => {
   // The group editor's changes are compared as a tree by segmentEditChanged instead of counted. A select change
   // rebuilds the editor before this listener runs, so its detached control is recognized by its data attribute.
-  if (!event.target.closest("#contact-condition-tree") && !("treeInput" in event.target.dataset))
-    segmentConditionInputs++;
+  if (!event.target.closest("#contact-condition-tree") && !("treeInput" in event.target.dataset)) segmentConditionInputs++;
   invalidateSegmentPreview();
   activeSegmentId = "";
   byId("contact-segment").value = "";
@@ -3600,10 +3069,7 @@ byId("contact-condition-tree-groups").addEventListener("input", (event) => {
   draftConditionTree = segmentTreeSetLeaf(draftConditionTree, group, leafIndex, changes).draft;
   if (control.tagName === "SELECT") {
     renderConditionTree();
-    focusConditionTree(
-      `[data-tree-group="${group}"][data-tree-leaf="${leafIndex}"][data-tree-input="${key}"]`,
-      `[data-tree-group="${group}"][data-tree-leaf="${leafIndex}"][data-tree-input="kind"]`,
-    );
+    focusConditionTree(`[data-tree-group="${group}"][data-tree-leaf="${leafIndex}"][data-tree-input="${key}"]`, `[data-tree-group="${group}"][data-tree-leaf="${leafIndex}"][data-tree-input="kind"]`);
   }
 });
 byId("contact-condition-tree-groups").addEventListener("click", (event) => {
@@ -3637,23 +3103,10 @@ byId("contact-condition-tree-groups").addEventListener("click", (event) => {
     "leaf-add": [leafAt(draftConditionTree.groups[group]?.conditions.length - 1, '[data-tree-input="kind"]')],
     "leaf-up": [leafAt(leaf - 1, '[data-tree-action="leaf-up"]'), leafAt(leaf - 1, '[data-tree-action="leaf-down"]')],
     "leaf-down": [leafAt(leaf + 1, '[data-tree-action="leaf-down"]'), leafAt(leaf + 1, '[data-tree-action="leaf-up"]')],
-    "leaf-remove": [
-      leafAt(leaf, '[data-tree-input="kind"]'),
-      leafAt(leaf - 1, '[data-tree-input="kind"]'),
-      groupAt(group, '[data-tree-action="leaf-add"]'),
-    ],
-    "group-up": [
-      groupAt(group - 1, '[data-tree-action="group-up"]'),
-      groupAt(group - 1, '[data-tree-action="group-down"]'),
-    ],
-    "group-down": [
-      groupAt(group + 1, '[data-tree-action="group-down"]'),
-      groupAt(group + 1, '[data-tree-action="group-up"]'),
-    ],
-    "group-remove": [
-      groupAt(Math.min(group, draftConditionTree.groups.length - 1), '[data-tree-action="leaf-add"]'),
-      "#contact-condition-tree-add-group",
-    ],
+    "leaf-remove": [leafAt(leaf, '[data-tree-input="kind"]'), leafAt(leaf - 1, '[data-tree-input="kind"]'), groupAt(group, '[data-tree-action="leaf-add"]')],
+    "group-up": [groupAt(group - 1, '[data-tree-action="group-up"]'), groupAt(group - 1, '[data-tree-action="group-down"]')],
+    "group-down": [groupAt(group + 1, '[data-tree-action="group-down"]'), groupAt(group + 1, '[data-tree-action="group-up"]')],
+    "group-remove": [groupAt(Math.min(group, draftConditionTree.groups.length - 1), '[data-tree-action="leaf-add"]'), "#contact-condition-tree-add-group"],
   }[action];
   focusConditionTree(...focus, "#contact-condition-tree-mode");
 });
@@ -3687,8 +3140,7 @@ byId("segment-edit").addEventListener("click", () => {
   byId("segment-save").elements.name.value = segment.name;
   segmentNameDirty = false;
   byId("segment-save").closest("details").open = true;
-  byId("segment-edit-status").textContent =
-    `"${segment.name}" 필터를 수정하고 있습니다. 위 조건과 이름을 바꾼 뒤 변경 저장을 눌러 주세요.`;
+  byId("segment-edit-status").textContent = `"${segment.name}" 필터를 수정하고 있습니다. 위 조건과 이름을 바꾼 뒤 변경 저장을 눌러 주세요.`;
   segmentControls();
   byId("segment-save").elements.name.focus();
 });
@@ -3712,8 +3164,7 @@ byId("segment-edit-reload").addEventListener("click", () => {
   segmentNameDirty = false;
   byId("segment-edit-conflict").hidden = true;
   byId("segment-edit-saved").textContent = "";
-  byId("segment-edit-status").textContent =
-    `저장된 "${saved.name}" 필터 값을 불러왔습니다. 필요한 부분을 다시 바꾼 뒤 변경 저장을 눌러 주세요.`;
+  byId("segment-edit-status").textContent = `저장된 "${saved.name}" 필터 값을 불러왔습니다. 필요한 부분을 다시 바꾼 뒤 변경 저장을 눌러 주세요.`;
   segmentControls();
 });
 async function saveSegmentEdit(editing, payload, generation) {
@@ -3739,18 +3190,14 @@ async function saveSegmentEdit(editing, payload, generation) {
       editing.saved = error.segment;
       byId("segment-edit-saved").textContent = `지금 저장된 값: ${segmentSummary(error.segment)}`;
       byId("segment-edit-conflict").hidden = false;
-      byId("segment-edit-status").textContent =
-        "다른 변경이 먼저 저장되었습니다. 입력한 값은 그대로 두었습니다. 저장된 값을 확인하고 불러온 뒤 다시 저장해 주세요.";
+      byId("segment-edit-status").textContent = "다른 변경이 먼저 저장되었습니다. 입력한 값은 그대로 두었습니다. 저장된 값을 확인하고 불러온 뒤 다시 저장해 주세요.";
       return;
     }
     if (error.code === "segment_not_found") {
       leaveSegmentEdit();
       if (activeSegmentId === editing.id) activeSegmentId = "";
       await loadContactSegments(true);
-      notice(
-        "수정하던 필터가 보관되었거나 삭제되었습니다. 입력한 이름과 조건은 남아 있으니 새 필터로 저장할 수 있습니다.",
-        true,
-      );
+      notice("수정하던 필터가 보관되었거나 삭제되었습니다. 입력한 이름과 조건은 남아 있으니 새 필터로 저장할 수 있습니다.", true);
       return;
     }
     throw error;
@@ -3817,13 +3264,7 @@ byId("segment-save").addEventListener("submit", (event) => {
   }).finally(segmentControls);
 });
 byId("segment-archive").addEventListener("click", (event) => {
-  if (
-    !activeSegmentId ||
-    segmentBusy ||
-    contactsSaving ||
-    !confirm("이 필터를 보관할까요? 연락처와 태그는 유지됩니다.")
-  )
-    return;
+  if (!activeSegmentId || segmentBusy || contactsSaving || !confirm("이 필터를 보관할까요? 연락처와 태그는 유지됩니다.")) return;
   const generation = segmentsGeneration;
   const id = activeSegmentId;
   const segment = contactSegments.find((value) => value.id === id);
@@ -3833,8 +3274,7 @@ byId("segment-archive").addEventListener("click", (event) => {
     try {
       await api(`/api/contact-segments/${id}`, "DELETE");
       if (generation !== segmentsGeneration) return;
-      if (contactsExportSegmentId === id)
-        invalidateContactExport("필터가 보관되어 진행 중인 내보내기를 취소했습니다. 연락처와 태그는 유지됩니다.");
+      if (contactsExportSegmentId === id) invalidateContactExport("필터가 보관되어 진행 중인 내보내기를 취소했습니다. 연락처와 태그는 유지됩니다.");
       if (segment && new URLSearchParams(contactsQuery).get("segment_id") === id) {
         const query = new URLSearchParams();
         if (segment.connection_id) query.set("connection_id", segment.connection_id);
@@ -3863,8 +3303,7 @@ byId("segment-archive").addEventListener("click", (event) => {
         } else if (segment.field_id) {
           query.set("field_id", segment.field_id);
           query.set("field_operator", segment.field_operator);
-          if (fieldConditionNeedsValue(segment.field_operator))
-            query.set("field_value", JSON.stringify(segment.field_value));
+          if (fieldConditionNeedsValue(segment.field_operator)) query.set("field_value", JSON.stringify(segment.field_value));
         }
         contactsQuery = query.toString();
       }
@@ -3903,12 +3342,7 @@ function configureFieldInput(input, field) {
   input.step = "any";
   input.required = Boolean(field && field.type !== "text" && field.type !== "boolean");
   input.maxLength = 1000;
-  input.placeholder =
-    field?.type === "boolean"
-      ? "true = 예, false = 아니요"
-      : field?.type === "text"
-        ? "빈 텍스트도 저장할 수 있습니다"
-        : "";
+  input.placeholder = field?.type === "boolean" ? "true = 예, false = 아니요" : field?.type === "text" ? "빈 텍스트도 저장할 수 있습니다" : "";
 }
 function fieldFilterRows() {
   const fields = byId("contacts-filter").elements;
@@ -3977,9 +3411,7 @@ function fieldConditionNeedsValue(operator) {
 }
 // The ordered operator labels of a field type; eq, is_set and is_unset read the same for every type.
 function orderedOperatorLabels(type) {
-  return type === "date"
-    ? { gte: "당일 포함 이후", gt: "당일 제외 이후", lte: "당일 포함 이전", lt: "당일 제외 이전" }
-    : { gte: "이상", gt: "초과", lte: "이하", lt: "미만" };
+  return type === "date" ? { gte: "당일 포함 이후", gt: "당일 제외 이후", lte: "당일 포함 이전", lt: "당일 제외 이전" } : { gte: "이상", gt: "초과", lte: "이하", lt: "미만" };
 }
 // The conditions of the shown rows that name a field, in row order.
 function contactFieldConditions() {
@@ -3988,14 +3420,11 @@ function contactFieldConditions() {
     if (!row.shown || !row.field.value) continue;
     const field = contactFields.find((item) => item.id === row.field.value);
     if (!field) throw new Error(errors.field_not_found);
-    if (conditions.some((condition) => condition.field_id === field.id))
-      throw new Error("같은 추가 정보 필드는 한 번만 조건으로 고를 수 있습니다.");
+    if (conditions.some((condition) => condition.field_id === field.id)) throw new Error("같은 추가 정보 필드는 한 번만 조건으로 고를 수 있습니다.");
     conditions.push({
       field_id: field.id,
       field_operator: row.operator.value,
-      ...(fieldConditionNeedsValue(row.operator.value)
-        ? { field_value: typedFieldValue(field, field.type === "boolean" ? row.boolean.value : row.value.value) }
-        : {}),
+      ...(fieldConditionNeedsValue(row.operator.value) ? { field_value: typedFieldValue(field, field.type === "boolean" ? row.boolean.value : row.value.value) } : {}),
     });
   }
   return conditions;
@@ -4003,8 +3432,7 @@ function contactFieldConditions() {
 // The request keys of the conditions on screen: one row keeps the legacy keys, two or three a set with its mode.
 function contactFieldConditionKeys() {
   const conditions = contactFieldConditions();
-  if (conditions.length > 1)
-    return { field_conditions: conditions, field_mode: byId("contacts-filter").elements.field_mode.value };
+  if (conditions.length > 1) return { field_conditions: conditions, field_mode: byId("contacts-filter").elements.field_mode.value };
   return conditions[0] ?? {};
 }
 // Marks a row change as a condition edit, as typing in the form does.
@@ -4053,8 +3481,7 @@ async function loadContactFields(force = false) {
       const previous = select.value;
       select.replaceChildren(new Option("조건 없음", ""));
       for (const field of contactFields) select.add(new Option(field.name, field.id));
-      if (previous && !contactFields.some((field) => field.id === previous))
-        select.add(new Option("사용할 수 없는 필드", previous));
+      if (previous && !contactFields.some((field) => field.id === previous)) select.add(new Option("사용할 수 없는 필드", previous));
       select.value = previous;
     }
     // The group editor's field selects list the same definitions, with the same fallback for an unknown field.
@@ -4073,13 +3500,10 @@ async function loadContactFields(force = false) {
       byId("field-definitions").append(row);
     }
     fieldControls();
-    byId("fields-status").textContent = contactFields.length
-      ? `활성 필드 ${contactFields.length}개 / 50개`
-      : "아직 필드가 없습니다. 연락처에 기록할 항목을 만들어 보세요.";
+    byId("fields-status").textContent = contactFields.length ? `활성 필드 ${contactFields.length}개 / 50개` : "아직 필드가 없습니다. 연락처에 기록할 항목을 만들어 보세요.";
     return true;
   } catch (error) {
-    if (generation === fieldsGeneration && request === fieldsRequest)
-      byId("fields-status").textContent = `${error.message} 새로고침으로 다시 시도해 주세요.`;
+    if (generation === fieldsGeneration && request === fieldsRequest) byId("fields-status").textContent = `${error.message} 새로고침으로 다시 시도해 주세요.`;
     return false;
   }
 }
@@ -4103,11 +3527,7 @@ byId("field-create").addEventListener("submit", (event) => {
       const loaded = await loadContactFields(true);
       if (generation !== fieldsGeneration) return;
       if (loaded && !contactsDirty.size && !contactsSaving) await loadContacts();
-      notice(
-        loaded
-          ? "필드를 만들었습니다. 연락처의 추가 정보 편집에서 값을 기록할 수 있습니다."
-          : "필드를 만들었지만 목록을 갱신하지 못했습니다. 새로고침으로 다시 불러와 주세요.",
-      );
+      notice(loaded ? "필드를 만들었습니다. 연락처의 추가 정보 편집에서 값을 기록할 수 있습니다." : "필드를 만들었지만 목록을 갱신하지 못했습니다. 새로고침으로 다시 불러와 주세요.");
     } finally {
       if (generation === fieldsGeneration) {
         fieldBusy = false;
@@ -4118,12 +3538,8 @@ byId("field-create").addEventListener("submit", (event) => {
 });
 function archiveField(field, button) {
   const selects = fieldFilterRows().map((row) => row.field);
-  const filterNotice =
-    selects.some((select) => select.value === field.id) || segmentTreeRemoveField(draftConditionTree, field.id).removed
-      ? " 이 필드의 검색 조건은 해제됩니다."
-      : "";
-  if (!canReloadContacts() || !confirm(`${field.name} 필드를 보관할까요? 저장한 값은 유지됩니다.${filterNotice}`))
-    return;
+  const filterNotice = selects.some((select) => select.value === field.id) || segmentTreeRemoveField(draftConditionTree, field.id).removed ? " 이 필드의 검색 조건은 해제됩니다." : "";
+  if (!canReloadContacts() || !confirm(`${field.name} 필드를 보관할까요? 저장한 값은 유지됩니다.${filterNotice}`)) return;
   const generation = fieldsGeneration;
   void action(button, async () => {
     fieldBusy = true;
@@ -4145,20 +3561,14 @@ function archiveField(field, button) {
         renderConditionTree();
         conditionTreeEdited();
         const incomplete = segmentTreeBuild(draftConditionTree, contactFields).error;
-        treeNotice =
-          ` 그룹 조건에서 이 필드를 쓰던 조건 ${tree.removed}개를 지웠습니다.` +
-          (incomplete ? ` 그룹 조건을 완성해야 조회할 수 있습니다. ${incomplete}` : "");
+        treeNotice = ` 그룹 조건에서 이 필드를 쓰던 조건 ${tree.removed}개를 지웠습니다.` + (incomplete ? ` 그룹 조건을 완성해야 조회할 수 있습니다. ${incomplete}` : "");
       }
       fieldFilterControls();
       clearContactResults();
       const loaded = await loadContactFields(true);
       if (generation !== fieldsGeneration) return;
       if (loaded) await loadContacts();
-      notice(
-        (loaded
-          ? "필드를 보관했습니다. 저장한 값은 유지됩니다."
-          : "필드를 보관했지만 목록을 갱신하지 못했습니다. 새로고침으로 다시 불러와 주세요.") + treeNotice,
-      );
+      notice((loaded ? "필드를 보관했습니다. 저장한 값은 유지됩니다." : "필드를 보관했지만 목록을 갱신하지 못했습니다. 새로고침으로 다시 불러와 주세요.") + treeNotice);
     } finally {
       if (generation === fieldsGeneration) {
         fieldBusy = false;
@@ -4203,8 +3613,7 @@ function contactFieldEditor(contact, summary) {
     input.value = value === undefined ? "" : String(value);
     booleanInput.value = value === false ? "false" : "true";
     original = activeInput().value;
-    status.textContent =
-      value === undefined ? "미입력. 값을 저장하면 입력된 상태가 됩니다." : `저장된 값: ${displayFieldValue(value)}`;
+    status.textContent = value === undefined ? "미입력. 값을 저장하면 입력된 상태가 됩니다." : `저장된 값: ${displayFieldValue(value)}`;
     contactsDirty.delete(key);
   }
   populate();
@@ -4229,23 +3638,15 @@ function contactFieldEditor(contact, summary) {
       contactsSaving = true;
       for (const control of editor.elements) control.disabled = true;
       try {
-        const saved = await api(
-          `/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}/fields/${id}`,
-          "PUT",
-          { value },
-        );
+        const saved = await api(`/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}/fields/${id}`, "PUT", { value });
         if (generation !== contactsGeneration) return;
         contact.fields ||= {};
         if (saved.value === null) delete contact.fields[id];
         else contact.fields[id] = saved.value;
         summary.replaceChildren();
-        for (const field of contactFields)
-          if (Object.hasOwn(contact.fields, field.id))
-            summary.append(node("p", `${field.name} · ${displayFieldValue(contact.fields[field.id])}`, "hint"));
+        for (const field of contactFields) if (Object.hasOwn(contact.fields, field.id)) summary.append(node("p", `${field.name} · ${displayFieldValue(contact.fields[field.id])}`, "hint"));
         populate();
-        notice(
-          value === null ? "값을 제거했습니다." : "값을 저장했습니다. 검색 결과는 필터를 다시 적용하면 갱신됩니다.",
-        );
+        notice(value === null ? "값을 제거했습니다." : "값을 저장했습니다. 검색 결과는 필터를 다시 적용하면 갱신됩니다.");
       } finally {
         for (const control of editor.elements) control.disabled = false;
         if (generation === contactsGeneration) contactsSaving = false;

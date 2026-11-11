@@ -19,13 +19,7 @@ type Candidate = { flow_id: string; version_id: string; trigger_type: string; de
 // the batch's inbox rows and confirmations are never rolled back by it. Flow and version rows are read without a
 // lock: publish and enable lock the flow and then the connection, so a flow lock here could deadlock with them.
 export async function startDmTriggerFlow(client: PoolClient, message: InstagramMessage): Promise<boolean> {
-  if (
-    message.confirmationReplyId !== undefined ||
-    !SENDER.test(message.senderId) ||
-    message.messageId.length > 512 ||
-    message.text.includes("\u0000")
-  )
-    return false;
+  if (message.confirmationReplyId !== undefined || !SENDER.test(message.senderId) || message.messageId.length > 512 || message.text.includes("\u0000")) return false;
   // FOR SHARE like the other connection-scoped writes of ingestion, so a disconnect or a data deletion cannot
   // commit between these reads and the inserts.
   const connection = (
@@ -56,16 +50,7 @@ export async function startDmTriggerFlow(client: PoolClient, message: InstagramM
   const started = await client.query<{ id: string }>(
     `INSERT INTO instagram_dm_start_events(workspace_id,connection_id,message_id,sender_id,flow_id,flow_version_id,trigger_type,message_at)
      VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(connection_id,message_id) DO NOTHING RETURNING id::text`,
-    [
-      connection.workspace_id,
-      connection.id,
-      message.messageId,
-      message.senderId,
-      chosen.flow_id,
-      chosen.version_id,
-      chosen.trigger_type,
-      message.timestamp,
-    ],
+    [connection.workspace_id, connection.id, message.messageId, message.senderId, chosen.flow_id, chosen.version_id, chosen.trigger_type, message.timestamp],
   );
   const startEvent = started.rows[0];
   if (!startEvent) return false;
@@ -74,15 +59,7 @@ export async function startDmTriggerFlow(client: PoolClient, message: InstagramM
   const runs = await client.query<{ id: string }>(
     `INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,dm_start_event_id,status,failure_code)
      VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(flow_id,dm_start_event_id) DO NOTHING RETURNING id::text`,
-    [
-      connection.workspace_id,
-      connection.id,
-      chosen.flow_id,
-      chosen.version_id,
-      startEvent.id,
-      status,
-      plan.status === "failed" ? plan.failure_code : null,
-    ],
+    [connection.workspace_id, connection.id, chosen.flow_id, chosen.version_id, startEvent.id, status, plan.status === "failed" ? plan.failure_code : null],
   );
   const run = runs.rows[0];
   if (!run) return false;
@@ -96,14 +73,7 @@ export async function startDmTriggerFlow(client: PoolClient, message: InstagramM
     `INSERT INTO flow_step_runs(run_id,workspace_id,connection_id,seq,node_id,node_type,outcome)
      SELECT $1,$2,$3,step.seq-1,step.node_id,step.node_type,step.outcome
      FROM unnest($4::text[],$5::text[],$6::text[]) WITH ORDINALITY AS step(node_id,node_type,outcome,seq)`,
-    [
-      run.id,
-      connection.workspace_id,
-      connection.id,
-      plan.steps.map((step) => step.node_id),
-      plan.steps.map((step) => step.node_type),
-      plan.steps.map((step) => step.outcome),
-    ],
+    [run.id, connection.workspace_id, connection.id, plan.steps.map((step) => step.node_id), plan.steps.map((step) => step.node_type), plan.steps.map((step) => step.outcome)],
   );
   return true;
 }
@@ -116,19 +86,9 @@ export async function startDmTriggerFlow(client: PoolClient, message: InstagramM
 // {{comment.text}} would render empty instead of failing.
 export function dmPlan(document: FlowDocument): Extract<FlowPlan, { status: "message" | "ended" | "failed" }> {
   const changes = { tags: new Map<string, boolean>(), fields: new Map<string, unknown>() };
-  if (document.nodes.some((node) => node.type === "instagram_message" && /\{\{|\}\}/.test(String(node.config.text))))
-    return { status: "failed", steps: [], failure_code: "unsupported_node", changes };
-  const plan = planFlowRun(
-    document,
-    { tags: new Set(), fields: new Map() },
-    { commentText: "", writableFields: new Set() },
-  );
-  const unsupported =
-    plan.status === "waiting" ||
-    (plan.status === "message" && plan.wait_node_id !== undefined) ||
-    plan.webhooks !== undefined ||
-    plan.changes.tags.size > 0 ||
-    plan.changes.fields.size > 0;
+  if (document.nodes.some((node) => node.type === "instagram_message" && /\{\{|\}\}/.test(String(node.config.text)))) return { status: "failed", steps: [], failure_code: "unsupported_node", changes };
+  const plan = planFlowRun(document, { tags: new Set(), fields: new Map() }, { commentText: "", writableFields: new Set() });
+  const unsupported = plan.status === "waiting" || (plan.status === "message" && plan.wait_node_id !== undefined) || plan.webhooks !== undefined || plan.changes.tags.size > 0 || plan.changes.fields.size > 0;
   if (unsupported) return { status: "failed", steps: [], failure_code: "unsupported_node", changes };
   return plan as Extract<FlowPlan, { status: "message" | "ended" | "failed" }>;
 }

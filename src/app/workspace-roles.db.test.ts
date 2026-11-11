@@ -7,8 +7,7 @@ import { appApi } from "./api.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const ownerId = "11111111-1111-4111-8111-111111111111";
@@ -44,10 +43,7 @@ beforeEach(async () => {
      VALUES($1,$2,'account-own',true,'token')`,
     [connectionId, workspaceId],
   );
-  await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'city','text')", [
-    fieldId,
-    workspaceId,
-  ]);
+  await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'city','text')", [fieldId, workspaceId]);
   await pool.query(
     `INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,keywords,private_reply_text,enabled)
      VALUES($1,$2,$3,'1789','link','{link}','reply',false)`,
@@ -66,8 +62,7 @@ function request(actorId: string, method: string, path: string, body?: unknown) 
     }),
     apiEnv,
     () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: actorId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actorId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 
@@ -129,10 +124,7 @@ test("agents are refused the administrative routes that admins can reach", async
     assert.notEqual(allowed.status, 403, `${method} ${path} as admin`);
     assert.ok(allowed.status < 500, `${method} ${path} as admin returned ${allowed.status}`);
   }
-  assert.equal(
-    (await pool.query("SELECT active FROM instagram_connections WHERE id=$1", [connectionId])).rows[0].active,
-    false,
-  );
+  assert.equal((await pool.query("SELECT active FROM instagram_connections WHERE id=$1", [connectionId])).rows[0].active, false);
 });
 
 test("agents keep conversation, contact and read-only settings access", async () => {
@@ -193,19 +185,8 @@ test("the role migration replays, keeps one owner per workspace and lets members
   await pool.query(invites);
   await pool.query(migration);
   await pool.query(invites);
-  assert.equal(
-    (
-      await pool.query(
-        "SELECT count(*)::int AS count FROM pg_indexes WHERE indexname='workspace_members_one_owner_idx'",
-      )
-    ).rows[0].count,
-    0,
-  );
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS count FROM workspace_members WHERE workspace_id=$1", [workspaceId]))
-      .rows[0].count,
-    3,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM pg_indexes WHERE indexname='workspace_members_one_owner_idx'")).rows[0].count, 0);
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM workspace_members WHERE workspace_id=$1", [workspaceId])).rows[0].count, 3);
   await assert.rejects(pool.query("UPDATE workspace_members SET role='owner' WHERE user_id=$1", [adminId]), {
     code: "23505",
   });
@@ -214,8 +195,5 @@ test("the role migration replays, keeps one owner per workspace and lets members
   });
   await pool.query("INSERT INTO workspaces(id) VALUES($1)", [missingId]);
   await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,gen_random_uuid())", [missingId]);
-  assert.equal(
-    (await pool.query("SELECT role FROM workspace_members WHERE workspace_id=$1", [missingId])).rows[0].role,
-    "owner",
-  );
+  assert.equal((await pool.query("SELECT role FROM workspace_members WHERE workspace_id=$1", [missingId])).rows[0].role, "owner");
 });

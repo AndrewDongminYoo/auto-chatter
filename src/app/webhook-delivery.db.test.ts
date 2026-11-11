@@ -3,21 +3,13 @@ import { createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { after, afterEach, before, beforeEach, mock, test } from "node:test";
 import { Pool } from "pg";
-import {
-  deliverDueWebhooks,
-  recoverStaleWebhookDeliveries,
-  WEBHOOK_MAX_DELIVERIES_PER_RUN,
-  WEBHOOK_MAX_RESPONSE_BYTES,
-  WEBHOOK_USER_AGENT,
-  type WebhookDeliveryOptions,
-} from "./webhook-delivery.ts";
+import { deliverDueWebhooks, recoverStaleWebhookDeliveries, WEBHOOK_MAX_DELIVERIES_PER_RUN, WEBHOOK_MAX_RESPONSE_BYTES, WEBHOOK_USER_AGENT, type WebhookDeliveryOptions } from "./webhook-delivery.ts";
 import { createWebhookEndpoint, retireWebhookKey, rotateWebhookKey, setWebhookEndpointActive } from "./webhooks.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const user = { id: "11111111-1111-4111-8111-111111111111", email: "admin@example.test" };
@@ -46,10 +38,7 @@ beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1)", [workspaceId]);
   await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2)", [workspaceId, user.id]);
-  await pool.query(
-    "INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'owned-account',true)",
-    [connectionId, workspaceId],
-  );
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,'owned-account',true)", [connectionId, workspaceId]);
   await pool.query("INSERT INTO flows(id,workspace_id,name,draft) VALUES($1,$2,'Notify','{}')", [flowId, workspaceId]);
   await pool.query(
     `INSERT INTO flow_versions(id,flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,published_by)
@@ -88,15 +77,8 @@ async function tenant(name: string) {
   const version = crypto.randomUUID();
   await pool.query("INSERT INTO workspaces(id) VALUES($1)", [ids.workspaceId]);
   await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2)", [ids.workspaceId, owner.id]);
-  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,$3,true)", [
-    ids.connectionId,
-    ids.workspaceId,
-    `account-${name}`,
-  ]);
-  await pool.query("INSERT INTO flows(id,workspace_id,name,draft) VALUES($1,$2,'Notify','{}')", [
-    ids.flowId,
-    ids.workspaceId,
-  ]);
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES($1,$2,$3,true)", [ids.connectionId, ids.workspaceId, `account-${name}`]);
+  await pool.query("INSERT INTO flows(id,workspace_id,name,draft) VALUES($1,$2,'Notify','{}')", [ids.flowId, ids.workspaceId]);
   await pool.query(
     `INSERT INTO flow_versions(id,flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_media_id,published_by)
      VALUES($1,$2,$3,1,0,'{}',$4,'1789',$5)`,
@@ -123,17 +105,7 @@ async function delivery(endpointId: string, dueSecondsAgo = 1, owner?: Tenant): 
   await pool.query(
     `INSERT INTO webhook_deliveries(event_id,workspace_id,endpoint_id,connection_id,flow_id,flow_run_id,node_id,sender_id,payload,next_attempt_at)
      VALUES($1,$2,$3,$4,$5,$6,$7,'sender-1',$8,now()-make_interval(secs=>$9))`,
-    [
-      eventId,
-      target.workspaceId,
-      endpointId,
-      target.connectionId,
-      target.flowId,
-      target.runId,
-      `hook-${++nodeNumber}`,
-      JSON.stringify({ event_id: eventId, type: "flow.webhook", fields: { city: "PAYLOAD-SENTINEL" } }),
-      dueSecondsAgo,
-    ],
+    [eventId, target.workspaceId, endpointId, target.connectionId, target.flowId, target.runId, `hook-${++nodeNumber}`, JSON.stringify({ event_id: eventId, type: "flow.webhook", fields: { city: "PAYLOAD-SENTINEL" } }), dueSecondsAgo],
   );
   return eventId;
 }
@@ -343,30 +315,19 @@ test("the name is resolved again immediately before every request, also for a UR
   addresses = [publicAddress];
   await makeDue();
   assert.deepEqual(await deliver(fetchImpl, { resolve }), { attempted: 1, sent: 1 });
-  assert.deepEqual(order, [
-    "resolve rebind.example.test",
-    "request",
-    "resolve rebind.example.test",
-    "resolve rebind.example.test",
-    "request",
-  ]);
+  assert.deepEqual(order, ["resolve rebind.example.test", "request", "resolve rebind.example.test", "resolve rebind.example.test", "request"]);
 });
 
 test("a redirect is a failure and is never followed", async () => {
   const target = await endpoint();
   for (const status of [301, 302, 303, 307, 308]) {
     const eventId = await delivery(target.id);
-    const { calls, fetchImpl } = recorder(
-      () => new Response(null, { status, headers: { location: "https://127.0.0.1/internal" } }),
-    );
+    const { calls, fetchImpl } = recorder(() => new Response(null, { status, headers: { location: "https://127.0.0.1/internal" } }));
     assert.deepEqual(await deliver(fetchImpl), { attempted: 1, sent: 0 });
     assert.equal(calls.length, 1, String(status));
     assert.equal(calls[0]!.init.redirect, "manual");
     const stored = await row(eventId);
-    assert.deepEqual(
-      [stored.status, stored.failure_code, stored.last_status_code],
-      ["retry", "redirect_refused", status],
-    );
+    assert.deepEqual([stored.status, stored.failure_code, stored.last_status_code], ["retry", "redirect_refused", status]);
     await pool.query("UPDATE webhook_deliveries SET status='dead' WHERE event_id=$1", [eventId]);
   }
 });
@@ -459,9 +420,7 @@ test("at most 64 KB of the response is read and none of it is kept", async () =>
   // The stream may have one chunk queued ahead of the reader.
   assert.ok(produced >= 64 * 1024, String(produced));
   assert.ok(produced <= 64 * 1024 + 2 * chunk, String(produced));
-  const stored = await pool.query("SELECT to_jsonb(d)::text AS text FROM webhook_deliveries d WHERE event_id=$1", [
-    eventId,
-  ]);
+  const stored = await pool.query("SELECT to_jsonb(d)::text AS text FROM webhook_deliveries d WHERE event_id=$1", [eventId]);
   assert.ok(!stored.rows[0].text.includes("RRRR"));
   assert.equal((await row(eventId)).status, "sent");
 });
@@ -473,10 +432,7 @@ test("a failed delivery is retried after 1, 5, 30, 120 and 360 minutes and then 
   for (const [index, minutes] of [1, 5, 30, 120, 360].entries()) {
     assert.deepEqual(await deliver(fetchImpl), { attempted: 1, sent: 0 });
     const stored = await row(eventId);
-    assert.deepEqual(
-      [stored.status, stored.attempt_count, stored.failure_code, stored.last_status_code],
-      ["retry", index + 1, "http_error", 500],
-    );
+    assert.deepEqual([stored.status, stored.attempt_count, stored.failure_code, stored.last_status_code], ["retry", index + 1, "http_error", 500]);
     assert.ok(Math.abs(stored.wait_seconds - minutes * 60) <= 2, `${minutes} minutes, got ${stored.wait_seconds}s`);
     // Not due yet: nothing is attempted.
     assert.deepEqual(await deliver(fetchImpl), { attempted: 0, sent: 0 });
@@ -491,10 +447,7 @@ test("a failed delivery is retried after 1, 5, 30, 120 and 360 minutes and then 
   assert.deepEqual(await deliver(fetchImpl), { attempted: 0, sent: 0 });
   assert.equal(calls.length, 6);
   // Every attempt carried the same event ID.
-  assert.deepEqual(
-    [...new Set(calls.map((call) => new Headers(call.init.headers).get("x-autochatter-event-id")))],
-    [eventId],
-  );
+  assert.deepEqual([...new Set(calls.map((call) => new Headers(call.init.headers).get("x-autochatter-event-id")))], [eventId]);
 });
 
 test("a delivery left in sending for over 10 minutes returns to retry and counts as an attempt", async () => {
@@ -513,10 +466,7 @@ test("a delivery left in sending for over 10 minutes returns to retry and counts
   await claim(lastAttempt, 11, 5);
   assert.equal(await recoverStaleWebhookDeliveries(pool), 2);
   const recovered = await row(stale);
-  assert.deepEqual(
-    [recovered.status, recovered.attempt_count, recovered.failure_code],
-    ["retry", 1, "worker_interrupted"],
-  );
+  assert.deepEqual([recovered.status, recovered.attempt_count, recovered.failure_code], ["retry", 1, "worker_interrupted"]);
   assert.ok(Math.abs(recovered.wait_seconds - 60) <= 2, String(recovered.wait_seconds));
   assert.equal((await row(fresh)).status, "sending");
   const exhausted = await row(lastAttempt);
@@ -539,9 +489,7 @@ test("an attempt that lost its claim changes nothing", async () => {
     return new Response("ok");
   });
   assert.deepEqual(await deliver(fetchImpl, { correlationId: "run-1" }), { attempted: 1, sent: 0 });
-  const stored = (
-    await pool.query("SELECT status,attempt_id::text,payload IS NOT NULL AS kept FROM webhook_deliveries")
-  ).rows[0];
+  const stored = (await pool.query("SELECT status,attempt_id::text,payload IS NOT NULL AS kept FROM webhook_deliveries")).rows[0];
   assert.deepEqual(stored, { status: "sending", attempt_id: other, kept: true });
   assert.deepEqual(
     logCalls.map(([line]) => JSON.parse(String(line))),
@@ -643,10 +591,7 @@ test("one run attempts a bounded number of deliveries and stops claiming after i
     return new Response("ok");
   });
   assert.deepEqual(await deliver(slow.fetchImpl, { now: () => clock }), { attempted: 1, sent: 1 });
-  assert.equal(
-    (await pool.query("SELECT count(*)::int AS count FROM webhook_deliveries WHERE status='pending'")).rows[0].count,
-    2,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM webhook_deliveries WHERE status='pending'")).rows[0].count, 2);
 });
 
 test("a run claims no delivery once the invocation has fewer subrequests left than one attempt needs", async () => {
@@ -654,35 +599,16 @@ test("a run claims no delivery once the invocation has fewer subrequests left th
   const deliveries = [await delivery(target.id, 400), await delivery(target.id, 300)];
   const waiting = [await delivery(target.id, 200), await delivery(target.id, 100)];
   // The lookups go through the same fetch, so every subrequest of an attempt is counted.
-  const { calls, fetchImpl } = recorder((call) =>
-    call.url.startsWith("https://cloudflare-dns.com/")
-      ? Response.json(
-          new URL(call.url).searchParams.get("type") === "A"
-            ? { Status: 0, Answer: [{ type: 1, data: publicAddress }] }
-            : { Status: 0 },
-        )
-      : new Response("ok"),
-  );
+  const { calls, fetchImpl } = recorder((call) => (call.url.startsWith("https://cloudflare-dns.com/") ? Response.json(new URL(call.url).searchParams.get("type") === "A" ? { Status: 0, Answer: [{ type: 1, data: publicAddress }] } : { Status: 0 }) : new Response("ok")));
   const budget = 7;
-  assert.deepEqual(
-    await deliverDueWebhooks(pool, encryptionKey, { fetchImpl, subrequestsLeft: () => budget - calls.length }),
-    { attempted: 2, sent: 2 },
-  );
+  assert.deepEqual(await deliverDueWebhooks(pool, encryptionKey, { fetchImpl, subrequestsLeft: () => budget - calls.length }), { attempted: 2, sent: 2 });
   assert.equal(calls.length, 6);
   assert.deepEqual(await Promise.all(deliveries.map(async (eventId) => (await row(eventId)).status)), ["sent", "sent"]);
   // The rest was never claimed: it waits for the next run without spending an attempt.
-  assert.deepEqual(
-    (
-      await pool.query(
-        "SELECT status,attempt_count,attempt_id,failure_code FROM webhook_deliveries WHERE event_id=ANY($1) ORDER BY next_attempt_at",
-        [waiting],
-      )
-    ).rows,
-    [
-      { status: "pending", attempt_count: 0, attempt_id: null, failure_code: null },
-      { status: "pending", attempt_count: 0, attempt_id: null, failure_code: null },
-    ],
-  );
+  assert.deepEqual((await pool.query("SELECT status,attempt_count,attempt_id,failure_code FROM webhook_deliveries WHERE event_id=ANY($1) ORDER BY next_attempt_at", [waiting])).rows, [
+    { status: "pending", attempt_count: 0, attempt_id: null, failure_code: null },
+    { status: "pending", attempt_count: 0, attempt_id: null, failure_code: null },
+  ]);
 });
 
 test("a slow endpoint gets one attempt per run and the other endpoints keep the rest of the run", async () => {
@@ -701,15 +627,8 @@ test("a slow endpoint gets one attempt per run and the other endpoints keep the 
     calls.map((call) => new URL(call.url).hostname),
     ["slow.example.test", "fast.example.test", "fast.example.test"],
   );
-  assert.deepEqual(await Promise.all(slowDeliveries.map(async (eventId) => (await row(eventId)).status)), [
-    "retry",
-    "pending",
-    "pending",
-  ]);
-  assert.deepEqual(await Promise.all(fastDeliveries.map(async (eventId) => (await row(eventId)).status)), [
-    "sent",
-    "sent",
-  ]);
+  assert.deepEqual(await Promise.all(slowDeliveries.map(async (eventId) => (await row(eventId)).status)), ["retry", "pending", "pending"]);
+  assert.deepEqual(await Promise.all(fastDeliveries.map(async (eventId) => (await row(eventId)).status)), ["sent", "sent"]);
 });
 
 function eventIdsOf(calls: Call[]): string[] {
@@ -754,18 +673,7 @@ test("consecutive runs reach every workspace when more workspaces have due work 
   // The next run starts with the workspaces never attempted, then the one whose latest attempt is oldest.
   const second = recorder();
   await deliver(second.fetchImpl);
-  assert.deepEqual(second.calls.map(workspaceOf), [
-    "ws10",
-    "ws11",
-    "ws0",
-    "ws1",
-    "ws2",
-    "ws3",
-    "ws4",
-    "ws5",
-    "ws6",
-    "ws7",
-  ]);
+  assert.deepEqual(second.calls.map(workspaceOf), ["ws10", "ws11", "ws0", "ws1", "ws2", "ws3", "ws4", "ws5", "ws6", "ws7"]);
   const third = recorder();
   assert.deepEqual(await deliver(third.fetchImpl), { attempted: 4, sent: 4 });
   assert.deepEqual(third.calls.map(workspaceOf), ["ws8", "ws9", "ws10", "ws11"]);
@@ -815,11 +723,7 @@ test("overlapping runs attempt each due delivery of several workspaces once", as
 test("an endpoint that used its budget stays skipped when its workspace's turn comes again", async () => {
   const slow = await tenant("slow");
   const fast = await tenant("fast");
-  const slowDeliveries = [
-    await delivery(slow.endpointId, 300, slow),
-    await delivery(slow.endpointId, 200, slow),
-    await delivery(slow.endpointId, 100, slow),
-  ];
+  const slowDeliveries = [await delivery(slow.endpointId, 300, slow), await delivery(slow.endpointId, 200, slow), await delivery(slow.endpointId, 100, slow)];
   const fastDeliveries = [await delivery(fast.endpointId, 20, fast), await delivery(fast.endpointId, 10, fast)];
   let clock = 0;
   const { calls, fetchImpl } = recorder((call) => {
@@ -833,31 +737,18 @@ test("an endpoint that used its budget stays skipped when its workspace's turn c
     calls.map((call) => new URL(call.url).hostname),
     ["slow.example.test", "fast.example.test", "fast.example.test"],
   );
-  assert.deepEqual(await Promise.all(slowDeliveries.map(async (eventId) => (await row(eventId)).status)), [
-    "retry",
-    "pending",
-    "pending",
-  ]);
-  assert.deepEqual(await Promise.all(fastDeliveries.map(async (eventId) => (await row(eventId)).status)), [
-    "sent",
-    "sent",
-  ]);
+  assert.deepEqual(await Promise.all(slowDeliveries.map(async (eventId) => (await row(eventId)).status)), ["retry", "pending", "pending"]);
+  assert.deepEqual(await Promise.all(fastDeliveries.map(async (eventId) => (await row(eventId)).status)), ["sent", "sent"]);
 });
 
 test("the delivery fairness migration keeps its index when reapplied", async () => {
-  const migration = await readFile(
-    new URL("../../db/migrations/043_webhook_delivery_fairness.sql", import.meta.url),
-    "utf8",
-  );
+  const migration = await readFile(new URL("../../db/migrations/043_webhook_delivery_fairness.sql", import.meta.url), "utf8");
   await pool.query(migration);
   await pool.query(migration);
-  const index = await pool.query(
-    "SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND indexname='webhook_deliveries_workspace_attempt_idx'",
-  );
+  const index = await pool.query("SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND indexname='webhook_deliveries_workspace_attempt_idx'");
   assert.deepEqual(index.rows, [
     {
-      indexdef:
-        "CREATE INDEX webhook_deliveries_workspace_attempt_idx ON public.webhook_deliveries USING btree (workspace_id, attempt_started_at)",
+      indexdef: "CREATE INDEX webhook_deliveries_workspace_attempt_idx ON public.webhook_deliveries USING btree (workspace_id, attempt_started_at)",
     },
   ]);
 });
@@ -881,28 +772,9 @@ test("delivery logs carry fixed codes only: no URL, host, payload, secret or res
   });
   assert.deepEqual(
     lines.map((line) => `${line.event}:${line.code}`),
-    [
-      ...Array.from({ length: 5 }, () => "webhook_delivery_failed:http_error"),
-      "webhook_delivery_dead:http_error",
-      "webhook_delivery_failed:address_refused",
-    ],
+    [...Array.from({ length: 5 }, () => "webhook_delivery_failed:http_error"), "webhook_delivery_dead:http_error", "webhook_delivery_failed:address_refused"],
   );
-  for (const line of lines)
-    for (const key of Object.keys(line))
-      assert.ok(["event", "code", "correlation_id", "connection_id"].includes(key), key);
+  for (const line of lines) for (const key of Object.keys(line)) assert.ok(["event", "code", "correlation_id", "connection_id"].includes(key), key);
   const text = JSON.stringify(logCalls);
-  for (const forbidden of [
-    "hooks.example.test",
-    "https:",
-    "URL-SENTINEL",
-    "PAYLOAD-SENTINEL",
-    "RESPONSE-SENTINEL",
-    "COMMENT-SENTINEL",
-    "sender-1",
-    target.secret,
-    "whsec_",
-    eventId,
-    "10.0.0.5",
-  ])
-    assert.ok(!text.includes(forbidden), forbidden);
+  for (const forbidden of ["hooks.example.test", "https:", "URL-SENTINEL", "PAYLOAD-SENTINEL", "RESPONSE-SENTINEL", "COMMENT-SENTINEL", "sender-1", target.secret, "whsec_", eventId, "10.0.0.5"]) assert.ok(!text.includes(forbidden), forbidden);
 });

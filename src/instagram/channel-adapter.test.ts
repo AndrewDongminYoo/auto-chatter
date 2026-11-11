@@ -50,18 +50,11 @@ test("Instagram channel event seam preserves parser content ordering and postbac
     comments: parseCommentEvents(body),
     messages: parseMessageEvents(body),
   });
-  assert.throws(() =>
-    partitionInstagramEvents([{ ...events[0]!, account: { channel: "test-only", accountId: "123" } }]),
-  );
+  assert.throws(() => partitionInstagramEvents([{ ...events[0]!, account: { channel: "test-only", accountId: "123" } }]));
   assert.throws(() => partitionInstagramEvents([{ ...events[0]!, actor: { kind: "dm_recipient", value: "456" } }]));
   assert.throws(() => partitionInstagramEvents([{ ...events[1]!, receipt: { family: "comment", providerId: "m1" } }]));
   assert.deepEqual(instagramAdapter.decodeWebhook(bytes({ object: "instagram", entry: [] })), []);
-  for (const body of [
-    bytes({ object: "other", entry: [] }),
-    bytes({ object: "instagram", entry: [{ id: "123", changes: [{ field: "comments", value: {} }] }] }),
-    bytes(null),
-  ])
-    assert.throws(() => instagramAdapter.decodeWebhook(body));
+  for (const body of [bytes({ object: "other", entry: [] }), bytes({ object: "instagram", entry: [{ id: "123", changes: [{ field: "comments", value: {} }] }] }), bytes(null)]) assert.throws(() => instagramAdapter.decodeWebhook(body));
 });
 
 test("Instagram capability variants describe implemented support without provider authorization", () => {
@@ -72,8 +65,7 @@ test("Instagram capability variants describe implemented support without provide
     assert.equal(checkCapability(caps, "follow_reply", "text"), surface !== "node_facebook");
     assert.equal(caps.templates.confirmation_postback, surface !== "node_facebook");
     assert.equal(caps.templates.approved_message, false);
-    for (const type of ["attachment", "provider_template"])
-      assert.equal(checkCapability(caps, "manual_reply", type), false);
+    for (const type of ["attachment", "provider_template"]) assert.equal(checkCapability(caps, "manual_reply", type), false);
     assert.equal(checkCapability(caps, "marketing", "text"), surface === "cloudflare_oauth");
     assert.equal(checkCapability(caps, "marketing", "attachment"), false);
     assert.equal(Object.isFrozen(caps.operations.manual_reply.content_types), true);
@@ -85,8 +77,7 @@ test("Instagram outcome classification preserves known no-send refusals and ambi
     kind: "accepted",
     messageId: " message ",
   });
-  for (const value of [null, {}, { messageId: " " }, { messageId: 1 }])
-    assert.throws(() => instagramAdapter.acceptSendResult(value));
+  for (const value of [null, {}, { messageId: " " }, { messageId: 1 }]) assert.throws(() => instagramAdapter.acceptSendResult(value));
   assert.deepEqual(instagramAdapter.classifySendError(new PreSendVerificationError("retry", "token_rotated")), {
     kind: "not_attempted",
     disposition: "retry",
@@ -109,10 +100,5 @@ test("Instagram outcome classification preserves known no-send refusals and ambi
     code: "meta_error_10",
     retryAfterSeconds: null,
   });
-  for (const error of [
-    new Error("private provider body"),
-    { name: "ProviderRejectedError", failureCode: "token-secret" },
-    null,
-  ])
-    assert.deepEqual(instagramAdapter.classifySendError(error), { kind: "unknown", code: "send_outcome_unknown" });
+  for (const error of [new Error("private provider body"), { name: "ProviderRejectedError", failureCode: "token-secret" }, null]) assert.deepEqual(instagramAdapter.classifySendError(error), { kind: "unknown", code: "send_outcome_unknown" });
 });

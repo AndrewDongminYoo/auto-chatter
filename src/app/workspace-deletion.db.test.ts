@@ -8,8 +8,7 @@ import { seedWorkspace } from "./workspace-fixture.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const userId = "11111111-1111-4111-8111-111111111111";
@@ -29,10 +28,7 @@ beforeEach(async () => {
   await seedWorkspace(pool, workspaceId, userId, connectionId, "account-own");
   await seedWorkspace(pool, otherWorkspaceId, otherUserId, foreignConnectionId, "account-foreign");
   // Disconnected, as the deletion requires; the other workspace stays connected.
-  await pool.query(
-    "UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1",
-    [connectionId],
-  );
+  await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1", [connectionId]);
 });
 
 after(async () => pool.end());
@@ -43,24 +39,17 @@ async function counts(workspace: string, connection: string) {
     // The workspace row itself is counted below.
     if (scope === "self") continue;
     const [column, value] = scope === "workspace" ? ["workspace_id", workspace] : ["connection_id", connection];
-    result[table] = Number(
-      (await pool.query(`SELECT count(*) FROM ${table} WHERE ${column}=$1`, [value])).rows[0].count,
-    );
+    result[table] = Number((await pool.query(`SELECT count(*) FROM ${table} WHERE ${column}=$1`, [value])).rows[0].count);
   }
   for (const table of ["workspaces", "instagram_oauth_states"]) {
     const column = table === "workspaces" ? "id" : "workspace_id";
-    result[table] = Number(
-      (await pool.query(`SELECT count(*) FROM ${table} WHERE ${column}=$1`, [workspace])).rows[0].count,
-    );
+    result[table] = Number((await pool.query(`SELECT count(*) FROM ${table} WHERE ${column}=$1`, [workspace])).rows[0].count);
   }
   return result;
 }
 
 function deleteWorkspace(workspace = workspaceId) {
-  return pool.query<{ result: Record<string, unknown> }>("SELECT public.delete_workspace_data($1,$2) AS result", [
-    workspace,
-    operatorId,
-  ]);
+  return pool.query<{ result: Record<string, unknown> }>("SELECT public.delete_workspace_data($1,$2) AS result", [workspace, operatorId]);
 }
 
 test("deletes every record of the workspace, including opt-outs, and leaves other workspaces intact", async () => {
@@ -92,10 +81,7 @@ test("deletes every record of the workspace, including opt-outs, and leaves othe
   assert.doesNotMatch(JSON.stringify(evidence.rows[0]), new RegExp(userId));
   // The Instagram account can be connected again by another workspace.
   await pool.query("INSERT INTO workspaces(id) VALUES(gen_random_uuid())");
-  await pool.query(
-    "INSERT INTO instagram_connections(id,workspace_id,account_id) SELECT gen_random_uuid(),id,'account-own' FROM workspaces WHERE id<>$1",
-    [otherWorkspaceId],
-  );
+  await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) SELECT gen_random_uuid(),id,'account-own' FROM workspaces WHERE id<>$1", [otherWorkspaceId]);
 });
 
 test("refuses while a connection is still connected and deletes nothing", async () => {
@@ -104,10 +90,7 @@ test("refuses while a connection is still connected and deletes nothing", async 
     const before = await counts(workspaceId, connectionId);
     await assert.rejects(deleteWorkspace(), { code: "AC002" });
     assert.deepEqual(await counts(workspaceId, connectionId), before);
-    await pool.query(
-      "UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1",
-      [connectionId],
-    );
+    await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1", [connectionId]);
   }
 });
 
@@ -117,16 +100,11 @@ test("refuses while any delivery is sending and deletes nothing", async () => {
     ["instagram_follow_conversations", "connection_id", connectionId],
     ["instagram_manual_replies", "workspace_id", workspaceId],
   ] as const) {
-    await pool.query(
-      `UPDATE ${table} SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE ${column}=$1`,
-      [value],
-    );
+    await pool.query(`UPDATE ${table} SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE ${column}=$1`, [value]);
     const before = await counts(workspaceId, connectionId);
     await assert.rejects(deleteWorkspace(), { code: "AC003" }, table);
     assert.deepEqual(await counts(workspaceId, connectionId), before);
-    await pool.query(`UPDATE ${table} SET status='failed',attempt_id=NULL,attempt_started_at=NULL WHERE ${column}=$1`, [
-      value,
-    ]);
+    await pool.query(`UPDATE ${table} SET status='failed',attempt_id=NULL,attempt_started_at=NULL WHERE ${column}=$1`, [value]);
   }
 });
 
@@ -135,10 +113,7 @@ test("waits for an uncommitted claim and refuses once it commits as sending", as
   const claim = await pool.connect();
   try {
     await claim.query("BEGIN");
-    await claim.query(
-      "UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE workspace_id=$1",
-      [workspaceId],
-    );
+    await claim.query("UPDATE private_reply_outbox SET status='sending',attempt_id=gen_random_uuid(),attempt_started_at=now() WHERE workspace_id=$1", [workspaceId]);
     const outcome = deleteWorkspace().then(
       () => "deleted",
       (error: { code?: string }) => error.code,
@@ -164,8 +139,7 @@ test("rejects an unknown workspace and a missing administrator", async () => {
 });
 
 test("refuses instead of deadlocking with a follow-gated send being finalized", async () => {
-  const rule = (await pool.query("SELECT id FROM instagram_comment_rules WHERE connection_id=$1", [connectionId]))
-    .rows[0].id;
+  const rule = (await pool.query("SELECT id FROM instagram_comment_rules WHERE connection_id=$1", [connectionId])).rows[0].id;
   const event = (
     await pool.query(
       `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
@@ -183,10 +157,7 @@ test("refuses instead of deadlocking with a follow-gated send being finalized", 
   const finalize = await pool.connect();
   try {
     await finalize.query("BEGIN");
-    await finalize.query(
-      "UPDATE private_reply_outbox SET status='sent',attempt_id=NULL,attempt_started_at=NULL,sent_at=now(),recipient_id='901' WHERE id=$1",
-      [reply],
-    );
+    await finalize.query("UPDATE private_reply_outbox SET status='sent',attempt_id=NULL,attempt_started_at=NULL,sent_at=now(),recipient_id='901' WHERE id=$1", [reply]);
     const outcome = deleteWorkspace().then(
       () => "deleted",
       (error: { code?: string }) => error.code,

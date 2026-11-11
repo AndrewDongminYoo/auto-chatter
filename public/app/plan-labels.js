@@ -25,10 +25,7 @@ function planConnectionsFull(entitlements) {
 function planCampaignUsage(entitlements) {
   const count = (value) => Number(value).toLocaleString("ko-KR");
   const { usage, limits } = entitlements;
-  if (!limits.campaign_sends_per_month)
-    return usage.campaign_sends
-      ? `캠페인 발송 불가(이번 달 ${count(usage.campaign_sends)}건 발송)`
-      : "캠페인 발송 불가";
+  if (!limits.campaign_sends_per_month) return usage.campaign_sends ? `캠페인 발송 불가(이번 달 ${count(usage.campaign_sends)}건 발송)` : "캠페인 발송 불가";
   return `이번 달 캠페인 발송 ${count(usage.campaign_sends)}/${count(limits.campaign_sends_per_month)}건`;
 }
 
@@ -36,12 +33,7 @@ function planCampaignUsage(entitlements) {
 function planSummary(entitlements) {
   if (!entitlements) return "";
   const { usage, limits } = entitlements;
-  return [
-    `요금제: ${planName(entitlements.plan)}`,
-    `멤버 ${usage.seats}/${limits.seats}명(대기 중인 초대 포함)`,
-    `Instagram 계정 ${usage.connections}/${limits.connections}개`,
-    planCampaignUsage(entitlements),
-  ].join(" · ");
+  return [`요금제: ${planName(entitlements.plan)}`, `멤버 ${usage.seats}/${limits.seats}명(대기 중인 초대 포함)`, `Instagram 계정 ${usage.connections}/${limits.connections}개`, planCampaignUsage(entitlements)].join(" · ");
 }
 
 function planSeatHelp(entitlements) {

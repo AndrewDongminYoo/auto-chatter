@@ -12,8 +12,7 @@ import type { InstagramMessage } from "../instagram/message-events.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const owner = { id: "11111111-1111-4111-8111-111111111111", email: "owner@example.test" };
@@ -48,25 +47,11 @@ before(async () => {
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces, workspace_deletion_records CASCADE");
   // The other workspace invites a member in the move check below, so it needs a second seat.
-  await pool.query("INSERT INTO workspaces(id,plan) VALUES($1,'free'),($2,'essential')", [
-    workspaceId,
-    otherWorkspaceId,
-  ]);
+  await pool.query("INSERT INTO workspaces(id,plan) VALUES($1,'free'),($2,'essential')", [workspaceId, otherWorkspaceId]);
   await pool.query(
     `INSERT INTO workspace_members(workspace_id,user_id,role,email)
      VALUES($1,$2,'owner',$3),($1,$4,'admin',$5),($1,$6,'agent',$7),($8,$9,'owner',$10)`,
-    [
-      workspaceId,
-      owner.id,
-      owner.email,
-      admin.id,
-      admin.email,
-      agent.id,
-      agent.email,
-      otherWorkspaceId,
-      outsider.id,
-      outsider.email,
-    ],
+    [workspaceId, owner.id, owner.email, admin.id, admin.email, agent.id, agent.email, otherWorkspaceId, outsider.id, outsider.email],
   );
   // Only an active connection with the inbox on stores DMs, so only then do rules apply.
   await pool.query(
@@ -81,14 +66,7 @@ after(async () => pool.end());
 
 type Connect = () => Promise<unknown>;
 
-function request(
-  actor: Actor,
-  method: string,
-  path: string,
-  body?: unknown,
-  connect: Connect = pool.connect.bind(pool),
-  origin = "https://app.test",
-) {
+function request(actor: Actor, method: string, path: string, body?: unknown, connect: Connect = pool.connect.bind(pool), origin = "https://app.test") {
   return appApi(
     new Request(`https://app.test${path}`, {
       method,
@@ -112,24 +90,16 @@ async function errorCode(response: Response, status: number): Promise<string> {
 }
 
 async function label(name: string, workspace = workspaceId): Promise<string> {
-  return (
-    await pool.query("INSERT INTO instagram_inbox_labels(workspace_id,name,created_by) VALUES($1,$2,$3) RETURNING id", [
-      workspace,
-      name,
-      admin.id,
-    ])
-  ).rows[0].id;
+  return (await pool.query("INSERT INTO instagram_inbox_labels(workspace_id,name,created_by) VALUES($1,$2,$3) RETURNING id", [workspace, name, admin.id])).rows[0].id;
 }
 
 const createRule = (actor: Actor, input: unknown) => request(actor, "POST", "/api/inbox/label-rules", input);
 async function rule(labelId: string, keywords: string[], extra: Record<string, unknown> = {}): Promise<Rule> {
   return body<Rule>(await createRule(admin, { label_id: labelId, match_mode: "contains", keywords, ...extra }), 201);
 }
-const editRule = (actor: Actor, id: string, input: unknown) =>
-  request(actor, "PATCH", `/api/inbox/label-rules/${id}`, input);
+const editRule = (actor: Actor, id: string, input: unknown) => request(actor, "PATCH", `/api/inbox/label-rules/${id}`, input);
 const archiveRule = (actor: Actor, id: string) => request(actor, "DELETE", `/api/inbox/label-rules/${id}`);
-const listRules = async () =>
-  (await body<{ rules: Rule[] }>(await request(admin, "GET", "/api/inbox/label-rules"), 200)).rules;
+const listRules = async () => (await body<{ rules: Rule[] }>(await request(admin, "GET", "/api/inbox/label-rules"), 200)).rules;
 
 let messageSeq = 0;
 function dm(sender: string, text: string, extra: Partial<InstagramMessage> = {}): InstagramMessage {
@@ -145,12 +115,9 @@ function dm(sender: string, text: string, extra: Partial<InstagramMessage> = {})
 }
 
 const labelsPath = (recipient: string) => `/api/inbox/conversations/${connectionId}/${recipient}/labels`;
-const putLabels = (actor: Actor, recipient: string, ids: string[], expected: number) =>
-  request(actor, "PUT", labelsPath(recipient), { expected_version: expected, label_ids: ids });
+const putLabels = (actor: Actor, recipient: string, ids: string[], expected: number) => request(actor, "PUT", labelsPath(recipient), { expected_version: expected, label_ids: ids });
 
-async function labelSet(
-  recipient: string,
-): Promise<{ label_ids: string[]; version: number; updated_by: string | null }> {
+async function labelSet(recipient: string): Promise<{ label_ids: string[]; version: number; updated_by: string | null }> {
   return (
     await pool.query(
       `SELECT label_ids::text[] AS label_ids,version,updated_by FROM instagram_inbox_conversation_labels
@@ -169,9 +136,7 @@ async function events(recipient?: string) {
   ).rows;
 }
 async function storedMessages(recipient: string): Promise<number> {
-  return (
-    await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_messages WHERE recipient_id=$1", [recipient])
-  ).rows[0].count;
+  return (await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_messages WHERE recipient_id=$1", [recipient])).rows[0].count;
 }
 
 // Returns once `operation` either finished or `count` backends wait for a lock, so a missing lock fails a value
@@ -180,9 +145,7 @@ async function settledOrWaiting(operation: Promise<unknown>, count = 1) {
   let settled = false;
   void operation.finally(() => (settled = true)).catch(() => undefined);
   for (let attempt = 0; attempt < 200 && !settled; attempt += 1) {
-    const waiting = await pool.query(
-      "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()",
-    );
+    const waiting = await pool.query("SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()");
     if (waiting.rows[0].waiting >= count) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -246,17 +209,9 @@ test("admins create, list, change and archive rules; keywords are stored the way
       updated_at: (created as unknown as { updated_at: string }).updated_at,
     },
   );
-  const changed = await body<Rule>(
-    await editRule(owner, created.id, { expected_version: 1, label_id: vip, match_mode: "exact", keywords: ["vip"] }),
-    200,
-  );
-  assert.deepEqual(
-    [changed.label.id, changed.match_mode, changed.keywords, changed.excluded_keywords, changed.version],
-    [vip, "exact", ["vip"], [], 2],
-  );
-  const audit = (
-    await pool.query("SELECT created_by,updated_by FROM instagram_inbox_label_rules WHERE id=$1", [created.id])
-  ).rows[0];
+  const changed = await body<Rule>(await editRule(owner, created.id, { expected_version: 1, label_id: vip, match_mode: "exact", keywords: ["vip"] }), 200);
+  assert.deepEqual([changed.label.id, changed.match_mode, changed.keywords, changed.excluded_keywords, changed.version], [vip, "exact", ["vip"], [], 2]);
+  const audit = (await pool.query("SELECT created_by,updated_by FROM instagram_inbox_label_rules WHERE id=$1", [created.id])).rows[0];
   assert.deepEqual(audit, { created_by: admin.id, updated_by: owner.id });
   const second = await rule(refund, ["환불"]);
   const archived = await body<Rule>(await archiveRule(admin, created.id), 200);
@@ -271,17 +226,8 @@ test("admins create, list, change and archive rules; keywords are stored the way
       [created.id, true],
     ],
   );
-  assert.equal(
-    await errorCode(
-      await editRule(admin, created.id, { expected_version: 3, label_id: vip, match_mode: "exact", keywords: ["x"] }),
-      409,
-    ),
-    "label_rule_archived",
-  );
-  assert.equal(
-    await errorCode(await archiveRule(admin, "abababab-abab-4bab-8bab-abababababab"), 404),
-    "label_rule_not_found",
-  );
+  assert.equal(await errorCode(await editRule(admin, created.id, { expected_version: 3, label_id: vip, match_mode: "exact", keywords: ["x"] }), 409), "label_rule_archived");
+  assert.equal(await errorCode(await archiveRule(admin, "abababab-abab-4bab-8bab-abababababab"), 404), "label_rule_not_found");
 });
 
 test("rule requests are admin-only, same-origin, validated and scoped to the workspace", async () => {
@@ -291,10 +237,7 @@ test("rule requests are admin-only, same-origin, validated and scoped to the wor
   assert.equal(await errorCode(await request(agent, "GET", "/api/inbox/label-rules"), 403), "role_forbidden");
   assert.equal(await errorCode(await createRule(agent, valid), 403), "role_forbidden");
   assert.equal(await errorCode(await createRule(stranger, valid), 403), "workspace_required");
-  assert.equal(
-    await errorCode(await request(admin, "POST", "/api/inbox/label-rules", valid, undefined, "https://evil.test"), 403),
-    "origin_rejected",
-  );
+  assert.equal(await errorCode(await request(admin, "POST", "/api/inbox/label-rules", valid, undefined, "https://evil.test"), 403), "origin_rejected");
   const invalid: [unknown, string][] = [
     [{ ...valid, match_mode: "all" }, "invalid_label_rule"],
     [{ ...valid, label_id: "not-a-uuid" }, "invalid_label_rule"],
@@ -327,10 +270,7 @@ test("rule requests are admin-only, same-origin, validated and scoped to the wor
       [otherWorkspaceId, foreign, outsider.id],
     )
   ).rows[0].id;
-  assert.equal(
-    await errorCode(await editRule(admin, theirs, { ...valid, expected_version: 1 }), 404),
-    "label_rule_not_found",
-  );
+  assert.equal(await errorCode(await editRule(admin, theirs, { ...valid, expected_version: 1 }), 404), "label_rule_not_found");
   assert.equal(await errorCode(await archiveRule(admin, theirs), 404), "label_rule_not_found");
   assert.equal(await errorCode(await editRule(admin, theirs, { ...valid }), 400), "invalid_label_rule");
   assert.deepEqual(
@@ -344,10 +284,7 @@ test("a rule's label must be active when the rule is written; a label archived l
   const vip = await label("vip");
   const created = await rule(refund, ["환불"]);
   await pool.query("UPDATE instagram_inbox_labels SET archived=true WHERE id=$1", [vip]);
-  assert.equal(
-    await errorCode(await createRule(admin, { label_id: vip, match_mode: "contains", keywords: ["x"] }), 409),
-    "label_archived",
-  );
+  assert.equal(await errorCode(await createRule(admin, { label_id: vip, match_mode: "contains", keywords: ["x"] }), 409), "label_archived");
   assert.equal(
     await errorCode(
       await editRule(admin, created.id, {
@@ -439,10 +376,7 @@ test("a workspace has at most 50 active rules, and concurrent creations at the l
   const input = { label_id: refund, match_mode: "contains", keywords: ["last"] };
   const held = heldRequest(admin, "POST", "/api/inbox/label-rules", input);
   try {
-    await Promise.race([
-      held.atCommit,
-      held.response.then((response) => assert.fail(`finished before COMMIT with ${response.status}`)),
-    ]);
+    await Promise.race([held.atCommit, held.response.then((response) => assert.fail(`finished before COMMIT with ${response.status}`))]);
     let settled = false;
     const second = createRule(owner, input).finally(() => (settled = true));
     await settledOrWaiting(second);
@@ -495,10 +429,7 @@ test("matching uses contains and exact with the comment-rule normalization, excl
   for (const sender of ["503", "504", "507"]) assert.equal(await labelSet(sender), undefined);
   assert.deepEqual(await labelSet("501"), { label_ids: [refund], version: 1, updated_by: null });
   // The label set reads like a member's change, so the inbox shows the label.
-  const read = await body<{ label_set: LabelSet }>(
-    await request(agent, "GET", `/api/connections/${connectionId}/inbox/501`),
-    200,
-  );
+  const read = await body<{ label_set: LabelSet }>(await request(agent, "GET", `/api/connections/${connectionId}/inbox/501`), 200);
   assert.deepEqual(read.label_set, { version: 1, labels: [{ id: refund, name: "환불", archived: false }] });
 });
 
@@ -526,14 +457,7 @@ test("rules apply only to DMs stored after them, and a redelivered DM applies no
   );
   // DMs to a connection whose inbox is off are not stored, so no rule applies to them.
   await ingestMessages(pool, [dm("456", "환불", { accountId: "124" })]);
-  assert.equal(
-    (
-      await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_label_events WHERE connection_id=$1", [
-        secondConnectionId,
-      ])
-    ).rows[0].count,
-    0,
-  );
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_label_events WHERE connection_id=$1", [secondConnectionId])).rows[0].count, 0);
 });
 
 test("a label a member removed is never added back by a rule, but a member can add it back", async () => {
@@ -603,9 +527,7 @@ test("several matching rules write one version and one audit row naming the firs
   const ruleC = await rule(c, ["환불"]);
   assert.notEqual(ruleB2.id, ruleB.id);
   await ingestMessages(pool, [dm("456", "환불")]);
-  assert.deepEqual(await events("456"), [
-    { recipient_id: "456", version: 1, added: [a, b, c], removed: [], actor_id: null, rule_id: ruleA.id },
-  ]);
+  assert.deepEqual(await events("456"), [{ recipient_id: "456", version: 1, added: [a, b, c], removed: [], actor_id: null, rule_id: ruleA.id }]);
   // The change names the first matching rule even when that rule's label is already there.
   await pool.query(
     `INSERT INTO instagram_inbox_conversation_labels(workspace_id,connection_id,recipient_id,label_ids,version)
@@ -740,16 +662,10 @@ test("an auto-label queues behind person deletion instead of deadlocking", async
   try {
     await ingestion.query("BEGIN");
     await storeInboxMessage(ingestion, dm("456", "환불"), new Date());
-    const deletion = pool
-      .query("SELECT public.delete_person_data($1,$2,$3,'dm_recipient','456') AS result", [
-        workspaceId,
-        connectionId,
-        owner.id,
-      ])
-      .then(
-        (result) => result.rows[0].result,
-        (error: unknown) => error,
-      );
+    const deletion = pool.query("SELECT public.delete_person_data($1,$2,$3,'dm_recipient','456') AS result", [workspaceId, connectionId, owner.id]).then(
+      (result) => result.rows[0].result,
+      (error: unknown) => error,
+    );
     await settledOrWaiting(deletion);
     // Later in the same batch, ingestion takes the connection FOR SHARE again (sendingConnection, the reply wait).
     await ingestion.query("SELECT 1 FROM instagram_connections WHERE id=$1 FOR SHARE", [connectionId]);
@@ -771,29 +687,16 @@ test("connection and person deletion remove rule-made label changes and keep the
   await rule(refund, ["환불"]);
   await ingestMessages(pool, [dm("456", "환불"), dm("457", "환불")]);
   assert.equal((await events()).length, 2);
-  const person = (
-    await pool.query("SELECT public.delete_person_data($1,$2,$3,'dm_recipient','456') AS result", [
-      workspaceId,
-      connectionId,
-      owner.id,
-    ])
-  ).rows[0].result;
+  const person = (await pool.query("SELECT public.delete_person_data($1,$2,$3,'dm_recipient','456') AS result", [workspaceId, connectionId, owner.id])).rows[0].result;
   assert.equal(person.deleted_counts.instagram_inbox_label_events, 1);
   assert.equal(person.deleted_counts.instagram_inbox_label_rules, undefined);
   await pool.query("UPDATE instagram_connections SET active=false WHERE workspace_id=$1", [workspaceId]);
-  const connection = (
-    await pool.query("SELECT public.delete_connection_data($1,$2,$3,'123') AS result", [
-      workspaceId,
-      connectionId,
-      owner.id,
-    ])
-  ).rows[0].result;
+  const connection = (await pool.query("SELECT public.delete_connection_data($1,$2,$3,'123') AS result", [workspaceId, connectionId, owner.id])).rows[0].result;
   assert.equal(connection.deleted_counts.instagram_inbox_label_events, 1);
   assert.equal(connection.deleted_counts.instagram_inbox_label_rules, undefined);
   assert.deepEqual(await events(), []);
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_label_rules")).rows[0].count, 1);
-  const workspace = (await pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [workspaceId, owner.id]))
-    .rows[0].result;
+  const workspace = (await pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [workspaceId, owner.id])).rows[0].result;
   assert.equal(workspace.deleted_counts.instagram_inbox_label_rules, 1);
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_label_rules")).rows[0].count, 0);
 });
@@ -811,9 +714,7 @@ test("migration 035 replays, the export lists the rules, and a rule alone keeps 
   await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
   const current = await functions();
   assert.equal(current.length, 3);
-  const removesRules = Object.fromEntries(
-    current.map(({ proname, body: text }) => [proname, /DELETE FROM public\.instagram_inbox_label_rules\b/.test(text)]),
-  );
+  const removesRules = Object.fromEntries(current.map(({ proname, body: text }) => [proname, /DELETE FROM public\.instagram_inbox_label_rules\b/.test(text)]));
   assert.deepEqual(removesRules, {
     delete_connection_data: false,
     delete_person_data: false,
@@ -899,14 +800,9 @@ test("migration 035 replays, the export lists the rules, and a rule alone keeps 
 
   // The move check of an accepted invite: a workspace that holds only a rule is not empty. The label is skipped
   // (replica mode skips foreign key checks), so that the rule is all the workspace holds.
-  const invited = await body<{ link: string }>(
-    await request(outsider, "POST", "/api/workspace/invites", { email: stranger.email, role: "agent" }),
-    201,
-  );
+  const invited = await body<{ link: string }>(await request(outsider, "POST", "/api/workspace/invites", { email: stranger.email, role: "agent" }), 201);
   await body(await request(stranger, "POST", "/api/workspace"), 200);
-  const strangerWorkspace = (
-    await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [stranger.id])
-  ).rows[0].workspace_id;
+  const strangerWorkspace = (await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [stranger.id])).rows[0].workspace_id;
   const client = await pool.connect();
   try {
     await client.query("SET session_replication_role=replica");
@@ -920,8 +816,5 @@ test("migration 035 replays, the export lists the rules, and a rule alone keeps 
     client.release();
   }
   const token = invited.link.split("#invite=")[1]!;
-  assert.equal(
-    await errorCode(await request(stranger, "POST", "/api/invites/accept", { token }), 409),
-    "workspace_not_empty",
-  );
+  assert.equal(await errorCode(await request(stranger, "POST", "/api/invites/accept", { token }), 409), "workspace_not_empty");
 });

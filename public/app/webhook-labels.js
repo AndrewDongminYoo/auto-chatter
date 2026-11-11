@@ -36,9 +36,7 @@ function webhookAttemptSummary(delivery) {
   if (!delivery.attempt_count && !delivery.failure_code) return "아직 시도하지 않았습니다";
   return [
     `시도 ${delivery.attempt_count}회`,
-    delivery.last_status_code === null || delivery.last_status_code === undefined
-      ? "HTTP 응답 없음"
-      : `마지막 HTTP 상태 ${delivery.last_status_code}`,
+    delivery.last_status_code === null || delivery.last_status_code === undefined ? "HTTP 응답 없음" : `마지막 HTTP 상태 ${delivery.last_status_code}`,
     ...(delivery.failure_code ? [`실패 사유: ${webhookFailureLabel(delivery.failure_code)}`] : []),
   ].join(" · ");
 }

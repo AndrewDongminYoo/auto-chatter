@@ -9,8 +9,7 @@ import { processNextPrivateReply, type PrivateReplyTransport } from "../instagra
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
 const testUrl = new URL(databaseUrl);
-if (!["localhost", "127.0.0.1"].includes(testUrl.hostname) || testUrl.pathname !== "/automations_test")
-  throw new Error("TEST_DATABASE_URL must point at the local automations_test database");
+if (!["localhost", "127.0.0.1"].includes(testUrl.hostname) || testUrl.pathname !== "/automations_test") throw new Error("TEST_DATABASE_URL must point at the local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const ownerId = "11111111-1111-4111-8111-111111111111";
@@ -52,8 +51,7 @@ function request(actorId: string, method: string, path: string, body?: unknown, 
     }),
     apiEnv,
     () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: actorId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actorId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 
@@ -94,40 +92,20 @@ test("admins and owners change the time zone, agents only read it", async () => 
 });
 
 test("only time zone names PostgreSQL knows are stored, compared case-sensitively", async () => {
-  for (const time_zone of [
-    "asia/seoul",
-    "Mars/Olympus",
-    "",
-    " Asia/Seoul",
-    "+09:00",
-    "KST",
-    "x".repeat(101),
-    9,
-    null,
-  ]) {
+  for (const time_zone of ["asia/seoul", "Mars/Olympus", "", " Asia/Seoul", "+09:00", "KST", "x".repeat(101), 9, null]) {
     const response = await request(adminId, "PUT", "/api/workspace/settings", { time_zone });
     assert.equal(response.status, 400, JSON.stringify(time_zone));
     assert.equal(((await response.json()) as { error: string }).error, "invalid_time_zone");
   }
   assert.equal((await request(adminId, "PUT", "/api/workspace/settings", {})).status, 400);
   assert.equal(await zoneOf(), "Asia/Seoul");
-  const crossOrigin = await request(
-    adminId,
-    "PUT",
-    "/api/workspace/settings",
-    { time_zone: "UTC" },
-    "https://evil.test",
-  );
+  const crossOrigin = await request(adminId, "PUT", "/api/workspace/settings", { time_zone: "UTC" }, "https://evil.test");
   assert.equal(crossOrigin.status, 403);
   assert.equal(await zoneOf(), "Asia/Seoul");
 });
 
 async function nextWallClock(at: string, zone: string, time: string): Promise<string> {
-  const result = await pool.query<{ next: Date }>(`SELECT ${nextWallClockSql("$1", "$2", "$3")} AS next`, [
-    at,
-    zone,
-    time,
-  ]);
+  const result = await pool.query<{ next: Date }>(`SELECT ${nextWallClockSql("$1", "$2", "$3")} AS next`, [at, zone, time]);
   return result.rows[0]!.next.toISOString();
 }
 
@@ -144,8 +122,7 @@ test("the next wall-clock time is strictly later, so the same minute means tomor
     ["2026-10-01T05:00:00Z", "America/Los_Angeles", "23:00", "2026-10-01T06:00:00.000Z"],
     ["2026-10-01T05:00:00Z", "America/Los_Angeles", "00:00", "2026-10-01T07:00:00.000Z"],
   ];
-  for (const [at, zone, time, expected] of cases)
-    assert.equal(await nextWallClock(at, zone, time), expected, `${at} ${zone} ${time}`);
+  for (const [at, zone, time, expected] of cases) assert.equal(await nextWallClock(at, zone, time), expected, `${at} ${zone} ${time}`);
 });
 
 test("the next wall-clock time follows PostgreSQL across daylight-saving changes", async () => {
@@ -161,8 +138,7 @@ test("the next wall-clock time follows PostgreSQL across daylight-saving changes
     ["2026-11-01T06:45:00Z", "01:30", "2026-11-02T06:30:00.000Z"], // 01:45 EST, past both
     ["2026-11-01T04:30:00Z", "00:20", "2026-11-02T05:20:00.000Z"], // 00:30 EDT, 25 hours less 10 minutes
   ];
-  for (const [at, time, expected] of cases)
-    assert.equal(await nextWallClock(at, "America/New_York", time), expected, `${at} ${time}`);
+  for (const [at, time, expected] of cases) assert.equal(await nextWallClock(at, "America/New_York", time), expected, `${at} ${time}`);
 });
 
 test("a time that occurs twice resumes at its first occurrence in a two-hour overlap", async () => {
@@ -173,8 +149,7 @@ test("a time that occurs twice resumes at its first occurrence in a two-hour ove
     ["2026-10-25T01:45:00Z", "01:30", "2026-10-26T01:30:00.000Z"], // 01:45 +00, past both
     ["2026-10-24T22:01:00Z", "00:00", "2026-10-26T00:00:00.000Z"], // 00:01 +02, 26 hours less a minute
   ];
-  for (const [at, time, expected] of cases)
-    assert.equal(await nextWallClock(at, "Antarctica/Troll", time), expected, `${at} ${time}`);
+  for (const [at, time, expected] of cases) assert.equal(await nextWallClock(at, "Antarctica/Troll", time), expected, `${at} ${time}`);
 });
 
 test("the next wall-clock time does not depend on the session time zone", async () => {
@@ -182,17 +157,9 @@ test("the next wall-clock time does not depend on the session time zone", async 
   try {
     for (const session of ["UTC", "Pacific/Kiritimati", "Pacific/Pago_Pago", "Asia/Seoul"]) {
       await client.query(`SET TimeZone='${session}'`);
-      const result = await client.query<{ next: Date }>(`SELECT ${nextWallClockSql("$1", "$2", "$3")} AS next`, [
-        "2026-10-01T05:00:00Z",
-        "America/Los_Angeles",
-        "23:00",
-      ]);
+      const result = await client.query<{ next: Date }>(`SELECT ${nextWallClockSql("$1", "$2", "$3")} AS next`, ["2026-10-01T05:00:00Z", "America/Los_Angeles", "23:00"]);
       assert.equal(result.rows[0]!.next.toISOString(), "2026-10-01T06:00:00.000Z", session);
-      const overlap = await client.query<{ next: Date }>(`SELECT ${nextWallClockSql("$1", "$2", "$3")} AS next`, [
-        "2026-11-01T05:15:00Z",
-        "America/New_York",
-        "01:30",
-      ]);
+      const overlap = await client.query<{ next: Date }>(`SELECT ${nextWallClockSql("$1", "$2", "$3")} AS next`, ["2026-11-01T05:15:00Z", "America/New_York", "01:30"]);
       assert.equal(overlap.rows[0]!.next.toISOString(), "2026-11-01T05:30:00.000Z", `${session} overlap`);
     }
   } finally {
@@ -265,9 +232,7 @@ test("a comment stops at a time wait until that local time in the workspace's zo
   await setZone("America/New_York");
   const id = await enabledFlow(timedDocument("09:30"));
   await comment("comment-1", "sender-1");
-  assert.deepEqual(await storedRuns("America/New_York"), [
-    { status: "waiting", resume_node_id: "clock", local: "09:30:00", ahead: true, within: true },
-  ]);
+  assert.deepEqual(await storedRuns("America/New_York"), [{ status: "waiting", resume_node_id: "clock", local: "09:30:00", ahead: true, within: true }]);
   const listed = (await (await request(agentId, "GET", `/api/flows/${id}/runs`)).json()) as {
     runs: { resume_at: string; steps: { outcome: string }[] }[];
   };
@@ -284,28 +249,18 @@ test("a time wait reads the zone when the run reaches it; a later change moves n
   await enabledFlow(timedDocument("09:30"));
   await comment("comment-1", "sender-1");
   const firstResume = (await pool.query("SELECT resume_at FROM flow_runs")).rows[0].resume_at as Date;
-  assert.equal(
-    (await request(adminId, "PUT", "/api/workspace/settings", { time_zone: "America/Los_Angeles" })).status,
-    200,
-  );
+  assert.equal((await request(adminId, "PUT", "/api/workspace/settings", { time_zone: "America/Los_Angeles" })).status, 200);
   await comment("comment-2", "sender-2");
   const [first, second] = await storedRuns("Asia/Seoul");
   assert.equal(first!.local, "09:30:00");
-  assert.equal(
-    ((await pool.query("SELECT resume_at FROM flow_runs ORDER BY created_at,id")).rows[0].resume_at as Date).getTime(),
-    firstResume.getTime(),
-  );
+  assert.equal(((await pool.query("SELECT resume_at FROM flow_runs ORDER BY created_at,id")).rows[0].resume_at as Date).getTime(), firstResume.getTime());
   assert.equal(second!.status, "waiting");
   assert.equal((await storedRuns("America/Los_Angeles"))[1]!.local, "09:30:00");
 });
 
 test("a time wait for the current local minute resumes the same time tomorrow", async () => {
   await setZone("Europe/Paris");
-  const minute = (
-    await pool.query<{ minute: string }>(
-      "SELECT to_char(clock_timestamp() AT TIME ZONE 'Europe/Paris','HH24:MI') AS minute",
-    )
-  ).rows[0]!.minute;
+  const minute = (await pool.query<{ minute: string }>("SELECT to_char(clock_timestamp() AT TIME ZONE 'Europe/Paris','HH24:MI') AS minute")).rows[0]!.minute;
   await enabledFlow(timedDocument(minute));
   await comment("comment-1", "sender-1");
   const row = (
@@ -348,9 +303,7 @@ test("a run that reaches a time wait after a delay reads the zone at that moment
   await setZone("Australia/Adelaide");
   await makeDue();
   assert.equal(await resumeDueFlowRuns(pool), 1);
-  assert.deepEqual(await storedRuns("Australia/Adelaide"), [
-    { status: "waiting", resume_node_id: "clock", local: "18:45:00", ahead: true, within: true },
-  ]);
+  assert.deepEqual(await storedRuns("Australia/Adelaide"), [{ status: "waiting", resume_node_id: "clock", local: "18:45:00", ahead: true, within: true }]);
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM private_reply_outbox")).rows[0].count, 0);
 });
 

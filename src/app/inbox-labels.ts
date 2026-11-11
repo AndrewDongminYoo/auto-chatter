@@ -23,8 +23,7 @@ export function labelsJson(workspace: string, ids: string): string {
 function labelName(input: unknown): string {
   if (typeof input !== "string" || input.length > 300) throw new ApiError(400, "invalid_label");
   const name = input.trim().normalize("NFC");
-  if (!name || [...name].length > LABEL_NAME_MAX || /[\p{Cc}\p{Cf}]/u.test(name))
-    throw new ApiError(400, "invalid_label");
+  if (!name || [...name].length > LABEL_NAME_MAX || /[\p{Cc}\p{Cf}]/u.test(name)) throw new ApiError(400, "invalid_label");
   return name;
 }
 
@@ -33,12 +32,7 @@ const LABEL_COLUMNS = "id,name,archived,created_at,updated_at";
 // Every role reads the labels, archived ones flagged, so agents can edit a conversation's set and filter by it.
 export async function listInboxLabels(pool: Pool, user: User) {
   const workspace = await workspaceFor(pool, user, "agent");
-  return (
-    await pool.query(
-      `SELECT ${LABEL_COLUMNS} FROM instagram_inbox_labels WHERE workspace_id=$1 ORDER BY archived,lower(name),id`,
-      [workspace],
-    )
-  ).rows;
+  return (await pool.query(`SELECT ${LABEL_COLUMNS} FROM instagram_inbox_labels WHERE workspace_id=$1 ORDER BY archived,lower(name),id`, [workspace])).rows;
 }
 
 export async function createInboxLabel(pool: Pool, user: User, input: unknown) {
@@ -69,10 +63,7 @@ export async function createInboxLabel(pool: Pool, user: User, input: unknown) {
 }
 
 async function missingOrArchived(pool: Pool, workspace: string, id: string): Promise<never> {
-  const found = await pool.query("SELECT archived FROM instagram_inbox_labels WHERE workspace_id=$1 AND id=$2", [
-    workspace,
-    id,
-  ]);
+  const found = await pool.query("SELECT archived FROM instagram_inbox_labels WHERE workspace_id=$1 AND id=$2", [workspace, id]);
   if (!found.rows[0]) throw new ApiError(404, "label_not_found");
   throw new ApiError(409, "label_archived");
 }
@@ -80,8 +71,7 @@ async function missingOrArchived(pool: Pool, workspace: string, id: string): Pro
 // Renaming keeps the label's ID, so every conversation that has it shows the new name. An archived label cannot
 // be renamed.
 export async function renameInboxLabel(pool: Pool, user: User, id: string, input: unknown) {
-  if (!isUuid(id) || !isRecord(input) || Object.keys(input).length !== 1 || !("name" in input))
-    throw new ApiError(400, "invalid_label");
+  if (!isUuid(id) || !isRecord(input) || Object.keys(input).length !== 1 || !("name" in input)) throw new ApiError(400, "invalid_label");
   const name = labelName(input.name);
   const workspace = await workspaceFor(pool, user, "admin");
   let result;
@@ -111,12 +101,7 @@ export async function archiveInboxLabel(pool: Pool, user: User, id: string) {
   return result.rows[0];
 }
 
-export async function readConversationLabels(
-  db: Pick<Pool, "query">,
-  workspace: string,
-  connection: string,
-  recipient: string,
-): Promise<LabelSet> {
+export async function readConversationLabels(db: Pick<Pool, "query">, workspace: string, connection: string, recipient: string): Promise<LabelSet> {
   const result = await db.query<LabelSet>(
     `SELECT coalesce(sets.version,0) AS version,${labelsJson("target.workspace_id", "coalesce(sets.label_ids,'{}')")} AS labels
      FROM (SELECT $1::uuid AS workspace_id,$2::uuid AS connection_id,$3::text AS recipient_id) target
@@ -128,8 +113,7 @@ export async function readConversationLabels(
 }
 
 function parseLabelSet(connection: string, recipient: string, query: URLSearchParams, input: unknown) {
-  if (!isUuid(connection) || !/^\d{1,40}$/.test(recipient) || query.size || !isRecord(input))
-    throw new ApiError(400, "invalid_label_request");
+  if (!isUuid(connection) || !/^\d{1,40}$/.test(recipient) || query.size || !isRecord(input)) throw new ApiError(400, "invalid_label_request");
   const keys = Object.keys(input);
   if (
     keys.length !== 2 ||
@@ -150,14 +134,7 @@ function parseLabelSet(connection: string, recipient: string, query: URLSearchPa
 
 export type SaveLabelsResult = { conflict: boolean; label_set: LabelSet };
 
-export async function saveConversationLabels(
-  pool: Pool,
-  user: User,
-  connection: string,
-  recipient: string,
-  query: URLSearchParams,
-  input: unknown,
-): Promise<SaveLabelsResult> {
+export async function saveConversationLabels(pool: Pool, user: User, connection: string, recipient: string, query: URLSearchParams, input: unknown): Promise<SaveLabelsResult> {
   const change = parseLabelSet(connection, recipient, query, input);
   const { workspace_id: workspace } = await membershipFor(pool, user, "agent");
   const client = await pool.connect();
@@ -175,34 +152,18 @@ export async function saveConversationLabels(
   }
 }
 
-async function applyLabels(
-  client: PoolClient,
-  user: User,
-  workspace: string,
-  connection: string,
-  recipient: string,
-  change: ReturnType<typeof parseLabelSet>,
-): Promise<SaveLabelsResult & { wrote: boolean }> {
+async function applyLabels(client: PoolClient, user: User, workspace: string, connection: string, recipient: string, change: ReturnType<typeof parseLabelSet>): Promise<SaveLabelsResult & { wrote: boolean }> {
   // The lock order of the conversation state change (saveConversationState): the workspace row, the caller's
   // membership row, the connection, the conversation (lockConversation), then the label-set row. The workspace
   // row first queues behind delete_workspace_data, the member row sees a committed removal, and the connection
   // FOR SHARE serializes with the connection and person deletion functions, so no label row is written after a
   // deletion removed the conversation.
   await client.query("SELECT 1 FROM workspaces WHERE id=$1 FOR SHARE", [workspace]);
-  const member = await client.query(
-    "SELECT 1 FROM workspace_members WHERE workspace_id=$1 AND user_id=$2 AND removed_at IS NULL FOR SHARE",
-    [workspace, user.id],
-  );
+  const member = await client.query("SELECT 1 FROM workspace_members WHERE workspace_id=$1 AND user_id=$2 AND removed_at IS NULL FOR SHARE", [workspace, user.id]);
   if (!member.rowCount) throw new ApiError(403, "workspace_required");
-  const owned = await client.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR SHARE", [
-    connection,
-    workspace,
-  ]);
+  const owned = await client.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR SHARE", [connection, workspace]);
   if (!owned.rowCount) throw new ApiError(404, "connection_not_found");
-  const exists = await client.query(
-    "SELECT 1 FROM instagram_inbox_messages WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 LIMIT 1",
-    [workspace, connection, recipient],
-  );
+  const exists = await client.query("SELECT 1 FROM instagram_inbox_messages WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 LIMIT 1", [workspace, connection, recipient]);
   if (!exists.rowCount) throw new ApiError(404, "conversation_not_found");
   await lockConversation(client, connection, recipient, "exclusive");
   // A version 0 row means the same as no row; inserting it gives concurrent first changes a row to queue on.
@@ -229,12 +190,7 @@ async function applyLabels(
   if (added.length) {
     // FOR SHARE holds the added labels until this commits, so an archive cannot commit between this check and
     // the write; a label archived before stays on conversations that already have it but cannot be added.
-    const labels = (
-      await client.query<{ id: string; archived: boolean }>(
-        "SELECT id,archived FROM instagram_inbox_labels WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE",
-        [workspace, added],
-      )
-    ).rows;
+    const labels = (await client.query<{ id: string; archived: boolean }>("SELECT id,archived FROM instagram_inbox_labels WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE", [workspace, added])).rows;
     if (labels.length !== added.length) throw new ApiError(404, "label_not_found");
     if (labels.some((label) => label.archived)) throw new ApiError(409, "label_archived");
   }

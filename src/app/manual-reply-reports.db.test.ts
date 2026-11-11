@@ -8,8 +8,7 @@ import { manualReplyReport } from "./manual-reply-reports.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: databaseUrl });
 const workspace = "11111111-1111-4111-8111-111111111111";
 const otherWorkspace = "22222222-2222-4222-8222-222222222222";
@@ -24,20 +23,13 @@ before(async () => pool.query(await readFile(new URL("../../db/schema.sql", impo
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspace, otherWorkspace]);
-  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'agent')", [
-    workspace,
-    owner,
-    agent,
-  ]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'agent')", [workspace, owner, agent]);
   for (const [ws, id] of [
     [workspace, connection],
     [otherWorkspace, otherConnection],
     [workspace, secondConnection],
   ]) {
-    await pool.query(
-      "INSERT INTO instagram_connections(id,workspace_id,account_id,username,instagram_user_id) VALUES($1::uuid,$2,$1::text,'SECRET-USERNAME',$1::text)",
-      [id, ws],
-    );
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,username,instagram_user_id) VALUES($1::uuid,$2,$1::text,'SECRET-USERNAME',$1::text)", [id, ws]);
     const rule = (
       await pool.query(
         `INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text)
@@ -59,10 +51,7 @@ beforeEach(async () => {
         [ws, id, rule, event],
       )
     ).rows[0].id;
-    await pool.query(
-      "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id) VALUES($1,$2,'456')",
-      [ws, id],
-    );
+    await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id) VALUES($1,$2,'456')", [ws, id]);
     await pool.query(
       `INSERT INTO instagram_inbox_handoffs(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,updated_by)
        VALUES($1,$2,'123','456',$3,true,1,$4)`,
@@ -91,8 +80,7 @@ function request(query = params, actor = owner) {
     }),
     { SUPABASE_URL: "https://project.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_test" },
     () => ({ query: pool.query.bind(pool), connect: pool.connect.bind(pool), end: async () => {} }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: actor, email: "owner@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actor, email: "owner@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 async function report(query = params) {
@@ -110,13 +98,8 @@ test("manual report counts current requests once, isolates workspaces and distin
   await seed("pending", undefined, secondConnection);
   // Retry is a new accepted request; repeated audit records never multiply the original request.
   const retry = await seed("pending");
-  const failed = (
-    await pool.query("SELECT id FROM instagram_manual_replies WHERE connection_id=$1 AND status='failed'", [connection])
-  ).rows[0].id;
-  await pool.query("UPDATE instagram_manual_replies SET retry_of=$2,retry_reason='user decision' WHERE id=$1", [
-    retry.id,
-    failed,
-  ]);
+  const failed = (await pool.query("SELECT id FROM instagram_manual_replies WHERE connection_id=$1 AND status='failed'", [connection])).rows[0].id;
+  await pool.query("UPDATE instagram_manual_replies SET retry_of=$2,retry_reason='user decision' WHERE id=$1", [retry.id, failed]);
   await pool.query(
     `INSERT INTO instagram_manual_reply_events(workspace_id,connection_id,recipient_id,reply_id,actor_id,kind,reason)
      VALUES($1,$2,'123',$3,$4,'queued',NULL),($1,$2,'123',$3,$4,'queued',NULL)`,
@@ -153,10 +136,7 @@ test("manual report counts current requests once, isolates workspaces and distin
 test("manual report uses creation cohort with exact half-open boundaries, not send or scheduled time", async () => {
   await seed("sent", "2026-09-30T14:59:59.999999Z");
   const inside = await seed("pending", "2026-09-30T15:00:00Z");
-  await pool.query(
-    "UPDATE instagram_manual_replies SET scheduled_at='2026-12-01',schedule_time_zone='Asia/Seoul' WHERE id=$1",
-    [inside.id],
-  );
+  await pool.query("UPDATE instagram_manual_replies SET scheduled_at='2026-12-01',schedule_time_zone='Asia/Seoul' WHERE id=$1", [inside.id]);
   await seed("failed", "2026-10-01T14:59:59.999999Z");
   await seed("sent", "2026-10-01T15:00:00Z");
   assert.deepEqual((await report()).counts, {
@@ -183,10 +163,7 @@ async function markRead(conn: string, messageId: string, recipient = "901") {
   );
 }
 async function withMessageId(id: string, messageId: string) {
-  await pool.query("UPDATE instagram_manual_replies SET provider_message_id=$2,sent_at=now() WHERE id=$1", [
-    id,
-    messageId,
-  ]);
+  await pool.query("UPDATE instagram_manual_replies SET provider_message_id=$2,sent_at=now() WHERE id=$1", [id, messageId]);
 }
 // `read` and `read_unavailable` are disjoint subsets of `sent` and stay outside the status partition.
 function assertReadSubsets(counts: Record<string, string>) {
@@ -340,11 +317,7 @@ test("manual report bounds index reads by creation period with and without a con
         return pool.query(sql, values);
       },
     } as unknown as Pool;
-    const result = await manualReplyReport(
-      explainedPool,
-      { id: owner, email: "owner@example.test" },
-      new URLSearchParams(params + suffix),
-    );
+    const result = await manualReplyReport(explainedPool, { id: owner, email: "owner@example.test" }, new URLSearchParams(params + suffix));
     assert.equal(result.counts.total, "1");
     assert.equal(plans.length, 1);
     const scans: Record<string, unknown>[] = [];

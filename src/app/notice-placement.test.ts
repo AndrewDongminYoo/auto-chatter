@@ -34,10 +34,8 @@ function element(name: string, tag: string, parent: FakeElement | null = null, h
     isConnected: true,
     parentElement: parent,
     closest(selector) {
-      const matches = (candidate: FakeElement) =>
-        selector === "[hidden]" ? candidate.hidden : selector.split(", ").includes(candidate.tag);
-      for (let current: FakeElement | null = self; current; current = current.parentElement)
-        if (matches(current)) return current;
+      const matches = (candidate: FakeElement) => (selector === "[hidden]" ? candidate.hidden : selector.split(", ").includes(candidate.tag));
+      for (let current: FakeElement | null = self; current; current = current.parentElement) if (matches(current)) return current;
       return null;
     },
   };
@@ -117,11 +115,7 @@ test("the dashboard wires the notice and action errors through these decisions",
   const action = app.match(/async function action\(button, task\) \{[\s\S]*?\n\}/)?.[0] ?? "";
   const clearAt = action.indexOf("clearActionError(button)");
   assert.ok(clearAt >= 0 && clearAt < action.indexOf("await task()"), "a new run clears the error");
-  assert.match(
-    action,
-    /catch \(error\) \{\n(?: {4}\/\/.*\n)* {4}if \(showActionError\(button, error\.message\)\) notice\(""\);\n {4}else notice\(error\.message, true\);/,
-    "an inline error replaces an earlier page notice; a failure without an owner still goes to the notice",
-  );
+  assert.match(action, /catch \(error\) \{\n(?: {4}\/\/.*\n)* {4}if \(showActionError\(button, error\.message\)\) notice\(""\);\n {4}else notice\(error\.message, true\);/, "an inline error replaces an earlier page notice; a failure without an owner still goes to the notice");
   const show = app.match(/function showActionError\(button, message\) \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.match(show, /setAttribute\("role", "alert"\)/);
   assert.doesNotMatch(show, /focus|scroll/, "an inline error moves neither focus nor the page");

@@ -73,18 +73,9 @@ export const EXPORTED_TABLES: Record<string, { scope: "self" | "workspace" | "co
 // OAuth states hold short-lived login secrets; workspace deletion evidence belongs to workspaces that no longer exist;
 // scheduled_steps is service-wide operations state with no workspace data; reminders and their audit are private to
 // the member who created them, so an admin's export does not carry other members' reminders.
-export const EXCLUDED_TABLES = [
-  "instagram_oauth_states",
-  "workspace_deletion_records",
-  "scheduled_steps",
-  "instagram_inbox_reminders",
-  "instagram_inbox_reminder_events",
-];
+export const EXCLUDED_TABLES = ["instagram_oauth_states", "workspace_deletion_records", "scheduled_steps", "instagram_inbox_reminders", "instagram_inbox_reminder_events"];
 // What the export leaves out, derived from the table settings so the file cannot understate it.
-export const EXCLUDED_ITEMS = [
-  ...Object.entries(EXPORTED_TABLES).flatMap(([table, { omit = [] }]) => omit.map((column) => `${table}.${column}`)),
-  ...EXCLUDED_TABLES,
-];
+export const EXCLUDED_ITEMS = [...Object.entries(EXPORTED_TABLES).flatMap(([table, { omit = [] }]) => omit.map((column) => `${table}.${column}`)), ...EXCLUDED_TABLES];
 
 // The export is built in Worker memory, so an oversized workspace is refused whole instead of truncated (#166).
 type WorkspaceExportLimits = { maxRows: number; maxBytes: number };
@@ -94,11 +85,7 @@ export const WORKSPACE_EXPORT_LIMITS: Readonly<WorkspaceExportLimits> = Object.f
 });
 
 function scopeFilter(scope: "self" | "workspace" | "connection"): string {
-  return scope === "self"
-    ? "t.id=$1"
-    : scope === "workspace"
-      ? "t.workspace_id=$1"
-      : "t.connection_id IN (SELECT id FROM instagram_connections WHERE workspace_id=$1)";
+  return scope === "self" ? "t.id=$1" : scope === "workspace" ? "t.workspace_id=$1" : "t.connection_id IN (SELECT id FROM instagram_connections WHERE workspace_id=$1)";
 }
 
 // Trusted internal limits support smaller budgets in tests; HTTP never accepts an override.
@@ -109,10 +96,7 @@ export async function exportWorkspace(pool: Pool, user: User, options: Partial<W
     // One snapshot for the membership check and every exported row, so a member removed concurrently
     // cannot export, and rows that reference each other are exported consistently.
     await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
-    const membership = await client.query<{ workspace_id: string; role: WorkspaceRole }>(
-      "SELECT workspace_id,role FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL",
-      [user.id],
-    );
+    const membership = await client.query<{ workspace_id: string; role: WorkspaceRole }>("SELECT workspace_id,role FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL", [user.id]);
     if (!membership.rows[0]) throw new ApiError(403, "workspace_required");
     // The export holds every comment, DM and contact record, so agents cannot take it.
     if (!roleAllows(membership.rows[0].role, "admin")) throw new ApiError(403, "role_forbidden");

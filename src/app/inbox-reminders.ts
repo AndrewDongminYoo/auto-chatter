@@ -52,13 +52,7 @@ async function readReminder(db: Pick<Pool, "query">, id: string): Promise<Remind
 }
 
 // The caller's pending reminder on one conversation, or null.
-export async function readCallerReminder(
-  db: Pick<Pool, "query">,
-  workspace: string,
-  user: string,
-  connection: string,
-  recipient: string,
-): Promise<Reminder | null> {
+export async function readCallerReminder(db: Pick<Pool, "query">, workspace: string, user: string, connection: string, recipient: string): Promise<Reminder | null> {
   const result = await db.query<Reminder>(
     `${REMINDER_SELECT} WHERE r.workspace_id=$1 AND r.creator_id=$2 AND r.connection_id=$3 AND r.recipient_id=$4
        AND r.status='pending'`,
@@ -75,15 +69,7 @@ function localTime(value: unknown): string {
   if (!match) throw new ApiError(400, "invalid_reminder_due");
   const [year, month, day, hour, minute] = match.slice(1).map(Number) as [number, number, number, number, number];
   const date = new Date(Date.UTC(year, month - 1, day, hour, minute));
-  if (
-    year < 2000 ||
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day ||
-    hour > 23 ||
-    minute > 59
-  )
-    throw new ApiError(400, "invalid_reminder_due");
+  if (year < 2000 || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day || hour > 23 || minute > 59) throw new ApiError(400, "invalid_reminder_due");
   return `${value}:00`;
 }
 
@@ -99,8 +85,7 @@ function reminderNote(value: unknown): string | null {
 
 function expectedVersion(input: Record<string, unknown>): number {
   const version = input.expected_version;
-  if (!Number.isInteger(version) || Number(version) < 1 || Number(version) >= 2147483647)
-    throw new ApiError(400, "invalid_reminder_request");
+  if (!Number.isInteger(version) || Number(version) < 1 || Number(version) >= 2147483647) throw new ApiError(400, "invalid_reminder_request");
   return Number(version);
 }
 
@@ -125,24 +110,11 @@ async function transaction<T>(pool: Pool, work: (client: PoolClient) => Promise<
 // committed removal (whose reminder cancellation then already ran), and the connection FOR SHARE serializes with the
 // connection and person deletion functions, so no reminder row is written after a deletion removed the conversation.
 // The conversation lock serializes reminder writes with a close, which cancels the conversation's reminders.
-async function lockConversationFor(
-  client: PoolClient,
-  user: User,
-  workspace: string,
-  connection: string,
-  recipient: string,
-  notFound: string,
-): Promise<void> {
+async function lockConversationFor(client: PoolClient, user: User, workspace: string, connection: string, recipient: string, notFound: string): Promise<void> {
   await client.query("SELECT 1 FROM workspaces WHERE id=$1 FOR SHARE", [workspace]);
-  const member = await client.query(
-    "SELECT 1 FROM workspace_members WHERE workspace_id=$1 AND user_id=$2 AND removed_at IS NULL FOR SHARE",
-    [workspace, user.id],
-  );
+  const member = await client.query("SELECT 1 FROM workspace_members WHERE workspace_id=$1 AND user_id=$2 AND removed_at IS NULL FOR SHARE", [workspace, user.id]);
   if (!member.rowCount) throw new ApiError(403, "workspace_required");
-  const owned = await client.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR SHARE", [
-    connection,
-    workspace,
-  ]);
+  const owned = await client.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR SHARE", [connection, workspace]);
   if (!owned.rowCount) throw new ApiError(404, notFound);
   await lockConversation(client, connection, recipient, "exclusive");
 }
@@ -162,28 +134,16 @@ async function dueAt(client: PoolClient, workspace: string, local: string): Prom
 
 export type ReminderResult = { conflict: false; reminder: Reminder } | { conflict: true; reminder: Reminder };
 
-export async function createReminder(
-  pool: Pool,
-  user: User,
-  connection: string,
-  recipient: string,
-  query: URLSearchParams,
-  input: unknown,
-): Promise<ReminderResult> {
-  if (!isUuid(connection) || !/^\d{1,40}$/.test(recipient) || query.size || !isRecord(input))
-    throw new ApiError(400, "invalid_reminder_request");
-  if (!("due_local" in input) || Object.keys(input).some((key) => !["due_local", "note"].includes(key)))
-    throw new ApiError(400, "invalid_reminder_request");
+export async function createReminder(pool: Pool, user: User, connection: string, recipient: string, query: URLSearchParams, input: unknown): Promise<ReminderResult> {
+  if (!isUuid(connection) || !/^\d{1,40}$/.test(recipient) || query.size || !isRecord(input)) throw new ApiError(400, "invalid_reminder_request");
+  if (!("due_local" in input) || Object.keys(input).some((key) => !["due_local", "note"].includes(key))) throw new ApiError(400, "invalid_reminder_request");
   const local = localTime(input.due_local);
   const note = "note" in input ? reminderNote(input.note) : null;
   const { workspace_id: workspace } = await membershipFor(pool, user, "agent");
   try {
     return await transaction(pool, async (client) => {
       await lockConversationFor(client, user, workspace, connection, recipient, "connection_not_found");
-      const exists = await client.query(
-        "SELECT 1 FROM instagram_inbox_messages WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 LIMIT 1",
-        [workspace, connection, recipient],
-      );
+      const exists = await client.query("SELECT 1 FROM instagram_inbox_messages WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 LIMIT 1", [workspace, connection, recipient]);
       if (!exists.rowCount) throw new ApiError(404, "conversation_not_found");
       // Status changes take the conversation lock too, so this read is current until COMMIT.
       const closed = await client.query(
@@ -223,20 +183,9 @@ type Change = { kind: "changed"; local?: string; note?: string | null } | { kind
 
 // Changes, completes or cancels one of the caller's reminders at its expected version. Another member's reminder is
 // answered like a missing one.
-async function writeReminder(
-  pool: Pool,
-  user: User,
-  id: string,
-  expected: number,
-  change: Change,
-): Promise<ReminderResult> {
+async function writeReminder(pool: Pool, user: User, id: string, expected: number, change: Change): Promise<ReminderResult> {
   const { workspace_id: workspace } = await membershipFor(pool, user, "agent");
-  const target = (
-    await pool.query<{ connection_id: string; recipient_id: string }>(
-      "SELECT connection_id,recipient_id FROM instagram_inbox_reminders WHERE id=$1 AND workspace_id=$2 AND creator_id=$3",
-      [id, workspace, user.id],
-    )
-  ).rows[0];
+  const target = (await pool.query<{ connection_id: string; recipient_id: string }>("SELECT connection_id,recipient_id FROM instagram_inbox_reminders WHERE id=$1 AND workspace_id=$2 AND creator_id=$3", [id, workspace, user.id])).rows[0];
   if (!target) throw new ApiError(404, "reminder_not_found");
   return transaction(pool, async (client) => {
     await lockConversationFor(client, user, workspace, target.connection_id, target.recipient_id, "reminder_not_found");
@@ -257,8 +206,7 @@ async function writeReminder(
       if (change.local !== undefined) due = await dueAt(client, workspace, change.local);
       if (change.note !== undefined) note = change.note;
       // An unchanged due time and note store nothing.
-      if (due.getTime() === row.due_at.getTime() && note === row.note)
-        return { conflict: false, reminder: await readReminder(client, id) };
+      if (due.getTime() === row.due_at.getTime() && note === row.note) return { conflict: false, reminder: await readReminder(client, id) };
     }
     const status = change.kind === "completed" ? "done" : change.kind === "cancelled" ? "cancelled" : "pending";
     const reason = change.kind === "cancelled" ? "manual" : null;
@@ -280,12 +228,7 @@ async function writeReminder(
 export async function changeReminder(pool: Pool, user: User, id: string, query: URLSearchParams, input: unknown) {
   if (!isUuid(id) || query.size || !isRecord(input)) throw new ApiError(400, "invalid_reminder_request");
   const keys = Object.keys(input);
-  if (
-    !keys.includes("expected_version") ||
-    keys.length < 2 ||
-    keys.some((key) => !["expected_version", "due_local", "note"].includes(key))
-  )
-    throw new ApiError(400, "invalid_reminder_request");
+  if (!keys.includes("expected_version") || keys.length < 2 || keys.some((key) => !["expected_version", "due_local", "note"].includes(key))) throw new ApiError(400, "invalid_reminder_request");
   const expected = expectedVersion(input);
   return writeReminder(pool, user, id, expected, {
     kind: "changed",
@@ -294,22 +237,8 @@ export async function changeReminder(pool: Pool, user: User, id: string, query: 
   });
 }
 
-export async function closeReminder(
-  pool: Pool,
-  user: User,
-  id: string,
-  action: "complete" | "cancel",
-  query: URLSearchParams,
-  input: unknown,
-) {
-  if (
-    !isUuid(id) ||
-    query.size ||
-    !isRecord(input) ||
-    Object.keys(input).length !== 1 ||
-    !("expected_version" in input)
-  )
-    throw new ApiError(400, "invalid_reminder_request");
+export async function closeReminder(pool: Pool, user: User, id: string, action: "complete" | "cancel", query: URLSearchParams, input: unknown) {
+  if (!isUuid(id) || query.size || !isRecord(input) || Object.keys(input).length !== 1 || !("expected_version" in input)) throw new ApiError(400, "invalid_reminder_request");
   return writeReminder(pool, user, id, expectedVersion(input), {
     kind: action === "complete" ? "completed" : "cancelled",
   });
@@ -318,17 +247,12 @@ export async function closeReminder(
 // The caller's pending reminders, earliest due first, 50 per page; due=true lists only due ones. The cursor carries
 // due_at as integer microseconds, like the inbox list.
 export async function listReminders(pool: Pool, user: User, query: URLSearchParams) {
-  if (
-    [...query.keys()].some((key) => !["due", "after"].includes(key) || query.getAll(key).length !== 1) ||
-    (query.has("due") && query.get("due") !== "true")
-  )
-    throw new ApiError(400, "invalid_reminder_request");
+  if ([...query.keys()].some((key) => !["due", "after"].includes(key) || query.getAll(key).length !== 1) || (query.has("due") && query.get("due") !== "true")) throw new ApiError(400, "invalid_reminder_request");
   let after: { at: string; id: string } | null = null;
   if (query.has("after")) {
     try {
       const value: unknown = JSON.parse(Buffer.from(query.get("after")!, "base64url").toString());
-      if (!isRecord(value) || typeof value.at !== "string" || !/^-?\d{1,18}$/.test(value.at) || !isUuid(value.id))
-        throw new Error();
+      if (!isRecord(value) || typeof value.at !== "string" || !/^-?\d{1,18}$/.test(value.at) || !isUuid(value.id)) throw new Error();
       after = { at: value.at, id: value.id };
     } catch {
       throw new ApiError(400, "invalid_reminder_request");
@@ -349,22 +273,14 @@ export async function listReminders(pool: Pool, user: User, query: URLSearchPara
     last = result.rows[49];
   return {
     reminders,
-    after:
-      result.rows.length > 50
-        ? Buffer.from(JSON.stringify({ at: last!.due_us, id: last!.id })).toString("base64url")
-        : null,
+    after: result.rows.length > 50 ? Buffer.from(JSON.stringify({ at: last!.due_us, id: last!.id })).toString("base64url") : null,
   };
 }
 
 // Called inside saveConversationState's transaction after it took the conversation lock, when the change closes an
 // open conversation: every member's pending reminder on it is cancelled with one audit row each and no actor. A later
 // reopen, by a member or by a new DM, does not revive them.
-export async function cancelClosedConversationReminders(
-  client: PoolClient,
-  workspace: string,
-  connection: string,
-  recipient: string,
-): Promise<number> {
+export async function cancelClosedConversationReminders(client: PoolClient, workspace: string, connection: string, recipient: string): Promise<number> {
   const result = await client.query(
     `WITH cancelled AS (
        UPDATE instagram_inbox_reminders SET status='cancelled',cancel_reason='conversation_closed',version=version+1,
@@ -382,11 +298,7 @@ export async function cancelClosedConversationReminders(
 // Called inside removeMember's transaction after it locked the workspace row and then the member row: the removed
 // member's pending reminders are cancelled with one audit row each and no actor. The connections are locked FOR SHARE
 // in ID order first, as the reminder writes and unassignRemovedMember do, so a concurrent data deletion queues.
-export async function cancelRemovedMemberReminders(
-  client: PoolClient,
-  workspace: string,
-  memberId: string,
-): Promise<number> {
+export async function cancelRemovedMemberReminders(client: PoolClient, workspace: string, memberId: string): Promise<number> {
   await client.query(
     `SELECT 1 FROM instagram_connections WHERE workspace_id=$1 AND id IN (
        SELECT connection_id FROM instagram_inbox_reminders WHERE workspace_id=$1 AND creator_id=$2 AND status='pending'

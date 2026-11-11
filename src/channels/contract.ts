@@ -15,13 +15,7 @@ export interface ScopedChannelIdentity {
   identityValue: string;
 }
 export function sameScopedIdentity(left: ScopedChannelIdentity, right: ScopedChannelIdentity): boolean {
-  return (
-    left.workspaceId === right.workspaceId &&
-    left.connectionId === right.connectionId &&
-    left.channel === right.channel &&
-    left.identityKind === right.identityKind &&
-    left.identityValue === right.identityValue
-  );
+  return left.workspaceId === right.workspaceId && left.connectionId === right.connectionId && left.channel === right.channel && left.identityKind === right.identityKind && left.identityValue === right.identityValue;
 }
 interface EventBase {
   account: ChannelAccountAddress;
@@ -35,12 +29,7 @@ export type ChannelEvent =
 
 // A receipt key is not an outgoing idempotency key. Database uniqueness remains authoritative.
 export function eventReceiptKey(event: ChannelEvent): string {
-  return JSON.stringify([
-    event.account.channel,
-    event.account.accountId,
-    event.receipt.family,
-    event.receipt.providerId,
-  ]);
+  return JSON.stringify([event.account.channel, event.account.accountId, event.receipt.family, event.receipt.providerId]);
 }
 export const CONTENT_TYPES = ["text", "attachment", "provider_template"] as const;
 export type ContentType = (typeof CONTENT_TYPES)[number];
@@ -66,10 +55,7 @@ export function checkCapability(capabilities: ChannelCapabilities, operation: st
   return capability.supported && capability.content_types.some((type) => type === contentType);
 }
 export type AcceptedOutcome = { kind: "accepted"; messageId: string; recipientId?: string };
-export type FailedOutcome =
-  | { kind: "not_attempted"; disposition: "retry" | "block"; code: string }
-  | { kind: "refused"; refusal: "rate_limited" | "other"; code: string; retryAfterSeconds: number | null }
-  | { kind: "unknown"; code: "send_outcome_unknown" };
+export type FailedOutcome = { kind: "not_attempted"; disposition: "retry" | "block"; code: string } | { kind: "refused"; refusal: "rate_limited" | "other"; code: string; retryAfterSeconds: number | null } | { kind: "unknown"; code: "send_outcome_unknown" };
 // The adapter neither authorizes sending nor decides whether/how to retry an outcome.
 export interface ChannelAdapter {
   readonly capabilities: ChannelCapabilities;

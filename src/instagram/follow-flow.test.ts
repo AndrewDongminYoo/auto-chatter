@@ -3,8 +3,7 @@ import { test } from "node:test";
 import { parseMessageEvents } from "./message-events.ts";
 import { InstagramFollowTransport } from "./follow-transport.ts";
 import { PreSendVerificationError, ProviderRateLimitedError, ProviderRejectedError } from "./reply-worker.ts";
-const body = (messaging: unknown[]) =>
-  Buffer.from(JSON.stringify({ object: "instagram", entry: [{ id: "123", messaging }] }));
+const body = (messaging: unknown[]) => Buffer.from(JSON.stringify({ object: "instagram", entry: [{ id: "123", messaging }] }));
 const message = {
   sender: { id: "456" },
   recipient: { id: "123" },
@@ -42,13 +41,7 @@ test("follow lookup distinguishes false from unknown and pins the account before
       graphVersion: "v26.0",
       fetchImpl: async (url) => {
         calls.push(String(url));
-        return Response.json(
-          String(url).includes("/me?")
-            ? { user_id: "123" }
-            : flag === undefined
-              ? {}
-              : { is_user_follow_business: flag },
-        );
+        return Response.json(String(url).includes("/me?") ? { user_id: "123" } : flag === undefined ? {} : { is_user_follow_business: flag });
       },
     });
     assert.equal(await transport.followStatus("456"), flag ?? null);
@@ -86,13 +79,7 @@ test("the final delivery guard runs with the claim and prevents a provider POST"
       throw new PreSendVerificationError("block", "delivery_disabled");
     },
   });
-  await assert.rejects(
-    transport.send("456", "hello", { replyId: "1", attemptId: "attempt-1" }),
-    (error) =>
-      error instanceof PreSendVerificationError &&
-      error.disposition === "block" &&
-      error.failureCode === "delivery_disabled",
-  );
+  await assert.rejects(transport.send("456", "hello", { replyId: "1", attemptId: "attempt-1" }), (error) => error instanceof PreSendVerificationError && error.disposition === "block" && error.failureCode === "delivery_disabled");
   assert.equal(requests, 0);
 });
 
@@ -112,8 +99,7 @@ test("confirmation postbacks carry a conversation binding rather than trusting t
       confirmationReplyId: "42",
     },
   ]);
-  for (const payload of ["other:42", "auto-chatter:confirm:0", "auto-chatter:confirm:42x"])
-    assert.deepEqual(parseMessageEvents(body([{ ...event, postback: { ...event.postback, payload } }])), []);
+  for (const payload of ["other:42", "auto-chatter:confirm:0", "auto-chatter:confirm:42x"]) assert.deepEqual(parseMessageEvents(body([{ ...event, postback: { ...event.postback, payload } }])), []);
   assert.deepEqual(parseMessageEvents(body([{ ...event, recipient: { id: "999" } }])), []);
   assert.deepEqual(parseMessageEvents(body([{ ...event, is_self: true }])), []);
 });
@@ -216,12 +202,6 @@ test("DM pre-POST guard exceptions remain definite unsent verification failures"
       throw new Error("database read unavailable");
     },
   });
-  await assert.rejects(
-    transport.send("456", "Manual reply", { replyId: "manual", attemptId: "attempt" }),
-    (error) =>
-      error instanceof PreSendVerificationError &&
-      error.disposition === "retry" &&
-      error.failureCode === "verification_unavailable",
-  );
+  await assert.rejects(transport.send("456", "Manual reply", { replyId: "manual", attemptId: "attempt" }), (error) => error instanceof PreSendVerificationError && error.disposition === "retry" && error.failureCode === "verification_unavailable");
   assert.equal(posts, 0);
 });

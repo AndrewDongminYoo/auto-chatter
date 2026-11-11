@@ -10,8 +10,7 @@ import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database tests");
 const testUrl = new URL(databaseUrl);
-if (testUrl.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(testUrl.hostname))
-  throw new Error("Database tests require a local automations_test database");
+if (testUrl.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: databaseUrl });
 const workspace = "11111111-1111-4111-8111-111111111111";
 const otherWorkspace = "22222222-2222-4222-8222-222222222222";
@@ -22,16 +21,7 @@ const otherConnection = "66666666-6666-4666-8666-666666666666";
 const secondConnection = "77777777-7777-4777-8777-777777777777";
 const outsider = "99999999-9999-4999-8999-999999999999";
 const params = "from=2026-10-01&before=2026-10-02&expected_time_zone=Asia%2FSeoul";
-const REASONS = [
-  "connection_unavailable",
-  "contact_paused",
-  "no_dm_identity",
-  "opted_out",
-  "marketing_consent_required",
-  "reply_window_closed",
-  "candidate",
-  "plan_limit_exceeded",
-] as const;
+const REASONS = ["connection_unavailable", "contact_paused", "no_dm_identity", "opted_out", "marketing_consent_required", "reply_window_closed", "candidate", "plan_limit_exceeded"] as const;
 const STATUSES = ["pending", "sending", "sent", "failed", "blocked", "unknown", "cancelled"] as const;
 type DeliveryStatus = (typeof STATUSES)[number];
 let draft: string;
@@ -43,14 +33,8 @@ before(async () => pool.query(await readFile(new URL("../../db/schema.sql", impo
 beforeEach(async () => {
   sequence = 0;
   await pool.query("TRUNCATE workspaces CASCADE");
-  await pool.query(
-    "INSERT INTO workspaces(id,time_zone,plan) VALUES($1,'Asia/Seoul','advanced'),($2,'Asia/Seoul','advanced')",
-    [workspace, otherWorkspace],
-  );
-  await pool.query(
-    "INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'agent'),($4,$5,'owner')",
-    [workspace, owner, agent, otherWorkspace, outsider],
-  );
+  await pool.query("INSERT INTO workspaces(id,time_zone,plan) VALUES($1,'Asia/Seoul','advanced'),($2,'Asia/Seoul','advanced')", [workspace, otherWorkspace]);
+  await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'agent'),($4,$5,'owner')", [workspace, owner, agent, otherWorkspace, outsider]);
   for (const [ws, id, account] of [
     [workspace, connection, "100"],
     [workspace, secondConnection, "101"],
@@ -72,12 +56,7 @@ after(async () => pool.end());
 // Freezes the given members into a snapshot and returns a version-1 draft that references it.
 async function draftFor(members: Array<[string, string]>, ws = workspace) {
   const actor = ws === workspace ? owner : outsider;
-  const segment = (
-    await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,$2) RETURNING id", [
-      ws,
-      `Audience ${++sequence}`,
-    ])
-  ).rows[0]!.id;
+  const segment = (await pool.query("INSERT INTO instagram_contact_segments(workspace_id,name) VALUES($1,$2) RETURNING id", [ws, `Audience ${++sequence}`])).rows[0]!.id;
   const snapshot = (
     await pool.query(
       `INSERT INTO instagram_segment_snapshots(workspace_id,segment_id,created_by,as_of,definition,segment_name,counts,member_count)
@@ -85,11 +64,7 @@ async function draftFor(members: Array<[string, string]>, ws = workspace) {
       [ws, segment, actor, members.length],
     )
   ).rows[0]!.id as string;
-  for (const [conn, sender] of members)
-    await pool.query(
-      "INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,$4)",
-      [snapshot, ws, conn, sender],
-    );
+  for (const [conn, sender] of members) await pool.query("INSERT INTO instagram_segment_snapshot_members(snapshot_id,workspace_id,connection_id,sender_id) VALUES($1,$2,$3,$4)", [snapshot, ws, conn, sender]);
   const id = randomUUID();
   await pool.query(
     `INSERT INTO campaign_drafts(id,workspace_id,snapshot_id,name,body,create_request_hash,created_by,updated_by)
@@ -101,27 +76,16 @@ async function draftFor(members: Array<[string, string]>, ws = workspace) {
 
 function startCounts(overrides: Record<string, number> = {}) {
   const counts: Record<string, string> = {};
-  for (const key of ["original_member_count", "remaining_member_count", ...REASONS.slice(0, 7)])
-    counts[key] = String(overrides[key] ?? 0);
-  for (const key of ["plan_limit_exceeded", "plan_limit", "plan_limit_used", "plan_limit_reserved"])
-    if (key in overrides) counts[key] = String(overrides[key]);
+  for (const key of ["original_member_count", "remaining_member_count", ...REASONS.slice(0, 7)]) counts[key] = String(overrides[key] ?? 0);
+  for (const key of ["plan_limit_exceeded", "plan_limit", "plan_limit_used", "plan_limit_reserved"]) if (key in overrides) counts[key] = String(overrides[key]);
   return counts;
 }
 
 // A run of `draftId` written as the start and the worker would leave it: an executed approval, the run with its stored
 // counts and the given number of delivery rows per status, each satisfying the delivery CHECKs.
-async function seedRun(options: {
-  draftId?: string;
-  status?: "running" | "cancelled" | "completed";
-  startedAt?: string;
-  counts?: Record<string, string>;
-  deliveries?: Partial<Record<DeliveryStatus, number>>;
-  conn?: string;
-}) {
+async function seedRun(options: { draftId?: string; status?: "running" | "cancelled" | "completed"; startedAt?: string; counts?: Record<string, string>; deliveries?: Partial<Record<DeliveryStatus, number>>; conn?: string }) {
   const draftId = options.draftId ?? draft;
-  const { workspace_id: ws, snapshot_id: snapshot } = (
-    await pool.query("SELECT workspace_id,snapshot_id FROM campaign_drafts WHERE id=$1", [draftId])
-  ).rows[0];
+  const { workspace_id: ws, snapshot_id: snapshot } = (await pool.query("SELECT workspace_id,snapshot_id FROM campaign_drafts WHERE id=$1", [draftId])).rows[0];
   const counts = JSON.stringify(options.counts ?? startCounts());
   const approval = randomUUID();
   await pool.query(
@@ -182,8 +146,7 @@ function request(path: string, actor = owner, plans?: Record<string, unknown>[],
         connect: pool.connect.bind(pool),
         end: async () => {},
       }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: actor, email: "member@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: actor, email: "member@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 const reportPath = (query: string) => `/api/reports/campaign-runs?${query}`;
@@ -198,8 +161,7 @@ async function refused(query: string, status: number, code: string, actor = owne
   assert.equal(response.status, status, query);
   assert.equal((await response.json()).error, code, query);
 }
-const sum = (values: Record<string, string>, keys: readonly string[]) =>
-  keys.reduce((total, key) => total + BigInt(values[key]!), 0n);
+const sum = (values: Record<string, string>, keys: readonly string[]) => keys.reduce((total, key) => total + BigInt(values[key]!), 0n);
 
 test("campaign report partitions run states, start reasons and delivery rows without multiplying runs", async () => {
   const running = await seedRun({
@@ -278,13 +240,9 @@ test("campaign report partitions run states, start reasons and delivery rows wit
   assert.equal(body.draft_id, null);
   assert.ok(Date.now() - Date.parse(body.checked_at) < 60_000);
   const text = JSON.stringify(body);
-  for (const secret of ["SECRET", running, owner, connection, draft])
-    assert.equal(text.includes(secret), false, secret);
+  for (const secret of ["SECRET", running, owner, connection, draft]) assert.equal(text.includes(secret), false, secret);
   // Counts are current: a later worker transition moves a row between statuses, not the run total.
-  await pool.query(
-    `UPDATE campaign_deliveries SET status='sent',provider_message_id='mid',sent_at=now() WHERE run_id=$1 AND status='sending'`,
-    [running],
-  );
+  await pool.query(`UPDATE campaign_deliveries SET status='sent',provider_message_id='mid',sent_at=now() WHERE run_id=$1 AND status='sending'`, [running]);
   const updated = await report();
   assert.equal(updated.delivery_counts.sending, "0");
   assert.equal(updated.delivery_counts.sent, "4");
@@ -306,11 +264,7 @@ test("campaign report counts a sent delivery row as read only on an exact messag
   const own = await seedRun({ deliveries: { sent: 3, failed: 1, cancelled: 1 } });
   const other = await seedRun({ status: "completed", deliveries: { sent: 2 }, conn: secondConnection });
   // seedRun numbers message IDs per run; give each row a distinct ID so a match names exactly one row.
-  for (const run of [own, other])
-    await pool.query(
-      "UPDATE campaign_deliveries SET provider_message_id=run_id::text||'-'||recipient_id WHERE run_id=$1 AND status='sent'",
-      [run],
-    );
+  for (const run of [own, other]) await pool.query("UPDATE campaign_deliveries SET provider_message_id=run_id::text||'-'||recipient_id WHERE run_id=$1 AND status='sent'", [run]);
   await markRead(connection, `${own}-91`, "901");
   await markRead(connection, `${own}-91`, "902");
   // The other run's message ID read on `connection` names no row there.
@@ -358,11 +312,7 @@ test("campaign report counts a sent delivery row on a connection that cannot rep
     deliveries: { sent: 3, failed: 1, cancelled: 1 },
     conn: secondConnection,
   });
-  for (const run of [own, other])
-    await pool.query(
-      "UPDATE campaign_deliveries SET provider_message_id=run_id::text||'-'||recipient_id WHERE run_id=$1 AND status='sent'",
-      [run],
-    );
+  for (const run of [own, other]) await pool.query("UPDATE campaign_deliveries SET provider_message_id=run_id::text||'-'||recipient_id WHERE run_id=$1 AND status='sent'", [run]);
   // A read stored for such a connection is still a confirmed read, never also unavailable.
   await markRead(secondConnection, `${other}-91`);
   const body = await report();
@@ -381,10 +331,7 @@ test("campaign report counts a sent delivery row on a connection that cannot rep
   assert.equal(body.run_counts.total, "2");
   // `read` and `read_unavailable` are disjoint subsets of `sent` and stay outside the status partition.
   assert.equal(sum(body.delivery_counts, STATUSES), BigInt(body.delivery_counts.total));
-  assert.ok(
-    BigInt(body.delivery_counts.read) + BigInt(body.delivery_counts.read_unavailable) <=
-      BigInt(body.delivery_counts.sent),
-  );
+  assert.ok(BigInt(body.delivery_counts.read) + BigInt(body.delivery_counts.read_unavailable) <= BigInt(body.delivery_counts.sent));
   // Reconnecting through Instagram Login records the user ID, and the count follows the connection's current state.
   await pool.query("UPDATE instagram_connections SET instagram_user_id='4242' WHERE id=$1", [secondConnection]);
   assert.equal((await report()).delivery_counts.read_unavailable, "0");
@@ -483,11 +430,7 @@ test("real starts: a started run's candidates equal its rows until a deletion, a
   assert.equal(limitedOnly.delivery_counts.total, "0");
 
   // Person deletion removes the row but keeps the run and its stored counts: candidates exceed the rows.
-  await pool.query("SELECT public.delete_person_data($1,$2,$3,'comment_sender','1001')", [
-    workspace,
-    connection,
-    owner,
-  ]);
+  await pool.query("SELECT public.delete_person_data($1,$2,$3,'comment_sender','1001')", [workspace, connection, owner]);
   const deleted = await report(query);
   assert.equal(deleted.run_counts.total, "2");
   assert.equal(deleted.start_counts.candidate, "1");
@@ -574,8 +517,7 @@ test("campaign report enforces active admins, the current time zone, DST and bou
 
 test("campaign report reaches delivery rows through the run_id-leading unique index", async () => {
   // Out-of-period history: 300 runs with 100 rows each, so a delivery scan would read 30,000 rows.
-  const { snapshot_id: snapshot } = (await pool.query("SELECT snapshot_id FROM campaign_drafts WHERE id=$1", [draft]))
-    .rows[0];
+  const { snapshot_id: snapshot } = (await pool.query("SELECT snapshot_id FROM campaign_drafts WHERE id=$1", [draft])).rows[0];
   await pool.query(
     `WITH approvals AS (
        INSERT INTO campaign_approvals(workspace_id,id,draft_id,draft_version,snapshot_id,name,body,schedule_kind,
@@ -605,26 +547,14 @@ test("campaign report reaches delivery rows through the run_id-leading unique in
     assert.equal(plans.length, 1);
     const deliveryNodes: Record<string, unknown>[] = [];
     function walk(node: Record<string, unknown>) {
-      if (
-        node["Relation Name"] === "campaign_deliveries" ||
-        String(node["Index Name"]).startsWith("campaign_deliveries")
-      )
-        deliveryNodes.push(node);
+      if (node["Relation Name"] === "campaign_deliveries" || String(node["Index Name"]).startsWith("campaign_deliveries")) deliveryNodes.push(node);
       for (const child of (node.Plans ?? []) as Record<string, unknown>[]) walk(child);
     }
     walk(plans[0]!);
     assert.ok(deliveryNodes.length > 0, "the plan reads campaign_deliveries");
-    for (const node of deliveryNodes)
-      assert.notEqual(
-        node["Node Type"],
-        "Seq Scan",
-        `delivery rows must not be read by a sequential scan: ${JSON.stringify(plans[0])}`,
-      );
+    for (const node of deliveryNodes) assert.notEqual(node["Node Type"], "Seq Scan", `delivery rows must not be read by a sequential scan: ${JSON.stringify(plans[0])}`);
     const member = deliveryNodes.filter((node) => node["Index Name"] === "campaign_deliveries_member");
-    assert.ok(
-      member.length > 0,
-      `delivery rows are read through campaign_deliveries_member: ${JSON.stringify(deliveryNodes)}`,
-    );
+    assert.ok(member.length > 0, `delivery rows are read through campaign_deliveries_member: ${JSON.stringify(deliveryNodes)}`);
     for (const node of member) {
       assert.match(String(node["Index Cond"]), /run_id =/);
       // One lookup per cohort run: the out-of-period history is never visited.
@@ -632,9 +562,7 @@ test("campaign report reaches delivery rows through the run_id-leading unique in
       assert.equal(node["Actual Rows"], 2);
     }
     assert.ok(
-      deliveryNodes.every(
-        (node) => node["Index Name"] === undefined || node["Index Name"] === "campaign_deliveries_member",
-      ),
+      deliveryNodes.every((node) => node["Index Name"] === undefined || node["Index Name"] === "campaign_deliveries_member"),
       "no other delivery index is used",
     );
   }

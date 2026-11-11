@@ -11,21 +11,11 @@ const DELETION_ERRORS: Record<string, [number, string]> = {
 };
 
 export async function deleteConnectionData(pool: Pool, user: User, connectionId: string, input: unknown) {
-  if (
-    !isUuid(connectionId) ||
-    !isRecord(input) ||
-    Object.keys(input).some((key) => key !== "confirm_account_id") ||
-    typeof input.confirm_account_id !== "string" ||
-    !input.confirm_account_id.trim() ||
-    input.confirm_account_id.length > 255
-  )
+  if (!isUuid(connectionId) || !isRecord(input) || Object.keys(input).some((key) => key !== "confirm_account_id") || typeof input.confirm_account_id !== "string" || !input.confirm_account_id.trim() || input.confirm_account_id.length > 255)
     throw new ApiError(400, "invalid_data_deletion");
   const workspace = await workspaceFor(pool, user, "admin");
   try {
-    const result = await pool.query<{ result: unknown }>(
-      "SELECT public.delete_connection_data($1,$2,$3,$4) AS result",
-      [workspace, connectionId, user.id, input.confirm_account_id],
-    );
+    const result = await pool.query<{ result: unknown }>("SELECT public.delete_connection_data($1,$2,$3,$4) AS result", [workspace, connectionId, user.id, input.confirm_account_id]);
     return result.rows[0]!.result;
   } catch (error) {
     const mapped = isRecord(error) && typeof error.code === "string" ? DELETION_ERRORS[error.code] : undefined;
@@ -37,10 +27,7 @@ export async function deleteConnectionData(pool: Pool, user: User, connectionId:
 export async function listDataDeletions(pool: Pool, user: User, connectionId: string) {
   if (!isUuid(connectionId)) throw new ApiError(400, "invalid_data_deletion");
   const workspace = await workspaceFor(pool, user, "admin");
-  const owned = await pool.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [
-    connectionId,
-    workspace,
-  ]);
+  const owned = await pool.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [connectionId, workspace]);
   if (!owned.rows[0]) throw new ApiError(404, "connection_not_found");
   return (
     await pool.query(

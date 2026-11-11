@@ -18,8 +18,7 @@ const LATEST_READ_TIME = 253402300799999;
 // A read event has no `message` or `postback`, so parseMessageEvents never sees it as an inbound DM.
 export function parseMessageReadEvents(body: Uint8Array): InstagramMessageRead[] {
   const payload: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
-  if (!isRecord(payload) || payload.object !== "instagram" || !Array.isArray(payload.entry))
-    throw new Error("Invalid Instagram webhook payload");
+  if (!isRecord(payload) || payload.object !== "instagram" || !Array.isArray(payload.entry)) throw new Error("Invalid Instagram webhook payload");
   const reads: InstagramMessageRead[] = [];
   for (const entry of payload.entry) {
     if (!isRecord(entry) || typeof entry.id !== "string" || !Array.isArray(entry.messaging)) continue;
@@ -64,10 +63,7 @@ export async function ingestMessageReads(pool: Pool, reads: readonly InstagramMe
     // Lock the active connections first, in their own statement, like contact writes: a connection deletion locks the
     // row FOR UPDATE, so it either finishes first (the row is then inactive and skipped here) or waits for this
     // transaction. The INSERT below then takes a fresh snapshot that sees every send row the deletion left.
-    const connections = await client.query<{ id: string }>(
-      "SELECT id FROM instagram_connections WHERE account_id=ANY($1::text[]) AND active ORDER BY id FOR SHARE",
-      [[...new Set(reads.map((read) => read.accountId))]],
-    );
+    const connections = await client.query<{ id: string }>("SELECT id FROM instagram_connections WHERE account_id=ANY($1::text[]) AND active ORDER BY id FOR SHARE", [[...new Set(reads.map((read) => read.accountId))]]);
     if (connections.rows.length) {
       await client.query(
         `INSERT INTO instagram_message_reads(workspace_id,connection_id,recipient_id,message_id,read_at)
@@ -86,13 +82,7 @@ export async function ingestMessageReads(pool: Pool, reads: readonly InstagramMe
            OR EXISTS(SELECT 1 FROM campaign_deliveries s WHERE s.connection_id=c.id AND s.provider_message_id=r.message_id)
          ORDER BY r.position
          ON CONFLICT(connection_id,message_id,recipient_id) DO NOTHING`,
-        [
-          reads.map((read) => read.accountId),
-          reads.map((read) => read.readerId),
-          reads.map((read) => read.messageId),
-          reads.map((read) => read.readAt.toISOString()),
-          connections.rows.map((row) => row.id),
-        ],
+        [reads.map((read) => read.accountId), reads.map((read) => read.readerId), reads.map((read) => read.messageId), reads.map((read) => read.readAt.toISOString()), connections.rows.map((row) => row.id)],
       );
     }
     await client.query("COMMIT");

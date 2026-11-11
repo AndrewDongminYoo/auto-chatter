@@ -18,8 +18,7 @@ import { ingestMessageReads, parseMessageReadEvents } from "./message-reads.ts";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
 const testUrl = new URL(databaseUrl);
-if (!["localhost", "127.0.0.1"].includes(testUrl.hostname) || testUrl.pathname !== "/automations_test")
-  throw new Error("TEST_DATABASE_URL must point at the local automations_test database");
+if (!["localhost", "127.0.0.1"].includes(testUrl.hostname) || testUrl.pathname !== "/automations_test") throw new Error("TEST_DATABASE_URL must point at the local automations_test database");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const userId = "11111111-1111-4111-8111-111111111111";
@@ -59,14 +58,11 @@ function request(method: string, path: string, body?: unknown, source: Pick<Pool
         connect: source.connect.bind(source),
         end: async () => {},
       }) as unknown as Pool,
-    (async () =>
-      Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
+    (async () => Response.json({ id: userId, email: "a@example.test", email_confirmed_at: "2026-09-25" })) as typeof fetch,
   );
 }
 
-type Trigger =
-  | { type: "instagram_dm_keyword"; keywords: string[]; mode?: "contains" | "exact" | "all" }
-  | { type: "instagram_dm_default" };
+type Trigger = { type: "instagram_dm_keyword"; keywords: string[]; mode?: "contains" | "exact" | "all" } | { type: "instagram_dm_default" };
 
 function dmDocument(trigger: Trigger, text: string) {
   return {
@@ -291,9 +287,7 @@ test("a DM that the reply wait takes starts nothing, also when it is delivered a
   });
   assert.equal((await request("POST", `/api/flows/${flow}/publish`, { expected_revision: 0 })).status, 201);
   assert.equal((await request("POST", `/api/flows/${flow}/enable`)).status, 200);
-  await ingestComments(pool, [
-    { accountId: "owned-account", commentId: "c1", postId: "1789", senderId: "123", text: "size" },
-  ]);
+  await ingestComments(pool, [{ accountId: "owned-account", commentId: "c1", postId: "1789", senderId: "123", text: "size" }]);
   const transport: PrivateReplyTransport = {
     verify: async () => ({ commentCreatedAt: new Date(), authorizationVerified: true, mediaOwned: true }),
     send: async () => ({ messageId: "mid-c1", recipientId: "9200" }),
@@ -354,10 +348,7 @@ test("a read of a sent reply neither starts a DM flow nor answers a follow confi
   // The calls of the webhook ingress, in its order.
   await ingestMessages(pool, partitionInstagramEvents(instagramAdapter.decodeWebhook(body)).messages);
   await ingestMessageReads(pool, parseMessageReadEvents(body));
-  assert.deepEqual((await pool.query("SELECT recipient_id FROM instagram_message_reads ORDER BY 1")).rows, [
-    { recipient_id: "9300" },
-    { recipient_id: "9400" },
-  ]);
+  assert.deepEqual((await pool.query("SELECT recipient_id FROM instagram_message_reads ORDER BY 1")).rows, [{ recipient_id: "9300" }, { recipient_id: "9400" }]);
   assert.equal((await started()).length, 0);
   assert.equal((await pool.query("SELECT status FROM instagram_follow_conversations")).rows[0].status, "waiting");
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_message_receipts")).rows[0].count, 0);
@@ -439,9 +430,7 @@ test("a redelivered DM that started a DM flow does not answer a reply wait", asy
   });
   assert.equal((await request("POST", `/api/flows/${flow}/publish`, { expected_revision: 0 })).status, 201);
   assert.equal((await request("POST", `/api/flows/${flow}/enable`)).status, 200);
-  await ingestComments(pool, [
-    { accountId: "owned-account", commentId: "c1", postId: "1789", senderId: "123", text: "size" },
-  ]);
+  await ingestComments(pool, [{ accountId: "owned-account", commentId: "c1", postId: "1789", senderId: "123", text: "size" }]);
   const transport: PrivateReplyTransport = {
     verify: async () => ({ commentCreatedAt: new Date(), authorizationVerified: true, mediaOwned: true }),
     send: async () => ({ messageId: "mid-c1", recipientId: "9600" }),
@@ -487,9 +476,7 @@ function deliveryHeldBeforeCommit(message: InstagramMessage) {
 
 async function waitForMessageLock() {
   for (let attempt = 0; attempt < 100; attempt++) {
-    const waiting = await pool.query(
-      "SELECT 1 FROM pg_stat_activity WHERE wait_event='advisory' AND query LIKE '%instagram-message:%'",
-    );
+    const waiting = await pool.query("SELECT 1 FROM pg_stat_activity WHERE wait_event='advisory' AND query LIKE '%instagram-message:%'");
     if (waiting.rowCount) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -549,10 +536,7 @@ test("a batch takes its message locks in key order, whatever the order of its me
       { accountId: "owned-account", senderId: "9801", messageId: "lock-a", text: "a", timestamp: at },
     ]);
     await waitForMessageLock();
-    const held = await pool.query(
-      "SELECT count(*)::int AS held FROM pg_locks WHERE locktype='advisory' AND granted AND pid<>$1",
-      [holderPid],
-    );
+    const held = await pool.query("SELECT count(*)::int AS held FROM pg_locks WHERE locktype='advisory' AND granted AND pid<>$1", [holderPid]);
     assert.equal(held.rows[0].held, 0);
   } finally {
     await holder.query("ROLLBACK");
@@ -601,10 +585,7 @@ test("an opted-out messaging identity and a handed-off conversation start nothin
     actorId: userId,
   });
   const reply = await sentReply("9501");
-  await pool.query(
-    "INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id) VALUES($1,$2,'123')",
-    [workspaceId, connectionId],
-  );
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id) VALUES($1,$2,'123')", [workspaceId, connectionId]);
   await pool.query(
     `INSERT INTO instagram_inbox_handoffs(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,updated_by)
      VALUES($1,$2,'9501','123',$3,true,1,$4)`,
@@ -644,10 +625,7 @@ test("a comment sender's revoke blocks the messaging ID a provider-acknowledged 
   await sentReply("9701");
   // A reply that Meta never acknowledged is no bridge, so its recipient is not the comment sender's.
   const unacknowledged = await sentReply("9704");
-  await pool.query(
-    "UPDATE private_reply_outbox SET status='unknown',provider_message_id=NULL,sent_at=NULL WHERE id=$1",
-    [unacknowledged],
-  );
+  await pool.query("UPDATE private_reply_outbox SET status='unknown',provider_message_id=NULL,sent_at=NULL WHERE id=$1", [unacknowledged]);
   await dm("9701", "hello");
   await dm("9704", "hello");
   await dm("9799", "hello");
@@ -672,14 +650,8 @@ test("no claim of another send path, worker or resume selects a DM delivery row"
   const before = (await pool.query("SELECT * FROM flow_dm_deliveries")).rows;
   assert.equal(before.length, 1);
   assert.equal(await processNextPrivateReply(pool, refusingTransport, () => new Date(), connectionId), false);
-  assert.equal(
-    await processNextFollowReply(pool, connectionId, { followStatus: refuse, send: refuse }, () => new Date()),
-    false,
-  );
-  assert.equal(
-    await processNextCampaignDelivery(pool, connectionId, { send: refuse } as never, null, { globalSendEnabled: true }),
-    false,
-  );
+  assert.equal(await processNextFollowReply(pool, connectionId, { followStatus: refuse, send: refuse }, () => new Date()), false);
+  assert.equal(await processNextCampaignDelivery(pool, connectionId, { send: refuse } as never, null, { globalSendEnabled: true }), false);
   assert.equal(await processNextManualReply(pool, connectionId, null, null), false);
   assert.equal(await resumeDueFlowRuns(pool), 0);
   assert.equal(await reconcileUnmatchedReplies(pool), 0);
@@ -698,9 +670,7 @@ test("enable and publish refuse a second default reply and overlapping keywords 
     ["dm_default_conflict"],
   );
   const price = await enabledFlow(dmDocument({ type: "instagram_dm_keyword", keywords: ["price"] }, "Prices"));
-  const overlapping = await createFlow(
-    dmDocument({ type: "instagram_dm_keyword", keywords: ["price list"], mode: "exact" }, "List"),
-  );
+  const overlapping = await createFlow(dmDocument({ type: "instagram_dm_keyword", keywords: ["price list"], mode: "exact" }, "List"));
   assert.equal((await request("POST", `/api/flows/${overlapping}/publish`, { expected_revision: 0 })).status, 422);
   // A flow published while the other was off cannot be enabled next to it.
   assert.equal((await request("POST", `/api/flows/${price}/disable`)).status, 200);
@@ -713,9 +683,7 @@ test("enable and publish refuse a second default reply and overlapping keywords 
     ["dm_keyword_conflict"],
   );
   const versions = await pool.query("SELECT trigger_type,trigger_media_id FROM flow_versions ORDER BY published_at");
-  assert.ok(
-    versions.rows.every((row) => row.trigger_media_id === null && row.trigger_type.startsWith("instagram_dm_")),
-  );
+  assert.ok(versions.rows.every((row) => row.trigger_media_id === null && row.trigger_type.startsWith("instagram_dm_")));
 });
 
 // Security audit #62, fourth pass: starts an enable that holds its transaction after its UPDATE, before the commit,
@@ -785,8 +753,7 @@ async function waitsOnConnectionLock(holder: number, other: Promise<unknown>) {
 test("concurrent enables of two default-reply flows on one connection leave one enabled", async () => {
   const first = await createFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
   const second = await createFlow(dmDocument({ type: "instagram_dm_default" }, "Hello"));
-  for (const id of [first, second])
-    assert.equal((await request("POST", `/api/flows/${id}/publish`, { expected_revision: 0 })).status, 201);
+  for (const id of [first, second]) assert.equal((await request("POST", `/api/flows/${id}/publish`, { expected_revision: 0 })).status, 201);
   const { enable: firstEnable, holder, release } = await heldEnable(first);
   let secondEnable: Promise<Response> | undefined;
   try {
@@ -808,9 +775,7 @@ test("concurrent enables of two default-reply flows on one connection leave one 
 test("a publish that overlaps an enable in flight waits for it and is refused", async () => {
   const enabling = await createFlow(dmDocument({ type: "instagram_dm_keyword", keywords: ["price"] }, "Prices"));
   assert.equal((await request("POST", `/api/flows/${enabling}/publish`, { expected_revision: 0 })).status, 201);
-  const overlapping = await createFlow(
-    dmDocument({ type: "instagram_dm_keyword", keywords: ["price list"], mode: "exact" }, "List"),
-  );
+  const overlapping = await createFlow(dmDocument({ type: "instagram_dm_keyword", keywords: ["price list"], mode: "exact" }, "List"));
   const { enable, holder, release } = await heldEnable(enabling);
   let publish: Promise<Response> | undefined;
   try {
@@ -844,9 +809,7 @@ test("a DM starts only the flows of the connection that received it", async () =
   const other = await enabledFlow(document);
   await dm("9800", "hello");
   assert.deepEqual(await started(), []);
-  await ingestMessages(pool, [
-    { accountId: "other-account", senderId: "9800", messageId: "in-other", text: "hello", timestamp: new Date() },
-  ]);
+  await ingestMessages(pool, [{ accountId: "other-account", senderId: "9800", messageId: "in-other", text: "hello", timestamp: new Date() }]);
   assert.deepEqual(
     (await started()).map((row) => [row.flow_id, row.message_id, row.recipient_id]),
     [[other, "in-other", "9800"]],
@@ -858,13 +821,7 @@ test("person, connection and workspace deletion remove the DM start events, runs
   await dm("9700", "hello");
   await dm("9701", "hello");
   const count = async (table: string) => Number((await pool.query(`SELECT count(*) FROM ${table}`)).rows[0].count);
-  const person = (
-    await pool.query("SELECT public.delete_person_data($1,$2,$3,'dm_recipient','9700') AS result", [
-      workspaceId,
-      connectionId,
-      userId,
-    ])
-  ).rows[0].result;
+  const person = (await pool.query("SELECT public.delete_person_data($1,$2,$3,'dm_recipient','9700') AS result", [workspaceId, connectionId, userId])).rows[0].result;
   assert.equal(person.deleted_counts.instagram_dm_start_events, 1);
   assert.equal(person.deleted_counts.flow_runs, 1);
   assert.equal(person.deleted_counts.flow_step_runs, 2);
@@ -874,39 +831,22 @@ test("person, connection and workspace deletion remove the DM start events, runs
     ["9701"],
   );
   // A comment-sender deletion of the same digits does not reach the messaging identity.
-  await pool.query("SELECT public.delete_person_data($1,$2,$3,'comment_sender','9701')", [
-    workspaceId,
-    connectionId,
-    userId,
-  ]);
+  await pool.query("SELECT public.delete_person_data($1,$2,$3,'comment_sender','9701')", [workspaceId, connectionId, userId]);
   assert.equal(await count("instagram_dm_start_events"), 1);
   await pool.query("UPDATE flows SET enabled=false");
   await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL");
-  const connection = (
-    await pool.query("SELECT public.delete_connection_data($1,$2,$3,'owned-account') AS result", [
-      workspaceId,
-      connectionId,
-      userId,
-    ])
-  ).rows[0].result;
+  const connection = (await pool.query("SELECT public.delete_connection_data($1,$2,$3,'owned-account') AS result", [workspaceId, connectionId, userId])).rows[0].result;
   assert.equal(connection.deleted_counts.instagram_dm_start_events, 1);
   assert.equal(connection.deleted_counts.flow_dm_deliveries, 1);
-  for (const table of ["instagram_dm_start_events", "flow_dm_deliveries", "flow_runs"])
-    assert.equal(await count(table), 0);
-  const workspace = (await pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [workspaceId, userId]))
-    .rows[0].result;
+  for (const table of ["instagram_dm_start_events", "flow_dm_deliveries", "flow_runs"]) assert.equal(await count(table), 0);
+  const workspace = (await pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [workspaceId, userId])).rows[0].result;
   assert.equal(workspace.deleted_counts.instagram_dm_start_events, 0);
 });
 
 test("migration 068 replays over stored rows, keeps the canonical deletion functions and runs in the runner", async () => {
   await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
   await dm("9800", "hello");
-  const definitions = async () =>
-    (
-      await pool.query(
-        "SELECT proname,pg_get_functiondef(oid) AS definition FROM pg_proc WHERE proname IN ('delete_person_data','delete_connection_data','delete_workspace_data') ORDER BY proname",
-      )
-    ).rows;
+  const definitions = async () => (await pool.query("SELECT proname,pg_get_functiondef(oid) AS definition FROM pg_proc WHERE proname IN ('delete_person_data','delete_connection_data','delete_workspace_data') ORDER BY proname")).rows;
   const canonical = await definitions();
   for (const { definition } of canonical) assert.match(definition, /flow_dm_deliveries/);
   const sql = await readFile(new URL("../../db/migrations/068_dm_start_triggers.sql", import.meta.url), "utf8");
@@ -914,19 +854,12 @@ test("migration 068 replays over stored rows, keeps the canonical deletion funct
   await pool.query(sql);
   // Migrations 069 (#291), 070 (#312) and 071 (#321) redefine the three deletion functions; 071 holds the latest body.
   await pool.query(await readFile(new URL("../../db/migrations/069_dm_flow_delivery.sql", import.meta.url), "utf8"));
-  await pool.query(
-    await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8"),
-  );
-  await pool.query(
-    await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"),
-  );
+  await pool.query(await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"));
   assert.deepEqual(await definitions(), canonical);
   assert.equal((await started()).length, 1);
   // The source CHECK holds: a run has exactly one of a comment event and a DM start event.
   await assert.rejects(pool.query("UPDATE flow_runs SET dm_start_event_id=NULL"), { code: "23514" });
   const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
-  assert.ok(
-    runner.indexOf("068_dm_start_triggers.sql") > runner.indexOf("067_campaign_sweep_recovered_at.sql") &&
-      runner.indexOf("068_dm_start_triggers.sql") < runner.indexOf("supabase-access.sql"),
-  );
+  assert.ok(runner.indexOf("068_dm_start_triggers.sql") > runner.indexOf("067_campaign_sweep_recovered_at.sql") && runner.indexOf("068_dm_start_triggers.sql") < runner.indexOf("supabase-access.sql"));
 });

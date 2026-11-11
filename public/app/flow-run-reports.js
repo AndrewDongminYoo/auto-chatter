@@ -28,13 +28,7 @@ function createFlowRunReports({ api, node }) {
       "reply",
       "reply_counts",
       byId("flow-report-reply-counts"),
-      [
-        ["absent", "연결된 답장 없음"],
-        ...sendStatusEntries(["pending", "sending", "sent"]),
-        ["read", "읽음 확인"],
-        ["read_unavailable", "읽음 확인 불가"],
-        ...sendStatusEntries(["blocked", "failed", "unknown"]),
-      ],
+      [["absent", "연결된 답장 없음"], ...sendStatusEntries(["pending", "sending", "sent"]), ["read", "읽음 확인"], ["read_unavailable", "읽음 확인 불가"], ...sendStatusEntries(["blocked", "failed", "unknown"])],
       "첫 답장 상태",
     ],
     [
@@ -121,12 +115,10 @@ function createFlowRunReports({ api, node }) {
         labels.flow.set(flow.id, flow.name);
         form.elements.flow_id.append(new Option(flow.name, flow.id));
       }
-      flowNotice.textContent =
-        "목록에는 보관하지 않은 플로만 표시됩니다. 전체 조회에는 보관한 플로의 실행도 포함됩니다.";
+      flowNotice.textContent = "목록에는 보관하지 않은 플로만 표시됩니다. 전체 조회에는 보관한 플로의 실행도 포함됩니다.";
     } catch {
       if (current !== contextGeneration) return;
-      flowNotice.textContent =
-        "플로 목록을 불러오지 못했습니다. 전체 조회는 가능하며, 개별 플로를 선택하려면 페이지를 새로고침해 주세요.";
+      flowNotice.textContent = "플로 목록을 불러오지 못했습니다. 전체 조회는 가능하며, 개별 플로를 선택하려면 페이지를 새로고침해 주세요.";
     } finally {
       if (current === contextGeneration) form.elements.flow_id.disabled = false;
     }
@@ -143,8 +135,7 @@ function createFlowRunReports({ api, node }) {
       before: form.elements.before.value,
       expected_time_zone: timeZone,
     });
-    for (const key of ["connection_id", "flow_id", "group_by"])
-      if (form.elements[key].value) query.set(key, form.elements[key].value);
+    for (const key of ["connection_id", "flow_id", "group_by"]) if (form.elements[key].value) query.set(key, form.elements[key].value);
     submit.disabled = true;
     submit.textContent = "조회 중…";
     try {
@@ -224,8 +215,7 @@ function createFlowRunReports({ api, node }) {
       const name = node("th", known ?? `${group.key.slice(0, 8)}…`);
       name.scope = "row";
       row.append(name);
-      for (const [, property, , metrics] of groups)
-        for (const [key] of metrics) row.append(node("td", BigInt(group[property][key]).toLocaleString("ko-KR")));
+      for (const [, property, , metrics] of groups) for (const [key] of metrics) row.append(node("td", BigInt(group[property][key]).toLocaleString("ko-KR")));
       tbody.append(row);
     }
     table.append(thead, tbody);
@@ -233,48 +223,15 @@ function createFlowRunReports({ api, node }) {
   }
   download.addEventListener("click", () => {
     if (!result || !permitted) return;
-    const rows = [
-      [
-        "group",
-        "metric",
-        "count",
-        "from_date",
-        "before_date_exclusive",
-        "time_zone",
-        "period_from_utc",
-        "period_before_utc",
-        "checked_at_utc",
-        "connection_id",
-        "flow_id",
-        "group_by",
-        "group_key",
-      ],
-    ];
+    const rows = [["group", "metric", "count", "from_date", "before_date_exclusive", "time_zone", "period_from_utc", "period_before_utc", "checked_at_utc", "connection_id", "flow_id", "group_by", "group_key"]];
     // Cohort totals first with an empty group_key, then each group's rows keyed by its date or UUID.
     const parts = [[null, result], ...(result.groups ?? []).map((group) => [group.key, group])];
     for (const [groupKey, counts] of parts)
       for (const [group, property, , metrics] of groups)
         for (const [key] of metrics)
-          rows.push([
-            group,
-            key,
-            counts[property][key],
-            result.from,
-            result.before,
-            result.time_zone,
-            result.period_from,
-            result.period_before,
-            result.checked_at,
-            result.connection_id ?? "",
-            result.flow_id ?? "",
-            groupKey === null ? "" : result.group_by,
-            groupKey ?? "",
-          ]);
+          rows.push([group, key, counts[property][key], result.from, result.before, result.time_zone, result.period_from, result.period_before, result.checked_at, result.connection_id ?? "", result.flow_id ?? "", groupKey === null ? "" : result.group_by, groupKey ?? ""]);
     // Fixed keys and validated metadata only; flow/account labels and customer text are excluded.
-    const csv =
-      "\uFEFF" +
-      rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\r\n") +
-      "\r\n";
+    const csv = "\uFEFF" + rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\r\n") + "\r\n";
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const link = node("a");
     link.href = url;
