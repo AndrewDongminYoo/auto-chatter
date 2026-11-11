@@ -125,14 +125,25 @@ test("CSV preview shows the chosen file name in Korean and clears it with the fi
   try {
     const h = previewHarness(async () => previewRows, channels);
     const input = h.get("contacts-import-file");
+    // Like a real file input, clearing the value drops the selected file.
+    let value = "";
+    Object.defineProperty(input, "value", {
+      get: () => value,
+      set: (next: string) => {
+        value = next;
+        if (next === "") input.files = [];
+      },
+    });
     input.files = [];
     h.controller.configure("admin");
     assert.equal(h.get("contacts-import-file-name").textContent, "선택한 파일 없음");
+    value = "tags.csv";
     input.files = [{ name: "tags.csv", size: 5, arrayBuffer: async () => new ArrayBuffer(0) } as never];
     input.dispatchEvent(new Event("change"));
     assert.equal(h.get("contacts-import-file-name").textContent, "tags.csv");
-    input.files = [];
     h.controller.sessionChanged();
+    assert.equal(input.value, "", "a session change clears the selected file");
+    assert.equal(input.files.length, 0);
     assert.equal(h.get("contacts-import-file-name").textContent, "선택한 파일 없음");
   } finally {
     for (const channel of channels) channel.close();
