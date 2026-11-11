@@ -289,6 +289,7 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
     try {
       const text = await api(`/api/segment-snapshots/${snapshot.id}/members.csv`, "GET", undefined, true, true);
       if (current !== generation) return;
+      // eslint-disable-next-line no-irregular-whitespace -- the literal U+FEFF byte order mark makes spreadsheet apps read the CSV as UTF-8
       const url = URL.createObjectURL(new Blob(["﻿" + text.replace(/^﻿/, "")], { type: "text/csv;charset=utf-8" }));
       try {
         const link = document.createElement("a");

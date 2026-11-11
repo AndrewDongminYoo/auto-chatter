@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A self-hosted messaging automation service positioned against ManyChat's paid features.
 The implemented channel is Instagram: signed comment and message webhooks feed PostgreSQL, keyword rules queue private replies, and confirmed DM responses trigger conditional follow checks and follow-up messages.
 The `/app/` dashboard uses server-verified Supabase Auth sessions and workspace-scoped APIs to connect accounts through Instagram OAuth and edit rules.
-Product scope, non-goals and the phased roadmap live in `docs/specs/` and `docs/plans/`; README.md, the specs, plans and notes are written in Korean, while `docs/agents/` holds English guidance for coding agents.
+Product scope, non-goals and the phased roadmap live in `docs/specs/` and `docs/plans/`; README.md, the specs, plans and notes are written in Korean, while `docs/agents/` holds English guidance for coding agents, including the [JavaScript and JSDoc conventions](docs/agents/javascript-conventions.md).
 
 ## Commands
 
@@ -18,6 +18,7 @@ Use `corepack pnpm` (pnpm 10, pinned by `packageManager`).
 ```bash
 corepack pnpm install --frozen-lockfile
 corepack pnpm check-types          # tsc --noEmit, the only compile check
+corepack pnpm lint                 # eslint .
 corepack pnpm test                 # unit tests, no DB needed
 python3 -m unittest discover -s .trunk/configs/tests -p 'test_*.py' -v # offline secret-scan reader
 TEST_DATABASE_URL=postgres://postgres:local-dev@127.0.0.1:5433/automations_test corepack pnpm test:db
@@ -42,6 +43,7 @@ node --test --test-name-pattern="seven-day boundary" src/instagram/reply-policy.
 - `.trunk/trunk.yaml` owns the Trunk linter set; pinact runs both `lint` and `upgrade`, and trufflehog runs offline.
   Its filesystem JSONL reader retains findings without a literal source match and fails on malformed records; the Python regression suite above also runs in CI.
   The pre-commit hook formats staged files and `trunk check` runs on pre-push; a file that must keep its formatting needs an explicit `lint.ignore` entry in `.trunk/trunk.yaml`.
+  Trunk's eslint loads the `eslint.config.js` imports from `node_modules`, so run `corepack pnpm install --frozen-lockfile` first in a new checkout or worktree.
   cspell reads `cspell.config.yaml`: add project terms to `.cspell/custom-dictionary.txt` and PostgreSQL catalog or function names to `.cspell/postgres-terms.txt`, and fix a real misspelling in its source instead.
 - Never enable sends, create cloud resources, or publish as part of tests.
 - PostgreSQL timestamps retain microseconds, while the default `pg` JavaScript `Date` reader retains milliseconds.

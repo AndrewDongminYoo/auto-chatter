@@ -1,4 +1,6 @@
 overrides:
+  # GHSA-g3hv-75wg-m249; ESLint 10 and typescript-eslint 8 require minimatch 10, whose fix is only in 11.
+  "minimatch@>=10 <11": ^11.0.1
   # GHSA-rgj7-g3m4-5g8c, GHSA-wq5f-xc86-pv6w; remove when Miniflare upgrades its pinned dependency.
   "sharp@>=0.35.0 <0.36.0": ~0.35.5
   # GHSA-4cwx-7wf7-3272, GHSA-8xcm-r25x-g524, GHSA-jr45-8vmc-qm54,

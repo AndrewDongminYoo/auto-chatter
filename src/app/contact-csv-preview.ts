@@ -23,6 +23,7 @@ type ImportSnapshot = { checked_at: Date; contacts: { row: number; tags: string[
 // Parse records, not physical lines: quoted cells may contain CRLF, commas and doubled quotes.
 export function parseImportCsv(value: string): string[][] {
   if (Buffer.byteLength(value, "utf8") > CONTACT_IMPORT_BYTES) throw new ApiError(422, "contact_import_too_large");
+  // eslint-disable-next-line no-control-regex -- an import that contains NUL is rejected
   if (/[\u0000\uD800-\uDFFF]/u.test(value)) throw new ApiError(400, "invalid_contact_import_format");
   const text = value.startsWith("\ufeff") ? value.slice(1) : value;
   const records: string[][] = [];

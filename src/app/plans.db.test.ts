@@ -19,7 +19,6 @@ type Actor = { id: string; email: string };
 const owner: Actor = { id: "11111111-1111-4111-8111-111111111111", email: "owner@example.test" };
 const first: Actor = { id: "22222222-2222-4222-8222-222222222222", email: "first@example.test" };
 const second: Actor = { id: "33333333-3333-4333-8333-333333333333", email: "second@example.test" };
-const third: Actor = { id: "44444444-4444-4444-8444-444444444444", email: "third@example.test" };
 const outsider: Actor = { id: "55555555-5555-4555-8555-555555555555", email: "outsider@example.test" };
 const workspaceId = "66666666-6666-4666-8666-666666666666";
 const otherWorkspaceId = "77777777-7777-4777-8777-777777777777";

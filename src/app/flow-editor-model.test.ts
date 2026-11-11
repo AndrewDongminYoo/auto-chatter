@@ -169,7 +169,9 @@ test("DM trigger configs keep the schema's keys and pass the publish and executi
     ["instagram_dm_keyword", { keywords: [], match_mode: "all" }],
     ["instagram_dm_default", {}],
   ] as const) {
-    let { document, id } = dmDoc(type, values);
+    const created = dmDoc(type, values);
+    const id = created.id;
+    let document = created.document;
     assert.equal(model.flowTrigger(document)?.id, id);
     assert.deepEqual(plain(model.flowSlotTypes(document, id, "next")), ["instagram_message"], type);
     document = plain(model.flowInsert(document, id, "next", "instagram_message", { text: "안녕하세요" }).document);
@@ -189,7 +191,9 @@ test("DM trigger configs keep the schema's keys and pass the publish and executi
 });
 
 test("a DM flow offers only one message after its trigger and links to nothing else", () => {
-  let { document, id: trigger } = dmDoc("instagram_dm_keyword", { keywords: ["a"] });
+  const created = dmDoc("instagram_dm_keyword", { keywords: ["a"] });
+  const trigger = created.id;
+  let document = created.document;
   const message = model.flowInsert(document, trigger, "next", "instagram_message", { text: "hi" });
   document = message.document;
   // A message is followed only by a reply wait, which a DM flow refuses; nothing fits in front of it either.
@@ -261,7 +265,9 @@ test("the offered types are the executable types with the ports of the schema", 
 });
 
 test("a document built with the editor operations passes the publish and execution checks", () => {
-  let { document, id: trigger } = triggerDoc();
+  const created = triggerDoc();
+  const trigger = created.id;
+  let document = created.document;
   const add = (from: string, port: string, type: string, values: Record<string, unknown>) => {
     assert.ok(model.flowSlotTypes(document, from, port).includes(type), `${type} after ${from}.${port}`);
     const added = model.flowInsert(document, from, port, type, model.flowConfig(type, values));
@@ -304,7 +310,9 @@ test("a document built with the editor operations passes the publish and executi
 });
 
 test("the picker offers only types the publish and execution checks accept on that slot", () => {
-  let { document, id: trigger } = triggerDoc();
+  const created = triggerDoc();
+  const trigger = created.id;
+  let document = created.document;
   const atStart = model.flowSlotTypes(document, trigger, "next");
   assert.ok(atStart.includes("instagram_message"));
   assert.ok(!atStart.includes("wait_for_reply"));
@@ -333,7 +341,9 @@ test("the picker offers only types the publish and execution checks accept on th
 });
 
 test("insert, connect, disconnect and remove keep the edges consistent", () => {
-  let { document, id: trigger } = triggerDoc();
+  const created = triggerDoc();
+  const trigger = created.id;
+  let document = created.document;
   const first = model.flowInsert(document, trigger, "next", "add_tag", { tag: "a" });
   document = first.document;
   const inserted = model.flowInsert(document, trigger, "next", "has_tag", { tag: "b" });

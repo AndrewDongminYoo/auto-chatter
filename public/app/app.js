@@ -3693,9 +3693,3 @@ const flowEditor = createFlowEditor({
 function initializeInbox() {
   inbox.initialize();
 }
-function loadInbox(more = false) {
-  return inbox.loadList(more);
-}
-function loadInboxMessages(older = false) {
-  return inbox.loadConversation(older);
-}

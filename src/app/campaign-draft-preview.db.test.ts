@@ -168,7 +168,7 @@ async function draftFor(members: Array<[string, string]>, ws = workspace, actor 
   );
   return id;
 }
-function assertCounts(body: Record<string, any>, expected: Partial<Record<string, number>>) {
+function assertCounts(body: { counts: unknown; remaining_member_count: unknown }, expected: Partial<Record<string, number>>) {
   const counts = Object.fromEntries(REASONS.map((reason) => [reason, String(expected[reason] ?? 0)]));
   assert.deepEqual(body.counts, counts);
   const sum = Object.values(body.counts as Record<string, string>).reduce((total, value) => total + Number(value), 0);

@@ -842,6 +842,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   function valid() {
     const name = fields.name.value.normalize("NFC").trim();
     const body = fields.body.value;
+    // eslint-disable-next-line no-control-regex -- campaign names must not contain control characters, as the server checks
     return form.reportValidity() && fields.snapshot_id.value && name && [...name].length <= 60 && !/[\u0000-\u001f\u007f]/.test(name) && body.trim() && body.length <= 1000 && !body.includes("\u0000") && !body.includes("{{") && !body.includes("}}");
   }
   async function save(archive = false) {

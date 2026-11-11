@@ -33,6 +33,10 @@ updates:
           - version-update:semver-patch
           - version-update:semver-minor
           - version-update:semver-major
+      # typescript-eslint supports only typescript <6.1; re-check when it adds TypeScript 7.
+      - dependency-name: typescript
+        versions:
+          - ">=6.1.0"
     schedule:
       interval: weekly
       day: monday

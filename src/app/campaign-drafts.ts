@@ -21,6 +21,7 @@ function version(value: unknown): number {
 export function parseCampaignDraft(input: unknown, editing = false) {
   const fields = [editing ? "expected_version" : "id", "snapshot_id", "name", "body"];
   if (!isRecord(input) || Object.keys(input).length !== fields.length || !fields.every((key) => key in input)) invalid();
+  // eslint-disable-next-line no-control-regex -- campaign names must not contain control characters
   if (typeof input.name !== "string" || /[\u0000-\u001f\u007f]/.test(input.name)) invalid();
   const name = input.name.normalize("NFC").trim();
   if (!name || [...name].length > 60) invalid();
@@ -162,7 +163,7 @@ export const CAMPAIGN_RECIPIENT_STAGE_SQL = `WITH evaluation AS MATERIALIZED (SE
  SELECT ${RECIPIENT_STAGE} AS stage
  FROM verified v CROSS JOIN evaluation CROSS JOIN LATERAL ${LATEST_TEXT}
  WHERE v.connection_id=$2 AND v.sender_id=$3 AND v.recipient_id=$4`;
-function previewOf(row: Record<string, any>) {
+function previewOf(row: Record<string, unknown>) {
   return {
     draft_id: row.draft_id as string,
     draft_version: row.draft_version as number,

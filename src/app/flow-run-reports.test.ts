@@ -271,7 +271,7 @@ test("flow report renders separate partitions and exports only the displayed sna
   const rows = csv
     .trim()
     .split("\r\n")
-    .map((line) => line.replace(/^"|"$/g, "").split('\",\"'));
+    .map((line) => line.replace(/^"|"$/g, "").split('","'));
   assert.equal(rows.length, 21);
   assert.ok(rows.slice(1).every((row) => row[11] === "" && row[12] === ""));
   for (const [group, values] of [

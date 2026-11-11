@@ -40,6 +40,7 @@ function keywordList(value: unknown, required: boolean): string[] {
   const keywords = value.map((item) => {
     if (typeof item !== "string" || item.length > 300) throw new ApiError(400, "invalid_label_rule_keywords");
     const keyword = normalizeMatchText(item);
+    // eslint-disable-next-line no-control-regex -- label rule keywords must not contain NUL
     if (!keyword || [...keyword].length > LABEL_RULE_KEYWORD_MAX || /[\u0000,\r\n]/.test(keyword)) throw new ApiError(400, "invalid_label_rule_keywords");
     return keyword;
   });

@@ -242,6 +242,7 @@ test("campaign report renders three partitions with run-screen labels and export
   const csv = await h.blob()!.text();
   assert.equal(csv.includes("SECRET"), false);
   const rows = csv
+    // eslint-disable-next-line no-irregular-whitespace -- strips the U+FEFF byte order mark the CSV export writes
     .replace(/^﻿/, "")
     .trim()
     .split("\r\n")

@@ -267,7 +267,7 @@ test("an Instagram callback provider failure logs the request's cf-ray as its co
 
 test("recovery endpoints require same-origin POST and never open the workspace database", async () => {
   const calls: string[] = [];
-  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+  const fetchImpl = (async (input: string | URL | Request) => {
     calls.push(new URL(String(input)).pathname);
     return new URL(String(input)).pathname.endsWith("/recover") ? Response.json({}) : new URL(String(input)).pathname.endsWith("/user") ? Response.json({ id: userId }) : new Response(null, { status: 204 });
   }) as typeof fetch;
@@ -1069,7 +1069,7 @@ test("contact preview returns an exact total string without changing the ordinar
 
 test("contact activity validates canonical UTC bounds and preserves an exact exclusion count", async () => {
   let values: unknown[] = [];
-  let queried = false;
+  let queried: boolean;
   const pool = {
     query: async (sql: string, parameters: unknown[]) => {
       queried = true;
@@ -1130,7 +1130,7 @@ test("contact activity validates canonical UTC bounds and preserves an exact exc
 
 test("contact consent filters validate an exact purpose-state pair before database access", async () => {
   let values: unknown[] = [];
-  let queried = false;
+  let queried: boolean;
   const pool = {
     query: async (sql: string, parameters: unknown[]) => {
       queried = true;
@@ -1194,7 +1194,7 @@ test("contact consent filters validate an exact purpose-state pair before databa
 
 test("contact DM consent filters validate an exact purpose-state pair before database access", async () => {
   let values: unknown[] = [];
-  let queried = false;
+  let queried: boolean;
   const pool = {
     query: async (sql: string, parameters: unknown[]) => {
       queried = true;
@@ -1287,7 +1287,7 @@ test("contact DM consent filters validate an exact purpose-state pair before dat
 test("contact DM activity takes canonical days 1 to 366 in $18 and refuses other values before database access", async () => {
   let values: unknown[] = [];
   let statement = "";
-  let queried = false;
+  let queried: boolean;
   const dmWindow = { from: "2026-10-15T03:00:00.000000Z", before: "2026-10-18T03:00:00.000000Z" };
   const pool = {
     query: async (sql: string, parameters: unknown[]) => {
@@ -1389,7 +1389,7 @@ test("contact DM activity takes canonical days 1 to 366 in $18 and refuses other
 
 test("contact calendar periods accept four exact values and refuse mixing before database access", async () => {
   let values: unknown[] = [];
-  let queried = false;
+  let queried: boolean;
   const window = {
     from: "2026-10-16T15:00:00.000000Z",
     before: "2026-10-17T15:00:00.000000Z",
@@ -1722,7 +1722,7 @@ test("segment definitions take a calendar period as an exact string and refuse m
 test("contact tag filters repeat tag up to five times with one mode and refuse other shapes before database access", async () => {
   let values: unknown[] = [];
   let statement = "";
-  let queried = false;
+  let queried: boolean;
   const pool = {
     query: async (sql: string, parameters: unknown[]) => {
       queried = true;
@@ -1838,7 +1838,7 @@ const setFieldTypes: Record<string, string> = {
 test("contact field filters take the legacy keys or a field_conditions set of up to three and refuse other shapes before database access", async () => {
   let values: unknown[] = [];
   let lookups: unknown[] = [];
-  let queried = false;
+  let queried: boolean;
   const pool = {
     query: async (sql: string, parameters: unknown[]) => {
       queried = true;
@@ -2016,7 +2016,7 @@ const tree = (mode: string, ...groups: unknown[]) => ({ mode, groups });
 test("contact condition trees take one bounded JSON tree in $19 and refuse other shapes before database access", async () => {
   let values: unknown[] = [];
   let lookups: unknown[] = [];
-  let queried = false;
+  let queried: boolean;
   const pool = {
     query: async (sql: string, parameters: unknown[]) => {
       queried = true;

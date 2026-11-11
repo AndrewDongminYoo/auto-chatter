@@ -27,7 +27,6 @@ const ownerId = "55555555-5555-4555-8555-555555555555",
   outsiderId = "88888888-8888-4888-8888-888888888888";
 const owner = { id: ownerId, email: "owner@example.test" };
 const admin = { id: adminId, email: "admin@example.test" };
-const agent = { id: agentId, email: "agent@example.test" };
 const asOf = "2026-10-10T03:00:00.000000Z";
 let sequence = 0;
 let changeQuery: ((query: QueryConfig) => QueryConfig) | undefined;

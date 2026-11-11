@@ -352,6 +352,7 @@ export async function processNextFollowReply(pool: Pool, connectionId: string, t
    ) UPDATE instagram_connections SET send_paused_until=GREATEST(send_paused_until,now()+make_interval(secs=>$5)) WHERE id IN(SELECT connection_id FROM retried)`,
           [row.reply_id, attempt, row.rate_limit_retries < 3 ? "pending" : "failed", error.failureCode, delay],
         );
+        // eslint-disable-next-line preserve-caught-error -- a lost claim is its own failure, not caused by the rate-limit error
         if (result.rowCount !== 1) throw new Error("Follow reply claim was lost");
         await writer.query("COMMIT");
       } catch (failure) {
