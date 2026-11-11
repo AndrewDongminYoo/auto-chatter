@@ -938,6 +938,16 @@ select:disabled {
 #inbox-conversations .conversation-line {
   display: block;
 }
+#inbox-conversations .conversation-snippet {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+}
+#inbox-conversations .conversation-id {
+  color: var(--muted-foreground);
+  font-size: var(--font-size-caption);
+}
 #inbox-conversations .conversation-head {
   display: flex;
   justify-content: space-between;
@@ -1517,6 +1527,51 @@ section {
 .contacts-filter label {
   flex: 1 1 180px;
   margin: 0;
+}
+/* The native file input stays focusable and clickable through its label, but its browser-language text is hidden
+   behind a Korean button and the chosen file name. */
+.file-picker-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.file-picker input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  opacity: 0;
+}
+.file-picker-button {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  min-height: 44px;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-weight: 700;
+  color: var(--foreground);
+  cursor: pointer;
+}
+.file-picker:hover .file-picker-button {
+  background: var(--muted);
+}
+.file-picker input[type="file"]:focus-visible + .file-picker-button {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.file-picker-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  font-size: var(--font-size-help);
 }
 /* The group editor takes the filter's full width; its groups and leaves wrap like the filter row. */
 .condition-tree {

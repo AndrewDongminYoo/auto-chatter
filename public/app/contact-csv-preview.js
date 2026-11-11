@@ -3,6 +3,7 @@ function createContactCsvPreview({ api, node, reloadContacts, sessionSource }) {
   const section = byId("contacts-import");
   const form = byId("contacts-import-form");
   const input = byId("contacts-import-file");
+  const fileName = byId("contacts-import-file-name");
   const button = byId("contacts-import-check");
   const status = byId("contacts-import-status");
   const list = byId("contacts-import-rows");
@@ -54,6 +55,8 @@ function createContactCsvPreview({ api, node, reloadContacts, sessionSource }) {
     applyButton.disabled = true;
     applyButton.removeAttribute("aria-busy");
     if (clearFile) input.value = "";
+    // The native control's own text follows the browser language, so the page shows the chosen name in Korean.
+    fileName.textContent = input.files?.[0]?.name ?? "선택한 파일 없음";
   }
   function configure(role) {
     allowed = Boolean(sessionChannel) && (role === "owner" || role === "admin");

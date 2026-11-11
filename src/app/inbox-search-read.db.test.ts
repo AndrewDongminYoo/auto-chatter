@@ -33,6 +33,7 @@ type Row = {
   unread_count: number;
   last_read_message_id: string | null;
   last_message_at: string;
+  last_message_preview: string;
   state: { status: string; assignee: { user_id: string } | null; version: number };
 };
 type Position = { last_read_message_id: string | null; read_at: string | null; unread_count: number };
@@ -254,6 +255,11 @@ test("search matches stored DM text literally and case-insensitively, and the co
   assert.equal(row!.message_count, 2);
   assert.equal(row!.unread_count, 2);
   assert.equal(row!.last_message_at, "2026-10-01T00:00:07.000Z");
+  // The preview is the newest DM, not the one the search matched, cut to 80 characters.
+  assert.equal(row!.last_message_preview, "그냥 인사");
+  await seed("461", "나".repeat(90), "2026-10-01T00:00:01Z");
+  const long = (await page(agent, "")).conversations.find((conversation) => conversation.recipient_id === "461");
+  assert.equal(long!.last_message_preview, "나".repeat(80));
 
   assert.deepEqual(await search("가".repeat(100)), []);
   for (const query of ["?q=", `?q=${"a".repeat(101)}`, `?q=${encodeURIComponent("가".repeat(101))}`, "?q=%00", "?q=a&q=b", "?unread=1", "?unread=false", "?assignee=someone", "?assignee=me&assignee=none", "?status=done", "?connection_id=shop", "?after=invalid", "?label=vip"])

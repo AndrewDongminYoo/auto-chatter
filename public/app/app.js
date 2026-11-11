@@ -1309,8 +1309,8 @@ async function loadWorkspace() {
   byId("delivery-status").textContent = me.global_send_enabled
     ? "계정별로 발송을 켜고 규칙을 활성화하면 자동화를 시작합니다."
     : connectAvailable
-      ? "계정 연결과 규칙 저장은 가능합니다. 전체 발송이 재개되기 전에는 메시지가 전송되지 않습니다."
-      : "전체 발송이 재개되기 전에는 메시지가 전송되지 않습니다. 새 Instagram 연결은 현재 제한됩니다.";
+      ? "전체 발송은 서비스 운영 측에서 재개합니다. 그전까지는 계정이나 규칙이 켜져 있어도 메시지가 전송되지 않으며, 계정 연결과 규칙 저장은 계속할 수 있습니다."
+      : "전체 발송은 서비스 운영 측에서 재개합니다. 그전까지는 계정이나 규칙이 켜져 있어도 메시지가 전송되지 않습니다. 새 Instagram 연결은 현재 제한됩니다.";
   byId("connect").disabled = !connectAvailable;
   byId("connect-help").hidden = connectAvailable;
   byId("connect-help").textContent = connectAvailable ? "" : errors.instagram_public_access_restricted;
@@ -1335,7 +1335,8 @@ async function loadWorkspace() {
       ...(account.subscription_missing_at ? [badge("웹후크 구독 유실", "warning")] : []),
       ...(account.deauthorized_at ? [badge("Instagram에서 권한 해제됨", "warning")] : []),
       badge(account.active ? "수신 설정 켜짐" : "수신 설정 꺼짐", account.active && credentialStatus === "valid" ? "success" : ""),
-      badge(account.send_enabled ? "발송 설정 켜짐" : "발송 설정 꺼짐", account.send_enabled && credentialStatus === "valid" ? "success" : ""),
+      // The account switch alone never means messages go out: the service-wide switch must also be on.
+      badge(account.send_enabled ? (me.global_send_enabled ? "발송 설정 켜짐" : "발송 설정 켜짐 · 전체 중지 중") : "발송 설정 꺼짐", account.send_enabled && credentialStatus === "valid" && me.global_send_enabled ? "success" : ""),
     );
     item.append(state);
     const inboxToggle = node("button", account.inbox_enabled ? "DM 보관 끄기" : "DM 보관 켜기", "secondary");
@@ -1454,7 +1455,7 @@ async function loadWorkspace() {
     item.append(target);
     observeRuleMedia(target, rule);
     const state = node("div", "", "badges");
-    state.append(badge(rule.enabled ? "활성" : "중지", rule.enabled ? "success" : ""), badge(rule.follow_gate_enabled ? "팔로우 확인" : "바로 답장"));
+    state.append(badge(rule.enabled ? (me.global_send_enabled ? "활성" : "활성 · 전체 중지 중") : "중지", rule.enabled && me.global_send_enabled ? "success" : ""), badge(rule.follow_gate_enabled ? "팔로우 확인" : "바로 답장"));
     item.append(state, node("p", rule.match_mode === "all" ? "모든 댓글" : `${rule.match_mode === "exact" ? "정확히 일치" : "키워드 포함"} · ${(rule.keywords.length ? rule.keywords : [rule.keyword]).join(", ")}`, "rule-summary"));
     const button = node("button", "수정");
     button.className = "secondary";
@@ -1548,6 +1549,14 @@ function resetMedia() {
   byId("selected-media").replaceChildren();
   byId("selected-media").hidden = true;
   byId("media-status").textContent = "";
+  collapseMediaList(false);
+}
+// After a new rule's post is chosen, the post list folds behind "게시물 변경" so the conditions and messages move up.
+function collapseMediaList(collapsed) {
+  byId("media-list").hidden = collapsed;
+  if (collapsed) byId("media-more").hidden = true;
+  else byId("media-more").hidden = !mediaAfter;
+  byId("media-change").hidden = !collapsed;
 }
 async function getMedia(connectionId, mediaId, force = false) {
   const key = mediaKey(connectionId, mediaId);
@@ -1625,13 +1634,16 @@ async function loadMedia(more = false, force = false) {
         form.elements.media_id.value = media.id;
         for (const option of byId("media-list").children) option.setAttribute("aria-pressed", String(option === button));
         showSelected(media);
+        collapseMediaList(true);
+        byId("media-change").focus();
         byId("media-status").textContent = "게시물을 선택했습니다. 댓글 조건과 메시지를 작성하세요.";
         markDirty();
       });
       byId("media-list").append(button);
     }
     mediaAfter = page.after;
-    byId("media-more").hidden = !mediaAfter;
+    // A post picked while this page loaded has already folded the list; keep its "more" button folded with it.
+    byId("media-more").hidden = !mediaAfter || byId("media-list").hidden;
     byId("media-status").textContent = byId("media-list").children.length
       ? "답장할 게시물을 선택하세요. 오래된 게시물은 더 불러올 수 있습니다."
       : mediaAfter
@@ -1665,6 +1677,11 @@ byId("media-reload").addEventListener("click", () => {
   void loadMedia(false, true);
 });
 byId("media-more").addEventListener("click", () => void loadMedia(true));
+byId("media-change").addEventListener("click", () => {
+  collapseMediaList(false);
+  const options = [...byId("media-list").children];
+  (options.find((option) => option.getAttribute("aria-pressed") === "true") ?? options[0])?.focus();
+});
 
 byId("login-form").addEventListener("submit", (event) => {
   event.preventDefault();

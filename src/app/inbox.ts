@@ -78,6 +78,11 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
        GROUP BY m.workspace_id,m.connection_id,m.recipient_id
      )
      SELECT m.connection_id,m.recipient_id,c.username,m.message_count,m.last_message_at,m.unread_count,
+       -- The list shows the start of the newest stored DM: one lookup per conversation through
+       -- instagram_inbox_messages_latest_idx.
+       (SELECT left(last.text,80) FROM instagram_inbox_messages last
+        WHERE last.workspace_id=m.workspace_id AND last.connection_id=m.connection_id AND last.recipient_id=m.recipient_id
+        ORDER BY last.message_at DESC,last.id DESC LIMIT 1) AS last_message_preview,
        m.last_read_message_id::text AS last_read_message_id,m.last_message_us::text AS last_message_us,${STATE_COLUMNS},
        jsonb_build_object('version',coalesce(sets.version,0),
          'labels',${labelsJson("m.workspace_id", "coalesce(sets.label_ids,'{}')")}) AS label_set,
