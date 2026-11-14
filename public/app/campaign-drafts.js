@@ -546,7 +546,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     controls();
   }
   function options(previous = fields.snapshot_id.value) {
-    const placeholder = node("option", snapshots.length ? "고정한 대상 선택" : "먼저 위에서 필터를 선택하고 대상을 고정해 주세요.");
+    const placeholder = node("option", snapshots.length ? "고정한 대상 선택" : "먼저 연락처 메뉴에서 대상을 고정해 주세요.");
     placeholder.value = "";
     const choices = snapshots.map((snapshot) => {
       const date = new Date(snapshot.as_of).toLocaleString("ko-KR", { timeZone });
