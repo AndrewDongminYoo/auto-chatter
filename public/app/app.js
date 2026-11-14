@@ -1169,14 +1169,19 @@ async function loadWebhooks() {
 }
 
 // Menu views: each one shows a group of sections. Switching only hides the others, so drafts and inputs stay.
-const views = ["home", "accounts", "automation", "inbox", "contacts", "settings"];
+const views = ["home", "accounts", "automation", "inbox", "contacts", "campaigns", "settings"];
+// A menu whose link is hidden for the current role (campaigns for members and viewers) is not opened from an address.
+function viewAvailable(name) {
+  return !document.querySelector(`.workspace-nav a[href="#${name}"]`)?.hidden;
+}
 function viewFromHash() {
   const name = location.hash.slice(1);
-  if (views.includes(name)) return name;
+  if (views.includes(name)) return viewAvailable(name) ? name : null;
   // An older section link such as #inbox-section opens the view that holds it. Anything else (#main, auth and invite
   // fragments) leaves the view as it is.
   if (!/^[a-z][a-z-]*$/.test(name)) return null;
-  return byId(name)?.closest(".view")?.dataset.view ?? null;
+  const view = byId(name)?.closest(".view")?.dataset.view ?? null;
+  return view && viewAvailable(view) ? view : null;
 }
 function showView(name, focus) {
   // A notice the new view's loader writes after this point still appears.
@@ -1270,6 +1275,7 @@ async function loadWorkspace() {
   byId("contacts-segment-export-help").hidden = !operationsVisible;
   byId("contacts-export-format").hidden = !operationsVisible;
   segmentSnapshots.configure(currentRole, workspaceTimeZone);
+  byId("nav-campaigns").hidden = !operationsVisible;
   void campaignDrafts.configure(currentRole, membership.workspace_id, workspaceTimeZone);
   byId("operations-section").hidden = !operationsVisible;
   byId("webhooks-section").hidden = !operationsVisible;
@@ -1304,7 +1310,7 @@ async function loadWorkspace() {
   byId("workspace").hidden = false;
   byId("logout").hidden = false;
   const firstDisplay = currentView === undefined;
-  showView(viewFromHash() ?? currentView ?? "home", false);
+  showView(viewFromHash() ?? (currentView && viewAvailable(currentView) ? currentView : "home"), false);
   const connectAvailable = me.instagram_connect_available === true;
   byId("delivery-status").textContent = me.global_send_enabled
     ? "계정별로 발송을 켜고 규칙을 활성화하면 자동화를 시작합니다."
@@ -2613,6 +2619,16 @@ byId("contacts-filter").addEventListener("submit", (event) => {
   event.preventDefault();
   if (canReloadContacts()) void loadContacts();
 });
+// A rejected input inside the folded conditions opens them; otherwise the submit would stop with nothing visible.
+// invalid does not bubble, so the form listens in the capture phase.
+byId("contacts-filter").addEventListener(
+  "invalid",
+  (event) => {
+    const more = event.target.closest("#contacts-filter-more");
+    if (more) more.open = true;
+  },
+  true,
+);
 byId("contacts-reload").addEventListener("click", async () => {
   if (contactsSaving || segmentBusy || fieldBusy) return;
   const generation = fieldsGeneration;
@@ -2939,6 +2955,9 @@ function fillSegmentConditions(segment) {
   fields.dm_consent_state.value = segment?.dm_consent_state || "";
   contactConsentControls();
   fields.last_dm_days.value = segment?.last_dm_days || "";
+  // A filter with conditions beyond the account and one tag shows them, so they are not applied unseen.
+  const folded = [segment?.condition_tree, segment?.last_comment_from, segment?.last_comment_before, segment?.last_comment_days, segment?.last_comment_period, segment?.consent_purpose, segment?.dm_consent_purpose, segment?.last_dm_days];
+  if (savedFields.length || savedTags.length > 1 || folded.some(Boolean)) byId("contacts-filter-more").open = true;
   fieldFilterControls();
   rows.forEach((row, index) => {
     const saved = savedFields[index];

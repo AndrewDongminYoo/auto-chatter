@@ -2045,13 +2045,25 @@ section {
 }
 
 #contacts-export-format summary,
-.contacts-filter-help summary {
+.contacts-filter-help summary,
+.contacts-filter-more > summary,
+.contacts-tools > summary {
   min-height: 44px;
   padding: var(--space-2) 0;
   color: var(--primary);
 }
 .contacts-filter-help {
   margin-bottom: var(--space-3);
+}
+/* The folded conditions take a whole row of the filter, under the account, tag and apply controls. */
+.contacts-filter-more {
+  flex: 1 1 100%;
+}
+/* The tools that change or export data sit under the list, apart from finding contacts. */
+.contacts-tools {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
 }
 
 .template-panel {
