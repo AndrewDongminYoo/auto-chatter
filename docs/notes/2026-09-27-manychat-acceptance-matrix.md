@@ -20,7 +20,7 @@
 각 항목은 해당 이슈의 확장 또는 최종 검증 완료 여부입니다.
 문맥 조회의 로컬 근거는 [조회 검증 기록](2026-09-27-inbox-handoff-verification.md), 상담 전환은 [전환 검증 기록](2026-09-27-inbox-human-handoff-verification.md)에 있으며 공급자·운영 검증과 구분합니다.
 채널 지원 표시는 코드와 공식 승인·실계정 왕복·운영 적용을 모두 확인한 범위로 제한합니다.
-검증 담당자는 기능별 구현자·독립 검토자이며, 외부 계정·가격·정책·배포·발송의 승인 담당자는 운영자입니다.
+검증 담당자는 기능별 구현자·독립 검토자이며, 외부 계정·가격·정책·배포·발송은 제가 직접 승인합니다.
 
 - [#12](https://github.com/AndrewDongminYoo/auto-chatter/issues/12) ManyChat 대체 범위와 기능별 검증 매트릭스 확정
   - 현재 코드: 범위 계약 문서
@@ -35,7 +35,7 @@
 - [#14](https://github.com/AndrewDongminYoo/auto-chatter/issues/14) Instagram App Review·Advanced Access 및 추가 사용자 연결 검증
   - 현재 코드: 부분 기반
   - 로컬 증거: 기존 증거 있음, 추가 검증 필요
-  - 공급자·실계정: 운영자 Instagram 일부만 확인
+  - 공급자·실계정: 제 Instagram 계정에서 일부만 확인
   - 운영 완료: 완료하지 않음
 - [#15](https://github.com/AndrewDongminYoo/auto-chatter/issues/15) 회원가입·이메일 확인·비밀번호 복구·세션 만료 경로 완성
   - 현재 코드: 가입·인증 링크·복구·이전 세션 폐기와 인증 요청 제한(#148) 구현
@@ -114,7 +114,7 @@
   - 운영 완료: 021 2026-09-30 적용, 실동작 미검증
 - [#30](https://github.com/AndrewDongminYoo/auto-chatter/issues/30) 시각적 플로 편집기·미리보기·테스트 실행
   - 현재 코드: 테스트 실행 API(part A)·편집기 화면(part B) 구현
-  - 로컬 증거: [테스트 실행](../specs/2026-09-30-flow-runs.md#테스트-실행) DB 로컬 테스트(실제 실행 경로와 단계 비교), [화면](2026-10-02-flow-editor-ui-verification.md) 단위·로컬 브라우저 확인, 2026-10-02 운영자 화면 승인
+  - 로컬 증거: [테스트 실행](../specs/2026-09-30-flow-runs.md#테스트-실행) DB 로컬 테스트(실제 실행 경로와 단계 비교), [화면](2026-10-02-flow-editor-ui-verification.md) 단위·로컬 브라우저 확인, 2026-10-02 화면 승인
   - 공급자·실계정: 해당 없음(합성 입력)
   - 운영 완료: 2026-10-02 배포, 운영 데이터로 미사용
 - [#31](https://github.com/AndrewDongminYoo/auto-chatter/issues/31) 플로 태그·필드 동작·응답 수집·메시지 변수
@@ -272,26 +272,26 @@
 #25의 식별자 병합·분리와 #26 전체 선행 조건의 미완료 상태를 유지하며, 비교 기능의 운영 배포·실사용은 검증하지 않았습니다.
 
 2026-10-20에는 전체 대시보드와 실제 로컬 Worker API·제한된 PostgreSQL 역할을 연결해 로그인·필터 저장·고정·변경 비교·CSV·권한·보관·삭제·페이지 처리를 확인했습니다([통합 수용 검증](2026-10-20-segment-integrated-acceptance-verification.md)).
-외부 인증은 합성 응답이며 운영자 화면 승인, 실제 Supabase 인증, 공급자·실계정·운영 검증과 #25·#27의 선행 조건은 완료하지 않았습니다.
+외부 인증은 합성 응답이며 화면 승인, 실제 Supabase 인증, 공급자·실계정·운영 검증과 #25·#27의 선행 조건은 완료하지 않았습니다.
 이 결과는 #26 전체 종료나 #35의 발송 가능 여부·비용·승인·예약 구현을 뜻하지 않습니다.
 
 ## 공개 제공과 최종 완료 조건
 
-현재 구현 채널은 Instagram이며 운영자 계정에서 제한된 첫 DM·팔로우 분기를 확인했습니다.
+현재 구현 채널은 Instagram이며 제 계정에서 제한된 첫 DM·팔로우 분기를 확인했습니다.
 추가 사용자의 Advanced Access와 수신 인박스의 남은 운영 검증은 별도 완료 조건입니다.
 확인 버튼은 모바일 Instagram 앱에서 표시되고, 2026-10-07 발송을 켠 테스트에서 버튼 postback 뒤의 팔로우 조회와 미팔로우·팔로워 후속 DM까지 확인했습니다([기록](2026-09-29-issue13-production-verification.md#2026-10-07-후속-검증)). Chrome 웹에는 버튼이 표시되지 않으며, 이는 Meta 문서에 적힌 웹 버전 제한입니다.
 WhatsApp·TikTok 이슈 #40–#43은 `unplanned`로 보관하며 현재 수용 범위에서 제외합니다.
-Email·SMS·결제는 출시 국가·사업자·통화·비용·동의 정책을 운영자가 확정한 뒤 실제 제공 범위를 기록합니다.
+Email·SMS·결제는 출시 국가·사업자·통화·비용·동의 정책을 제가 확정한 뒤 실제 제공 범위를 기록합니다.
 FAQ AI는 오프라인 평가·초안 모드와 예산·인계가 확인되기 전 자동 발송을 허용하지 않습니다.
 
-| 제공 범위                         | 현재 제한 사유                                                                                     | 공개 여부의 결정 담당자와 조건                                                                                                                                                                                           |
-| --------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 다른 사용자의 Instagram 연결      | 저장소의 공개 연결 기본 설정은 꺼져 있고, 추가 사용자 권한 심사와 실계정 검증이 끝나지 않았습니다. | 운영자가 [#14](https://github.com/AndrewDongminYoo/auto-chatter/issues/14)의 승인·실계정 결과를 확인한 뒤 공개 연결을 결정합니다.                                                                                        |
-| Instagram 팔로우 조건과 확인 버튼 | 제한된 실계정 결과만 있으며, 확인 불가·중복 이벤트가 남았고 웹에는 버튼이 표시되지 않습니다.       | 운영자가 [#14](https://github.com/AndrewDongminYoo/auto-chatter/issues/14)의 남은 결과와 [#13](https://github.com/AndrewDongminYoo/auto-chatter/issues/13)의 운영 증거를 확인합니다.                                     |
-| Messenger·Telegram                | 채널 어댑터와 채널별 정책 검사가 구현되지 않았습니다.                                              | 구현자는 [#37](https://github.com/AndrewDongminYoo/auto-chatter/issues/37)–[#39](https://github.com/AndrewDongminYoo/auto-chatter/issues/39)를 검증하고, 운영자가 필요한 공급자 권한을 확인한 뒤 제공 여부를 결정합니다. |
-| Email·SMS                         | 발신 인증, 출시 국가, 동의와 비용 정책 및 발송 어댑터가 확정되지 않았습니다.                       | 운영자가 [#44](https://github.com/AndrewDongminYoo/auto-chatter/issues/44)–[#46](https://github.com/AndrewDongminYoo/auto-chatter/issues/46)의 공급자·지역 결정을 확인한 뒤 제공합니다.                                  |
-| 구독 결제                         | 판매 플랜·사업자·결제 공급자와 실패·환불 정책이 확정되지 않았습니다.                               | 운영자가 [#53](https://github.com/AndrewDongminYoo/auto-chatter/issues/53)을 결정하고 [#54](https://github.com/AndrewDongminYoo/auto-chatter/issues/54)의 원장을 검증합니다.                                             |
-| AI 자동 답변                      | 근거 평가, 비용 상한과 상담원 인계가 구현·검증되지 않았습니다.                                     | 구현자와 운영자가 [#55](https://github.com/AndrewDongminYoo/auto-chatter/issues/55)–[#57](https://github.com/AndrewDongminYoo/auto-chatter/issues/57)의 오프라인 평가와 발송 정책을 확인합니다.                          |
+| 제공 범위                         | 현재 제한 사유                                                                                     | 공개 여부의 결정 담당자와 조건                                                                                                                                                                                       |
+| --------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 다른 사용자의 Instagram 연결      | 저장소의 공개 연결 기본 설정은 꺼져 있고, 추가 사용자 권한 심사와 실계정 검증이 끝나지 않았습니다. | 제가 [#14](https://github.com/AndrewDongminYoo/auto-chatter/issues/14)의 승인·실계정 결과를 확인한 뒤 공개 연결을 결정합니다.                                                                                        |
+| Instagram 팔로우 조건과 확인 버튼 | 제한된 실계정 결과만 있으며, 확인 불가·중복 이벤트가 남았고 웹에는 버튼이 표시되지 않습니다.       | 제가 [#14](https://github.com/AndrewDongminYoo/auto-chatter/issues/14)의 남은 결과와 [#13](https://github.com/AndrewDongminYoo/auto-chatter/issues/13)의 운영 증거를 확인합니다.                                     |
+| Messenger·Telegram                | 채널 어댑터와 채널별 정책 검사가 구현되지 않았습니다.                                              | 구현자는 [#37](https://github.com/AndrewDongminYoo/auto-chatter/issues/37)–[#39](https://github.com/AndrewDongminYoo/auto-chatter/issues/39)를 검증하고, 제가 필요한 공급자 권한을 확인한 뒤 제공 여부를 결정합니다. |
+| Email·SMS                         | 발신 인증, 출시 국가, 동의와 비용 정책 및 발송 어댑터가 확정되지 않았습니다.                       | 제가 [#44](https://github.com/AndrewDongminYoo/auto-chatter/issues/44)–[#46](https://github.com/AndrewDongminYoo/auto-chatter/issues/46)의 공급자·지역 결정을 확인한 뒤 제공합니다.                                  |
+| 구독 결제                         | 판매 플랜·사업자·결제 공급자와 실패·환불 정책이 확정되지 않았습니다.                               | 제가 [#53](https://github.com/AndrewDongminYoo/auto-chatter/issues/53)을 결정하고 [#54](https://github.com/AndrewDongminYoo/auto-chatter/issues/54)의 원장을 검증합니다.                                             |
+| AI 자동 답변                      | 근거 평가, 비용 상한과 상담원 인계가 구현·검증되지 않았습니다.                                     | 구현자와 제가 [#55](https://github.com/AndrewDongminYoo/auto-chatter/issues/55)–[#57](https://github.com/AndrewDongminYoo/auto-chatter/issues/57)의 오프라인 평가와 발송 정책을 확인합니다.                          |
 
 제한 사유가 해소되기 전에는 해당 기능을 공개 지원으로 표시하거나 관련 발송을 활성화하지 않습니다.
 이 표는 출시 범위의 결정 기준이며 공급자 승인 또는 운영 배포가 완료됐다는 증거는 아닙니다.
