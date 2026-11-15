@@ -82,7 +82,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     rate_limited: "요청이 많습니다. 잠시 후 다시 시도해 주세요.",
   };
   const failure = (code) => reasons[code] || "전송 조건을 확인하지 못했습니다. 상태를 새로고침해 주세요.";
-  const date = (value) => new Date(value).toLocaleString("ko-KR");
+  const date = (value) => formatDateTime(value);
   const base = (state) => `/api/connections/${state.row.connection_id}/inbox/${state.row.recipient_id}`;
   const current = (state, session) => epoch === session && selected === state;
   const expired = (state) => !state.deadline || performance.now() >= state.deadline;
@@ -177,7 +177,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       labelAdmin();
       ruleAdmin();
     } catch (error) {
-      if (epoch === session && request === labelsRequest) byId("inbox-labels-status").textContent = error.message;
+      if (epoch === session && request === labelsRequest) byId("inbox-labels-status").textContent = errorMessage(error);
     }
   }
 
@@ -280,7 +280,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       if (epoch !== session) return;
       if (error.status >= 400 && error.status < 500) {
         state.labelDraft = null;
-        state.labelNotice = error.code === "label_conflict" ? "다른 멤버가 먼저 라벨을 바꿔 최신 라벨을 다시 불러왔습니다. 확인한 뒤 다시 저장해 주세요." : error.message;
+        state.labelNotice = error.code === "label_conflict" ? "다른 멤버가 먼저 라벨을 바꿔 최신 라벨을 다시 불러왔습니다. 확인한 뒤 다시 저장해 주세요." : errorMessage(error);
         if (["label_archived", "label_not_found"].includes(error.code)) void loadLabels();
         if (selected === state) void loadConversation();
       } else state.labelNotice = "저장 여부를 확인하지 못했습니다. 대화를 새로고침해 현재 라벨을 확인해 주세요.";
@@ -453,7 +453,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     } catch (error) {
       if (epoch !== session) return;
       if (error.status >= 400 && error.status < 500) {
-        state.reminderNotice = error.message;
+        state.reminderNotice = errorMessage(error);
         // An existing or newer reminder comes back with the refusal; the editor keeps the values to save onto it,
         // unless the time zone changed since, which makes both the values and the returned reminder old-zone times.
         if (error.reminder && zone === zoneChanges) {
@@ -502,7 +502,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     } catch (error) {
       if (epoch !== session) return;
       if (error.status >= 400 && error.status < 500) {
-        state.reminderNotice = error.message;
+        state.reminderNotice = errorMessage(error);
         if (error.reminder && zone === zoneChanges) showReminder(state, error.reminder);
         else if (selected === state) void loadConversation();
       } else state.reminderNotice = "처리 여부를 확인하지 못했습니다. 대화를 새로고침해 리마인더를 확인해 주세요.";
@@ -571,7 +571,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       state.memoLoaded = true;
       renderMemos(state);
     } catch (error) {
-      if (current(state, session) && request === state.memoRequest) state.memoNotice = error.message;
+      if (current(state, session) && request === state.memoRequest) state.memoNotice = errorMessage(error);
     } finally {
       if (current(state, session) && request === state.memoRequest) {
         state.memoLoading = false;
@@ -609,7 +609,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       if (epoch !== session) return;
       const refused = error.status >= 400 && error.status < 500;
       // The draft stays, so a refused or unconfirmed note can be sent again after checking the list.
-      state.memoNotice = refused ? error.message : "메모가 저장됐는지 확인하지 못했습니다. 메모 목록을 확인한 뒤 필요하면 다시 남겨 주세요.";
+      state.memoNotice = refused ? errorMessage(error) : "메모가 저장됐는지 확인하지 못했습니다. 메모 목록을 확인한 뒤 필요하면 다시 남겨 주세요.";
       if (!refused && selected === state) void loadMemos();
     } finally {
       if (epoch === session) {
@@ -693,7 +693,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       void loadList();
       void loadRules();
     } catch (error) {
-      if (epoch === session) byId("inbox-labels-status").textContent = error.message;
+      if (epoch === session) byId("inbox-labels-status").textContent = errorMessage(error);
     } finally {
       if (epoch === session) {
         labelsBusy = false;
@@ -727,7 +727,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       rules = result.rules;
       ruleAdmin();
     } catch (error) {
-      if (epoch === session && request === rulesRequest) byId("inbox-label-rules-status").textContent = error.message;
+      if (epoch === session && request === rulesRequest) byId("inbox-label-rules-status").textContent = errorMessage(error);
     }
   }
 
@@ -847,7 +847,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         const current = rules.find((rule) => rule.id === ruleEditing?.id && !rule.archived);
         if (error.code === "label_rule_conflict") current ? editRule(current) : stopRuleEdit();
       }
-      byId("inbox-label-rules-status").textContent = error.message;
+      byId("inbox-label-rules-status").textContent = errorMessage(error);
     } finally {
       if (epoch === session) {
         rulesBusy = false;
@@ -1312,7 +1312,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     } catch (error) {
       if (!current(state, session) || request !== state.readRequest) return;
       state.status = null;
-      byId("inbox-message-status").textContent = `${error.message} 대화 새로고침으로 다시 확인해 주세요.`;
+      byId("inbox-message-status").textContent = `${errorMessage(error)} 대화 새로고침으로 다시 확인해 주세요.`;
     } finally {
       if (current(state, session) && request === state.readRequest) {
         state.loading = false;
@@ -1507,7 +1507,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
             ? "검색어나 보기 조건에 맞는 대화가 없습니다."
             : "보관한 DM이 없습니다. 계정에서 DM 보관을 켠 뒤 새 DM을 받아 주세요.";
     } catch (error) {
-      if (epoch === session && request === listRequest) byId("inbox-status").textContent = error.message;
+      if (epoch === session && request === listRequest) byId("inbox-status").textContent = errorMessage(error);
     } finally {
       if (epoch === session && request === listRequest) {
         listBusy = false;

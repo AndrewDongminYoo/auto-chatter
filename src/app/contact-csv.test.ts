@@ -46,6 +46,9 @@ function previewHarness(api: (path: string, method?: string, body?: unknown) => 
         }
       : undefined,
   });
+  // Mocked api errors come from this realm, and errorMessage passes through only plain Errors of the script's realm.
+  context.Error = Error;
+  vm.runInContext(readFileSync(new URL("../../public/app/display-values.js", import.meta.url), "utf8"), context);
   vm.runInContext(readFileSync(new URL("../../public/app/contact-csv-preview.js", import.meta.url), "utf8"), context);
   const controller = context.createContactCsvPreview({
     api,

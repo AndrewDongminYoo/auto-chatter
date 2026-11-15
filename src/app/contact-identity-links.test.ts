@@ -30,6 +30,9 @@ class Element {
 const file = new URL("../../public/app/contact-identity-links.js", import.meta.url);
 function harness(api: (path: string, method?: string, body?: unknown) => Promise<unknown>, edit = true) {
   const context = vm.createContext({ crypto: { randomUUID: () => "request-1" }, confirm: () => true });
+  // Mocked api errors come from this realm, and errorMessage passes through only plain Errors of the script's realm.
+  context.Error = Error;
+  vm.runInContext(readFileSync(new URL("../../public/app/display-values.js", import.meta.url), "utf8"), context);
   if (existsSync(file)) vm.runInContext(readFileSync(file, "utf8"), context);
   assert.equal(typeof context.createContactIdentityLinks, "function", "contact identity controller must exist");
   let current = true;

@@ -146,7 +146,7 @@ function createFlowRunReports({ api, node }) {
       const flow = form.elements.flow_id.selectedOptions[0].textContent;
       let checkedAt;
       try {
-        checkedAt = new Date(report.checked_at).toLocaleString("ko-KR", { timeZone: report.time_zone });
+        checkedAt = formatDateTime(report.checked_at, { timeZone: report.time_zone });
       } catch {
         checkedAt = `${report.checked_at} (UTC)`;
       }
@@ -170,7 +170,7 @@ function createFlowRunReports({ api, node }) {
         role_forbidden: "소유자와 관리자만 리포트를 조회할 수 있습니다.",
         workspace_required: "작업 공간 권한을 확인할 수 없습니다. 페이지를 새로고침해 주세요.",
       };
-      summary.textContent = messages[error.code] || error.message;
+      summary.textContent = messages[error.code] || errorMessage(error);
     } finally {
       if (current === generation) {
         submit.disabled = !permitted;
