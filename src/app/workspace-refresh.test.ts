@@ -455,3 +455,46 @@ test("retired view initialization cannot continue into a new session", async () 
   await pending;
   assert.ok(!h.calls.includes("contacts"));
 });
+
+test("saving a changed time zone retires the reports view load", async () => {
+  const begin = source.indexOf('byId("time-zone-form").addEventListener("submit"');
+  const end = source.indexOf('\nbyId("operations-refresh")', begin);
+  assert.ok(begin >= 0 && end > begin);
+  let submit!: (event: { preventDefault(): void; currentTarget: object }) => void;
+  let saving: Promise<void> | undefined;
+  const loads = new Map([
+    ["reports", Promise.resolve()],
+    ["inbox", Promise.resolve()],
+  ]);
+  const noop = () => {};
+  const context = vm.createContext({
+    byId: () => ({
+      addEventListener: (_name: string, listener: typeof submit) => {
+        submit = listener;
+      },
+    }),
+    action: (_button: object, task: () => Promise<void>) => {
+      saving = task();
+    },
+    api: async () => ({ time_zone: "UTC" }),
+    workspaceTimeZone: "Asia/Seoul",
+    timeZoneWriteRevision: 0,
+    currentRole: "owner",
+    currentView: "settings",
+    connections: [],
+    viewLoads: loads,
+    inbox: { timeZoneChanged: noop },
+    campaignDrafts: { timeZoneChanged: noop },
+    manualReports: { configure: noop },
+    flowReports: { configure: noop },
+    handoffReports: { configure: noop },
+    campaignReports: { configure: noop },
+    notice: noop,
+  });
+  vm.runInContext(source.slice(begin, end), context);
+  submit({ preventDefault: noop, currentTarget: { elements: { time_zone: { value: "UTC" } }, querySelector: () => ({}) } });
+  await saving;
+  assert.equal(loads.has("reports"), false);
+  assert.equal(loads.has("inbox"), true);
+  assert.equal(context.workspaceTimeZone, "UTC");
+});

@@ -2080,6 +2080,7 @@ byId("time-zone-form").addEventListener("submit", (event) => {
     workspaceTimeZone = saved.time_zone;
     // Reminder due times on screen are wall-clock values in the previous zone.
     if (changed) {
+      viewLoads.delete("reports");
       inbox.timeZoneChanged();
       campaignDrafts.timeZoneChanged(workspaceTimeZone);
       manualReports.configure(currentRole, workspaceTimeZone, connections);

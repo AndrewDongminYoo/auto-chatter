@@ -146,6 +146,16 @@
   await until(() => !get("reports-refresh").disabled);
   check(fixture.reads.length === before + 2, "Explicit report refresh did not reread both option lists");
   check(form.elements.from.value === "2026-10-01" && get("manual-report-summary").textContent === summary, "Option refresh discarded report query or snapshot");
+  page.showView("settings", false);
+  await page.loadView("settings");
+  const zoneForm = get("time-zone-form");
+  zoneForm.elements.time_zone.value = "UTC";
+  zoneForm.requestSubmit();
+  await until(() => !zoneForm.querySelector("button[type=submit]").disabled);
+  page.showView("reports", false);
+  await page.loadView("reports");
+  check(!get("flow-report-form").elements.flow_id.disabled && !get("campaign-report-form").elements.draft_id.disabled, "Saved time zone left cached report pickers disabled");
+  check(get("manual-report-download").disabled, "Changed report context retained an old CSV snapshot");
   page.location.hash = "manual-reports-section";
   await until(() => !get("view-reports").hidden);
   for (const name of ["automation", "contacts", "inbox", "campaigns", "settings"]) {
