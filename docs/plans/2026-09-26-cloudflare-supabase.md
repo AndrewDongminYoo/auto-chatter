@@ -2,12 +2,12 @@
 
 ## 승인과 범위
 
-2026-09-26 운영자가 Cloudflare + Supabase 방향을 승인했습니다.
+2026-09-26 Cloudflare + Supabase 방향을 승인했습니다.
 이 계획은 로컬 구현과 검증을 다루며, 실제 리소스 생성·공개 배포·Meta 발송은 별도 운영 단계입니다.
 기존 단일 서버 계획은 Compose 기반 로컬 검증과 대체 배포 경로로 유지합니다.
 
 2026-09-26 개인 계정과 Supabase 조직을 확인한 뒤 리소스 생성까지 진행했습니다.
-운영자의 workers.dev 사용 승인에 따라 Worker도 배포했으며 `SEND_ENABLED=false`를 유지합니다.
+workers.dev 사용 승인에 따라 Worker도 배포했으며 `SEND_ENABLED=false`를 유지합니다.
 실제 리소스와 남은 Meta 연결 작업은 [배포 절차](../notes/2026-09-26-cloudflare-runbook.md)에 기록합니다.
 
 ## 설계
@@ -43,7 +43,7 @@ Queue 알림 소실·중복 자체가 메시지 상태를 결정하지 않으므
 - [Hyperdrive 조회 캐시](https://developers.cloudflare.com/hyperdrive/concepts/query-caching/): 캐시는 기본 활성화이므로 배포 때 명시적으로 끕니다.
 - [Queues 제한](https://developers.cloudflare.com/queues/platform/limits/): 소비자 실행은 유한하므로 무한 폴링 루프를 실행하지 않습니다.
 
-운영자가 개인 LLM Wiki의 프로젝트 ID를 `auto-chatter`로 확인했습니다.
+제 개인 LLM Wiki의 프로젝트 ID를 `auto-chatter`로 확인했습니다.
 Oracle 런처는 `tomllib` 모듈 오류로 MCP 조회 전에 실패했으며, 개인 Wiki의 `wiki/entities/auto-chatter.md`와 `wiki/sources/auto-chatter--claude.md`를 로컬에서 직접 확인했습니다.
 해당 기록은 `origin/main`의 `271c5dd` 기준으로, PostgreSQL outbox를 발송 상태의 기준으로 삼고 `unknown`을 자동 재발송하지 않으며 실계정 검증과 모의 테스트를 구분한다는 기존 결정을 확인합니다.
 이 세 원칙을 전환 설계에도 유지합니다.

@@ -7,11 +7,11 @@
 아래 초기 앱 화면·미검증 상태와 실계정 확인 항목은 2026-09-25 당시 기록입니다.
 이 기록은 공식 문서와 로컬 코드·테스트로 확인한 범위를 구분합니다.
 실제 Meta 앱과 Instagram 계정의 권한 승인 상태는 아직 확인하지 못했습니다.
-운영자는 [Meta 앱 `1802833180713730`](https://developers.facebook.com/apps/1802833180713730)을 만들었다고 알렸습니다.
+[Meta 앱 `1802833180713730`](https://developers.facebook.com/apps/1802833180713730)을 만들었습니다.
 앱 대시보드에는 이름 `AutoMessage`와 `게시되지 않음`이, Instagram 사용 사례에는 `Instagram 로그인이 포함된 API 설정`과 Instagram 앱 ID `1822350878757042`가 표시됐습니다.
 `비즈니스용 Facebook 로그인`도 대시보드에 보이지만, 현재 확인된 Instagram 설정은 Instagram Login 경로입니다.
-운영자는 Instagram API 설정에서 발급한 토큰을 `META_INSTAGRAM_ACCESS_TOKEN`으로 설정하고, 개발자 대시보드에서 일반 DM 발송에 성공했다고 보고했습니다.
-운영자가 실행한 `META_LOGIN_MODE=instagram corepack pnpm meta:check`는 `Instagram token account ID verified`를 출력했습니다.
+Instagram API 설정에서 발급한 토큰을 `META_INSTAGRAM_ACCESS_TOKEN`으로 설정하고, 개발자 대시보드에서 일반 DM 발송에 직접 성공했습니다.
+제가 실행한 `META_LOGIN_MODE=instagram corepack pnpm meta:check`는 `Instagram token account ID verified`를 출력했습니다.
 이 결과는 토큰의 `user_id`와 설정한 계정 ID가 일치함을 확인하지만, 댓글 관리 권한이나 댓글 비공개 답장 발송은 확인하지 않습니다.
 Facebook Login 구현을 유지하면서 이 앱의 Instagram Login 경로도 추가했으며, 운영 경로는 실계정 검증 뒤 확정합니다.
 
@@ -72,7 +72,7 @@ DB 검사와 외부 POST는 원자적으로 실행되지 않으므로, 이미 `s
 현재 앱에는 `META_LOGIN_MODE=instagram`을 설정하며, 이때 `corepack pnpm meta:check`는 토큰의 전문 계정 ID만 읽기 전용으로 확인합니다.
 기존 `facebook` 경로에서는 토큰 범위, Page 연결과 `MESSAGING` 작업을 확인합니다.
 `corepack pnpm worker:instagram`은 활성 DB 연결 하나에 범위를 제한해 실제 발송을 처리하고, 10분 이상 남은 `sending` 작업을 시작 시점과 실행 중 주기적으로 `unknown`으로 전환합니다.
-운영자가 설정한 Instagram 사용자 토큰과 계정 ID로 저장소의 읽기 전용 실계정 Graph 확인 명령을 실행했고, 계정 ID 일치 결과를 공유했습니다.
+제가 설정한 Instagram 사용자 토큰과 계정 ID로 저장소의 읽기 전용 실계정 Graph 확인 명령을 실행했고, 계정 ID 일치 결과를 공유했습니다.
 이 저장소에서 댓글 비공개 답장 발송은 아직 실행하지 않았습니다.
 기존 Facebook 경로에서 앱 ID만 설정해 `meta:check`를 실행한 결과, 나머지 필수 환경 변수 여섯 개가 없어 종료 코드 2로 끝났으며 Graph 요청은 시작되지 않았습니다.
 Instagram Login 경로의 이전 `meta:check` 실행은 Graph 버전, 전문 계정 ID와 Instagram 사용자 토큰이 없어 종료 코드 2로 끝났습니다.

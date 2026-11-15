@@ -125,7 +125,7 @@ node --test --test-name-pattern='DM activity|last_dm_days' src/app/api.test.ts
 
 [UNVERIFIED: real browser] 실제 브라우저로는 실행하지 않았습니다.
 대시보드를 띄우려면 실제 Supabase 인증 세션과 workerd 실행 환경이 필요하고, 저장소의 `node_modules`에는 Playwright가 없으며 새 의존성은 추가하지 않았습니다.
-운영자가 확인할 항목은 다음과 같습니다.
+제가 확인할 항목은 다음과 같습니다.
 
 - DM 동의 선택 옆에 "최근 N일 안에 받은 DM" 숫자 입력이 비어 있는 상태로 보이고, 안내 문구가 확인된 DM 대화만 평가하며 텍스트와 버튼 응답을 모두 세고 발송 가능 여부나 24시간 답장 가능 시간을 뜻하지 않는다고 설명합니다.
 - 0·367·숫자가 아닌 값을 넣으면 요청 전에 안내하고 보내지 않습니다.

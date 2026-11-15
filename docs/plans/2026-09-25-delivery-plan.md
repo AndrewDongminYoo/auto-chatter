@@ -3,8 +3,8 @@
 상태: 최초 단계 계획이며, 이후 진행 상태는 [기능 격차 기록](../notes/2026-09-27-manychat-parity.md)을 따릅니다.
 ChatbotX 채택 검증을 수행하고 Instagram 웹훅 수신·이벤트 저장·개인 답장 요청 보관·발송 정책·워커 모듈을 구현했습니다.
 Facebook Login과 Instagram Login용 발송 어댑터와 실행 명령은 모의 Graph 응답으로 검증했습니다.
-Meta 앱의 Instagram Login 설정을 확인했고, 운영자는 Instagram API 설정에서 발급한 토큰으로 개발자 대시보드의 일반 DM 발송에 성공했다고 보고했습니다.
-운영자가 실행한 `meta:check`는 토큰의 Instagram 계정 ID와 설정값이 일치한다고 확인했습니다.
+Meta 앱의 Instagram Login 설정을 확인했고, Instagram API 설정에서 발급한 토큰으로 개발자 대시보드의 일반 DM 발송에 직접 성공했습니다.
+제가 실행한 `meta:check`는 토큰의 Instagram 계정 ID와 설정값이 일치한다고 확인했습니다.
 이후 Supabase Auth·Instagram OAuth·설정 화면을 배포하고 Cloudflare 워커의 첫 비공개 답장과 팔로우 조건 분기를 실계정에서 검증했습니다.
 연락처·태그·필터·필드·자동화 중지·수신 인박스의 구현 및 로컬 검증도 마쳤습니다.
 수동 답장과 팀 인박스는 아직 구현하지 않았으며, 최근 기능의 운영 적용·다른 실제 사용자·Advanced Access 검증은 남아 있습니다.

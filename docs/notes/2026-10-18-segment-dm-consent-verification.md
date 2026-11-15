@@ -96,7 +96,7 @@ node --test --test-name-pattern='DM consent' src/app/api.test.ts
 
 [UNVERIFIED: real browser] 실제 브라우저로는 실행하지 않았습니다.
 대시보드를 띄우려면 실제 Supabase 인증 세션과 workerd 실행 환경이 필요하고, 저장소의 `node_modules`에는 Playwright가 없습니다.
-운영자가 확인할 항목은 다음과 같습니다.
+제가 확인할 항목은 다음과 같습니다.
 
 - 댓글 동의 선택 옆에 "DM 동의 목적"과 "DM 동의 기록 상태"가 보이고, 목적을 지우면 상태도 지워지고 잠깁니다.
 - 안내 문구가 확인된 DM 대화의 조건과 발송 가능 여부를 뜻하지 않는다는 점을 설명합니다.

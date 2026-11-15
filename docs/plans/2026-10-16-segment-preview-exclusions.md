@@ -25,7 +25,7 @@ AND는 태그만·필드만·둘 다 불일치를 구분하고 OR는 둘 다 불
 5. 타입·단위·격리 DB·Cloudflare와 변경 파일의 Trunk 검사를 실행합니다.
    최소 명령은 `corepack pnpm check-types`, `corepack pnpm test`, 로컬 UTF-8 `automations_test`의 `corepack pnpm test:db`·`corepack pnpm test:cloudflare`, `trunk check --no-fix <변경 경로>`입니다.
 6. 기존 명세·수용 매트릭스·CLAUDE·README·AGENTS에서 구현으로 바뀐 주장을 같은 PR에 반영하고 독립 리뷰와 호스팅 CI·리뷰를 완료합니다.
-   화면 자료를 보존하고 병합 전 운영자 승인을 받습니다.
+   화면 자료를 보존하고 병합 전 승인을 받습니다.
 
 ## 결정 근거와 한계
 

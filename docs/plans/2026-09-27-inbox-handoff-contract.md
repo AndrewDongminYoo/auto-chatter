@@ -2,7 +2,7 @@
 
 ## 승인된 방향과 범위
 
-운영자가 승인한 ManyChat 대체 PR 루프의 다음 단계로, 수동 답장 전에 [식별자·상담 전환 계약](../specs/2026-09-27-inbox-handoff-contract.md)을 확정합니다.
+승인된 ManyChat 대체 PR 루프의 다음 단계로, 수동 답장 전에 [식별자·상담 전환 계약](../specs/2026-09-27-inbox-handoff-contract.md)을 확정합니다.
 기존 작업 공간과 `codex/inbox-handoff-contract` 브랜치를 사용합니다.
 새 의존성·테이블·화면·외부 발송은 추가하지 않습니다.
 상담 전환 쓰기와 수동 답장은 이 조회 계약을 사용하는 다음 이슈입니다.

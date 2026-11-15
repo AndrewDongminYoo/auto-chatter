@@ -53,7 +53,7 @@ TEST_DATABASE_URL=postgres://postgres@127.0.0.1:65256/automations_test node --te
 브라우저 도구의 select 동작은 합성 change 이벤트만 발생시켜, 모드 전환 검사에서는 브라우저 input 이벤트도 명시적으로 발생시켰습니다.
 실제 화면과 API·DB를 검사했지만 실제 사용자 인증, 운영 데이터, Meta 요청은 검사하지 않았습니다.
 화면 승인 자료는 저장소 밖의 보존 디렉터리 `../pr-loop-reviews/auto-chatter/segment-relative-activity-20261016/`에 둡니다.
-운영자의 시각적 승인은 별도로 필요합니다.
+시각적 승인은 별도로 필요합니다.
 
 ## 검토와 적용 조건
 

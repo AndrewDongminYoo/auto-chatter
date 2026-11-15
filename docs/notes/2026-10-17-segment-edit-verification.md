@@ -71,7 +71,7 @@ TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5434/automations_test node --tes
 화면 코드는 `node --check public/app/app.js` 문법 검사와 `trunk check`만 통과했습니다.
 
 [UNVERIFIED: real browser] 이 환경에는 Playwright가 설치되어 있지 않아 실제 브라우저에서 수정 시작, 변경 저장, 충돌 표시와 저장된 값 불러오기, 수정 취소를 실행하지 않았습니다.
-운영자가 확인할 항목은 다음과 같습니다.
+제가 확인할 항목은 다음과 같습니다.
 
 - 소유자·관리자에게만 "필터 수정"이 보이고, 저장 필터를 선택했을 때만 누를 수 있습니다.
 - 수정을 시작하면 조건 폼과 이름에 저장된 값이 채워지고, 저장 버튼이 "변경 저장"으로 바뀌며, 저장 필터 선택 목록이 잠깁니다.

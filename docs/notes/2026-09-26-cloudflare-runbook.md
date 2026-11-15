@@ -12,9 +12,9 @@ Supabase Auth의 Site URL을 `https://auto-chat.donminzzi.kr/app/`로 변경하�
 확인 이메일의 실제 복귀는 아직 실사용 계정으로 검증하지 않았습니다.
 Meta Instagram Login의 OAuth 콜백에는 새 도메인 주소를 추가하고 기존 workers.dev 주소도 유지했습니다.
 동일한 Worker 코드의 설정 버전 `29e958e0-57bb-47b6-b4c4-753a0df4783c`을 100% 활성화해 운영 `APP_ORIGIN`을 `https://auto-chat.donminzzi.kr`로 바꿨으며 `SEND_ENABLED=false`를 유지했습니다.
-운영자가 Meta 웹훅 콜백을 새 도메인으로 변경했고, 2026-09-28 Meta 설정 재조회에서 새 주소와 `comments`·`messages` 구독 및 `ai.you.wanted` 계정 구독을 확인했습니다.
+제가 Meta 웹훅 콜백을 새 도메인으로 변경했고, 2026-09-28 Meta 설정 재조회에서 새 주소와 `comments`·`messages` 구독 및 `ai.you.wanted` 계정 구독을 확인했습니다.
 2026-09-28 새 도메인 로그인 후 게시한 `auto-chatter 도메인 수신 테스트` 댓글이 운영 `instagram_comment_events`에 `2026-09-28 03:53:26.961295+00` 시각으로 저장된 것을 Supabase Table Editor에서 확인했습니다.
-2026-09-28 운영자가 `ai.you.wanted`에 테스트 DM을 보낸 직후 Worker 실시간 로그에서 `POST /webhooks/instagram`의 HTTP 200 응답을 확인했습니다.
+2026-09-28 제가 `ai.you.wanted`에 테스트 DM을 보낸 직후 Worker 실시간 로그에서 `POST /webhooks/instagram`의 HTTP 200 응답을 확인했습니다.
 현재 운영 코드는 일반 DM 본문을 저장하지 않으므로 이 로그만으로 개별 메시지 내용까지 대조하지는 못했습니다.
 기본 배포 설정은 `SEND_ENABLED=false`입니다.
 승인된 단일 게시물의 첫 DM 테스트에서 실제 수신과 DB의 `sent` 행·공급자 메시지 ID를 확인한 뒤 전역·계정·규칙 발송을 모두 중지했습니다.
@@ -24,7 +24,7 @@ Meta Instagram Login의 OAuth 콜백에는 새 도메인 주소를 추가하고 
 `INSTAGRAM_APP_SECRET`과 `INSTAGRAM_VERIFY_TOKEN`의 등록을 확인했습니다.
 Instagram Login 제품 설정에서 `comments` 구독이 활성화된 화면을 확인했고, 대시보드 테스트 직후 수신된 POST의 HTTP 200 응답을 Worker 로그로 확인했습니다.
 첫 대시보드 테스트 당시에는 workspace·Instagram 연결·규칙이 없어 이벤트와 outbox도 0건이었습니다.
-이후 운영자가 지정한 `ai.you.wanted`의 수신 연결을 등록했습니다.
+이후 제가 지정한 `ai.you.wanted`의 수신 연결을 등록했습니다.
 실제 테스트 댓글 저장과 비공개 답장 1건의 발송·수신은 2026-09-26에 확인했습니다.
 다중 사용자 코드와 003–006 DB 마이그레이션은 2026-09-26에 발송을 비활성화한 상태로 운영 배포했습니다.
 2026-09-26 다중 사용자 전환에서 확인한 Worker 버전은 `dfa763f7-742d-497a-8e58-6eeb737837bd`이며 배포 코드 태그는 `6d71ef7`입니다.
@@ -34,12 +34,12 @@ Instagram Login 제품 설정에서 `comments` 구독이 활성화된 화면을 
 이후 스키마 조회 결과는 [#13 운영 검증 기록](2026-09-29-issue13-production-verification.md)에 있습니다.
 팔로우 조건 테스트를 마친 뒤 전역 `SEND_ENABLED=false`를 배포하고 실제 버전 조회로 확인했습니다.
 실행 코드 변경 없이 이전에 검증한 소유권 수정 버전을 사용합니다.
-운영 로그인 요청의 503 해소를 확인했고, 운영자가 회원가입 완료를 보고한 뒤 DB에서 이메일 인증·로그인 완료를 확인했습니다.
-관리자 스크립트로 확인된 운영자를 기존 수신 전용 작업 공간에 배정했습니다.
+운영 로그인 요청의 503 해소를 확인했고, 제가 회원가입 완료를 보고한 뒤 DB에서 이메일 인증·로그인 완료를 확인했습니다.
+관리자 스크립트로 확인된 제 계정을 기존 수신 전용 작업 공간에 배정했습니다.
 메일 수신 화면과 확인 링크의 복귀는 직접 관찰하지 않았습니다.
 재현과 검증 결과는 [인증 런타임 수정 기록](2026-09-26-auth-fetch-runtime-fix.md)에 있습니다.
 배포된 앱 ID `1822350878757042`와 secrets 다섯 개의 등록을 확인했습니다.
-이후 운영자가 Instagram OAuth 연결을 완료했고, 저장된 암호화 토큰을 복호화해 조회한 Meta 프로필이 `ai.you.wanted`와 일치함을 확인했습니다.
+이후 제가 Instagram OAuth 연결을 완료했고, 저장된 암호화 토큰을 복호화해 조회한 Meta 프로필이 `ai.you.wanted`와 일치함을 확인했습니다.
 Meta 구독 조회에서 `comments`·`messages`를 확인했으며 토큰 만료는 `2026-11-24T12:20:10.423Z`입니다.
 OAuth 연결 확인 시점에는 계정 수신 활성화·발송 비활성화·규칙과 outbox 0개였습니다.
 이후 실제 OAuth 수신 테스트 댓글을 DB에서 확인했습니다.
@@ -66,11 +66,11 @@ Instagram Login 경로는 공통 Webhooks 메뉴 대신 **Instagram 로그인이
 해당 제품 화면의 `comments` 구독과 대상 계정의 Webhook 구독을 함께 확인합니다.
 관리자·서버 DB 비밀번호는 새로 생성했으며 로컬 `deploy/secrets/supabase-provisioning.json`에만 저장했습니다.
 디렉터리는 0700, 파일은 0600으로 생성했고 전체 디렉터리를 Git에서 제외했습니다.
-운영자가 비밀번호 관리 도구에 보관하기 전까지 이 파일을 삭제하지 않습니다.
+제가 비밀번호 관리 도구에 보관하기 전까지 이 파일을 삭제하지 않습니다.
 
 ### 수신 계정
 
-운영자 승인과 Instagram 제품 화면의 계정 ID를 기준으로 `ai.you.wanted` (`17841437471464257`)를 등록했습니다.
+승인과 Instagram 제품 화면의 계정 ID를 기준으로 `ai.you.wanted` (`17841437471464257`)를 등록했습니다.
 workspace ID는 `eedede37-b94a-4afe-b072-c728932e7c04`, connection ID는 `a5df4215-fb1e-46d4-93f4-13c0176fb031`입니다.
 연결의 `active=true`는 댓글 저장을 허용하며, 실제 메시지 발송은 별도 `SEND_ENABLED=false`로 차단합니다.
 등록 직후 조회에서 연결 한 개와 발송 규칙·outbox 0건을 확인했습니다.
@@ -80,8 +80,8 @@ Graph 버전은 `wrangler.json`의 `META_GRAPH_VERSION=v26.0`으로 지정되어
 
 ### 개인정보 안내와 Meta 게시
 
-운영자가 Meta 앱은 아직 개발·미게시 상태이며 개인정보처리방침 URL 누락으로 게시가 막혔다고 확인했습니다.
-이후 개인정보 안내 페이지 배포를 마친 뒤 운영자가 Meta 앱 게시 완료를 알렸습니다.
+제가 Meta 앱은 아직 개발·미게시 상태이며 개인정보처리방침 URL 누락으로 게시가 막혔다고 확인했습니다.
+이후 개인정보 안내 페이지 배포를 마친 뒤 Meta 앱을 직접 게시했습니다.
 2026-09-28 Meta 앱 설정 재조회에서 개인정보처리방침 URL은 `https://auto-chat.donminzzi.kr/privacy`, 서비스 약관 URL은 `https://auto-chat.donminzzi.kr/service`, 사용자 데이터 삭제 안내 URL은 `https://auto-chat.donminzzi.kr/data-deletion`로 확인했습니다.
 삭제 안내 페이지는 이메일 기반 수동 요청 절차이며 자동 삭제 콜백 URL이 아닙니다.
 세 페이지는 로그인·DB·Meta secrets 없이 열리고, 승인된 운영자 연락처와 보관·삭제 정책 및 서비스 이용 조건을 안내합니다.
@@ -114,13 +114,13 @@ Facebook Login은 기존 Node 워커 경로에서만 지원합니다.
 이 세 메일 요청은 접속 IP별 시간당 10회와 프로젝트 전체 시간당 15회 제한도 통과해야 하며, 고정 창 경계에서 요청이 몰려도 Supabase 메일 한도(시간당 30통)를 넘지 않도록 프로젝트 전체 제한을 그 절반 이하로 유지합니다([#165](https://github.com/AndrewDongminYoo/auto-chatter/issues/165), [인증 명세](../specs/2026-09-28-auth-completion.md)).
 같은 키의 요청은 어느 접속 위치로 들어와도 이름으로 정한 하나의 Durable Object가 세므로 전역으로 집계되며, IP 제한은 공유 IP 사용자에게 함께 적용될 수 있습니다.
 Supabase Auth의 자체 이메일·IP 제한은 별도로 적용됩니다.
-2026-10-06 운영자가 사생활 보호 창에서 테스트 계정으로 가입 메일, 인증 링크, 만료 링크, 복구 메일, 이전 세션 폐기, 새 비밀번호 로그인과 이전 비밀번호 거부를 확인했습니다. 메일 도착은 Gmail에서, 사용자 생성·이메일 인증·비밀번호 변경 시각과 세션 0개는 운영 DB에서 확인했으며, 세부 결과와 자료 충돌은 [#15 기록](https://github.com/AndrewDongminYoo/auto-chatter/issues/15#issuecomment-6008039226)에 있습니다.
+2026-10-06 제가 사생활 보호 창에서 테스트 계정으로 가입 메일, 인증 링크, 만료 링크, 복구 메일, 이전 세션 폐기, 새 비밀번호 로그인과 이전 비밀번호 거부를 확인했습니다. 메일 도착은 Gmail에서, 사용자 생성·이메일 인증·비밀번호 변경 시각과 세션 0개는 운영 DB에서 확인했으며, 세부 결과와 자료 충돌은 [#15 기록](https://github.com/AndrewDongminYoo/auto-chatter/issues/15#issuecomment-6008039226)에 있습니다.
 테스트 작업 공간은 public 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-06-issue15/`에 백업한 뒤 `delete_workspace_data`로 삭제했습니다.
 위 확인 때까지 인증 메일은 Supabase 기본 메일 서비스(`noreply@mail.app.supabase.io`)로 발송됐습니다. 이 서비스는 팀원 주소에만 시간당 2통까지 보내므로 일반 사용자에게는 메일이 가지 않습니다.
-2026-10-06 운영자가 사용자 지정 SMTP를 켰습니다([#151](https://github.com/AndrewDongminYoo/auto-chatter/issues/151)). 발신자는 `auto-chatter <no-reply@auth.donminzzi.kr>`이고, 경로는 Resend SMTP(`smtp.resend.com`, 포트 465, 사용자 `resend`)입니다. Resend 계정은 party-os 알림 메일과 같은 계정이며, 인증 메일만 하위 도메인 `auth.donminzzi.kr`로 분리했습니다.
+2026-10-06 제가 사용자 지정 SMTP를 켰습니다([#151](https://github.com/AndrewDongminYoo/auto-chatter/issues/151)). 발신자는 `auto-chatter <no-reply@auth.donminzzi.kr>`이고, 경로는 Resend SMTP(`smtp.resend.com`, 포트 465, 사용자 `resend`)입니다. Resend 계정은 party-os 알림 메일과 같은 계정이며, 인증 메일만 하위 도메인 `auth.donminzzi.kr`로 분리했습니다.
 설정 위치는 세 곳입니다. Resend에는 도메인 `auth.donminzzi.kr`(도쿄 리전)과 이 도메인으로 제한한 API 키가 있습니다. Cloudflare의 `donminzzi.kr` zone에는 Resend가 안내한 DKIM(`resend._domainkey.auth`)과 `send.auth`·`rsend.auth` 레코드가 있습니다. Supabase에는 Authentication의 SMTP 설정이 있고, SMTP 비밀번호가 곧 그 API 키입니다. 키는 Supabase 화면에만 입력했고 저장소와 이 문서에는 기록하지 않습니다.
 Supabase Auth의 메일 발송 한도는 사용자 지정 SMTP의 기본값인 시간당 30통으로 유지했습니다. 이 한도는 Worker의 이메일별 분당 5회 제한과 별개입니다. 같은 Resend 계정의 일·월 발송량은 party-os와 함께 집계됩니다.
-같은 날 09:44:58Z에 운영자가 `ydm2790+ac-smtp-test@gmail.com`으로 가입하자 가입 인증 메일이 이 발신자로 도착했습니다. 도쿄 리전 SES(`e234-52.smtp-out.ap-northeast-1.amazonses.com`)를 거쳤고, Gmail 검사 결과는 SPF pass(반송 경로 `rsend.auth.donminzzi.kr`), DKIM pass(`d=auth.donminzzi.kr`, `s=resend`), DMARC pass(루트 정책 `p=none`)였습니다. 테스트 사용자는 운영자가 삭제했습니다.
+같은 날 09:44:58Z에 제가 `ydm2790+ac-smtp-test@gmail.com`으로 가입하자 가입 인증 메일이 이 발신자로 도착했습니다. 도쿄 리전 SES(`e234-52.smtp-out.ap-northeast-1.amazonses.com`)를 거쳤고, Gmail 검사 결과는 SPF pass(반송 경로 `rsend.auth.donminzzi.kr`), DKIM pass(`d=auth.donminzzi.kr`, `s=resend`), DMARC pass(루트 정책 `p=none`)였습니다. 테스트 사용자는 제가 삭제했습니다.
 팀원 주소 제한은 기본 서비스에만 있으므로, 이 발신자로 도착한 것은 사용자 지정 SMTP 경로를 탔다는 근거입니다. 다만 Gmail의 `+` 주소는 기본 서비스에서도 메일을 받았으므로, 팀원이 아닌 별도 주소로 받은 확인은 아닙니다.
 
 이 서비스 전용 프로젝트를 사용합니다.
@@ -281,7 +281,7 @@ Worker 버전 `94be1bcd-d527-464c-a7a3-fb8dda6470fe`를 해당 커밋에서 배�
 이 배포에는 DB 마이그레이션이 없으며 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 앞과 같은 점검(공개 페이지, 로그인하지 않은 API와 다른 출처 요청 거부, 서명 없는 웹훅 거부, 정적 파일 해시, `/privacy` 문구와 시행일)을 모두 통과했고, 배포 후 새 버전에서 cron 3회가 예외와 오류 로그 없이 완료됐습니다.
 운영에는 플로가 없으므로 바뀐 발행 검증은 운영 데이터로 실행하지 않았습니다.
-2026-10-02에는 운영자 승인에 따라 PR #114(migration 028, 발송 기록 전 응답 보관), PR #115(migration 029, 대화 담당자와 상태), PR #116(migration 030, 정기 작업 기록), PR #117·#118(migration 031, 플로 외부 전송)을 포함한 `main` 커밋 `dc17c72cd562a45c095e8706cdfffc7e0a1ff9d9`의 마이그레이션을 운영 DB에 적용했습니다. Worker는 배포하지 않았습니다.
+2026-10-02에는 승인에 따라 PR #114(migration 028, 발송 기록 전 응답 보관), PR #115(migration 029, 대화 담당자와 상태), PR #116(migration 030, 정기 작업 기록), PR #117·#118(migration 031, 플로 외부 전송)을 포함한 `main` 커밋 `dc17c72cd562a45c095e8706cdfffc7e0a1ff9d9`의 마이그레이션을 운영 DB에 적용했습니다. Worker는 배포하지 않았습니다.
 적용 전 운영 DB는 027까지 적용된 상태였고, 네 migration의 테이블 8개가 모두 없었으며, 연결 1개(수신 켜짐·발송 꺼짐)·켜진 플로 0개·활성 규칙 0개·발송 중 행 0개였습니다.
 public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-10-02-pr118/public-before-028-031.dump`에 백업했으며 데이터 테이블 28개가 들어 있습니다.
 관리자 연결은 앞과 같은 Session pooler를 TLS `verify-full`(Git에서 제외된 `deploy/secrets/supabase-ca.crt`)로 사용했고, 해당 커밋의 `deploy/migrate-multi-user.sql`을 실행해 migration 028~031을 한 트랜잭션으로 적용했습니다. 실행 로그에 오류나 경고는 없었습니다.
@@ -290,19 +290,19 @@ public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-10-0
 세 삭제 함수의 정의에는 `webhook_deliveries`가 들어 있었고, 소유자(`postgres`), `SECURITY DEFINER` 여부(연결 삭제 함수만), 서버 역할의 실행 권한(연결 삭제 함수만)은 그대로였습니다.
 기존 행 수(작업 공간 2, 멤버 1, 연결 1, 댓글 9, outbox 3, 플로 0, 플로 실행 0)와 발송 꺼짐 상태는 유지됐습니다.
 운영 Worker는 `d23cef2`에서 배포한 `01e7f0b9-9bf9-478c-9fe1-3ca35824ee52` 그대로이므로, 새 테이블을 쓰는 기능(발송 전 응답 보관, 대화 담당자, 운영 상태, 외부 전송)은 운영에서 아직 동작하지 않습니다. 이후 `main`을 배포할 때는 `/privacy` 시행일을 배포일로 옮겨야 합니다.
-같은 날 이어서 운영자 승인에 따라 PR #120(`/privacy` 시행일을 2026년 10월 2일로 변경)과 PR #121(초대 링크 잠금)을 포함한 `main` 커밋 `2e45865`의 Worker를 버전 `3174fdde-e922-4f03-83be-7b49b02a4d2a`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `01e7f0b9-9bf9-478c-9fe1-3ca35824ee52`였습니다.
-자동 모드에서 에이전트의 배포 명령이 거부되어, 배포는 운영자가 같은 명령을 직접 실행했습니다. 이 배포에는 새 DB 마이그레이션이 없으며 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+같은 날 이어서 승인에 따라 PR #120(`/privacy` 시행일을 2026년 10월 2일로 변경)과 PR #121(초대 링크 잠금)을 포함한 `main` 커밋 `2e45865`의 Worker를 버전 `3174fdde-e922-4f03-83be-7b49b02a4d2a`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `01e7f0b9-9bf9-478c-9fe1-3ca35824ee52`였습니다.
+자동 모드에서 에이전트의 배포 명령이 거부되어, 배포는 제가 같은 명령을 직접 실행했습니다. 이 배포에는 새 DB 마이그레이션이 없으며 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 공개 페이지 3개와 `/app/`은 200이었고, `/privacy`에는 시행일 2026년 10월 2일, 외부 전송 문장, 발송 전 응답 보관 문장이 표시됐습니다.
 로그인하지 않은 `/api/me`, `/api/flows`, 내보내기, `/api/workspace/health`, `/api/webhooks/endpoints`, `/api/webhooks/deliveries`는 401, 다른 출처에서 보낸 작업 공간 설정 변경과 서명 없는 웹훅은 403이었으며 `/app/`의 정적 파일 네 개(`app.js`, `inbox.js`, `styles.css`, `webhook-labels.js`)는 배포 커밋 파일과 SHA-256이 일치했습니다.
 같은 점검을 배포 전에 실행했을 때는 `/privacy`의 세 문장과 정적 파일 해시가 일치하지 않았고, 배포 직후 첫 실행에서도 일부가 이전 응답이었다가 다시 실행했을 때 모두 일치했습니다(`/privacy`는 `max-age=300`).
 배포 후 새 버전에서 cron 3회가 예외와 오류 로그 없이 완료됐습니다(`wrangler tail`).
 운영에는 플로, 등록한 외부 전송 주소, 여러 멤버가 없으므로 발송 전 응답 보관, 대화 담당자, 외부 전송은 운영 데이터로 실행하지 않았고, 운영 상태 화면과 Workers Logs Query Builder의 JSON 필드 추출도 아직 확인하지 않았습니다.
-같은 날 이어서 운영자 승인에 따라 PR #123(플로 테스트 실행 API)과 PR #124(플로 편집기 화면, 운영자 화면 승인 뒤 병합)를 포함한 `main` 커밋 `58d7e63`의 Worker를 버전 `1e19dc31-3ca2-4436-967f-092401636003`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `3174fdde-e922-4f03-83be-7b49b02a4d2a`였습니다.
-이 배포에는 DB 마이그레이션이 없으며(`2e45865` 이후 `db/`, `deploy/`, `wrangler.json`, 공개 페이지 변경 없음), 배포 명령은 이번에도 운영자가 직접 실행했고 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+같은 날 이어서 승인에 따라 PR #123(플로 테스트 실행 API)과 PR #124(플로 편집기 화면, 화면 승인 뒤 병합)를 포함한 `main` 커밋 `58d7e63`의 Worker를 버전 `1e19dc31-3ca2-4436-967f-092401636003`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `3174fdde-e922-4f03-83be-7b49b02a4d2a`였습니다.
+이 배포에는 DB 마이그레이션이 없으며(`2e45865` 이후 `db/`, `deploy/`, `wrangler.json`, 공개 페이지 변경 없음), 배포 명령은 이번에도 제가 직접 실행했고 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 앞과 같은 공개 점검에 다른 출처에서 보낸 `POST /api/flows/<id>/test-run` 거부(403)와 새 정적 파일 두 개(`flow-editor.js`, `flow-editor-model.js`)의 해시를 더해 22개 항목이 모두 통과했습니다. 같은 점검을 배포 전에 실행했을 때는 정적 파일 네 개의 해시가 일치하지 않았습니다.
 배포 후 새 버전에서 cron 3회가 예외와 오류 로그 없이 완료됐습니다(`wrangler tail`).
 운영에는 플로가 없으므로 편집기와 테스트 실행은 운영 데이터로 조작하지 않았습니다.
-2026-10-03에는 운영자 승인에 따라 PR #126(인박스 검색·필터·멤버별 읽음 상태, migration 032)을 포함한 `main` 커밋 `b227782`의 마이그레이션을 운영 DB에 적용하고 Worker를 배포했습니다.
+2026-10-03에는 승인에 따라 PR #126(인박스 검색·필터·멤버별 읽음 상태, migration 032)을 포함한 `main` 커밋 `b227782`의 마이그레이션을 운영 DB에 적용하고 Worker를 배포했습니다.
 적용 전 운영 DB는 031까지 적용된 상태였고(`instagram_inbox_read_state` 없음, public 테이블 36개), 연결 1개(수신 켜짐·발송 꺼짐)·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-10-03-pr126/public-before-032.dump`에 백업했으며 데이터 테이블 36개가 들어 있습니다.
 관리자 연결은 앞과 같은 Session pooler를 TLS `verify-full`로 사용했고, 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 실행 로그에 오류나 경고는 없었습니다.
@@ -311,15 +311,15 @@ public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-10-0
 세 삭제 함수의 정의에는 `instagram_inbox_read_state`가 들어 있었고, 소유자(`postgres`), `SECURITY DEFINER` 여부와 서버 역할의 실행 권한(둘 다 연결 삭제 함수만)은 그대로였습니다.
 기존 행 수(작업 공간 2, 멤버 1, 연결 1, 댓글 9, outbox 3, 인박스 메시지 3, 플로 0, 플로 실행 0)와 발송 꺼짐 상태는 유지됐습니다.
 이어서 같은 커밋의 Worker를 버전 `ca3b077b-2dcc-4bc2-8227-d2b7380c4328`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `1e19dc31-3ca2-4436-967f-092401636003`였습니다.
-배포 명령은 이번에도 운영자가 직접 실행했고 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. `wrangler.json`과 공개 페이지는 바뀌지 않아 `/privacy` 시행일은 2026년 10월 2일 그대로입니다.
+배포 명령은 이번에도 제가 직접 실행했고 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. `wrangler.json`과 공개 페이지는 바뀌지 않아 `/privacy` 시행일은 2026년 10월 2일 그대로입니다.
 앞과 같은 공개 점검에 로그인하지 않은 `GET /api/inbox`(검색·안 읽음 조건 포함)의 401과 다른 출처에서 보낸 읽음 표시 `POST`의 403, `/app/`의 정적 파일 7개 해시를 더해 24개 항목이 모두 통과했습니다.
 같은 점검을 배포 전에 실행했을 때는 `app.js`, `inbox.js`, `styles.css`의 해시가 일치하지 않았습니다. `index.html`은 그때 `/app/index.html`의 빈 응답으로 비교했으므로, 배포 전후 구별은 확인하지 않았습니다.
 배포 후 cron 3회(05:36, 05:37, 05:38 UTC)에서 `scheduled_steps`에 기록된 6개 단계가 모두 성공으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 운영에는 여러 멤버가 없고 인박스 메시지가 3건뿐이므로 검색·필터·읽음 표시는 운영 화면에서 조작하지 않았습니다. 읽음 기준선의 알려진 한계는 [#127](https://github.com/AndrewDongminYoo/auto-chatter/issues/127)에 있습니다.
-같은 날 이어서 운영자 승인에 따라 PR #129(#127 대화별 DM 수집 직렬화와 #130 follow 워커의 잠금 순서)를 포함한 `main` 커밋 `35ae48d`의 Worker를 버전 `0a53d66b-8153-4bb5-9665-7d3e9e04d5b8`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `ca3b077b-2dcc-4bc2-8227-d2b7380c4328`였습니다.
-이 배포에는 DB 마이그레이션이 없고(`b227782` 이후 `db/`, `deploy/`, `public/`, `wrangler.json`, 공개 페이지 변경 없음), 배포 명령은 운영자가 직접 실행했으며 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. 첫 실행은 원래 체크아웃에 `node_modules`가 없어 `wrangler`를 찾지 못하고 아무것도 배포하지 않은 채 끝났고, lockfile로 다시 설치한 뒤 같은 명령을 실행했습니다.
+같은 날 이어서 승인에 따라 PR #129(#127 대화별 DM 수집 직렬화와 #130 follow 워커의 잠금 순서)를 포함한 `main` 커밋 `35ae48d`의 Worker를 버전 `0a53d66b-8153-4bb5-9665-7d3e9e04d5b8`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `ca3b077b-2dcc-4bc2-8227-d2b7380c4328`였습니다.
+이 배포에는 DB 마이그레이션이 없고(`b227782` 이후 `db/`, `deploy/`, `public/`, `wrangler.json`, 공개 페이지 변경 없음), 배포 명령은 제가 직접 실행했으며 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. 첫 실행은 원래 체크아웃에 `node_modules`가 없어 `wrangler`를 찾지 못하고 아무것도 배포하지 않은 채 끝났고, lockfile로 다시 설치한 뒤 같은 명령을 실행했습니다.
 앞과 같은 공개 점검 24개 항목이 모두 통과했지만, 정적 파일이 바뀌지 않아 이 점검은 배포 전후를 구별하지 못합니다. 배포 증거는 활성 버전의 변경과, 배포 후 cron 3회(11:06, 11:07, 11:08 UTC)에서 `scheduled_steps`의 6개 단계가 모두 성공으로 갱신되고 배포 이후의 실패 기록과 경보가 없었던 것입니다.
-2026-10-04에는 운영자 승인에 따라 PR #131(#23-B 인박스 라벨과 내부 메모, migration 033)을 포함한 `main` 커밋 `6e3df5b`의 마이그레이션을 운영 DB에 적용하고 Worker를 배포했습니다.
+2026-10-04에는 승인에 따라 PR #131(#23-B 인박스 라벨과 내부 메모, migration 033)을 포함한 `main` 커밋 `6e3df5b`의 마이그레이션을 운영 DB에 적용하고 Worker를 배포했습니다.
 적용 전 운영 DB는 032까지 적용된 상태였고(033의 테이블 4개 없음, public 테이블 37개), 연결 1개(수신 켜짐·발송 꺼짐)·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-10-04-pr131/public-before-033.dump`에 백업했으며 데이터 테이블 37개가 들어 있습니다.
 관리자 연결은 앞과 같은 Session pooler를 TLS `verify-full`로 사용했고, 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 실행 로그에 오류나 경고는 없었습니다.
@@ -328,11 +328,11 @@ public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-10-0
 연결 삭제와 사람 삭제 함수의 정의에는 대화 단위 테이블 3개가, 작업 공간 삭제 함수에는 라벨 정의까지 4개가 들어 있었고, 소유자(`postgres`), `SECURITY DEFINER` 여부와 서버 역할의 실행 권한(둘 다 연결 삭제 함수만)은 그대로였습니다.
 기존 행 수(작업 공간 2, 멤버 1, 연결 1, 댓글 9, outbox 3, 인박스 메시지 3, 읽음 0, 플로 0, 플로 실행 0)와 발송 꺼짐 상태는 유지됐습니다.
 이어서 같은 커밋의 Worker를 버전 `7c9859f7-ba05-4eb6-9040-402cec865ccf`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `0a53d66b-8153-4bb5-9665-7d3e9e04d5b8`였습니다.
-배포 명령은 이번에도 운영자가 직접 실행했고 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. `wrangler.json`과 공개 페이지는 바뀌지 않아 `/privacy` 시행일은 2026년 10월 2일 그대로입니다.
+배포 명령은 이번에도 제가 직접 실행했고 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. `wrangler.json`과 공개 페이지는 바뀌지 않아 `/privacy` 시행일은 2026년 10월 2일 그대로입니다.
 같은 공개 점검 24개 항목이 모두 통과했고, 배포 전에 실행했을 때는 바뀐 정적 파일 4개(`app.js`, `inbox.js`, `styles.css`, `index.html`)의 해시가 일치하지 않아 점검이 배포 전후를 구별하는 것을 확인했습니다.
 배포 후 cron 3회(02:36, 02:38, 02:39 UTC)에서 `scheduled_steps`의 6개 단계가 모두 성공으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 운영에는 여러 멤버와 라벨이 없으므로 라벨, 라벨 필터, 내부 메모는 운영 화면에서 조작하지 않았습니다.
-같은 날 이어서 운영자 승인에 따라 PR #135(#23-C 인박스 리마인더, migration 034)를 포함한 `main` 커밋 `b1f5654`의 마이그레이션을 운영 DB에 적용하고 Worker를 배포했습니다.
+같은 날 이어서 승인에 따라 PR #135(#23-C 인박스 리마인더, migration 034)를 포함한 `main` 커밋 `b1f5654`의 마이그레이션을 운영 DB에 적용하고 Worker를 배포했습니다.
 적용 전 운영 DB는 033까지 적용된 상태였고(034의 테이블 2개 없음, public 테이블 41개), 연결 1개(수신 켜짐·발송 꺼짐)·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-10-04-pr135/public-before-034.dump`에 백업했으며 데이터 테이블 41개가 들어 있습니다.
 관리자 연결은 앞과 같은 Session pooler를 TLS `verify-full`로 사용했고, 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 실행 로그에 오류나 경고는 없었습니다.
@@ -341,18 +341,18 @@ public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-10-0
 삭제 함수 3개의 정의에는 새 테이블 2개가 모두 들어 있었고, 소유자(`postgres`), `SECURITY DEFINER` 여부와 서버 역할의 실행 권한(둘 다 연결 삭제 함수만)은 그대로였습니다.
 기존 행 수(작업 공간 2, 멤버 1, 연결 1, 댓글 9, outbox 3, 인박스 메시지 3, 대화 상태 0, 라벨 0, 메모 0, 플로 0, 플로 실행 0)와 발송 꺼짐 상태는 유지됐습니다.
 이어서 같은 커밋의 Worker를 버전 `e74b1633-d268-4911-b7f3-74d54dc7425a`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `7c9859f7-ba05-4eb6-9040-402cec865ccf`였습니다.
-배포 명령은 이번에도 운영자가 직접 실행했고 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. `wrangler.json`과 공개 페이지는 바뀌지 않아 `/privacy` 시행일은 2026년 10월 2일 그대로입니다.
+배포 명령은 이번에도 제가 직접 실행했고 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. `wrangler.json`과 공개 페이지는 바뀌지 않아 `/privacy` 시행일은 2026년 10월 2일 그대로입니다.
 공개 점검에 리마인더 경로 4개(로그인 없는 `GET /api/inbox?reminder=due`와 `GET /api/inbox/reminders`의 401, 다른 출처의 리마인더 만들기·완료 요청의 403)를 더한 28개 항목이 모두 통과했고, 배포 전에 실행했을 때는 바뀐 정적 파일 4개(`app.js`, `inbox.js`, `styles.css`, `index.html`)의 해시가 일치하지 않아 점검이 배포 전후를 구별하는 것을 확인했습니다. 리마인더 경로 4개는 이전 Worker에서도 같은 코드를 돌려주므로 배포를 구별하지 않습니다.
 배포 후 cron 3회(06:20, 06:21, 06:22 UTC)에서 `scheduled_steps`의 6개 단계가 모두 성공으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 운영에는 여러 멤버와 리마인더가 없으므로 리마인더 배지, 필터, 편집 칸은 운영 화면에서 조작하지 않았습니다.
-같은 날 이어서 운영자 승인에 따라 PR #137(#132 키워드 자동 라벨 규칙, migration 035)과 그 뒤에 병합된 PR #138~#141을 포함한 `main` 커밋 `4f79511`의 마이그레이션을 운영 DB에 적용하고 Worker를 배포했습니다. #138~#141에는 마이그레이션이 없습니다.
+같은 날 이어서 승인에 따라 PR #137(#132 키워드 자동 라벨 규칙, migration 035)과 그 뒤에 병합된 PR #138~#141을 포함한 `main` 커밋 `4f79511`의 마이그레이션을 운영 DB에 적용하고 Worker를 배포했습니다. #138~#141에는 마이그레이션이 없습니다.
 적용 전 운영 DB는 034까지 적용된 상태였고(035의 테이블 없음, 라벨 변경 이력의 `rule_id` 열 없음, public 테이블 43개), 연결 1개(수신 켜짐·발송 꺼짐)·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-10-04-pr137/public-before-035.dump`에 백업했으며 데이터 테이블 43개가 들어 있습니다.
 관리자 연결은 앞과 같은 Session pooler를 TLS `verify-full`로 사용했고, 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 실행 로그에 오류나 경고는 없었습니다.
 적용 후 public 테이블은 44개가 됐고, 새 테이블 `instagram_inbox_label_rules`는 RLS가 켜져 있었습니다. 서버 역할의 권한은 규칙이 SELECT·INSERT·UPDATE, 라벨 변경 이력은 그대로 SELECT·INSERT뿐이었고, 제품 테이블 DELETE 권한은 0개, `anon`과 `authenticated`의 public 테이블 권한도 0개였습니다.
 라벨 변경 이력의 `actor_id`와 `rule_id`는 둘 다 NULL을 허용하고 그중 정확히 하나만 채우는 CHECK가 들어갔으며, 규칙을 지우는 삭제 함수는 작업 공간 삭제 함수뿐이었습니다. 세 삭제 함수의 소유자, `SECURITY DEFINER` 여부와 서버 역할의 실행 권한은 그대로였습니다.
 기존 행 수(작업 공간 2, 멤버 1, 연결 1, 댓글 9, outbox 3, 인박스 메시지 3, 그 밖의 인박스 테이블 0, 플로 0)와 발송 꺼짐 상태는 유지됐습니다.
-이어서 이번에는 운영자의 배포 요청에 따라 같은 커밋의 Worker를 직접 버전 `90bb728b-4f11-42bc-b663-762dc3d4113a`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `e74b1633-d268-4911-b7f3-74d54dc7425a`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
+이어서 이번에는 배포 요청에 따라 같은 커밋의 Worker를 직접 버전 `90bb728b-4f11-42bc-b663-762dc3d4113a`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `e74b1633-d268-4911-b7f3-74d54dc7425a`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 공개 점검에 라벨 규칙 경로 3개(로그인 없는 `GET /api/inbox/label-rules`의 401, 다른 출처의 규칙 만들기·보관 요청의 403)를 더한 31개 항목이 모두 통과했고, 배포 전에는 바뀐 정적 파일 4개의 해시만 일치하지 않았습니다.
 배포 후 cron 3회(14:10, 14:11, 14:12 UTC)에서 `scheduled_steps`의 6개 단계가 모두 성공으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 운영에는 라벨과 규칙이 없으므로 규칙 관리 칸과 자동 라벨은 운영 화면에서 조작하지 않았습니다.
@@ -360,43 +360,43 @@ public 스키마 전체를 Git에서 제외된 `deploy/secrets/backups/2026-10-0
 Cloudflare GraphQL 분석 API(`workersInvocationsAdaptive`)로 확인한 결과, 2026-10-03 14:30Z부터 24시간 동안 호출 1,585번 가운데 837번이 `exceededResources`로 끝났고, 정상 종료된 748번의 CPU 중앙값도 17ms였습니다. 호출의 대부분은 매분 실행하는 cron입니다.
 시간대별 CPU 중앙값은 2026-10-02 09:57Z 배포(`3174fdde`, `main` `2e45865`) 직후 3.2ms에서 21.7ms로 올랐습니다. 그 배포에 들어간 PR #114·#116으로 cron 단계와 단계별 기록이 늘어, 빈 로컬 DB에서 발송을 끈 cron 한 번의 쿼리가 직전 배포 커밋 `d23cef2`의 2개에서 18개가 됐습니다.
 발송이 꺼져 있어 잘못 보낸 것은 없었고, 끊긴 회차의 남은 단계는 다음 분의 실행이 이어서 처리했습니다.
-운영자가 계정을 Workers Paid로 전환했습니다. HTTP 요청의 CPU 한도는 기본 30초(최대 5분)이고, cron은 주기가 1시간 미만이면 30초, 1시간 이상이면 15분이므로 매분 실행하는 이 cron의 한도는 30초입니다([한도 문서](https://developers.cloudflare.com/workers/platform/limits/#cpu-time)와 [가격 문서](https://developers.cloudflare.com/workers/platform/pricing/), 2026-10-05 확인). 결제 시각은 이 문서에 기록하지 않았습니다.
+제가 계정을 Workers Paid로 전환했습니다. HTTP 요청의 CPU 한도는 기본 30초(최대 5분)이고, cron은 주기가 1시간 미만이면 30초, 1시간 이상이면 15분이므로 매분 실행하는 이 cron의 한도는 30초입니다([한도 문서](https://developers.cloudflare.com/workers/platform/limits/#cpu-time)와 [가격 문서](https://developers.cloudflare.com/workers/platform/pricing/), 2026-10-05 확인). 결제 시각은 이 문서에 기록하지 않았습니다.
 분석 API에서 마지막 `exceededResources`는 2026-10-04 14:07Z였고, 14:10Z부터 확인한 15:30Z까지 강제 종료는 0번, CPU가 10ms를 넘는 정상 종료는 66번이었습니다.
 cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongminYoo/auto-chatter/issues/142)에서 다룹니다.
-2026-10-05에는 운영자 요청에 따라 PR #145(#142의 일부: 단계 기록 묶어 쓰기, 경보 평가 한 번에 읽기)를 포함한 `main` 커밋 `a19de4b`의 Worker를 버전 `fb5544e0-18c9-4d38-b1cb-76f758e9f9ca`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `90bb728b-4f11-42bc-b663-762dc3d4113a`였습니다.
+2026-10-05에는 요청에 따라 PR #145(#142의 일부: 단계 기록 묶어 쓰기, 경보 평가 한 번에 읽기)를 포함한 `main` 커밋 `a19de4b`의 Worker를 버전 `fb5544e0-18c9-4d38-b1cb-76f758e9f9ca`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `90bb728b-4f11-42bc-b663-762dc3d4113a`였습니다.
 `4f79511` 이후 `db/`, `deploy/`, `public/`, `wrangler.json`과 패키지 파일이 바뀌지 않아 마이그레이션은 없었고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. 배포 전 원래 체크아웃에 `node_modules`가 없어 lockfile로 다시 설치했습니다.
 같은 공개 점검 31개 항목이 모두 통과했지만, 정적 파일이 바뀌지 않아 이 점검은 배포 전후를 구별하지 못합니다. 배포 후 cron 3회(00:14, 00:15, 00:16 UTC)에서 `scheduled_steps`의 6개 단계가 모두 성공으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 빈 로컬 DB에서 발송을 끈 cron 한 번의 쿼리는 18개에서 7개가 됐습니다. 분석 API의 CPU는 배포 전 3시간(2026-10-04 21:00Z~10-05 00:13Z, 호출 210번) 중앙값 16.1ms·P90 18.5ms·P99 21.3ms에서, 배포 후 2시간 20분(00:15Z~02:35Z, 143번) 9.2ms·11.7ms·13.7ms로 줄었고, 두 구간 모두 `exceededResources`는 없었습니다. P90이 아직 무료 플랜 한도(10ms)를 넘으므로 유료 플랜은 유지합니다.
-2026-10-05 14:15Z에는 운영자 요청에 따라 PR #147(#144: 줄바꿈이 든 댓글 규칙 키워드 거부)을 포함한 `main` 커밋 `0bb3715`의 Worker를 버전 `5baa0a01-038a-4948-8b87-fadbe6e81857`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `fb5544e0-18c9-4d38-b1cb-76f758e9f9ca`였습니다.
+2026-10-05 14:15Z에는 요청에 따라 PR #147(#144: 줄바꿈이 든 댓글 규칙 키워드 거부)을 포함한 `main` 커밋 `0bb3715`의 Worker를 버전 `5baa0a01-038a-4948-8b87-fadbe6e81857`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `fb5544e0-18c9-4d38-b1cb-76f758e9f9ca`였습니다.
 `a19de4b` 이후 `db/`, `deploy/`, `public/`, `wrangler.json`과 lockfile이 바뀌지 않아(`package.json`에는 라이선스 필드만 추가됐습니다) 마이그레이션은 없었고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 공개 점검 31개 항목이 모두 통과했지만, 정적 파일이 바뀌지 않아 이 점검은 배포 전후를 구별하지 못합니다. 배포 후 cron 3회(14:17, 14:18, 14:19 UTC)에서 `scheduled_steps`의 6개 단계가 모두 성공으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
-같은 날 16:27Z에는 운영자 요청에 따라 PR #149(#148: 인증 요청 제한을 Durable Object로 집계)를 포함한 `main` 커밋 `77db96e`의 Worker를 버전 `d6c2b64c-aa0b-467f-afed-45a1e1ee6802`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `5baa0a01-038a-4948-8b87-fadbe6e81857`였습니다.
+같은 날 16:27Z에는 요청에 따라 PR #149(#148: 인증 요청 제한을 Durable Object로 집계)를 포함한 `main` 커밋 `77db96e`의 Worker를 버전 `d6c2b64c-aa0b-467f-afed-45a1e1ee6802`로 배포하고 100% 활성 상태를 조회했습니다. 배포 전 활성 버전은 `5baa0a01-038a-4948-8b87-fadbe6e81857`였습니다.
 이 배포는 `wrangler.json`의 Durable Object 마이그레이션 `v1`로 `AuthLimiter` 네임스페이스를 만들고 rate limit 바인딩 `AUTH_IP_LIMIT`·`AUTH_EMAIL_LIMIT`을 없앴습니다. DB 마이그레이션은 없으며 `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 [롤백 문서](https://developers.cloudflare.com/workers/configuration/versions-and-deployments/rollbacks/)(2026-10-05 확인)는 두 버전 사이에 Durable Object 클래스 수명 주기 변경이 있으면 롤백을 허용하지 않으므로, 이 버전보다 앞선 버전으로는 `wrangler rollback`할 수 없습니다. 문제가 생기면 `AuthLimiter`와 `v1`을 남긴 채 고친 코드를 배포하는 것을 우선 복구 방법으로 정했습니다. 클래스를 없애야 한다면 이 저장소가 쓰는 `migrations` 배열 방식의 [삭제 마이그레이션](https://developers.cloudflare.com/durable-objects/reference/durable-object-class-migrations-legacy/#delete-migration)(2026-10-05 확인)을 따라 바인딩과 코드에서 클래스를 지우고 `deleted_classes: ["AuthLimiter"]` 마이그레이션을 새 태그로 추가해 배포하며, 이때 저장된 창은 모두 지워집니다. `limitAuthRequest`는 제한 바인딩이 없으면 인증 요청을 `503 auth_unavailable`로 거절하므로, 같은 배포에서 다른 제한 바인딩을 연결해야 합니다.
 배포 전 16:22Z에 존재하지 않는 주소 하나로 `POST /api/auth/recover`를 요청마다 새 연결로 8번 보냈을 때는 모두 200이었습니다. 배포 후 16:28Z에 같은 방식으로 8번 보내자 5번은 200, 이어서 3번은 `429 auth_rate_limited`였습니다.
 이어서 새 창이 열리도록 65초를 기다린 뒤 서로 다른 존재하지 않는 주소 35개로 보내자 처음 30번은 200, 다음 3번은 429였습니다. 이 35번에 63초가 걸려 마지막 2번은 첫 요청이 연 60초 창이 끝난 뒤에 도착했고 200이었습니다. 503 `auth_unavailable`은 없었습니다.
 공개 점검 31개 항목도 모두 통과했지만 정적 파일이 바뀌지 않아 배포 전후를 구별하지 못합니다. 배포 후 `scheduled_steps`를 16:29:52Z, 16:30:57Z, 16:32:02Z, 16:44:14Z에 조회했을 때 6개 단계의 마지막 성공 시각은 16:29:50, 16:29:50(아직 갱신 전), 16:31:51, 16:43:50이었고, 배포 이후의 실패 기록과 경보는 없었습니다.
-2026-10-06 04:39Z에는 PR #153(대시보드 메뉴 화면 분리와 시작하기 목록)을 포함한 `main` 커밋 `3745c82`의 Worker를 운영자가 직접 버전 `ededa5c9-df9b-4b19-bd15-05109d923485`로 배포했고, 04:39:58Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `d6c2b64c-aa0b-467f-afed-45a1e1ee6802`였습니다.
+2026-10-06 04:39Z에는 PR #153(대시보드 메뉴 화면 분리와 시작하기 목록)을 포함한 `main` 커밋 `3745c82`의 Worker를 제가 직접 버전 `ededa5c9-df9b-4b19-bd15-05109d923485`로 배포했고, 04:39:58Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `d6c2b64c-aa0b-467f-afed-45a1e1ee6802`였습니다.
 `77db96e` 이후 바뀐 코드는 `public/app/`의 `index.html`, `app.js`, `styles.css`뿐이어서 마이그레이션은 없었고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 정적 파일 8개의 상태 코드와 SHA-256을 `main`의 파일과 비교하고 공개 경로·웹후크 거부·세션 없는 API 거부를 확인하는 22개 항목의 점검은, 배포 전에는 바뀐 세 파일의 해시만 달라 19개가 통과했고 배포 후에는 22개가 모두 통과했습니다.
 운영 DB는 조회하지 않아 `scheduled_steps`의 단계별 결과는 읽지 않았습니다. 대신 분석 API의 `workersInvocationsAdaptive`에서 배포 후 04:41Z~04:44Z의 cron을 포함한 새 버전 호출이 모두 `success`였고 오류는 0건이었습니다.
-2026-10-07에는 운영자가 승인한 #13 확인 버튼 실발송 테스트를 위해 `main` 커밋 `791267e`를 `--var SEND_ENABLED:true`로 배포했습니다. 버전 `d9d0fe42-0139-40aa-b78f-6ec18e58d22a`가 00:41:03Z부터 100% 활성화됐고, 버전 조회에서 `SEND_ENABLED=true`를 확인했습니다. 이 커밋은 `3745c82`와 코드가 같고 문서만 다릅니다.
+2026-10-07에는 승인된 #13 확인 버튼 실발송 테스트를 위해 `main` 커밋 `791267e`를 `--var SEND_ENABLED:true`로 배포했습니다. 버전 `d9d0fe42-0139-40aa-b78f-6ec18e58d22a`가 00:41:03Z부터 100% 활성화됐고, 버전 조회에서 `SEND_ENABLED=true`를 확인했습니다. 이 커밋은 `3745c82`와 코드가 같고 문서만 다릅니다.
 테스트 뒤 같은 커밋을 기본값으로 다시 배포해 버전 `c825eebe-e1f9-4950-8a95-a550e854f238`이 00:44:00Z부터 100% 활성화됐고, 버전 조회에서 `SEND_ENABLED=false`를 확인했습니다. 발송 3건과 종료 조회 결과는 [#13 운영 적용 검증 기록](2026-09-29-issue13-production-verification.md#2026-10-07-후속-검증)에 있습니다.
-같은 날 01:54Z에는 운영자의 "운영 DB 조회·백업, 마이그레이션 036~037 적용, 운영 배포" 승인에 따라 PR #157(sharp 0.35.5), #158(숫자·날짜 필드 순서 비교, migration 036), #159(태그·필드 AND/OR, migration 037)를 포함한 `main` 커밋 `c922e91`을 적용했습니다.
+같은 날 01:54Z에는 "운영 DB 조회·백업, 마이그레이션 036~037 적용, 운영 배포" 승인에 따라 PR #157(sharp 0.35.5), #158(숫자·날짜 필드 순서 비교, migration 036), #159(태그·필드 AND/OR, migration 037)를 포함한 `main` 커밋 `c922e91`을 적용했습니다.
 적용 전 조회에서 `instagram_contact_segments`는 0행이었고, `contact_segment_field_condition`은 `eq`·`is_set`·`is_unset`만 허용했으며 `condition_operator` 열은 없었습니다. `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-07-migration-036-037/public-pre-036.dump`(275,070바이트, SHA-256 `b7db6e893f0d82b855d52b4b9ec2a24d040ce7b54fc61be10392537b07bae181`)에 저장했고 목록 읽기가 성공했습니다.
 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했고, 로그는 `COMMIT`으로 끝났으며 오류나 경고는 없었습니다. 적용 후 조회에서 field 조건 CHECK가 `gt`·`gte`·`lt`·`lte`를 포함하고, `condition_operator`가 `NOT NULL DEFAULT 'and'`로 추가되고 `contact_segment_condition_operator` CHECK가 생겼습니다. RLS와 `auto_chatter_server`의 SELECT·INSERT·UPDATE 권한은 그대로였습니다.
 이어서 Worker를 버전 `cd170b5c-6af0-4bb8-995f-3b2874452567`로 배포했고, 01:55:22Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `c825eebe-e1f9-4950-8a95-a550e854f238`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 정적 파일·공개 경로 22개 항목 점검은 배포 전에 바뀐 `index.html`과 `app.js`의 해시만 달라 20개가 통과했고, 배포 후에는 22개가 모두 통과했습니다.
 `scheduled_steps`를 01:55:45Z, 01:56:50Z, 01:57:56Z에 조회했을 때, 발송과 무관하게 실행되는 6개 단계는 두 번째 조회부터 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. `SEND_ENABLED=true`일 때만 실행되는 `stale_recovery`, `wake`, `webhook_delivery`의 마지막 성공은 앞의 실발송 테스트 중인 00:43Z입니다.
-같은 날 03:27Z에는 운영자 요청에 따라 PR #162(#62 보안 회귀 테스트)와 #163(다른 작업 공간의 연결 해제 요청에 `404 connection_not_found`)을 포함한 `main` 커밋 `e924c09`의 Worker를 버전 `8eaeb7b0-d3ba-4af9-babb-825c098877ef`로 배포했고, 03:27:51Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `cd170b5c-6af0-4bb8-995f-3b2874452567`였습니다.
+같은 날 03:27Z에는 요청에 따라 PR #162(#62 보안 회귀 테스트)와 #163(다른 작업 공간의 연결 해제 요청에 `404 connection_not_found`)을 포함한 `main` 커밋 `e924c09`의 Worker를 버전 `8eaeb7b0-d3ba-4af9-babb-825c098877ef`로 배포했고, 03:27:51Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `cd170b5c-6af0-4bb8-995f-3b2874452567`였습니다.
 `c922e91` 이후 실행 코드는 `src/app/settings.ts`의 연결 해제만 바뀌었고 나머지는 테스트와 문서이므로 마이그레이션은 없었으며, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 22개 항목 점검은 모두 통과했지만 정적 파일이 바뀌지 않아 배포 전후를 구별하지 못합니다. 운영 DB는 조회하지 않았고, 분석 API의 `workersInvocationsAdaptive`에서 배포 후 03:27Z~03:30Z의 cron을 포함한 새 버전 호출이 모두 `success`였고 오류는 0건이었습니다.
-같은 날 05:08Z에는 운영자 요청에 따라 PR #170(#165: 인증 메일 요청의 IP별 시간당 10회·프로젝트 전체 시간당 15회 제한)을 포함한 `main` 커밋 `2fa939c`의 Worker를 버전 `ca5c276d-2e3e-44fd-8b9e-3749e1c82d9b`로 배포했고, 05:08:18Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `8eaeb7b0-d3ba-4af9-babb-825c098877ef`였습니다.
+같은 날 05:08Z에는 요청에 따라 PR #170(#165: 인증 메일 요청의 IP별 시간당 10회·프로젝트 전체 시간당 15회 제한)을 포함한 `main` 커밋 `2fa939c`의 Worker를 버전 `ca5c276d-2e3e-44fd-8b9e-3749e1c82d9b`로 배포했고, 05:08:18Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `8eaeb7b0-d3ba-4af9-babb-825c098877ef`였습니다.
 `e924c09` 이후 실행 코드는 `src/app/auth-rate-limit.ts`와 `src/cloudflare/auth-limiter.ts`만 바뀌었고, 두 제한은 기존 `AuthLimiter` Durable Object의 새 이름(`mail-ip:`, `mail:`)을 쓰므로 Wrangler 설정과 마이그레이션은 바뀌지 않았습니다. `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 배포 후 05:08:47Z~05:09:06Z에 존재하지 않는 서로 다른 주소(`example.com`) 11개로 `POST /api/auth/recover`를 요청마다 새 연결로 보내자 처음 10번은 `200 recovery_requested`, 11번째는 `429 auth_rate_limited`였습니다. 이 확인은 그 시간 창의 프로젝트 전체 한도 15회 가운데 10회를 썼습니다.
 22개 항목 점검은 모두 통과했지만 정적 파일이 바뀌지 않아 배포 전후를 구별하지 못합니다. 운영 DB는 조회하지 않았고, 분석 API에서 배포 후 05:08Z~05:11Z의 cron을 포함한 새 버전 호출이 모두 `success`였고 오류는 0건이었습니다.
-같은 날 운영자가 PR #172(#164: Supabase 비밀 키와 사용자 IP 전달)의 `main` 커밋 `8ffc2c5`를 배포했고, 이전 secret을 삭제하면서 생긴 버전 `7070d24a-795f-406b-b213-ec553e06b80d`가 13:26:48Z부터 활성화됐습니다. 자세한 확인 내용은 [#164의 완료 기록](https://github.com/AndrewDongminYoo/auto-chatter/issues/164)에 있습니다.
-2026-10-11에는 운영자의 "마이그레이션 진행하고 배포해주세요" 요청에 따라 PR #174(#166: 게시물 조회·작업 공간 내보내기·OAuth 시작의 사용자별 제한)와 PR #175(#173: 만료된 OAuth state 정리, migration 038)를 포함한 `main` 커밋 `13577c1`을 적용했습니다.
+같은 날 제가 PR #172(#164: Supabase 비밀 키와 사용자 IP 전달)의 `main` 커밋 `8ffc2c5`를 배포했고, 이전 secret을 삭제하면서 생긴 버전 `7070d24a-795f-406b-b213-ec553e06b80d`가 13:26:48Z부터 활성화됐습니다. 자세한 확인 내용은 [#164의 완료 기록](https://github.com/AndrewDongminYoo/auto-chatter/issues/164)에 있습니다.
+2026-10-11에는 "마이그레이션 진행하고 배포해주세요" 요청에 따라 PR #174(#166: 게시물 조회·작업 공간 내보내기·OAuth 시작의 사용자별 제한)와 PR #175(#173: 만료된 OAuth state 정리, migration 038)를 포함한 `main` 커밋 `13577c1`을 적용했습니다.
 적용 전 조회(06:02Z)에서 운영 DB는 037까지 적용된 상태였고(`delete_expired_oauth_states` 없음, public 테이블 44개), OAuth state 6행이 모두 만료 상태였으며, 연결 1개(수신 켜짐·발송 꺼짐)·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-11-migration-038/public-pre-038.dump`(275,589바이트, SHA-256 `245e3994714369cdb7bd5caaa29316b286a2ae48904099d5669f94cc6b714c6b`)에 저장했고, 목록 읽기에서 데이터 테이블 44개를 확인했습니다.
 관리자 연결은 앞과 같은 Session pooler를 TLS `verify-full`로 사용했고, 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE 129건은 모두 이미 있는 객체를 건너뛴다는 알림이었습니다.
@@ -404,7 +404,7 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 이어서 Worker를 버전 `3880574d-1b20-44f0-a4c6-05e871900116`로 배포했고, 06:07:44Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `7070d24a-795f-406b-b213-ec553e06b80d`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. 새 제한은 기존 `AuthLimiter` Durable Object의 새 이름을 쓰므로 Wrangler 설정은 바뀌지 않았습니다.
 정적 파일 8개의 해시와 공개 경로·세션 없는 API 거부·다른 출처 요청 거부·웹후크 거부를 확인하는 18개 항목의 점검은, 배포 전에는 바뀐 `app.js`의 해시만 달라 17개가 통과했고 배포 후에는 18개가 모두 통과했습니다. Python `urllib`처럼 `Accept` 헤더 없이 요청하면 Cloudflare가 `/app/`에 Web Analytics 스크립트를 넣어 해시가 달라지므로, 점검은 `Accept: */*`를 보냅니다.
 `scheduled_steps`를 06:08:43Z, 06:09:48Z, 06:10:53Z에 조회했을 때 새 단계 `oauth_state_cleanup`을 포함해 발송과 무관하게 실행되는 7개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. 첫 조회에서 이미 OAuth state가 0행이 되어 만료된 6행이 지워진 것을 확인했습니다.
-같은 날 07:58Z에는 운영자의 "039 마이그레이션 진행하고 배포해주세요" 요청에 따라 PR #177(#16: Meta가 토큰을 거부한 연결의 재연결 필요 표시, migration 039)을 포함한 `main` 커밋 `ec6841e`을 적용했습니다.
+같은 날 07:58Z에는 "039 마이그레이션 진행하고 배포해주세요" 요청에 따라 PR #177(#16: Meta가 토큰을 거부한 연결의 재연결 필요 표시, migration 039)을 포함한 `main` 커밋 `ec6841e`을 적용했습니다.
 적용 전 조회에서 운영 DB는 038까지 적용된 상태였고(`reauth_*` 열 없음, public 테이블 44개), 연결 1개(수신 켜짐·발송 꺼짐)·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-11-migration-039/public-pre-039.dump`(276,200바이트, SHA-256 `a4d78d27512fd69dd5218a24fceab25b2beb1a5fe46ee9ef3f212c643e415007`)에 저장했고, 목록 읽기에서 데이터 테이블 44개를 확인했습니다.
 같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류는 없었으며, NOTICE 129건은 038 적용 때와 같은 건너뛰기 알림이었습니다.
@@ -414,7 +414,7 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 `scheduled_steps`를 08:01:32Z, 08:02:38Z, 08:03:43Z에 조회했을 때 발송과 무관하게 실행되는 7개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 `token_refresh`는 갱신할 토큰이 있을 때만 새 열을 쓰므로, 이 성공은 새 열을 쓰는 경로를 보여 주지 않습니다. 대신 `GET /api/connections`의 조회문을 관리자 연결의 읽기 전용 트랜잭션에서 실행해 연결 1개가 표시 없이(`credential_status=valid`) 반환되는 것을 확인했습니다. 관리자 역할은 서버 역할의 구성원이 아니므로 서버 역할로는 실행하지 않았습니다.
 로그인한 화면의 "재연결 필요" 배지와 Meta가 실제로 토큰을 거부했을 때의 기록은 운영에서 확인하지 않았습니다.
-같은 날 12:48Z에는 운영자의 "040 마이그레이션 진행하고 배포해주세요" 요청에 따라 PR #180(#16: Meta 권한 해제 콜백, migration 040)을 포함한 `main` 커밋 `094e182`를 적용했습니다.
+같은 날 12:48Z에는 "040 마이그레이션 진행하고 배포해주세요" 요청에 따라 PR #180(#16: Meta 권한 해제 콜백, migration 040)을 포함한 `main` 커밋 `094e182`를 적용했습니다.
 적용 전 조회에서 운영 DB는 039까지 적용된 상태였고(`instagram_user_id`·`deauthorized_at` 열 없음, public 테이블 44개), 연결 1개(수신 켜짐·발송 꺼짐·토큰 있음)·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-11-migration-040/public-pre-040.dump`(276,716바이트, SHA-256 `30efd7db5305e1723f567716f3009ea2a3842824bb4c9e47fe0f99ef7f82966c`)에 저장했고, 목록 읽기에서 데이터 테이블 44개를 확인했습니다.
 같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류는 없었으며, NOTICE 132건은 모두 건너뛰기 알림이었습니다(039의 세 열을 다시 실행한 3건이 늘었습니다).
@@ -422,9 +422,9 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 이어서 Worker를 버전 `f1f3e9b5-9480-4346-a8a3-e76db680d293`로 배포했고, 12:50:42Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `20d5078d-0105-4b8d-8f17-d8ef63c8a284`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다. 콜백이 쓰는 `INSTAGRAM_OAUTH_APP_SECRET`은 secret 이름 목록에서 확인했습니다.
 18개 항목 점검은 배포 전에는 바뀐 `app.js`의 해시만 달라 17개가 통과했고, 배포 후에는 18개가 모두 통과했습니다. 배포 후 `/instagram/deauthorize`는 `GET`에 405, 본문 없는 `POST`와 위조한 서명의 `POST`에 400을 응답했습니다.
 `scheduled_steps`를 12:52:33Z, 12:53:38Z, 12:54:44Z에 조회했을 때 발송과 무관하게 실행되는 7개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. 같은 조회에서 연결은 수신 켜짐·토큰 있음·`deauthorized_at` 없음으로 그대로였습니다.
-서명이 맞는 콜백의 처리, 화면의 "Instagram에서 권한 해제됨" 배지, Meta가 실제로 보내는 ID는 운영에서 확인하지 않았습니다. Meta 앱 대시보드에 Deauthorize callback URL을 등록하는 일은 운영자가 따로 진행합니다([권한 해제 콜백](../specs/2026-09-28-instagram-token-refresh.md#권한-해제-콜백-16)).
-운영자는 Business login settings의 Deauthorize callback URL에 `https://auto-chat.donminzzi.kr/instagram/deauthorize`를 등록했고, 15:10Z에 저장을 마쳤다고 알렸습니다. 등록 직전에 같은 주소는 `GET`에 405, 본문 없는 `POST`에 400을 응답했습니다. 같은 화면의 데이터 삭제 요청 URL은 비어 있습니다. 앱 검수를 제출하기 전에 이 칸을 채워야 하지만, `/data-deletion`은 안내 페이지일 뿐 Meta의 데이터 삭제 콜백이 아니므로 아직 등록하지 않았습니다.
-2026-10-12 03:12Z에는 운영자의 "041 마이그레이션 진행하고 배포해주세요" 요청에 따라 PR #183(#179: 웹후크 구독 유실 주기 검사, migration 041)을 포함한 `main` 커밋 `f9c4c9c`를 적용했습니다.
+서명이 맞는 콜백의 처리, 화면의 "Instagram에서 권한 해제됨" 배지, Meta가 실제로 보내는 ID는 운영에서 확인하지 않았습니다. Meta 앱 대시보드에 Deauthorize callback URL을 등록하는 일은 제가 따로 진행합니다([권한 해제 콜백](../specs/2026-09-28-instagram-token-refresh.md#권한-해제-콜백-16)).
+제가 Business login settings의 Deauthorize callback URL에 `https://auto-chat.donminzzi.kr/instagram/deauthorize`를 등록했고, 15:10Z에 저장을 마쳤습니다. 등록 직전에 같은 주소는 `GET`에 405, 본문 없는 `POST`에 400을 응답했습니다. 같은 화면의 데이터 삭제 요청 URL은 비어 있습니다. 앱 검수를 제출하기 전에 이 칸을 채워야 하지만, `/data-deletion`은 안내 페이지일 뿐 Meta의 데이터 삭제 콜백이 아니므로 아직 등록하지 않았습니다.
+2026-10-12 03:12Z에는 "041 마이그레이션 진행하고 배포해주세요" 요청에 따라 PR #183(#179: 웹후크 구독 유실 주기 검사, migration 041)을 포함한 `main` 커밋 `f9c4c9c`를 적용했습니다.
 적용 전 조회에서 운영 DB는 040까지 적용된 상태였고(`subscription_*` 열 없음, public 테이블 44개), 연결 1개(수신 켜짐·발송 꺼짐·만료 전 토큰 있음·재연결 필요 표시 없음)·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-12-migration-041/public-pre-041.dump`(276,828바이트, SHA-256 `8902c4131d38c4c8fedd57e8d89c7c4d2c6be50febede02ce1c6b82c070ea1c8`)에 저장했고, 목록 읽기에서 데이터 테이블 44개를 확인했습니다.
 같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE 134건은 모두 건너뛰기 알림이었습니다(040의 두 열을 다시 실행한 2건이 늘었습니다).
@@ -433,9 +433,9 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 18개 항목 점검은 배포 전에는 바뀐 `app.js`의 해시만 달라 17개가 통과했고, 배포 후에는 18개가 모두 통과했습니다.
 `scheduled_steps`를 03:16:00Z, 03:17:06Z, 03:18:11Z에 조회했을 때 새 단계 `subscription_check`를 포함해 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 배포 직후 03:14:25Z의 cron이 운영 연결 1개의 구독을 Meta에서 확인했고, 결과는 구독이 있음(`subscription_checked_at` 03:14:26Z, `subscription_missing_at` 없음, 기록이 현재 토큰과 일치)이었습니다. 이후 두 번의 실행은 6시간 간격에 따라 같은 연결을 다시 확인하지 않았습니다.
-이어서 운영자가 로그인한 계정 화면에서 "Meta 상태 확인"을 실행했고, 화면에는 저장된 기록("Meta가 필수 웹후크 구독 필드를 반환했습니다. 마지막 확인: 2026. 10. 12. 오후 12:37:04.")과 이번 확인 결과가 함께 표시됐습니다. 03:37:33Z의 조회에서 `subscription_check_attempted_at`은 03:37:04.19Z, `subscription_checked_at`은 03:37:04.68Z로 갱신됐고, 유실 기록은 없었으며 기록은 현재 토큰과 일치했습니다. 수동 확인도 시도 시각을 갱신하므로, cron의 다음 확인은 그로부터 6시간 뒤로 미뤄집니다.
+이어서 제가 로그인한 계정 화면에서 "Meta 상태 확인"을 실행했고, 화면에는 저장된 기록("Meta가 필수 웹후크 구독 필드를 반환했습니다. 마지막 확인: 2026. 10. 12. 오후 12:37:04.")과 이번 확인 결과가 함께 표시됐습니다. 03:37:33Z의 조회에서 `subscription_check_attempted_at`은 03:37:04.19Z, `subscription_checked_at`은 03:37:04.68Z로 갱신됐고, 유실 기록은 없었으며 기록은 현재 토큰과 일치했습니다. 수동 확인도 시도 시각을 갱신하므로, cron의 다음 확인은 그로부터 6시간 뒤로 미뤄집니다.
 구독이 실제로 유실된 경우의 기록과 화면의 "웹후크 구독 유실" 배지는 실제 구독을 해제해야 하므로 운영에서 확인하지 않았습니다.
-2026-10-12 08:14Z에는 운영자의 "042·043 마이그레이션 진행하고 배포해주세요" 요청에 따라 `main` 커밋 `fb2a621`을 적용했습니다. 이 커밋에는 PR #187(#184: 발송 전 계정 확인이 `refresh_rejected` 표시를 지우지 않음), PR #188(#60 일부: 계정별 비공개 답장 시간당 한도와 cron 깨우기 순환, migration 042), PR #190(#167 일부: 작업 공간을 돌아가는 웹후크 전달 순서, migration 043)이 들어 있습니다.
+2026-10-12 08:14Z에는 "042·043 마이그레이션 진행하고 배포해주세요" 요청에 따라 `main` 커밋 `fb2a621`을 적용했습니다. 이 커밋에는 PR #187(#184: 발송 전 계정 확인이 `refresh_rejected` 표시를 지우지 않음), PR #188(#60 일부: 계정별 비공개 답장 시간당 한도와 cron 깨우기 순환, migration 042), PR #190(#167 일부: 작업 공간을 돌아가는 웹후크 전달 순서, migration 043)이 들어 있습니다.
 적용 전 조회에서 운영 DB는 041까지 적용된 상태였고(`provider_called_at`·`send_woken_at` 열과 두 새 인덱스 없음, public 테이블 44개), 연결 1개(수신 켜짐·발송 꺼짐)·비공개 답장 4행·외부 전송 0행·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-12-migration-042-043/public-pre-042-043.dump`(277,330바이트, SHA-256 `d32ef71eab2d44fbc5489764e0e427c875d6dce9395c9e732790d552e36adc70`)에 저장했고, 목록 읽기에서 데이터 테이블 44개를 확인했습니다.
 같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행해 042와 043을 함께 적용했습니다. 로그는 `COMMIT`으로 끝났고 오류는 없었으며, NOTICE 138건은 모두 건너뛰기 알림이었습니다(041의 네 열을 다시 실행한 4건이 늘었습니다).
@@ -444,7 +444,7 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 이번 커밋은 `public/`을 바꾸지 않았으므로 18개 항목 점검은 배포 전과 배포 후 모두 18개가 통과했습니다.
 `scheduled_steps`를 08:19:51Z, 08:20:51Z, 08:21:52Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 발송이 꺼져 있어 `wake`·`webhook_delivery`·`stale_recovery` 단계는 실행되지 않으므로, 시간당 한도의 셈, cron 깨우기의 `send_woken_at` 기록, 작업 공간 순환 전달, #184의 표시 유지는 운영에서 실행되지 않았습니다.
-2026-10-12 10:47Z에는 운영자의 "044 마이그레이션 진행하고 배포해주세요" 요청에 따라 `main` 커밋 `868d737`을 적용했습니다. 이 커밋에는 PR #192(#189: 데이터 삭제 뒤에도 비공개 답장 예산의 최근 호출 수를 연결 행에 이월, migration 044)와 PR #193(#167: 로그인한 API 쓰기와 받은 편지함 목록의 기본 요청 한도, 마이그레이션 없음)이 들어 있습니다.
+2026-10-12 10:47Z에는 "044 마이그레이션 진행하고 배포해주세요" 요청에 따라 `main` 커밋 `868d737`을 적용했습니다. 이 커밋에는 PR #192(#189: 데이터 삭제 뒤에도 비공개 답장 예산의 최근 호출 수를 연결 행에 이월, migration 044)와 PR #193(#167: 로그인한 API 쓰기와 받은 편지함 목록의 기본 요청 한도, 마이그레이션 없음)이 들어 있습니다.
 적용 전 조회에서 운영 DB는 043까지 적용된 상태였고(`private_reply_carried_*` 열과 `carry_deleted_private_reply_calls` 함수·트리거 없음, public 테이블 44개), 연결 1개(수신 켜짐·발송 꺼짐)·비공개 답장 4행(호출 기록 0행)·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-12-migration-044/public-pre-044.dump`(278,256바이트, SHA-256 `42981b4adcee166f0e93a35c8db9c776a60f84f94a48bce218d4ee37f7043a0b`)에 저장했고, 목록 읽기에서 데이터 테이블 44개를 확인했습니다.
 같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE 143건은 모두 건너뛰기 알림이었습니다(042·043을 다시 실행한 4건과, 처음 적용한 044의 없는 트리거를 지우는 1건이 늘었습니다).
@@ -453,7 +453,7 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 18개 항목 점검은 배포 전에는 바뀐 `app.js`와 `inbox.js`의 해시만 달라 16개가 통과했고, 배포 직후의 첫 점검에서는 `app.js`의 해시만 달라 17개가 통과했습니다. 10:59:30Z에 다시 받은 `app.js`는 로컬 파일과 해시가 같았고(`cf-cache-status: MISS`, `cache-control: no-store`), 11:02Z에 끝난 재점검에서는 18개가 모두 통과했습니다.
 `scheduled_steps`를 10:57:17Z, 10:58:18Z, 10:59:18Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 적용 뒤 데이터 삭제를 실행하지 않았으므로 이월 트리거는 실행되지 않았고, 로그인한 세션으로 요청하지 않았으므로 새 요청 한도의 `429`와 한도 장치가 응답하지 않을 때의 동작도 운영에서 확인하지 않았습니다.
-2026-10-12 14:07Z에는 운영자의 "045 마이그레이션 진행하고 배포해주세요" 요청에 따라 `main` 커밋 `0ce8aa1`을 적용했습니다. 이 커밋에는 PR #195(#52 1단계: 요금제 권한과 멤버 자리·연결 한도, migration 045)와 PR #197(#62 3차 점검: 테스트와 점검 기록만)이 들어 있습니다.
+2026-10-12 14:07Z에는 "045 마이그레이션 진행하고 배포해주세요" 요청에 따라 `main` 커밋 `0ce8aa1`을 적용했습니다. 이 커밋에는 PR #195(#52 1단계: 요금제 권한과 멤버 자리·연결 한도, migration 045)와 PR #197(#62 3차 점검: 테스트와 점검 기록만)이 들어 있습니다.
 적용 전 조회에서 운영 DB는 044까지 적용된 상태였고(`workspaces`의 열은 `id`, `time_zone`뿐이고 `workspaces_plan` 제약 없음, public 테이블 44개), 작업 공간 3개·제거되지 않은 멤버 2명·열린 초대 0개·연결된 계정 1개·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다. `auto_chatter_server`는 `workspaces`에 테이블 단위 SELECT·INSERT·UPDATE를 가지고 있었습니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-12-migration-045/public-pre-045.dump`(280,578바이트, SHA-256 `469372874d65149758a79ab4c732f0626b8d749fc9a66c2ba995dd9e1a9228a8`)에 저장했고, 목록 읽기에서 데이터 테이블 44개를 확인했습니다.
 같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE 144건은 모두 건너뛰기 알림이었습니다(044의 두 열을 다시 실행한 2건이 늘고, 이번에는 트리거가 있으므로 044의 트리거 삭제 알림 1건이 줄었습니다).
@@ -462,16 +462,16 @@ cron의 쿼리 수를 줄이는 개선은 [#142](https://github.com/AndrewDongmi
 18개 항목 점검은 배포 전에는 바뀐 `index.html`과 `app.js`의 해시만 달라 16개가 통과했습니다. 배포 직후의 반영 지연을 피해 2분 뒤 14:13:50Z에 시작한 점검에서는 18개가 모두 통과했고, 새 파일 `plan-labels.js`도 200으로 응답하며 로컬 파일과 해시가 같았습니다.
 `scheduled_steps`를 14:15:59Z, 14:16:59Z, 14:17:59Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 로그인한 세션으로 요청하지 않았으므로, 화면의 요금제·사용량 표시와 `seat_limit_reached`·`connection_limit_reached` 거절은 운영에서 확인하지 않았습니다.
-이후 운영자가 로그인한 설정 화면의 스크린샷을 보냈고, 화면에는 "요금제: 어드밴스드 · 멤버 1/10명(대기 중인 초대 포함) · Instagram 계정 1/10개"가 표시됐습니다. 이 값은 사후 확인의 사용량 조회(멤버 1, 열린 초대 0, 연결 1)와 같습니다. 한도 초과 거절은 여전히 운영에서 확인하지 않았습니다.
-2026-10-12 15:59Z에는 운영자의 "머지되면 배포까지 진행해주세요" 요청에 따라 PR #200(#199 관련: `/app/*`의 `Cache-Control`을 `no-store`에서 `no-cache`로 바꾸고 로고를 192×192, 20,369바이트로 줄임)을 포함한 `main` 커밋 `6987580`을 배포했습니다. DB 변경은 없어 마이그레이션을 실행하지 않았습니다.
+이후 제가 로그인한 설정 화면의 스크린샷을 보냈고, 화면에는 "요금제: 어드밴스드 · 멤버 1/10명(대기 중인 초대 포함) · Instagram 계정 1/10개"가 표시됐습니다. 이 값은 사후 확인의 사용량 조회(멤버 1, 열린 초대 0, 연결 1)와 같습니다. 한도 초과 거절은 여전히 운영에서 확인하지 않았습니다.
+2026-10-12 15:59Z에는 "머지되면 배포까지 진행해주세요" 요청에 따라 PR #200(#199 관련: `/app/*`의 `Cache-Control`을 `no-store`에서 `no-cache`로 바꾸고 로고를 192×192, 20,369바이트로 줄임)을 포함한 `main` 커밋 `6987580`을 배포했습니다. DB 변경은 없어 마이그레이션을 실행하지 않았습니다.
 배포 전 활성 버전은 `f8271e30-ad3c-40bd-8195-754a6c3fed77`였고, 그때 `/app/`은 `Cache-Control: no-store`, 로고는 950,745바이트였습니다. 18개 항목 점검은 바뀐 로고의 해시만 달라 17개가 통과했습니다.
 Worker를 버전 `bd9ed6d9-daea-4d84-a47a-226ebfdafdbd`로 배포했고, 15:59:30Z부터 100% 활성 상태임을 조회했습니다. `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 배포 후 2분을 기다려 16:01:43Z에 시작한 점검에서는 18개가 모두 통과했습니다. 같은 점검에서 `/app/`, `/app/app.js`, `/app/styles.css`는 `Cache-Control: no-cache`와 ETag를 보냈고, `app.js`를 받은 ETag로 다시 요청하면 본문 없는 `304`가 돌아왔으며, 로고는 20,369바이트(0.89초)였습니다. 이때 `/cdn-cgi/trace`는 `colo=CDG`였습니다([#199](https://github.com/AndrewDongminYoo/auto-chatter/issues/199)).
 `scheduled_steps`를 16:02:20Z, 16:03:20Z, 16:04:21Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
-브라우저가 실제로 파일을 보관했다가 다시 쓰는지는 운영자의 브라우저에서 확인하지 않았습니다.
+브라우저가 실제로 파일을 보관했다가 다시 쓰는지는 제 브라우저에서 확인하지 않았습니다.
 2026-10-16의 공개 URL 재측정과 남은 판단 한계는 [#199 네트워크 측정 기록](2026-10-16-network-routing-measurements.md)에 있습니다.
 
-2026-10-17 10:29Z에는 운영자의 "운영 적용과 배포 진행해주세요" 요청에 따라 `main` 커밋 `335968b`를 적용했습니다. 이 커밋에는 마지막 배포 커밋 `6987580` 뒤에 병합된 PR #201~#218의 18개가 들어 있으며, 그중 DB를 바꾸는 PR은 #208(046), #209(047), #210(048), #211(049), #212(050), #213(051), #214(052), #215(053), #218(054)입니다.
+2026-10-17 10:29Z에는 "운영 적용과 배포 진행해주세요" 요청에 따라 `main` 커밋 `335968b`를 적용했습니다. 이 커밋에는 마지막 배포 커밋 `6987580` 뒤에 병합된 PR #201~#218의 18개가 들어 있으며, 그중 DB를 바꾸는 PR은 #208(046), #209(047), #210(048), #211(049), #212(050), #213(051), #214(052), #215(053), #218(054)입니다.
 적용 전 조회에서 운영 DB는 PostgreSQL 17.6이며 045까지 적용된 상태였습니다. 046~054가 만드는 열·테이블·인덱스는 하나도 없었고, public 테이블은 44개였습니다. 작업 공간 3개, 연결된 계정 1개, 세그먼트 0개, 수동 답장 0개, 발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 관리자 연결 보조 스크립트는 scratchpad에 다시 만들었고, 앞과 같은 Session pooler를 TLS `verify-full`(Git에서 제외된 `deploy/secrets/supabase-ca.crt`)로 사용했습니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-17-migration-046-054/public-pre-046-054.dump`(281,259바이트, SHA-256 `6f5c38e4e314ce69a167c5db14e727937c13f70ee1dab45da34fe84e97392b06`)에 저장했고, 목록 읽기에서 데이터 테이블 44개를 확인했습니다.
@@ -483,7 +483,7 @@ Worker를 버전 `bd9ed6d9-daea-4d84-a47a-226ebfdafdbd`로 배포했고, 15:59:3
 같은 세 번의 조회에서 `stale_recovery`, `wake`, `webhook_delivery`는 발송이 꺼져 있어 실행되지 않았고, 마지막 성공 시각은 배포 전인 00:43:49Z 그대로였습니다. 그래서 049가 예약 답장을 걸러 내도록 바꾼 claim·wake 질의는 운영에서 아직 실행되지 않았으며, 발송을 켜는 첫 실행에서 확인해야 합니다.
 로그인한 세션으로 요청하지 않았으므로 이번에 배포한 세그먼트 수정·답장 템플릿·예약 답장·리포트·CSV 사전 검사와 적용 화면과 API는 운영에서 실행하지 않았습니다.
 
-2026-10-17 13:07Z에는 운영자의 "운영 적용 배포해주세요" 요청에 따라 `main` 커밋 `098c513`을 적용했습니다. 이 커밋에는 PR #219(앞 기록, 문서만)와 PR #220(#26 일부: 작업 공간 시간대 기준 달력 활동 기간, migration 055)이 들어 있습니다.
+2026-10-17 13:07Z에는 "운영 적용 배포해주세요" 요청에 따라 `main` 커밋 `098c513`을 적용했습니다. 이 커밋에는 PR #219(앞 기록, 문서만)와 PR #220(#26 일부: 작업 공간 시간대 기준 달력 활동 기간, migration 055)이 들어 있습니다.
 적용 전 조회에서 운영 DB는 054까지 적용된 상태였고(`instagram_contact_segments.version` 있음, `last_comment_period` 열과 `contact_segment_calendar_period` 제약 없음, public 테이블 45개), 작업 공간 3개·세그먼트 0개·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-17-migration-055/public-pre-055.dump`(289,152바이트, SHA-256 `8b6ef019db821f18098b24d11073d1b7f5b731228545026b28f578b8f303e71e`)에 저장했고, 목록 읽기에서 데이터 테이블 45개를 확인했습니다.
 앞과 같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE는 162건이었습니다.
@@ -493,7 +493,7 @@ Worker를 버전 `bd9ed6d9-daea-4d84-a47a-226ebfdafdbd`로 배포했고, 15:59:3
 `scheduled_steps`를 13:11:11Z, 13:12:29Z, 13:13:43Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. `stale_recovery`, `wake`, `webhook_delivery`는 발송이 꺼져 있어 이번에도 실행되지 않았습니다.
 로그인한 세션으로 요청하지 않았으므로 달력 활동 기간의 화면과 API는 운영에서 실행하지 않았습니다.
 
-2026-10-17 15:01Z에는 운영자의 "운영 적용 및 배포 진행해주세요" 요청에 따라 `main` 커밋 `8fdb6fe`를 적용했습니다. 이 커밋에는 PR #221(앞 기록, 문서만)과 PR #222(#26 일부: 다중 태그 조건, migration 056)가 들어 있습니다.
+2026-10-17 15:01Z에는 "운영 적용 및 배포 진행해주세요" 요청에 따라 `main` 커밋 `8fdb6fe`를 적용했습니다. 이 커밋에는 PR #221(앞 기록, 문서만)과 PR #222(#26 일부: 다중 태그 조건, migration 056)가 들어 있습니다.
 적용 전 조회에서 운영 DB는 055까지 적용된 상태였고(`last_comment_period` 있음, `tags`·`tag_mode` 열과 `contact_segment_multi_tag` 제약 없음, `contact_segment_condition_operator`는 `tag`만 태그 조건으로 인정, public 테이블 45개), 작업 공간 3개·세그먼트 0개·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-18-migration-056/public-pre-056.dump`(289,501바이트, SHA-256 `0790736e00a90e9433af0f93ec4e2e96968d7b3b35e6c41fa16b324166998e44`)에 저장했고, 목록 읽기에서 데이터 테이블 45개를 확인했습니다. 디렉터리 이름의 날짜는 작업한 현지 날짜이며, UTC로는 2026-10-17입니다.
 앞과 같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE는 163건이었습니다.
@@ -504,7 +504,7 @@ Worker를 버전 `bd9ed6d9-daea-4d84-a47a-226ebfdafdbd`로 배포했고, 15:59:3
 `scheduled_steps`를 15:04:55Z, 15:06:28Z, 15:07:52Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. `stale_recovery`, `wake`, `webhook_delivery`는 발송이 꺼져 있어 이번에도 실행되지 않았습니다.
 로그인한 세션으로 요청하지 않았으므로 다중 태그 조건의 화면과 API는 운영에서 실행하지 않았습니다.
 
-2026-10-17 23:27Z에는 운영자의 "운영 배포 적용하고" 요청에 따라 `main` 커밋 `baca76f`를 적용했습니다. 이 커밋에는 PR #224(#26 일부: 다중 필드 조건, migration 057, 이미 적용한 056의 OR 결합 제약 재생성 가드)와 PR #223(앞 기록, 문서만)이 들어 있습니다.
+2026-10-17 23:27Z에는 "운영 배포 적용하고" 요청에 따라 `main` 커밋 `baca76f`를 적용했습니다. 이 커밋에는 PR #224(#26 일부: 다중 필드 조건, migration 057, 이미 적용한 056의 OR 결합 제약 재생성 가드)와 PR #223(앞 기록, 문서만)이 들어 있습니다.
 적용 전 조회에서 운영 DB는 056까지 적용된 상태였고(`tags` 있음, `field_conditions`·`field_mode` 열과 `contact_segment_multi_field` 제약 없음, `contact_segment_condition_operator`는 필드 조건으로 `field_id`만 인정, public 테이블 45개), 작업 공간 3개·세그먼트 0개·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-18-migration-057/public-pre-057.dump`(290,333바이트, SHA-256 `0ecf518e6cbaa7ec53e360d5c54eee70da7f0d1aa31fcea2ad6ff2fec7bfa6d5`)에 저장했고, 목록 읽기에서 데이터 테이블 45개를 확인했습니다. 디렉터리 이름의 날짜는 작업한 현지 날짜이며, UTC로는 2026-10-17입니다.
 앞과 같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE는 165건이었습니다. 실행기가 056을 057보다 먼저 다시 적용했고, 그때는 아직 057의 규칙이 없어 056은 같은 OR 결합 규칙을 다시 만들었습니다.
@@ -515,7 +515,7 @@ Worker를 버전 `bd9ed6d9-daea-4d84-a47a-226ebfdafdbd`로 배포했고, 15:59:3
 `scheduled_steps`를 23:33:53Z, 23:35:15Z, 23:36:36Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다. `stale_recovery`, `wake`, `webhook_delivery`는 발송이 꺼져 있어 이번에도 실행되지 않았습니다.
 로그인한 세션으로 요청하지 않았으므로 다중 필드 조건의 화면과 API는 운영에서 실행하지 않았습니다.
 
-2026-10-18 11:36Z에는 운영자의 "운영 DB에 적용하고 배포해주세요" 요청에 따라 `main` 커밋 `3bd679f`를 적용했습니다. 이 커밋에는 PR #226(세그먼트 CSV 내보내기, 마이그레이션 없음), PR #227(DM 동의 조건, migration 058), PR #228(DM 활동 조건, migration 059), PR #230(중첩 조건 그룹, migration 060), PR #231(그룹 편집기, 마이그레이션 없음), PR #232(대상 스냅샷, migration 061)와 PR #225(앞 기록, 문서만)가 들어 있습니다.
+2026-10-18 11:36Z에는 "운영 DB에 적용하고 배포해주세요" 요청에 따라 `main` 커밋 `3bd679f`를 적용했습니다. 이 커밋에는 PR #226(세그먼트 CSV 내보내기, 마이그레이션 없음), PR #227(DM 동의 조건, migration 058), PR #228(DM 활동 조건, migration 059), PR #230(중첩 조건 그룹, migration 060), PR #231(그룹 편집기, 마이그레이션 없음), PR #232(대상 스냅샷, migration 061)와 PR #225(앞 기록, 문서만)가 들어 있습니다.
 적용 전 조회에서 운영 DB는 057까지 적용된 상태였고(`field_conditions` 있음, `dm_consent_purpose`·`last_dm_days`·`condition_tree` 열, `instagram_inbox_messages_latest_idx` 색인, `instagram_segment_snapshots` 테이블 없음, public 테이블 45개), 작업 공간 3개·세그먼트 0개·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다. 059가 트랜잭션 안에서 `CONCURRENTLY` 없이 만드는 색인의 대상인 `instagram_inbox_messages`는 5행(64 kB)이었습니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-18-migration-061/public-pre-058-061.dump`(294,840바이트, SHA-256 `833ec068b0136e9bbb6b4b71d76c71aeabc56d4022e26c33e29eaf49aa28d776`)에 저장했고, 목록 읽기에서 데이터 테이블 45개를 확인했습니다.
 앞과 같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE는 173건이었습니다.
@@ -528,7 +528,7 @@ Worker를 버전 `bd9ed6d9-daea-4d84-a47a-226ebfdafdbd`로 배포했고, 15:59:3
 세 단계의 마지막 성공 시각은 날짜까지 다시 읽은 결과 2026-10-07 00:43:49Z이며, 그 뒤로는 실행된 적이 없습니다. Worker는 `SEND_ENABLED`가 `true`일 때만 이 세 단계를 실행합니다(`src/cloudflare/index.ts`의 `scheduled`). 처음 기록에는 시각만 출력하는 조회 결과를 보고 날짜를 2026-10-18로 잘못 적었고, 2026-10-19에 날짜를 확인해 고쳤습니다.
 로그인한 세션으로 요청하지 않았으므로 DM 조건, 중첩 조건 그룹, 그룹 편집기, 세그먼트 CSV 내보내기, 대상 스냅샷의 화면과 API는 운영에서 실행하지 않았습니다.
 
-2026-10-26 13:48Z에는 운영자의 "운영 반영 진행하고" 요청에 따라 `main` 커밋 `fb0e8b2`를 적용했습니다. 이 커밋에는 앞 기록 이후의 PR #236~#244, #251, #253~#258이 들어 있으며, 그중 migration은 PR #241(운영자 식별자 연결 확인, migration 062)과 PR #242(캠페인 초안, migration 063)뿐입니다.
+2026-10-26 13:48Z에는 "운영 반영 진행하고" 요청에 따라 `main` 커밋 `fb0e8b2`를 적용했습니다. 이 커밋에는 앞 기록 이후의 PR #236~#244, #251, #253~#258이 들어 있으며, 그중 migration은 PR #241(운영자 식별자 연결 확인, migration 062)과 PR #242(캠페인 초안, migration 063)뿐입니다.
 배포 전 활성 Worker 버전은 2026-10-19 06:53Z에 만든 `0be5a01a-bcac-4743-8b17-80972dcee4e8`이었습니다. 이 버전의 배포 기록은 이 문서에 없습니다.
 적용 전 조회에서 운영 DB는 061까지 적용된 상태였고(`instagram_segment_snapshots` 있음, `instagram_contact_identity_links`·`campaign_drafts` 없음, public 테이블 47개), 작업 공간 3개·고정 대상 0개·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-26-migration-063/public-pre-062-063.dump`(307,913바이트, SHA-256 `9982f8d40a6c99322d8a95979a26e7d7321f66685b7e63f4f02ff2fc7641d8ed`)에 저장했고, 목록 읽기에서 데이터 테이블 47개를 확인했습니다.
@@ -542,7 +542,7 @@ Worker를 버전 `bd9ed6d9-daea-4d84-a47a-226ebfdafdbd`로 배포했고, 15:59:3
 배포 전 버전에서 기록된 실패도 남아 있습니다: `early_reply_reconcile`(2026-10-23 00:44:39Z), `flow_resume`(2026-10-25 18:42:26Z), `kept_reply_cleanup`(2026-10-25 23:51:22Z), `alerts`(2026-10-25 03:00:37Z)가 `unexpected_error`, `cron`이 `step_failed`(2026-10-25 23:51:24Z)였고, 모두 다음 실행에서 성공했으며 경보는 켜지지 않았습니다. 원인은 조사하지 않았습니다.
 로그인한 세션으로 요청하지 않았으므로 식별자 연결 확인, 캠페인 초안과 그 미리보기의 화면과 API는 운영에서 실행하지 않았습니다.
 
-2026-10-27 01:31Z에는 운영자의 "운영 배포해주세요" 요청에 따라 `main` 커밋 `8d52245`를 배포했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #259(CI의 Node.js 26 전환), PR #260(앞 기록, 문서만), PR #261(캠페인 초안 발송 조건 미리보기 화면)이며 migration은 없습니다.
+2026-10-27 01:31Z에는 "운영 배포해주세요" 요청에 따라 `main` 커밋 `8d52245`를 배포했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #259(CI의 Node.js 26 전환), PR #260(앞 기록, 문서만), PR #261(캠페인 초안 발송 조건 미리보기 화면)이며 migration은 없습니다.
 같은 요청에서 운영 DB의 public 외래 키 74개를 읽기 전용으로 조회해 새 DB에 `db/schema.sql`을 적용한 결과와 정렬 후 비교했고 차이가 없었습니다. 식별자 연결 두 테이블의 `instagram_connections` 외래 키도 있었습니다. 로컬 테스트 셋업에서 이 외래 키가 사라지는 문제는 [#262](https://github.com/AndrewDongminYoo/auto-chatter/issues/262)에 기록했습니다.
 배포 전 `main`의 `8d52245` CI가 통과한 것을 확인했습니다.
 Worker를 버전 `e8fa53d7-5d6f-436d-aa3b-a7809ff806f5`로 배포했고, 01:31:04Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `4790f0f4-38c1-45e8-8c05-7c6175691a0a`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
@@ -551,7 +551,7 @@ Worker를 버전 `e8fa53d7-5d6f-436d-aa3b-a7809ff806f5`로 배포했고, 01:31:0
 앞 배포 버전 `4790f0f4`에서도 단계 실패가 기록됐습니다: `oauth_state_cleanup`(2026-10-26 17:29:22Z)과 `flow_resume`(18:44:52Z)이 `unexpected_error`, `cron`이 `step_failed`(18:44:57Z)였고, 모두 다음 실행에서 성공했으며 경보는 켜지지 않았습니다. 원인은 조사하지 않았습니다.
 로그인한 세션으로 요청하지 않았으므로 미리보기 화면은 운영에서 실행하지 않았습니다.
 
-2026-10-27 04:17Z에는 운영자의 "운영 DB 마이그레이션 적용하고 배포해주세요" 요청에 따라 `main` 커밋 `e3523cb`를 적용했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #263(앞 기록, 문서만)과 PR #264(캠페인 실행 승인 기록, migration 064)입니다.
+2026-10-27 04:17Z에는 "운영 DB 마이그레이션 적용하고 배포해주세요" 요청에 따라 `main` 커밋 `e3523cb`를 적용했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #263(앞 기록, 문서만)과 PR #264(캠페인 실행 승인 기록, migration 064)입니다.
 이 작업 직전에 운영 Mac이 재부팅되어 임시 디렉터리의 관리자 연결 보조 스크립트가 지워졌으므로, 같은 Session pooler와 TLS `verify-full`(Git에서 제외된 `deploy/secrets/supabase-ca.crt`)로 다시 만들었습니다.
 적용 전 조회에서 운영 DB는 063까지 적용된 상태였고(`campaign_drafts` 있음, `campaign_approvals`·`campaign_approval_events` 없음, public 테이블 50개), 작업 공간 3개·캠페인 초안 0개·발송 중 행 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-27-migration-064/public-pre-064.dump`(327,103바이트, SHA-256 `e29bf0993e26fc4444f98c7f4b0fea7b7ce89a2f12f70e1b19fecd24e990edba`)에 저장했고, 목록 읽기에서 데이터 테이블 50개를 확인했습니다.
@@ -564,7 +564,7 @@ Worker를 버전 `e8fa53d7-5d6f-436d-aa3b-a7809ff806f5`로 배포했고, 01:31:0
 `scheduled_steps`를 04:20:22Z, 04:21:27Z, 04:22:32Z에 조회했을 때 발송과 무관하게 실행되는 8개 단계가 모두 배포 뒤의 성공 시각으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 로그인한 세션으로 요청하지 않았으므로 실행 승인 API는 운영에서 실행하지 않았습니다.
 
-2026-10-27 05:39Z에는 운영자의 "배포 올려주세요" 요청에 따라 `main` 커밋 `48a32c5`를 배포했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #266(앞 기록, 문서만)과 PR #267(캠페인 실행 승인 화면)이며 migration은 없습니다.
+2026-10-27 05:39Z에는 "배포 올려주세요" 요청에 따라 `main` 커밋 `48a32c5`를 배포했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #266(앞 기록, 문서만)과 PR #267(캠페인 실행 승인 화면)이며 migration은 없습니다.
 배포 전 `main`의 `48a32c5` CI가 통과한 것을 확인했습니다.
 Worker를 버전 `cb7e7d5e-d26e-479b-b7da-04e44024adcf`로 배포했고, 05:39:02Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `d58cdd9b-6265-491c-8134-b5a75476dcfb`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 23개 항목의 공개 점검은 배포 전에는 바뀐 `index.html`·`app.js`·`campaign-drafts.js`·`styles.css`의 해시만 달라 19개가 통과했고, 배포 뒤 05:40:36Z의 점검에서는 23개가 모두 통과했습니다.
@@ -572,7 +572,7 @@ Worker를 버전 `cb7e7d5e-d26e-479b-b7da-04e44024adcf`로 배포했고, 05:39:0
 따라서 05:38Z부터 05:41Z까지 약 4분 동안 cron 기록이 없었습니다. 앞선 배포들에서는 배포 1~2분 안에 성공이 갱신됐으며, 이 공백의 원인은 조사하지 않았습니다.
 로그인한 세션으로 요청하지 않았으므로 실행 승인 화면은 운영에서 실행하지 않았습니다.
 
-2026-10-27 08:52Z에는 운영자의 "운영 DB 조회, 백업, migration 065 적용, Worker 배포를 승인합니다" 요청에 따라 `main` 커밋 `b18b6c8`을 적용했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #268(앞 기록, 문서만)과 PR #269(캠페인 실행과 수신자별 발송 행, migration 065)입니다.
+2026-10-27 08:52Z에는 "운영 DB 조회, 백업, migration 065 적용, Worker 배포를 승인합니다" 요청에 따라 `main` 커밋 `b18b6c8`을 적용했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #268(앞 기록, 문서만)과 PR #269(캠페인 실행과 수신자별 발송 행, migration 065)입니다.
 적용 전 조회에서 운영 DB는 064까지 적용된 상태였고(`campaign_approvals` 있음, `campaign_runs`·`campaign_deliveries` 없음, public 테이블 52개), 캠페인 승인은 상태와 관계없이 0개, 발송 중 행은 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 따라서 [캠페인 실행 계약](../specs/2026-10-27-campaign-runs.md#이미-있는-승인과-배포-순서)이 정한 기존 `approved` 승인의 확인과 취소 결정은 이번 적용에서 다룰 대상이 없었습니다. `SEND_ENABLED`를 켜기 직전에 같은 조회를 다시 합니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-27-migration-065/public-pre-065.dump`(338,651바이트, SHA-256 `6929efe00c2e11e52461f81682f0cd9a30131891a14c0627c6429d8f565d17fd`)에 저장했고, 목록 읽기에서 데이터 테이블 52개를 확인했습니다.
@@ -588,7 +588,7 @@ Worker를 버전 `cb7e7d5e-d26e-479b-b7da-04e44024adcf`로 배포했고, 05:39:0
 `cron` 행의 마지막 실패는 배포 전인 08:42:32Z의 `step_failed`였고, 그 시각에 실패를 기록한 개별 단계 행은 없었습니다. 10-23부터 간헐적으로 남은 단계별 `unexpected_error`와 함께 원인은 조사하지 않았습니다.
 로그인한 세션으로 요청하지 않았으므로 실행 조회·취소 API는 운영에서 실행하지 않았습니다.
 
-2026-10-29 05:08Z에는 운영자의 "운영 DB 조회, 백업, migration 066 적용, Worker 배포를 승인합니다" 요청에 따라 `main` 커밋 `9ecc418`을 적용했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #270(앞 기록, 문서만), PR #271(의존성과 품질 도구 갱신)과 PR #272(캠페인 발송 worker, migration 066)입니다.
+2026-10-29 05:08Z에는 "운영 DB 조회, 백업, migration 066 적용, Worker 배포를 승인합니다" 요청에 따라 `main` 커밋 `9ecc418`을 적용했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #270(앞 기록, 문서만), PR #271(의존성과 품질 도구 갱신)과 PR #272(캠페인 발송 worker, migration 066)입니다.
 적용 전 조회에서 운영 DB는 065까지 적용된 상태였고(`campaign_deliveries`에 `next_attempt_at`·`provider_called_at` 없음, public 테이블 54개), 캠페인 실행·발송 행·승인은 모두 0개, 발송 중 행은 0개(비공개 답장, 수동 답장, 외부 전송)였습니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-29-migration-066/public-pre-066.dump`(353,567바이트, SHA-256 `32a736ed4f220fa6f41db1cb8650f10c0ad96fc48ab568bcaf6a0e096e64e8a4`)에 저장했고, 목록 읽기에서 데이터 테이블 54개를 확인했습니다.
 같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE는 196건이었습니다.
@@ -602,14 +602,14 @@ Worker를 버전 `cb7e7d5e-d26e-479b-b7da-04e44024adcf`로 배포했고, 05:39:0
 배포 전의 실패 기록으로 `kept_reply_cleanup`의 2026-10-27T10:42:22Z `unexpected_error`와 `cron`의 2026-10-28T16:04:47Z `step_failed`가 새로 남아 있었습니다. 앞 기록의 간헐적 실패와 같이 원인은 조사하지 않았습니다.
 로그인한 세션으로 요청하지 않았으므로 캠페인 화면과 API는 운영에서 실행하지 않았고, 실제 캠페인 발송도 하지 않았습니다.
 
-2026-10-29 09:07Z에는 운영자의 "운영 배포해주세요" 요청에 따라 `main` 커밋 `e0e6726`을 배포했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #276(캠페인 실행 현황·취소 화면)과 PR #275(앞 기록, 문서만)이며 migration은 없습니다.
+2026-10-29 09:07Z에는 "운영 배포해주세요" 요청에 따라 `main` 커밋 `e0e6726`을 배포했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #276(캠페인 실행 현황·취소 화면)과 PR #275(앞 기록, 문서만)이며 migration은 없습니다.
 배포 시점에 `e0e6726`의 CI는 진행 중이었고, 코드가 같은 `38ffd27`의 CI는 통과한 상태였습니다. `e0e6726`의 CI도 그 뒤 통과했습니다.
 Worker를 버전 `3c3ddd7c-1c9e-4d84-9b4f-f9c2f5718a63`로 배포했고, 09:07:39Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `3c3dfcca-8793-454f-884b-6701175c766c`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 23개 항목의 공개 점검은 배포 전에는 바뀐 `app.js`·`campaign-drafts.js`·`styles.css`·`index.html`의 해시만 달라 19개가 통과했고, 배포 뒤 09:08:14Z의 점검에서는 23개가 모두 통과했습니다.
 `scheduled_steps`를 09:09:19Z, 09:10:25Z, 09:11:30Z에 조회했습니다. 발송과 무관한 8개 단계는 첫 조회부터 모두 배포 뒤의 성공 시각(09:09:11~13Z)으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 로그인한 세션으로 요청하지 않았으므로 실행 현황 화면은 운영에서 실행하지 않았고, 실제 캠페인 발송도 하지 않았습니다.
 
-2026-10-29 11:02Z에는 운영자의 "운영 DB 조회, 백업, migration 067 적용, Worker 배포를 승인합니다" 요청에 따라 `main` 커밋 `32bd56b`를 적용했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #279(끝난 캠페인 행 정리와 복구된 결과의 24시간 창, migration 067, 앞 기록 포함)입니다.
+2026-10-29 11:02Z에는 "운영 DB 조회, 백업, migration 067 적용, Worker 배포를 승인합니다" 요청에 따라 `main` 커밋 `32bd56b`를 적용했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #279(끝난 캠페인 행 정리와 복구된 결과의 24시간 창, migration 067, 앞 기록 포함)입니다.
 적용 전 조회에서 운영 DB는 066까지 적용된 상태였고(`recovered_at` 열 없음, `campaign_delivery_attempt` CHECK는 `pending`·`cancelled`만 시도 열 없이 허용, public 테이블 54개), 캠페인 실행·발송 행·승인은 모두 0개, 발송 중 행은 0개(비공개 답장, 팔로우 응답, 수동 답장, 외부 전송)였습니다.
 `public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-10-29-migration-067/public-pre-067.dump`(354,890바이트, SHA-256 `d3932de49ca4762bc602f8e2d7394ca2dd439743f40f7c829116b6df0293ec02`)에 저장했고, 목록 읽기에서 데이터 테이블 54개를 확인했습니다.
 같은 관리자 연결로 해당 커밋의 `deploy/migrate-multi-user.sql`을 한 트랜잭션으로 실행했습니다. 로그는 `COMMIT`으로 끝났고 오류나 경고는 없었으며, NOTICE는 201건이었습니다.
@@ -621,16 +621,16 @@ Worker를 버전 `3c3ddd7c-1c9e-4d84-9b4f-f9c2f5718a63`로 배포했고, 09:07:3
 `scheduled_steps`를 11:04:59Z, 11:06:04Z, 11:07:09Z에 조회했습니다. 발송과 무관한 8개 단계는 첫 조회부터 모두 배포 뒤의 성공 시각(11:04:11~13Z)으로 갱신됐고, 배포 이후의 실패 기록과 경보는 없었습니다.
 `SEND_ENABLED`가 거짓이므로 `stale_recovery`와 `campaign_start`(끝난 행 정리 포함)는 실행되지 않았고, 실제 캠페인 발송도 하지 않았습니다.
 
-2026-10-29 12:59Z에는 운영자의 "Worker 배포를 승인합니다" 요청에 따라 `main` 커밋 `2e46561`을 migration 없이 배포했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #281(앞 기록)과 PR #282(승인 쓰기 결과 확인과 거절 뒤 포커스, 세그먼트 스냅숏 CSV 테스트 수정)입니다.
+2026-10-29 12:59Z에는 "Worker 배포를 승인합니다" 요청에 따라 `main` 커밋 `2e46561`을 migration 없이 배포했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #281(앞 기록)과 PR #282(승인 쓰기 결과 확인과 거절 뒤 포커스, 세그먼트 스냅숏 CSV 테스트 수정)입니다.
 배포 전 `main`의 `2e46561` CI(실행 40874368386)가 통과한 것을 확인했습니다.
 Worker를 버전 `9bf7a62e-5d0f-413f-a8f8-a220ea6ed772`로 배포했고, 12:59:35Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `ccf5240a-51c4-4dd8-bb67-9506a9d6deb8`이었고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 23개 항목의 공개 점검은 배포 전에는 바뀐 `campaign-drafts.js`·`index.html`의 해시만 달라 21개가 통과했고, 배포 뒤 13:00:05Z의 점검에서는 23개가 모두 통과했습니다.
-배포 승인에 운영 DB 조회가 포함되지 않아 배포 직후에는 `scheduled_steps`를 조회하지 않았습니다. 그 뒤 운영자가 직접 실행한 읽기 전용 조회로 13:20:23Z, 13:21:28Z, 13:22:33Z에 확인했습니다.
+배포 승인에 운영 DB 조회가 포함되지 않아 배포 직후에는 `scheduled_steps`를 조회하지 않았습니다. 그 뒤 제가 직접 실행한 읽기 전용 조회로 13:20:23Z, 13:21:28Z, 13:22:33Z에 확인했습니다.
 발송과 무관한 8개 단계는 첫 조회부터 모두 배포 뒤의 성공 시각(13:20:11~13Z)으로 갱신됐고, 이후 조회마다 다시 갱신됐습니다. 가장 최근 실패 기록은 배포 전인 2026-10-28 16:04:47Z의 `cron` `step_failed`이며, 배포 이후의 실패 기록과 켜진 경보는 없었습니다.
 `stale_recovery`·`wake`·`webhook_delivery`의 마지막 성공은 2026-10-07 00:43:49Z로, `SEND_ENABLED`가 거짓이라 실행되지 않은 상태 그대로입니다.
 로그인한 세션으로 요청하지 않았으므로 승인 화면은 운영에서 실행하지 않았고, 실제 캠페인 발송도 하지 않았습니다.
 
-2026-10-29 15:30Z에는 운영자의 "운영 DB 조회와 Worker 배포를 승인합니다" 요청에 따라 `main` 커밋 `5d52546`을 migration 없이 배포했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #283(앞 기록)과 PR #284(`campaign_start`의 두 번째 이후 부분 실패를 `cron_step_part_failed`로 기록, 앞 기록의 cron 확인 포함)입니다.
+2026-10-29 15:30Z에는 "운영 DB 조회와 Worker 배포를 승인합니다" 요청에 따라 `main` 커밋 `5d52546`을 migration 없이 배포했습니다. 앞 기록 이후 이 커밋에 들어온 변경은 PR #283(앞 기록)과 PR #284(`campaign_start`의 두 번째 이후 부분 실패를 `cron_step_part_failed`로 기록, 앞 기록의 cron 확인 포함)입니다.
 배포 전 `main`의 `5d52546` CI(실행 40885753889)가 통과한 것을 확인했습니다.
 Worker를 버전 `15941dfd-94f5-4635-8deb-3ee9d05b722f`로 배포했고, 15:30:51Z부터 100% 활성 상태임을 조회했습니다. 배포 전 활성 버전은 `9bf7a62e-5d0f-413f-a8f8-a220ea6ed772`였고, `SEND_ENABLED=false`, `INSTAGRAM_PUBLIC_CONNECT_ENABLED=false`를 유지했습니다.
 공개 점검은 공개 페이지 3개, 잘못된 검증 토큰과 서명 없는 웹훅 요청의 403, 다른 출처 `POST /api/workspace`의 403, 로그인 없는 `GET /api/inbox`의 401, `/app/` 정적 파일 17개의 해시로 24개 항목입니다.
@@ -953,7 +953,7 @@ Worker 배포 명령은 Queue 생산자·소비자와 매분 Cron 등록을 확�
 공개 HTTPS 요청에서 루트의 404를 확인했습니다.
 웹훅은 최초 secrets 미등록 상태에서 503을 반환했고, 두 secrets 등록 후 잘못된 검증 토큰과 서명 없는 요청을 403으로 거부했습니다.
 이는 거부 동작의 검증이며 정상 토큰으로 구독 확인에 성공했거나 실제 Meta 서명을 검증했다는 증거는 아닙니다.
-이후 운영자가 대시보드 테스트를 전송한 직후 웹훅 POST 한 건이 HTTP 200으로 처리됐고 오류 로그·예외는 없었습니다.
+이후 제가 대시보드 테스트를 전송한 직후 웹훅 POST 한 건이 HTTP 200으로 처리됐고 오류 로그·예외는 없었습니다.
 이 요청은 서버의 서명 검사와 파서를 통과했지만, 원문을 기록하지 않았으므로 댓글 포함 여부와 DB 처리 경로는 이 로그만으로 단정하지 않습니다.
 별도 DB 조회에서 workspace·연결·규칙·이벤트·outbox가 모두 0건임을 확인했으며, 이 테스트로 댓글 저장을 검증했다고 간주하지 않습니다.
 이후 수신 연결을 등록하고 실제 테스트 댓글 저장을 2026-09-26에 확인했습니다.

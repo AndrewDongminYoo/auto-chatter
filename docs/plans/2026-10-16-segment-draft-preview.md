@@ -16,4 +16,4 @@
 5. `node --check public/app/app.js`, `corepack pnpm check-types`, `corepack pnpm test`와 변경 파일의 Trunk 검사를 실행합니다.
    API·DB 계약은 바꾸지 않으며 전체 DB·workerd·격리 배포 검사는 hosted CI의 결과를 별도로 기록합니다.
 6. 한 번의 구조화된 로컬 검토 후 명시적 파일만 커밋·푸시하고 PR에 `Refs #26`을 사용합니다.
-   현재 커밋의 CI·호스팅 리뷰와 화면 검토 자료를 준비한 뒤 운영자 시각 승인·병합을 기다립니다.
+   현재 커밋의 CI·호스팅 리뷰와 화면 검토 자료를 준비한 뒤 시각 승인·병합을 기다립니다.

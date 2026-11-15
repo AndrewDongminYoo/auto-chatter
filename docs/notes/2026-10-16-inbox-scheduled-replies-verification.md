@@ -42,7 +42,7 @@ DB 검사는 시간대 변경과 동일 키 재확인, 입력 범위, 다른 작
 - 검증용 예약 행이 없을 때 `scheduled fixture missing`으로 화면 확인식을 먼저 실패시킨 뒤 실제 생성 후 통과시켰습니다.
 
 화면 캡처는 저장소 옆 `pr-loop-reviews/auto-chatter/inbox-scheduled-replies-20261016/`에 보관합니다.
-운영자의 최종 화면 승인은 별도입니다.
+최종 화면 승인은 별도입니다.
 
 ## 선례
 

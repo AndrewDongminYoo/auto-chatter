@@ -21,7 +21,7 @@
 6. CLAUDE·기존 연락처/세그먼트/활동/미리보기 명세·수용 매트릭스와 검증 기록을 맞춥니다.
    PR208 감사에서 확인한 수용표 서두의 활동 조건 잔여 범위도 명확히 합니다.
 7. 타입·단위·격리 DB·workerd·Trunk 검사와 독립 리뷰 후 커밋·PR·CI·호스팅 코드/보안 리뷰를 완료합니다.
-   운영자의 시각 승인 뒤 병합은 운영자에게 맡깁니다.
+   시각 승인 뒤 병합은 제가 직접 합니다.
 
 최소 검증은 `corepack pnpm check-types`, `corepack pnpm test`, 로컬 격리 `automations_test`의 `corepack pnpm test:db`·`corepack pnpm test:cloudflare`, `trunk check --no-fix <변경 경로>`입니다.
 새 의존성·운영 작업·추가 채널 정책은 도입하지 않습니다.

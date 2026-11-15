@@ -18,7 +18,7 @@ Advisor의 범위 축소 권고에 따라 #24의 예약 발송을 분리하고 �
    실제 브라우저에서 실패 보존·늦은 응답·접수 잠금·모바일을 검사합니다.
 5. CLAUDE·인박스·작업 공간 삭제/이동/내보내기 명세·수용 매트릭스를 코드와 함께 갱신합니다.
 6. 타입·단위·DB·workerd·Trunk와 독립 리뷰 후 한 기능 커밋·PR·호스팅 리뷰·CI를 완료합니다.
-   화면 승인과 병합은 운영자에게 맡깁니다.
+   화면 승인과 병합은 제가 직접 합니다.
 
 최소 검증은 `corepack pnpm check-types`, `corepack pnpm test`, 격리된 `automations_test`의 `corepack pnpm test:db`·`corepack pnpm test:cloudflare`, 변경 경로를 지정한 `trunk check --no-fix`입니다.
 새 런타임 의존성과 운영 외부 작업은 추가하지 않습니다.
