@@ -114,7 +114,7 @@
             <div class="section-heading">
               <div>
                 <h2 id="getting-started-title">시작하기</h2>
-                <p class="hint">세 단계를 마치면 댓글에 자동으로 DM을 보낼 수 있습니다.</p>
+                <p class="hint">댓글 자동화의 기본 설정을 준비합니다. 실제 발송 조건은 별도로 확인합니다.</p>
               </div>
             </div>
             <ol class="checklist">
@@ -137,16 +137,17 @@
               <li id="step-send">
                 <div>
                   <strong>발송 켜기</strong>
-                  <p class="hint" id="step-send-help">계정의 발송 설정을 켜면 규칙에 맞는 댓글에 DM을 보냅니다.</p>
+                  <p class="hint" id="step-send-help">계정과 규칙을 켜도 수신 동의 등 발송 조건을 별도로 확인합니다.</p>
                 </div>
                 <span class="step-state"></span>
                 <a class="step-action" href="#accounts">발송 설정하기</a>
               </li>
             </ol>
           </section>
-          <div id="delivery-banner" class="delivery-banner">
+          <div id="delivery-banner" class="delivery-banner" role="status" aria-live="polite">
             <strong id="delivery-title">발송 상태</strong>
             <p id="delivery-status"></p>
+            <button type="button" id="send-settings-refresh" class="secondary">발송 설정 다시 확인</button>
           </div>
           <section id="activity-section" class="card" aria-labelledby="activity-title">
             <div class="section-heading">
@@ -348,6 +349,7 @@
                 </div>
                 <p id="editor-help" class="hint">게시물 하나에 규칙 하나. 입력한 답장은 미리보기에서 확인하세요.</p>
                 <p id="editor-empty" class="inline-note" hidden>Instagram 계정을 먼저 연결하면 규칙을 만들 수 있습니다.</p>
+                <p id="rule-send-settings" class="hint" role="status" aria-live="polite"></p>
                 <form id="rule-form">
                   <fieldset id="rule-fields">
                     <fieldset class="form-section">
@@ -410,7 +412,7 @@
                       </div>
                     </fieldset>
                     <label class="toggle enable-rule"
-                      ><input name="enabled" type="checkbox" /><span>이 규칙 활성화<small>계정 발송도 켜져 있어야 메시지가 전송됩니다.</small></span></label
+                      ><input name="enabled" type="checkbox" /><span>이 규칙 활성화<small>전체·계정 발송 설정과 수신 동의 등 발송 조건을 별도로 확인합니다.</small></span></label
                     >
                   </fieldset>
                   <div class="save-bar">
@@ -659,6 +661,8 @@
                 <div id="inbox-messages"></div>
                 <form id="inbox-composer" class="inbox-composer" hidden>
                   <h4>직접 답장</h4>
+                  <p id="inbox-send-settings" class="hint" role="status" aria-live="polite"></p>
+                  <p class="hint">직접 답장의 차단 사유와 가능한 시간은 아래 서버 확인 결과를 따릅니다.</p>
                   <p id="inbox-eligibility" class="hint" role="status"></p>
                   <details id="inbox-template-panel" class="template-panel">
                     <summary>답장 템플릿 사용</summary>
