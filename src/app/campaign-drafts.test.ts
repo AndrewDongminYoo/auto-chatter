@@ -296,6 +296,9 @@ function draftHarness(override?: DraftApi, initialApprovals: Approval[] = []) {
     crypto: { randomUUID: () => (uuidCount++ === 0 ? input.id : "dddddddd-dddd-4ddd-8ddd-dddddddddddd") },
   });
   const script = new URL("../../public/app/campaign-drafts.js", import.meta.url);
+  // Mocked api errors come from this realm, and errorMessage passes through only plain Errors of the script's realm.
+  context.Error = Error;
+  vm.runInContext(readFileSync(new URL("../../public/app/display-values.js", import.meta.url), "utf8"), context);
   vm.runInContext(readFileSync(new URL("../../public/app/send-status-labels.js", import.meta.url), "utf8"), context);
   vm.runInContext(existsSync(script) ? readFileSync(script, "utf8") : "", context);
   assert.equal(typeof context.createCampaignDrafts, "function", "campaign draft controller is missing");

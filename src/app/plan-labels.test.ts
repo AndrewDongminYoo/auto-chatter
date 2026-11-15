@@ -22,6 +22,7 @@ interface PlanLabels {
 
 // public/app/plan-labels.js is a classic browser script; its top-level functions become context globals.
 const context = vm.createContext({});
+vm.runInContext(readFileSync(new URL("../../public/app/display-values.js", import.meta.url), "utf8"), context);
 vm.runInContext(readFileSync(new URL("../../public/app/plan-labels.js", import.meta.url), "utf8"), context);
 const labels = context as unknown as PlanLabels;
 
@@ -79,7 +80,7 @@ test("a full workspace keeps the invite button for new links, and the invitee ge
   const app = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
   // The server lets an invited email get a new link at the seat limit, so only the open link locks the button.
   assert.match(app, /querySelector\("button\[type=submit\]"\)\.disabled = inviteLinkLocked\(\);/);
-  assert.match(app, /error\.code === "seat_limit_reached" \? planAcceptSeatRefusal\(\) : error\.message/);
+  assert.match(app, /error\.code === "seat_limit_reached" \? planAcceptSeatRefusal\(\) : errorMessage\(error\)/);
   const refusal = labels.planAcceptSeatRefusal();
   assert.match(refusal, /소유자에게/);
   assert.match(refusal, /초대 링크를 다시 열어/);

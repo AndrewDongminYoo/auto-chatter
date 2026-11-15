@@ -268,7 +268,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   const member = (id) => (id && id === userId() ? "나" : `다른 멤버 (${String(id).slice(0, 8)})`);
   const snapshotLabel = (id) => {
     const snapshot = snapshots.find((item) => item.id === id);
-    return snapshot ? `${snapshot.segment_name} · ${new Date(snapshot.as_of).toLocaleString("ko-KR", { timeZone })} · 고정 당시 ${snapshot.member_count}명` : "목록에서 찾을 수 없는 고정 대상";
+    return snapshot ? `${snapshot.segment_name} · ${formatDateTime(snapshot.as_of, { timeZone })} · 고정 당시 ${snapshot.member_count}명` : "목록에서 찾을 수 없는 고정 대상";
   };
   // Scheduled times show in the zone the approval stored, which a later workspace zone change does not move.
   const scheduleText = (value) => (value.schedule_kind === "immediate" ? "즉시" : instant(value.scheduled_at, value.schedule_time_zone));
@@ -549,7 +549,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     const placeholder = node("option", snapshots.length ? "고정한 대상 선택" : "먼저 연락처 메뉴에서 대상을 고정해 주세요.");
     placeholder.value = "";
     const choices = snapshots.map((snapshot) => {
-      const date = new Date(snapshot.as_of).toLocaleString("ko-KR", { timeZone });
+      const date = formatDateTime(snapshot.as_of, { timeZone });
       const option = node("option", `${snapshot.segment_name}${snapshot.segment_archived ? " · 필터 보관됨" : ""} · ${date} · 고정 당시 ${snapshot.member_count}명`);
       option.value = snapshot.id;
       return option;

@@ -76,7 +76,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     open.type = "button";
     open.setAttribute("aria-label", `${flow.name} 플로 열기`);
     open.addEventListener("click", () => openFlow(flow.id, open));
-    item.append(node("strong", flow.name), badges, node("p", `${new Date(flow.updated_at).toLocaleString("ko-KR")} 수정`, "hint"), open);
+    item.append(node("strong", flow.name), badges, node("p", `${formatDateTime(flow.updated_at)} 수정`, "hint"), open);
     return item;
   }
   function renderList() {
@@ -92,7 +92,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
       flows = result.flows;
       renderList();
     } catch (error) {
-      if (session === epoch && request === listRequest) notice(error.message, true);
+      if (session === epoch && request === listRequest) notice(errorMessage(error), true);
     }
   }
 

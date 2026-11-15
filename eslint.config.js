@@ -44,6 +44,11 @@ const dashboardGlobals = [
   { readers: ["app"], names: ["createContactCsvPreview"] },
   // contact-identity-links.js
   { readers: ["app"], names: ["createContactIdentityLinks"] },
+  // display-values.js
+  {
+    readers: ["app", "campaign-drafts", "campaign-run-reports", "contact-csv-preview", "contact-identity-links", "flow-editor", "flow-run-reports", "handoff-reports", "inbox", "manual-reply-reports", "plan-labels", "segment-snapshots"],
+    names: ["errorMessage", "formatCount", "formatDate", "formatDateTime", "formatTime"],
+  },
   // flow-editor-model.js
   {
     readers: ["flow-editor"],

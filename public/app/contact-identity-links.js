@@ -64,7 +64,7 @@ function createContactIdentityLinks({ api, node, contact, isCurrent }) {
               if (error.status === 409) {
                 await load(null, "연결 상태나 근거가 변경됐습니다. 최신 내용을 확인한 뒤 다시 선택해 주세요.");
               } else {
-                status.textContent = error.message || "요청을 처리하지 못했습니다. 다시 시도해 주세요.";
+                status.textContent = errorMessage(error);
                 if ([400, 403, 404].includes(error.status)) {
                   body = undefined;
                   list.replaceChildren();
@@ -94,7 +94,7 @@ function createContactIdentityLinks({ api, node, contact, isCurrent }) {
       more.hidden = !after;
       status.textContent = message || `연결 ${result.links.length}개를 표시합니다.`;
     } catch (error) {
-      if (current()) status.textContent = error.message || "연결 상태를 불러오지 못했습니다.";
+      if (current()) status.textContent = errorMessage(error);
     } finally {
       if (current()) refresh.disabled = false;
     }

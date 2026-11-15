@@ -668,8 +668,8 @@ async function action(button, task) {
   } catch (error) {
     // An inline error also clears the page notice, which the failure used to replace, so an earlier result is not
     // shown beside it.
-    if (showActionError(button, error.message)) notice("");
-    else notice(error.message, true);
+    if (showActionError(button, errorMessage(error))) notice("");
+    else notice(errorMessage(error), true);
   } finally {
     for (const [control, disabled] of original) control.disabled = disabled;
     button.textContent = label;
@@ -737,7 +737,7 @@ function countTotal(counts) {
 function countSummary(counts, labels) {
   return Object.entries(counts ?? {})
     .filter(([, count]) => Number(count) > 0)
-    .map(([key, count]) => `${labels[key] ?? key} ${Number(count).toLocaleString("ko-KR")}건`)
+    .map(([key, count]) => `${labels[key] ?? key} ${formatCount(Number(count))}건`)
     .join(", ");
 }
 
@@ -745,7 +745,7 @@ function deletionRecord(record) {
   const item = node("li", "");
   const scope = record.scope === "person" ? "이용자 단위 삭제(운영자 처리)" : "연결 단위 삭제";
   const requester = record.scope === "person" ? "" : record.requested_by === currentUserId ? " · 내 요청" : " · 다른 관리자 요청";
-  item.append(node("strong", `${new Date(record.completed_at).toLocaleString("ko-KR")} · ${scope}${requester}`));
+  item.append(node("strong", `${formatDateTime(record.completed_at)} · ${scope}${requester}`));
   const deleted = countSummary(record.deleted_counts, deletedLabels);
   item.append(node("p", deleted ? `삭제 ${countTotal(record.deleted_counts).toLocaleString("ko-KR")}건 · ${deleted}` : "삭제할 기록이 없었습니다.", "hint"));
   const retained = countSummary(record.retained_counts, retainedLabels);
@@ -789,7 +789,7 @@ function connectionData(account, generation) {
       historyStatus.textContent = result.deletions.length ? `최근 ${result.deletions.length}건 · 댓글·메시지 내용과 이용자 식별자는 기록하지 않습니다.` : "이 연결의 삭제 기록이 없습니다.";
     } catch (error) {
       if (generation !== segmentsGeneration || request !== historyRequest) return;
-      historyStatus.textContent = error.message;
+      historyStatus.textContent = errorMessage(error);
     }
   };
   history.addEventListener("toggle", () => {
@@ -848,7 +848,7 @@ function connectionData(account, generation) {
           forgetDeletedConnection(account.id);
         } catch (error) {
           if (generation !== segmentsGeneration) return;
-          failure.textContent = error.message;
+          failure.textContent = errorMessage(error);
           input.setAttribute("aria-invalid", "true");
           input.focus();
         }
@@ -886,7 +886,7 @@ async function acceptPendingInvite() {
     // server error keeps it so the next load or login retries the acceptance.
     if ([400, 403, 404, 409, 410].includes(error.status)) rememberInvite(null);
     // The errors map speaks to the owner who creates invites; the invitee gets its own text for a full workspace.
-    notice(error.code === "seat_limit_reached" ? planAcceptSeatRefusal() : error.message, true);
+    notice(error.code === "seat_limit_reached" ? planAcceptSeatRefusal() : errorMessage(error), true);
   }
   inviteNoticeShown = true;
 }
@@ -913,7 +913,7 @@ function memberItem(member) {
       notice(`멤버(${member.email ?? "이메일 미기록"})의 역할을 ${roleLabelsAs[role.value]} 바꿨습니다. 다음 요청부터 적용됩니다.`);
     } catch (error) {
       role.value = member.role;
-      notice(error.message, true);
+      notice(errorMessage(error), true);
     } finally {
       role.disabled = false;
       void loadMembers();
@@ -936,7 +936,7 @@ function inviteItem(invite) {
   const item = node("div", "", "item");
   item.append(node("strong", invite.email));
   const badges = node("div", "", "badges");
-  badges.append(badge(roleLabels[invite.role] ?? invite.role), badge(invite.expired ? "만료됨" : `${new Date(invite.expires_at).toLocaleDateString("ko-KR")}까지`, invite.expired ? "warning" : ""));
+  badges.append(badge(roleLabels[invite.role] ?? invite.role), badge(invite.expired ? "만료됨" : `${formatDate(invite.expires_at)}까지`, invite.expired ? "warning" : ""));
   const revoke = node("button", "초대 취소", "secondary");
   revoke.addEventListener("click", () =>
     action(revoke, async () => {
@@ -960,7 +960,7 @@ async function loadMembers() {
     byId("members").replaceChildren(...members.members.map(memberItem));
     byId("invites").replaceChildren(...(invites.invites.length ? invites.invites.map(inviteItem) : [node("p", "대기 중인 초대가 없습니다.", "hint")]));
   } catch (error) {
-    if (generation === segmentsGeneration) notice(error.message, true);
+    if (generation === segmentsGeneration) notice(errorMessage(error), true);
   }
 }
 
@@ -1028,8 +1028,8 @@ async function loadOperations() {
     const health = await api("/api/workspace/health");
     if (generation !== segmentsGeneration) return;
     const limits = health.thresholds;
-    const cron = health.last_cron_success_at ? new Date(health.last_cron_success_at).toLocaleString("ko-KR") : "기록 없음";
-    const summary = [`${new Date(health.checked_at).toLocaleTimeString("ko-KR")} 확인 · 마지막 정기 작업 성공: ${cron}`, ...(health.global_send_enabled ? [] : ["전체 발송이 중지되어 있어 발송 대기 경보는 표시하지 않습니다."])].join(" · ");
+    const cron = health.last_cron_success_at ? formatDateTime(health.last_cron_success_at) : "기록 없음";
+    const summary = [`${formatTime(health.checked_at)} 확인 · 마지막 정기 작업 성공: ${cron}`, ...(health.global_send_enabled ? [] : ["전체 발송이 중지되어 있어 발송 대기 경보는 표시하지 않습니다."])].join(" · ");
     byId("operations-summary").textContent = summary;
     byId("operations-alerts").replaceChildren(...health.alerts.map((name) => operationAlert(name, limits)));
     byId("operations").replaceChildren(
@@ -1047,7 +1047,7 @@ async function loadOperations() {
                 "p",
                 [
                   connection.token_expires_in_days === null ? "연결 토큰 없음" : connection.token_expires_in_days < 0 ? "토큰 만료됨" : `토큰 만료까지 ${connection.token_expires_in_days}일`,
-                  ...(connection.send_paused_until ? [`발송 제한으로 ${new Date(connection.send_paused_until).toLocaleTimeString("ko-KR")}까지 일시 중지`] : []),
+                  ...(connection.send_paused_until ? [`발송 제한으로 ${formatTime(connection.send_paused_until)}까지 일시 중지`] : []),
                 ].join(" · "),
                 "hint",
               ),
@@ -1057,7 +1057,7 @@ async function loadOperations() {
         : [node("p", "연결한 계정이 없습니다.", "hint")]),
     );
   } catch (error) {
-    if (generation === segmentsGeneration) notice(error.message, true);
+    if (generation === segmentsGeneration) notice(errorMessage(error), true);
   }
 }
 
@@ -1106,7 +1106,7 @@ function webhookEndpointItem(endpoint) {
   const badges = node("div", "", "badges");
   badges.append(badge(endpoint.active ? "켜짐" : "꺼짐", endpoint.active ? "success" : "warning"), badge(webhookKeyState(endpoint.keys)));
   item.append(node("strong", endpoint.name), badges, node("p", endpoint.url, "hint"));
-  for (const key of endpoint.keys) item.append(node("p", `키 ${key.id} · ${new Date(key.created_at).toLocaleString("ko-KR")} 발급`, "hint"));
+  for (const key of endpoint.keys) item.append(node("p", `키 ${key.id} · ${formatDateTime(key.created_at)} 발급`, "hint"));
   const rotate = node("button", "키 교체", "secondary");
   rotate.dataset.loadingLabel = "발급 중…";
   rotate.dataset.keyCount = String(endpoint.keys.length);
@@ -1154,7 +1154,7 @@ function webhookDeliveryItem(delivery, endpointName) {
     node("p", webhookAttemptSummary(delivery), "hint"),
     node(
       "p",
-      webhookDeliveryTimes(delivery, (value) => new Date(value).toLocaleString("ko-KR")),
+      webhookDeliveryTimes(delivery, (value) => formatDateTime(value)),
       "hint",
     ),
   );
@@ -1180,7 +1180,7 @@ async function loadWebhooks() {
     byId("webhook-endpoints").replaceChildren(...(endpoints.endpoints.length ? endpoints.endpoints.map(webhookEndpointItem) : [node("p", "등록한 주소가 없습니다.", "hint")]));
     byId("webhook-deliveries").replaceChildren(...(deliveries.deliveries.length ? deliveries.deliveries.map((delivery) => webhookDeliveryItem(delivery, names.get(delivery.endpoint_id))) : [node("p", "아직 전송 기록이 없습니다.", "hint")]));
   } catch (error) {
-    if (generation === segmentsGeneration) notice(error.message, true);
+    if (generation === segmentsGeneration) notice(errorMessage(error), true);
   }
 }
 
@@ -1456,21 +1456,21 @@ async function loadWorkspace() {
         "p",
         credentialStatus === "valid"
           ? account.active
-            ? `토큰 만료일: ${new Date(account.token_expires_at).toLocaleDateString("ko-KR")} · 만료 30일 전부터 갱신을 시도합니다. ${unconfirmed}`
-            : `토큰 만료일: ${new Date(account.token_expires_at).toLocaleDateString("ko-KR")} · 수신 중지 중에는 갱신하지 않습니다. ${unconfirmed}`
+            ? `토큰 만료일: ${formatDate(account.token_expires_at)} · 만료 30일 전부터 갱신을 시도합니다. ${unconfirmed}`
+            : `토큰 만료일: ${formatDate(account.token_expires_at)} · 수신 중지 중에는 갱신하지 않습니다. ${unconfirmed}`
           : `${credentialStatus === "expired" ? "토큰이 만료됐습니다." : "연결 토큰이 없습니다."} 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`,
         "hint",
       ),
     );
-    if (reauthReason) item.append(node("p", `${new Date(account.reauth_required_at).toLocaleString("ko-KR")} · ${reauthReason} 다시 연결하기 전까지 대기 중인 답장이 발송 전 확인에서 차단될 수 있습니다. 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`, "hint"));
+    if (reauthReason) item.append(node("p", `${formatDateTime(account.reauth_required_at)} · ${reauthReason} 다시 연결하기 전까지 대기 중인 답장이 발송 전 확인에서 차단될 수 있습니다. 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`, "hint"));
     // The periodic or manual check found a required webhook subscription field missing for the stored token;
     // the server records it, display only.
-    const subscriptionChecked = account.subscription_checked_at ? ` 마지막 확인: ${new Date(account.subscription_checked_at).toLocaleString("ko-KR")}.` : "";
+    const subscriptionChecked = account.subscription_checked_at ? ` 마지막 확인: ${formatDateTime(account.subscription_checked_at)}.` : "";
     if (account.subscription_missing_at)
       item.append(
         node(
           "p",
-          `${new Date(account.subscription_missing_at).toLocaleString("ko-KR")} 처음 기록 · Meta가 이 계정의 댓글·DM·확인 버튼 웹후크 구독 필드를 모두 반환하지 않았습니다. 새 댓글과 DM이 이 앱에 도착하지 않을 수 있습니다. 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택하거나 'Meta 상태 확인'을 실행해 주세요.${subscriptionChecked}`,
+          `${formatDateTime(account.subscription_missing_at)} 처음 기록 · Meta가 이 계정의 댓글·DM·확인 버튼 웹후크 구독 필드를 모두 반환하지 않았습니다. 새 댓글과 DM이 이 앱에 도착하지 않을 수 있습니다. 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택하거나 'Meta 상태 확인'을 실행해 주세요.${subscriptionChecked}`,
           "hint",
         ),
       );
@@ -1480,7 +1480,7 @@ async function loadWorkspace() {
       item.append(
         node(
           "p",
-          `${new Date(account.deauthorized_at).toLocaleString("ko-KR")} · 계정 소유자가 Instagram에서 이 앱의 권한을 해제해 연결이 해제됐습니다. 수신과 발송, 이 계정의 댓글 규칙과 플로우가 꺼졌습니다. 다시 사용하려면 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`,
+          `${formatDateTime(account.deauthorized_at)} · 계정 소유자가 Instagram에서 이 앱의 권한을 해제해 연결이 해제됐습니다. 수신과 발송, 이 계정의 댓글 규칙과 플로우가 꺼졌습니다. 다시 사용하려면 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`,
           "hint",
         ),
       );
@@ -1501,7 +1501,7 @@ async function loadWorkspace() {
           expired: "연결 토큰이 만료됐습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
           missing: "연결 토큰이 없습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
         }[result.status];
-        healthStatus.textContent = message ? `${new Date(result.checked_at).toLocaleTimeString("ko-KR")} 확인 · ${message}` : "Meta 상태 응답을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.";
+        healthStatus.textContent = message ? `${formatTime(result.checked_at)} 확인 · ${message}` : "Meta 상태 응답을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.";
         // The check also stores the subscription record and the reconnect marker; reload so the badges match.
         healthResults.set(account.id, healthStatus.textContent);
         await loadWorkspace();
@@ -1608,7 +1608,7 @@ function mediaTitle(media) {
 function mediaSummary(media) {
   const content = node("div", "", "media-copy");
   content.append(node("strong", mediaTitle(media)));
-  const date = media.timestamp ? new Date(media.timestamp).toLocaleDateString("ko-KR") : "날짜 정보 없음";
+  const date = media.timestamp ? formatDate(media.timestamp) : "날짜 정보 없음";
   const kind = { IMAGE: "사진", VIDEO: "동영상", CAROUSEL_ALBUM: "여러 장" }[media.media_type];
   content.append(node("span", `${date} · ${kind || "게시물"}`));
   return content;
@@ -1759,7 +1759,7 @@ async function loadMedia(more = false, force = false) {
       target.replaceChildren(node("strong", "현재 규칙에 저장한 게시물"), identity);
       target.hidden = false;
     }
-    byId("media-status").textContent = editingRuleId ? `${error.message} 저장한 대상과 입력 내용은 유지됩니다.` : error.message;
+    byId("media-status").textContent = editingRuleId ? `${errorMessage(error)} 저장한 대상과 입력 내용은 유지됩니다.` : errorMessage(error);
   } finally {
     if (generation === mediaGeneration) {
       mediaBusy = false;
@@ -2041,7 +2041,7 @@ async function downloadContactCsv(button, path, fileName, progress, done, segmen
     }
     status.textContent = done;
   } catch (error) {
-    if (generation === contactsExportGeneration) status.textContent = error.message;
+    if (generation === contactsExportGeneration) status.textContent = errorMessage(error);
   } finally {
     if (generation === contactsExportGeneration) {
       contactsExportBusy = false;
@@ -2146,7 +2146,7 @@ form.addEventListener("submit", (event) => {
       try {
         await loadWorkspace();
       } catch (error) {
-        notice(`저장은 완료했습니다. ${error.message}`, true);
+        notice(`저장은 완료했습니다. ${errorMessage(error)}`, true);
       }
     } catch (error) {
       editorState("저장하지 못했습니다. 입력한 내용은 유지됩니다.");
@@ -2201,7 +2201,7 @@ async function start() {
     await loadWorkspace();
   } catch (error) {
     if (error.status !== 401) {
-      notice(error.message, true);
+      notice(errorMessage(error), true);
       byId("retry-load").hidden = location.protocol !== "file:" ? false : true;
     }
     byId("auth").hidden = false;
@@ -2313,8 +2313,7 @@ function contactCard(contact) {
   });
   automation.append(automationStatus, node("p", "중지 중에는 새 확인 답장을 자동 처리하지 않습니다. 대기 발송은 보관됩니다.", "hint"), toggle);
   summary.append(automation);
-  const date = new Date(contact.last_comment_at);
-  summary.append(node("p", `최근 댓글 · ${date.toLocaleString("ko-KR")}`, "hint"));
+  summary.append(node("p", `최근 댓글 · ${formatDateTime(contact.last_comment_at)}`, "hint"));
   const tags = node("div", "", "badges");
   for (const tag of contact.tags) tags.append(badge(tag));
   if (!contact.tags.length) tags.append(node("span", "태그 없음", "hint"));
@@ -2405,7 +2404,7 @@ function contactDetail(contact) {
   const generation = contactsGeneration;
   let requestId = 0;
   let after = null;
-  const date = (value) => new Date(value).toLocaleString("ko-KR");
+  const date = (value) => formatDateTime(value);
   const section = (title) => {
     const part = node("section");
     part.append(node("h4", title));
@@ -2484,7 +2483,7 @@ function contactDetail(contact) {
       more.hidden = !after;
       status.textContent = `${next ? "다음 대화 페이지" : "현재 저장된 정보"} · 대화 ${detail.conversations.length}개. 편집 중인 내용은 저장 후 상세 새로고침으로 확인해 주세요.`;
     } catch (error) {
-      if (current()) status.textContent = `${error.message} 상세 새로고침으로 다시 시도할 수 있습니다.`;
+      if (current()) status.textContent = `${errorMessage(error)} 상세 새로고침으로 다시 시도할 수 있습니다.`;
     } finally {
       if (current()) {
         refresh.disabled = false;
@@ -2667,7 +2666,7 @@ async function loadContacts(more = false) {
       if (!contactFields.some((field) => field.id === rows[0].field.value) || rows.some((row) => row.shown && row.field.value && !contactFields.some((field) => field.id === row.field.value))) {
         clearContactResults();
       }
-      byId("contacts-status").textContent = error.message;
+      byId("contacts-status").textContent = errorMessage(error);
       return;
     }
   }
@@ -2700,7 +2699,7 @@ async function loadContacts(more = false) {
     byId("contacts-status").textContent = `연락처 ${byId("contacts-list").children.length}명을 표시합니다. 같은 계정의 반복 댓글은 한 명으로 묶습니다.` + period;
     if (!byId("contacts-list").children.length) byId("contacts-list").append(emptyState("표시할 연락처가 없습니다", "댓글을 받거나 태그·계정 필터를 바꾼 뒤 다시 불러와 주세요."));
   } catch (error) {
-    if (generation === contactsGeneration) byId("contacts-status").textContent = `${error.message} 새로고침으로 다시 시도할 수 있습니다.`;
+    if (generation === contactsGeneration) byId("contacts-status").textContent = `${errorMessage(error)} 새로고침으로 다시 시도할 수 있습니다.`;
   } finally {
     if (generation === contactsGeneration) {
       contactsBusy = false;
@@ -2787,7 +2786,7 @@ byId("segment-preview").addEventListener("click", async () => {
       byId("segment-preview-list").append(item);
     }
   } catch (error) {
-    if (current()) status.textContent = `${error.message} 조건을 확인하고 다시 미리보기해 주세요.`;
+    if (current()) status.textContent = `${errorMessage(error)} 조건을 확인하고 다시 미리보기해 주세요.`;
   } finally {
     if (current()) {
       button.removeAttribute("aria-disabled");
@@ -3115,7 +3114,7 @@ async function loadContactSegments(force = false) {
     segmentControls();
     byId("segments-status").textContent = contactSegments.length ? `저장된 필터 ${contactSegments.length}개. 조건에 맞는 연락처는 조회할 때 갱신됩니다.` : "자주 쓰는 계정·태그 조건을 필터로 저장해 보세요.";
   } catch (error) {
-    if (generation === segmentsGeneration && request === segmentsRequest) byId("segments-status").textContent = `${error.message} 새로고침으로 다시 시도해 주세요.`;
+    if (generation === segmentsGeneration && request === segmentsRequest) byId("segments-status").textContent = `${errorMessage(error)} 새로고침으로 다시 시도해 주세요.`;
   }
 }
 byId("contacts-filter").addEventListener("input", (event) => {
@@ -3362,7 +3361,7 @@ byId("segment-save").addEventListener("submit", (event) => {
     Object.assign(payload, contactDmConsentCondition());
     Object.assign(payload, contactDmActivityCondition());
   } catch (error) {
-    notice(error.message, true);
+    notice(errorMessage(error), true);
     return;
   }
   void action(event.currentTarget.querySelector("button"), async () => {
@@ -3632,7 +3631,7 @@ async function loadContactFields(force = false) {
     byId("fields-status").textContent = contactFields.length ? `활성 필드 ${contactFields.length}개 / 50개` : "아직 필드가 없습니다. 연락처에 기록할 항목을 만들어 보세요.";
     return true;
   } catch (error) {
-    if (generation === fieldsGeneration && request === fieldsRequest) byId("fields-status").textContent = `${error.message} 새로고침으로 다시 시도해 주세요.`;
+    if (generation === fieldsGeneration && request === fieldsRequest) byId("fields-status").textContent = `${errorMessage(error)} 새로고침으로 다시 시도해 주세요.`;
     return false;
   }
 }
@@ -3789,7 +3788,7 @@ function contactFieldEditor(contact, summary) {
       if (!field) throw new Error(errors.field_not_found);
       void persist(typedFieldValue(field, activeInput().value), save);
     } catch (error) {
-      notice(error.message, true);
+      notice(errorMessage(error), true);
     }
   });
   clear.addEventListener("click", () => {

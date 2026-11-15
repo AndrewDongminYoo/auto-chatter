@@ -163,7 +163,7 @@ function createContactCsvPreview({ api, node, reloadContacts, sessionSource }) {
       showPreview(result, "");
       offerApply(csv, result);
     } catch (error) {
-      if (request === generation) status.textContent = error.message;
+      if (request === generation) status.textContent = errorMessage(error);
     } finally {
       if (request === generation) {
         button.disabled = !allowed;
@@ -205,8 +205,8 @@ function createContactCsvPreview({ api, node, reloadContacts, sessionSource }) {
       invalidate();
       // A rejected or stale file carries the server's fresh rows; nothing was written, and a new check is required.
       if (["contact_import_rejected", "contact_import_stale"].includes(error.code) && isPreviewResult({ counts: error.counts, rows: error.rows, checked_at: error.checked_at }))
-        showPreview({ counts: error.counts, rows: error.rows, checked_at: error.checked_at }, `${error.message} `);
-      else status.textContent = error.message;
+        showPreview({ counts: error.counts, rows: error.rows, checked_at: error.checked_at }, `${errorMessage(error)} `);
+      else status.textContent = errorMessage(error);
     }
   });
   return {

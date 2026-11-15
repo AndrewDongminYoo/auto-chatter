@@ -182,6 +182,9 @@ function harness(api: (url: string) => Promise<unknown>, clock?: string) {
     },
     setTimeout() {},
   });
+  // Mocked api errors come from this realm, and errorMessage passes through only plain Errors of the script's realm.
+  context.Error = Error;
+  vm.runInContext(readFileSync(new URL("../../public/app/display-values.js", import.meta.url), "utf8"), context);
   vm.runInContext(readFileSync(new URL("../../public/app/send-status-labels.js", import.meta.url), "utf8"), context);
   vm.runInContext(readFileSync(new URL("../../public/app/campaign-run-reports.js", import.meta.url), "utf8"), context);
   const controller = context.createCampaignRunReports({ api, node: (_tag: string, text = "") => element(text) });

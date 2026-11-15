@@ -45,12 +45,12 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
 
   function time(value) {
     try {
-      return new Date(value).toLocaleString("ko-KR", { timeZone });
+      return formatDateTime(value, { timeZone });
     } catch {
       return `${value} (UTC)`;
     }
   }
-  const count = (value) => Number(value).toLocaleString("ko-KR");
+  const count = (value) => formatCount(Number(value));
   function controls() {
     create.disabled = !permitted || !segment || blocked || busy;
     more.disabled = busy;
@@ -166,7 +166,7 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
       render(result.snapshots, false);
       status.textContent = message ?? (result.snapshots.length ? `이 필터로 고정한 대상 ${count(result.snapshots.length)}개. 고정한 명단은 바뀌지 않습니다.` : "이 필터로 고정한 대상이 아직 없습니다.");
     } catch (error) {
-      if (current === generation && request === listRequest) status.textContent = messages[error.code] || error.message;
+      if (current === generation && request === listRequest) status.textContent = messages[error.code] || errorMessage(error);
     }
   }
   function appendMembers(page) {
@@ -194,7 +194,7 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
       status.textContent = "";
       controls();
     } catch (error) {
-      if (current === generation && request === openRequest) status.textContent = messages[error.code] || error.message;
+      if (current === generation && request === openRequest) status.textContent = messages[error.code] || errorMessage(error);
     }
   }
   compare.addEventListener("click", async () => {
@@ -219,7 +219,7 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
         "삭제 후 남은 명단과 현재 저장된 필터를 비교한 결과입니다. 발송 가능한 인원 수가 아닙니다.";
       status.textContent = "";
     } catch (error) {
-      if (current === generation && opened?.id === id && request === comparisonRequest) status.textContent = messages[error.code] || error.message;
+      if (current === generation && opened?.id === id && request === comparisonRequest) status.textContent = messages[error.code] || errorMessage(error);
     } finally {
       if (current === generation && request === comparisonRequest) {
         comparing = false;
@@ -245,7 +245,7 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
       await Promise.all([load(`${time(saved.as_of)} 기준으로 ${count(saved.member_count)}명을 고정했습니다. 메시지는 보내지 않았으며, 발송할 때 수신 가능 여부를 다시 확인합니다.`), loadUsage()]);
     } catch (error) {
       if (current !== generation) return;
-      status.textContent = messages[error.code] || error.message;
+      status.textContent = messages[error.code] || errorMessage(error);
       // A refused freeze shows how much of each limit is in use.
       if (error.code === "snapshot_limit_reached" || error.code === "snapshot_members_limit_reached") await loadUsage();
     } finally {
@@ -270,7 +270,7 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
       appendMembers(result.members);
       more.hidden = !after;
     } catch (error) {
-      if (current === generation) status.textContent = messages[error.code] || error.message;
+      if (current === generation) status.textContent = messages[error.code] || errorMessage(error);
     } finally {
       if (current === generation) {
         busy = false;
@@ -301,7 +301,7 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
       }
       status.textContent = "명단 CSV를 저장했습니다. 식별자만 들어 있지만 안전하게 보관하세요.";
     } catch (error) {
-      if (current === generation) status.textContent = messages[error.code] || error.message;
+      if (current === generation) status.textContent = messages[error.code] || errorMessage(error);
     } finally {
       if (current === generation) {
         busy = false;

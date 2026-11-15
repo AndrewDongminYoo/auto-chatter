@@ -23,7 +23,7 @@ function planConnectionsFull(entitlements) {
 // Campaign delivery rows of this calendar month in the workspace time zone against the monthly limit (#52). A plan
 // without campaigns says so, with the month's rows when a downgrade left some.
 function planCampaignUsage(entitlements) {
-  const count = (value) => Number(value).toLocaleString("ko-KR");
+  const count = (value) => formatCount(Number(value));
   const { usage, limits } = entitlements;
   if (!limits.campaign_sends_per_month) return usage.campaign_sends ? `캠페인 발송 불가(이번 달 ${count(usage.campaign_sends)}건 발송)` : "캠페인 발송 불가";
   return `이번 달 캠페인 발송 ${count(usage.campaign_sends)}/${count(limits.campaign_sends_per_month)}건`;
