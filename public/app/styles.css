@@ -2045,15 +2045,58 @@ section {
 }
 
 #contacts-export-format summary,
-.contacts-filter-help summary,
 .contacts-filter-more > summary,
 .contacts-tools > summary {
   min-height: 44px;
   padding: var(--space-2) 0;
   color: var(--primary);
 }
-.contacts-filter-help {
+
+/* Long help text sits behind an info button; its popover opens under the button (app.js places it). */
+.help-info {
   margin-bottom: var(--space-3);
+}
+.help-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: var(--space-2) 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font-size: var(--font-size-help);
+  line-height: var(--line-height-help);
+  cursor: pointer;
+}
+.help-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 1.25em;
+  height: 1.25em;
+  border: 1.5px solid currentcolor;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  font-weight: 700;
+}
+.help-popover {
+  position: fixed;
+  inset: auto;
+  max-width: min(32rem, calc(100vw - var(--space-8)));
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 16%);
+}
+.help-popover > :first-child {
+  margin-top: 0;
+}
+.help-popover > :last-child {
+  margin-bottom: 0;
 }
 /* The folded conditions take a whole row of the filter, under the account, tag and apply controls. */
 .contacts-filter-more {
