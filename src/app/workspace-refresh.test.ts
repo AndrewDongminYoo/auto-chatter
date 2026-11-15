@@ -89,12 +89,17 @@ function workspaceHarness() {
   };
   const report = {
     date: "2026-10-01",
+    zone: "Asia/Seoul",
     reset() {
       this.date = "default";
     },
-    configure: noop,
+    configure(_role: string, zone: string) {
+      this.zone = zone;
+    },
   };
   const membership = { workspace_id: "workspace-a", role: "owner", time_zone: "Asia/Seoul" };
+  const notices: string[] = [];
+  byId("retry-load").hidden = true;
   const context = vm.createContext({
     pendingInvite: null,
     segmentsGeneration: 0,
@@ -105,6 +110,7 @@ function workspaceHarness() {
     currentWorkspaceId: "workspace-a",
     currentRole: "owner",
     workspaceTimeZone: "Asia/Seoul",
+    timeZoneWriteRevision: 0,
     currentView: "home",
     connections: [],
     editingSegment: null,
@@ -113,6 +119,8 @@ function workspaceHarness() {
     byId,
     form: { elements: { connection_id: element() } },
     errors: {},
+    errorMessage: (error: Error) => error.message,
+    notice: (message: string) => notices.push(message),
     manualReports: report,
     flowReports: report,
     handoffReports: report,
@@ -163,7 +171,7 @@ function workspaceHarness() {
     byId("workspace").hidden = true;
   };
   vm.runInContext(appFunction("readWorkspace") + "\n" + appFunction("loadWorkspace"), context);
-  return { context, membership, report, byId, load: () => context.loadWorkspace() as Promise<void> };
+  return { context, membership, report, byId, notices, load: () => context.loadWorkspace() as Promise<void> };
 }
 
 test("workspace refresh preserves unrelated report and settings drafts", async () => {
@@ -197,6 +205,13 @@ for (const change of ["user", "workspace", "role"]) {
     await assert.rejects(h.load(), /offline/);
     assert.equal(h.report.date, "default");
     assert.equal(h.byId("workspace").hidden, true);
+    assert.equal(h.byId("auth").hidden, true);
+    assert.equal(h.byId("retry-load").hidden, false);
+    assert.deepEqual(h.notices, ["offline"]);
+    h.context.api = api;
+    await h.load();
+    assert.equal(h.byId("workspace").hidden, false);
+    assert.equal(h.byId("retry-load").hidden, true);
   });
 }
 
@@ -217,6 +232,28 @@ test("a superseded workspace request cannot commit its older settings", async ()
   resolve({ ...h.membership, time_zone: "UTC" });
   await older;
   assert.equal(h.context.workspaceTimeZone, "Asia/Seoul");
+});
+
+test("a time zone saved during a refresh survives its older membership snapshot", async () => {
+  const h = workspaceHarness();
+  const api = h.context.api;
+  let release!: () => void;
+  h.context.api = (url: string) =>
+    url === "/api/connections"
+      ? new Promise((resolve) => {
+          release = () => resolve({ connections: [] });
+        })
+      : api(url);
+  const pending = h.load();
+  await new Promise<void>((done) => setImmediate(done));
+  h.context.timeZoneWriteRevision++;
+  h.context.workspaceTimeZone = "UTC";
+  h.byId("time-zone-form").elements.time_zone.value = "UTC";
+  release();
+  await pending;
+  assert.equal(h.byId("time-zone-form").elements.time_zone.value, "UTC");
+  assert.equal(h.context.workspaceTimeZone, "UTC");
+  assert.equal(h.report.zone, "UTC");
 });
 
 test("an unrelated action cannot unlock a rule save already in progress", async () => {

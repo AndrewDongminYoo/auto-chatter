@@ -22,8 +22,10 @@ The auth client wraps injected fetch in a standalone call because workerd reject
 Session invalidation clears the entire protected dashboard, advances its generation and exposes the existing reload action; it does not imply an authentication refusal.
 Workspace refresh reads the user, membership, accounts and rules before applying the core snapshot, and only the newest refresh may apply it.
 User, workspace or role changes clear the preceding context before further reads; same-context refreshes preserve unrelated drafts and report snapshots.
+Discarding a context exposes reload immediately, and a failed replacement read reports its error even when the original action has been retired.
 Reports own their query and result invalidation: unchanged role, time zone and account options preserve them, while changed context resets them and a session reset retires pending responses.
 Flow and campaign report option lists can retry independently of report dates and results.
+An in-flight same-context refresh cannot overwrite a time zone saved after that refresh began; new contexts still take their membership's zone.
 Network failures keep the existing workspace visible with a retry action; only an authentication refusal shows login, and secondary reads retain their feature-level failure handling.
 Actions lock their own form; rule controls additionally follow the rule save's busy state, and a session reset retires action cleanup so an old completion cannot restore a new session's controls.
 The synthetic browser regression in `scripts/workspace-state-acceptance.mjs` covers workspace refresh, rule save, account settings, network retry, partial failure, response ordering and session boundaries; it does not prove live provider behavior.

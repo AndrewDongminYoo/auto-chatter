@@ -130,6 +130,7 @@ let currentRole;
 let currentView;
 // The workspace time zone, which the inbox reminder editor shows its date and time in.
 let workspaceTimeZone;
+let timeZoneWriteRevision = 0;
 // The workspace plan, its limits and usage (#52) from the latest workspace or member list response.
 let workspacePlan;
 let pendingInvite = null;
@@ -1359,10 +1360,13 @@ document.addEventListener("visibilitychange", () => {
 // discard its predecessor immediately, even if a later read fails.
 async function readWorkspace(request) {
   let session = workspaceGeneration;
+  let discardedPrevious = false;
   const current = () => request === workspaceLoadRequest && session === workspaceGeneration;
   const discardPrevious = () => {
     resetSession();
     byId("auth").hidden = true;
+    byId("retry-load").hidden = false;
+    discardedPrevious = true;
     session = workspaceGeneration;
   };
   try {
@@ -1380,12 +1384,15 @@ async function readWorkspace(request) {
   } catch (error) {
     // Session retirement or a newer reload owns the screen, including its errors.
     if (!current()) return;
+    // The action that requested this reload was retired with the old context.
+    if (discardedPrevious) notice(errorMessage(error), true);
     throw error;
   }
 }
 
 async function loadWorkspace() {
   const request = ++workspaceLoadRequest;
+  const zoneWrite = timeZoneWriteRevision;
   globalSendRevision++;
   const snapshot = await readWorkspace(request);
   if (!snapshot || request !== workspaceLoadRequest || snapshot.session !== workspaceGeneration) return;
@@ -1393,14 +1400,16 @@ async function loadWorkspace() {
   const generation = segmentsGeneration,
     workspaceSession = workspaceGeneration;
   const firstContext = currentWorkspaceId === undefined;
-  const zoneChanged = workspaceTimeZone !== membership.time_zone;
+  // A save completed after this membership read started; its zone is newer than the snapshot.
+  const timeZone = firstContext || zoneWrite === timeZoneWriteRevision ? membership.time_zone : workspaceTimeZone;
+  const zoneChanged = workspaceTimeZone !== timeZone;
   currentUserId = me.user?.id;
   currentWorkspaceId = membership.workspace_id;
   currentRole = membership.role;
   if (firstContext) contactCsvPreview.configure(currentRole);
   const zoneInput = byId("time-zone-form").elements.time_zone;
-  if (firstContext || zoneInput.value === (workspaceTimeZone ?? "")) zoneInput.value = membership.time_zone ?? "";
-  workspaceTimeZone = membership.time_zone ?? undefined;
+  if (firstContext || zoneInput.value === (workspaceTimeZone ?? "")) zoneInput.value = timeZone ?? "";
+  workspaceTimeZone = timeZone ?? undefined;
   workspacePlan = { plan: membership.plan, limits: membership.limits, usage: membership.usage };
   planControls();
   timeZoneControls();
@@ -1979,6 +1988,7 @@ byId("time-zone-form").addEventListener("submit", (event) => {
   const zoneForm = event.currentTarget;
   action(zoneForm.querySelector("button[type=submit]"), async () => {
     const saved = await api("/api/workspace/settings", "PUT", { time_zone: zoneForm.elements.time_zone.value.trim() });
+    timeZoneWriteRevision++;
     zoneForm.elements.time_zone.value = saved.time_zone;
     const changed = saved.time_zone !== workspaceTimeZone;
     workspaceTimeZone = saved.time_zone;

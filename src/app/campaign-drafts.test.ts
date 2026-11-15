@@ -583,6 +583,7 @@ test("session invalidation prevents a pending workspace bootstrap from reconfigu
       currentUserId: undefined,
       currentRole: undefined,
       workspaceTimeZone: undefined,
+      timeZoneWriteRevision: 0,
       workspacePlan: undefined,
       contactCsvPreview: controller,
       segmentSnapshots: controller,

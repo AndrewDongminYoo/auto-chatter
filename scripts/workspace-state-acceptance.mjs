@@ -25,6 +25,7 @@
     activityFailure: false,
     writes: 0,
     rules: [],
+    rulesFailure: false,
     unexpected: [],
     logoutFailure: false,
     holdRuleSave: null,
@@ -61,7 +62,12 @@
       if (fixture.holdMembership) await fixture.holdMembership();
       return Response.json(membership);
     }
+    if (route === "/api/workspace/settings" && init.method === "PUT") {
+      fixture.zone = JSON.parse(init.body).time_zone;
+      return Response.json({ time_zone: fixture.zone });
+    }
     if (route === "/api/rules") {
+      if (fixture.rulesFailure) return Response.json({ error: "service_unavailable" }, { status: 503 });
       if (init.method === "PUT") {
         if (fixture.holdRuleSave) await fixture.holdRuleSave();
         fixture.rules = [{ ...JSON.parse(init.body), id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", keyword: "자료" }];
@@ -204,6 +210,24 @@
   await older;
   check(get("time-zone-form").elements.time_zone.value === "UTC", "Older refresh replaced the newer context");
 
+  fixture.holdMembership = () => {
+    fixture.holdMembership = null;
+    return new Promise((resolve) => {
+      releaseMembership = resolve;
+    });
+  };
+  releaseMembership = null;
+  const beforeZoneSave = page.loadWorkspace();
+  await until(() => Boolean(releaseMembership));
+  const zoneForm = get("time-zone-form");
+  zoneForm.elements.time_zone.value = "Asia/Seoul";
+  zoneForm.requestSubmit();
+  await until(() => !zoneForm.querySelector("button[type=submit]").hasAttribute("aria-busy"));
+  check(zoneForm.elements.time_zone.value === "Asia/Seoul", "Time zone save did not complete");
+  releaseMembership();
+  await beforeZoneSave;
+  check(zoneForm.elements.time_zone.value === "Asia/Seoul" && get("manual-report-zone").textContent.includes("Asia/Seoul"), "A pending refresh restored the zone from before the save");
+
   fixture.unauthorized = true;
   await page.start();
   check(!get("auth").hidden && get("workspace").hidden && !rule.elements.private_reply_text.value, "401 retained protected input");
@@ -240,6 +264,14 @@
   fixture.zone = "Asia/Seoul";
   await page.start();
   await until(() => !get("workspace").hidden);
+  fixture.role = "admin";
+  fixture.rulesFailure = true;
+  await page.action(get("refresh-activity"), () => page.loadWorkspace());
+  check(get("auth").hidden && get("workspace").hidden && !get("retry-load").hidden && get("notice").textContent, "Retired action left a failed replacement context without recovery");
+  fixture.rulesFailure = false;
+  fixture.role = "owner";
+  await page.start();
+  check(!get("workspace").hidden && get("retry-load").hidden && !get("notice").textContent, "Replacement context retry did not recover");
   check(!fixture.unexpected.length, `Incomplete fixture: ${fixture.unexpected.join(", ")}`);
   return {
     passed: [
@@ -256,6 +288,8 @@
       "401",
       "user/workspace/role isolation",
       "cross-tab isolation",
+      "replacement context recovery",
+      "saved time zone during refresh",
     ],
     fixture: "workspaceFixture",
   };
