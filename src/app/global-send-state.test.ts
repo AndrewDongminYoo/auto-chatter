@@ -106,7 +106,7 @@ test("the workspace load, a menu change, focus and a visible page trigger the re
   const app = read("app.js");
   const load = appFunction("loadWorkspace");
   // The load stamps its own read, so its showView call does not read /api/me twice, and retires older re-reads.
-  assert.ok(load.indexOf("globalSendRevision++") < load.indexOf('api("/api/me")'));
+  assert.ok(load.indexOf("globalSendRevision++") < load.indexOf("readWorkspace(request)"));
   assert.ok(load.indexOf("globalSendReadAt = Date.now()") < load.indexOf("showView("));
   // The value is stored only beside the render: a load that throws after /api/me keeps the stored value equal to
   // the screen, so a later re-read still detects a change.

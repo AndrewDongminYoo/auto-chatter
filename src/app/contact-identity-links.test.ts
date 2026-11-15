@@ -160,6 +160,14 @@ test("actual dashboard session listeners invalidate contacts on cross-tab change
     }
   }
   const runtime = {
+    startupRequest: 0,
+    resetSession() {
+      runtime.workspaceGeneration++;
+      runtime.segmentsGeneration++;
+      runtime.contactsSaving = false;
+      runtime.clearContactResults();
+      runtime.campaignDrafts.reset();
+    },
     segmentsGeneration: 0,
     workspaceGeneration: 0,
     contactSessionSource: "current-tab",
@@ -191,7 +199,7 @@ test("actual dashboard session listeners invalidate contacts on cross-tab change
   assert.equal(invalidations, 2);
   assert.equal(campaignInvalidations, 2, "session events clear campaign messages too");
   assert.equal(runtime.workspaceGeneration, 2, "session events invalidate pending workspace loads");
-  assert.equal(runtime.segmentsGeneration, 0, "pending filter operations must retain their cleanup generation");
+  assert.equal(runtime.segmentsGeneration, 2, "session reset retires pending filter operations");
   assert.equal(retryLoad.hidden, false, "a cleared campaign screen must offer a fresh workspace load");
   assert.equal(runtime.contactsSaving, false, "session invalidation releases stale saves");
 });

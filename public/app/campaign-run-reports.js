@@ -44,6 +44,7 @@ function createCampaignRunReports({ api, node }) {
       [["total", "발송 행 합계"], ...sendStatusEntries(["pending", "sending", "sent"]), ["read", "읽음 확인"], ["read_unavailable", "읽음 확인 불가"], ...sendStatusEntries(["failed", "blocked", "unknown", "cancelled"])],
     ],
   ];
+  let configuration;
   let generation = 0;
   let contextGeneration = 0;
   let timeZone;
@@ -60,6 +61,7 @@ function createCampaignRunReports({ api, node }) {
     summary.textContent = message;
   }
   function reset() {
+    configuration = undefined;
     contextGeneration++;
     permitted = false;
     timeZone = undefined;
@@ -72,7 +74,13 @@ function createCampaignRunReports({ api, node }) {
     byId("campaign-report-zone").textContent = "";
   }
   async function configure(role, zone) {
+    const next = JSON.stringify([role, zone]);
+    if (configuration === next) {
+      if (permitted && timeZone) await refreshOptions();
+      return;
+    }
     reset();
+    configuration = next;
     permitted = role === "owner" || role === "admin";
     if (!permitted || !zone) return;
     timeZone = zone;
@@ -93,12 +101,23 @@ function createCampaignRunReports({ api, node }) {
       byId("campaign-report-zone").textContent += " 이 브라우저에서는 시작일과 종료일을 직접 입력해 주세요.";
     }
     invalidate();
-    const current = contextGeneration;
+    await refreshOptions();
+  }
+  async function refreshOptions() {
+    const current = ++contextGeneration;
+    const selected = form.elements.draft_id.value;
+    form.elements.draft_id.disabled = true;
     draftNotice.textContent = "캠페인 목록을 불러오고 있습니다. 전체 조회는 바로 할 수 있습니다.";
     try {
       const { drafts } = await api("/api/campaign-drafts");
       if (current !== contextGeneration || !permitted) return;
+      form.elements.draft_id.replaceChildren(new Option("모든 캠페인(보관 포함)", ""));
       for (const draft of drafts) if (!draft.archived) form.elements.draft_id.append(new Option(draft.name, draft.id));
+      if (drafts.some((draft) => draft.id === selected && !draft.archived)) form.elements.draft_id.value = selected;
+      else if (selected) {
+        form.elements.draft_id.value = "";
+        invalidate();
+      }
       draftNotice.textContent = "목록에는 화면을 연 시점에 보관하지 않은 캠페인만 표시됩니다. 이후 만들거나 보관한 캠페인은 새로고침하면 반영됩니다. 전체 조회에는 보관한 캠페인의 실행도 포함됩니다.";
     } catch {
       if (current !== contextGeneration) return;

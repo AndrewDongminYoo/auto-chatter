@@ -197,3 +197,20 @@ test("handoff report defaults to the last seven days of the workspace calendar, 
     assert.doesNotMatch(h.get("handoff-report-zone").textContent, /직접 입력/);
   }
 });
+
+test("same-context refresh keeps handoff report inputs and the displayed snapshot", async () => {
+  const h = harness(async () => snapshot, "2026-11-15T03:00:00Z");
+  await h.controller.configure("owner", "Asia/Seoul", []);
+  h.inputs.from.value = "2026-10-01";
+  h.inputs.before.value = "2026-10-02";
+  await h.form.dispatch("submit");
+  const summary = h.get("handoff-report-summary").textContent;
+  await h.controller.configure("owner", "Asia/Seoul", []);
+  assert.equal(h.inputs.from.value, "2026-10-01");
+  assert.equal(h.inputs.before.value, "2026-10-02");
+  assert.equal(h.get("handoff-report-summary").textContent, summary);
+  assert.equal(h.get("handoff-report-download").disabled, false);
+  await h.controller.configure("agent", "Asia/Seoul", []);
+  assert.equal(h.get("handoff-reports-section").hidden, true);
+  assert.equal(h.get("handoff-report-download").disabled, true);
+});

@@ -352,31 +352,57 @@ test("campaign report clears results on edits and ignores late report and picker
   assert.equal(late.get("campaign-reports-section").hidden, true);
 });
 
-test("the app's other-tab session signal and BFCache restoration reset every report controller", () => {
-  // The controllers' reset() behavior is exercised above; this runs the app's invalidation path with spies.
+test("the app's other-tab session signal delegates to the complete session reset", () => {
   const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
   const start = source.indexOf("const invalidateContactSession = () => {");
   const end = source.indexOf("\n};", start);
   assert.ok(start >= 0 && end > start);
-  const resets: string[] = [];
-  const spy = (name: string) => ({
-    reset: () => {
-      resets.push(name);
-    },
-  });
+  let resets = 0;
   const context = vm.createContext({
-    workspaceGeneration: 0,
-    contactsSaving: false,
-    campaignDrafts: spy("campaignDrafts"),
-    manualReports: spy("manualReports"),
-    flowReports: spy("flowReports"),
-    handoffReports: spy("handoffReports"),
-    campaignReports: spy("campaignReports"),
-    clearContactResults: () => {},
+    startupRequest: 0,
+    resetSession: () => {
+      resets++;
+    },
     notice: () => {},
     byId: () => ({ hidden: true }),
   });
   vm.runInContext(`${source.slice(start, end + 3)}\nglobalThis.invalidate = invalidateContactSession;`, context);
   context.invalidate();
-  for (const name of ["manualReports", "flowReports", "handoffReports", "campaignReports"]) assert.ok(resets.includes(name), `${name}.reset() must run on session invalidation`);
+  assert.equal(resets, 1);
+  assert.equal(context.startupRequest, 1);
+});
+
+test("same-context refresh keeps campaign report inputs and the displayed snapshot", async () => {
+  const h = harness(async (_url) => {
+    const url = _url;
+    return url === "/api/campaign-drafts" ? { drafts: [] } : snapshot;
+  }, "2026-11-15T03:00:00Z");
+  await h.controller.configure("owner", "Asia/Seoul");
+  h.inputs.from.value = "2026-10-01";
+  h.inputs.before.value = "2026-10-02";
+  await h.form.dispatch("submit");
+  const summary = h.get("campaign-report-summary").textContent;
+  await h.controller.configure("owner", "Asia/Seoul");
+  assert.equal(h.inputs.from.value, "2026-10-01");
+  assert.equal(h.inputs.before.value, "2026-10-02");
+  assert.equal(h.get("campaign-report-summary").textContent, summary);
+  assert.equal(h.get("campaign-report-download").disabled, false);
+  await h.controller.configure("agent", "Asia/Seoul");
+  assert.equal(h.get("campaign-reports-section").hidden, true);
+  assert.equal(h.get("campaign-report-download").disabled, true);
+});
+
+test("campaign option failure can retry without discarding report dates", async () => {
+  let available = false;
+  const h = harness(async (url) => {
+    assert.equal(url, "/api/campaign-drafts");
+    if (!available) throw new Error("offline");
+    return { drafts: [{ id: "choice", name: "Choice" }] };
+  }, "2026-11-15T03:00:00Z");
+  await h.controller.configure("owner", "Asia/Seoul");
+  h.inputs.from.value = "2026-10-01";
+  available = true;
+  await h.controller.configure("owner", "Asia/Seoul");
+  assert.equal(h.inputs.from.value, "2026-10-01");
+  assert.equal(h.inputs.draft_id.children.length, 2);
 });

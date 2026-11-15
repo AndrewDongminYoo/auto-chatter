@@ -137,3 +137,21 @@ test("manual reply report defaults to the last seven days of the workspace calen
     assert.doesNotMatch(h.get("manual-report-zone").textContent, /직접 입력/);
   }
 });
+
+test("same-context refresh preserves report dates and a completed result", async () => {
+  const h = harness("2026-11-15T03:00:00Z");
+  h.controller.configure("owner", "Asia/Seoul", []);
+  h.from.value = "2026-10-01";
+  h.before.value = "2026-10-02";
+  await h.listeners.get("submit")!({ preventDefault() {} });
+  const summary = h.get("manual-report-summary").textContent;
+  h.controller.configure("owner", "Asia/Seoul", []);
+  assert.equal(h.from.value, "2026-10-01");
+  assert.equal(h.before.value, "2026-10-02");
+  assert.equal(h.get("manual-report-summary").textContent, summary);
+  assert.equal(h.get("manual-report-download").disabled, false);
+  h.controller.reset();
+  h.controller.configure("owner", "Asia/Seoul", []);
+  assert.equal(h.get("manual-report-download").disabled, true);
+  assert.notEqual(h.from.value, "2026-10-01");
+});

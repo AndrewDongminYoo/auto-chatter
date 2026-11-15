@@ -619,6 +619,10 @@ test("same-document login broadcasts do not invalidate the dashboard bootstrap b
     const block = source.match(/\/\/ Invalidate contact disclosures on cross-tab sessions and BFCache restoration\.[\s\S]*?\/\/ End contact session listeners\./)?.[0];
     assert.ok(block);
     const context = vm.createContext({
+      startupRequest: 0,
+      resetSession: () => {
+        invalidations++;
+      },
       contactSessionSource: "document-a",
       segmentsGeneration: 0,
       workspaceGeneration: 0,
