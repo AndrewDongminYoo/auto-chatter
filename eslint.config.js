@@ -85,6 +85,7 @@ const dashboardGlobals = [
       "flowStepNumbers",
       "flowStoredList",
       "flowSummary",
+      "flowTestDocument",
       "flowTestStatus",
       "flowTypeLabel",
       "flowTypedNumber",

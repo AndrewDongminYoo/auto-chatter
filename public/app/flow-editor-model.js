@@ -151,6 +151,14 @@ function flowTrigger(document) {
 function flowIsDmFlow(document) {
   return Object.hasOwn(flowDmTriggerLabels, flowTrigger(document)?.type ?? "");
 }
+// The document whose trigger decides the test-run inputs (#305): the draft for the draft source, and for the
+// published source the published version as the editor read it ({ version_no, definition }). A draft saved
+// through the API can have another trigger kind than the published version, so the published source never
+// falls back to the draft; null means that version is not read yet or could not be read.
+function flowTestDocument(source, draft, published) {
+  if (source !== "published") return draft;
+  return flowReadable(published?.definition) ? published.definition : null;
+}
 // What starts a run of the flow, as the screen names it: "DM" or "댓글".
 function flowStartName(document) {
   return flowIsDmFlow(document) ? "DM" : "댓글";
