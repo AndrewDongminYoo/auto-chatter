@@ -21,6 +21,7 @@
     role: "owner",
     zone: "Asia/Seoul",
     globalEnabled: false,
+    replyAllowed: false,
     offline: false,
     unauthorized: false,
     activityFailure: false,
@@ -91,7 +92,15 @@
     const thread = `/api/connections/${connectionId}/inbox/999`;
     if (route === thread) return Response.json({ messages: [], before: null });
     if (route === `${thread}/replies`) return Response.json({ replies: [], before: null });
-    if (route === `${thread}/reply-status`) return Response.json({ allowed: false, failure_code: "send_disabled", checked_at: new Date().toISOString(), window_expires_at: new Date(Date.now() + 3600000).toISOString() });
+    if (route === `${thread}/reply-status`)
+      return Response.json({
+        allowed: fixture.replyAllowed,
+        failure_code: fixture.replyAllowed ? null : "recipient_opted_out",
+        channel: "instagram",
+        capabilities: { schema_version: 1, channel: "instagram", operations: { manual_reply: { supported: true, content_types: ["text"] } } },
+        checked_at: new Date().toISOString(),
+        window_expires_at: new Date(Date.now() + 3600000).toISOString(),
+      });
     if (route === `${thread}/context`) return Response.json({ mapping_status: "unverified" });
     if (route.endsWith("/999/notes")) return Response.json({ notes: [], before: null });
     const responses = {
@@ -155,11 +164,16 @@
         check(enabled || text.includes("계정 발송 설정 꺼짐"), "Account stop omitted action");
         check(ruleEnabled || text.includes("규칙 중지"), "Rule stop omitted action");
         check(get("inbox-send-settings").textContent.includes("전달을 보장하지 않습니다"), "Inbox omitted common guidance");
+        check(get("inbox-eligibility").textContent.includes("수신 거부"), "Server refusal was hidden by incomplete capability data");
         check(get("inbox-send").disabled, "Guidance bypassed server reply eligibility");
         preserved();
       }
     }
   }
+  fixture.replyAllowed = true;
+  get("inbox-thread-refresh").click();
+  await until(() => get("inbox-eligibility").textContent.includes("답장 가능 ·"));
+  check(!get("inbox-send").disabled, "Settings guidance blocked a server-allowed reply");
   fixture.offline = true;
   await refresh();
   check(get("delivery-title").textContent.includes("확인하지 못했습니다"), "Failed read retained a positive state");
