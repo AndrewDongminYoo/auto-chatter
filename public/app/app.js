@@ -1534,6 +1534,7 @@ async function loadWorkspace() {
       });
     });
     item.append(inboxToggle);
+    const reconnectHelp = connectAvailable ? "상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요." : "연결 제한이 해제된 뒤 계정 관리자가 같은 Instagram 계정을 다시 연결할 수 있습니다.";
     const unconfirmed = account.subscription_checked_at ? "철회·권한 여부는 확인되지 않았습니다." : "철회·권한·구독 여부는 확인되지 않았습니다.";
     item.append(
       node(
@@ -1542,11 +1543,11 @@ async function loadWorkspace() {
           ? account.active
             ? `토큰 만료일: ${formatDate(account.token_expires_at)} · 만료 30일 전부터 갱신을 시도합니다. ${unconfirmed}`
             : `토큰 만료일: ${formatDate(account.token_expires_at)} · 수신 중지 중에는 갱신하지 않습니다. ${unconfirmed}`
-          : `${credentialStatus === "expired" ? "토큰이 만료됐습니다." : "연결 토큰이 없습니다."} 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`,
+          : `${credentialStatus === "expired" ? "토큰이 만료됐습니다." : "연결 토큰이 없습니다."} ${reconnectHelp}`,
         "hint",
       ),
     );
-    if (reauthReason) item.append(node("p", `${formatDateTime(account.reauth_required_at)} · ${reauthReason} 다시 연결하기 전까지 대기 중인 답장이 발송 전 확인에서 차단될 수 있습니다. 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`, "hint"));
+    if (reauthReason) item.append(node("p", `${formatDateTime(account.reauth_required_at)} · ${reauthReason} 다시 연결하기 전까지 대기 중인 답장이 발송 전 확인에서 차단될 수 있습니다. ${reconnectHelp}`, "hint"));
     // The periodic or manual check found a required webhook subscription field missing for the stored token;
     // the server records it, display only.
     const subscriptionChecked = account.subscription_checked_at ? ` 마지막 확인: ${formatDateTime(account.subscription_checked_at)}.` : "";
@@ -1554,20 +1555,13 @@ async function loadWorkspace() {
       item.append(
         node(
           "p",
-          `${formatDateTime(account.subscription_missing_at)} 처음 기록 · Meta가 이 계정의 댓글·DM·확인 버튼 웹후크 구독 필드를 모두 반환하지 않았습니다. 새 댓글과 DM이 이 앱에 도착하지 않을 수 있습니다. 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택하거나 'Meta 상태 확인'을 실행해 주세요.${subscriptionChecked}`,
+          `${formatDateTime(account.subscription_missing_at)} 처음 기록 · Meta가 이 계정의 댓글·DM·확인 버튼 웹후크 구독 필드를 모두 반환하지 않았습니다. 새 댓글과 DM이 이 앱에 도착하지 않을 수 있습니다. ${reconnectHelp}${credentialStatus === "valid" ? " 'Meta 상태 확인'으로 구독 상태도 확인할 수 있습니다." : ""}${subscriptionChecked}`,
           "hint",
         ),
       );
     else if (account.subscription_checked_at) item.append(node("p", `Meta가 필수 웹후크 구독 필드를 반환했습니다.${subscriptionChecked}`, "hint"));
     // Meta reported that the account owner removed the app in Instagram; the server disconnected the account.
-    if (account.deauthorized_at)
-      item.append(
-        node(
-          "p",
-          `${formatDateTime(account.deauthorized_at)} · 계정 소유자가 Instagram에서 이 앱의 권한을 해제해 연결이 해제됐습니다. 수신과 발송, 이 계정의 댓글 규칙과 플로우가 꺼졌습니다. 다시 사용하려면 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`,
-          "hint",
-        ),
-      );
+    if (account.deauthorized_at) item.append(node("p", `${formatDateTime(account.deauthorized_at)} · 계정 소유자가 Instagram에서 이 앱의 권한을 해제해 연결이 해제됐습니다. 수신과 발송, 이 계정의 댓글 규칙과 플로우가 꺼졌습니다. 다시 사용하려면 ${reconnectHelp}`, "hint"));
     const healthStatus = node("p", healthResults.get(account.id) ?? "Meta 계정과 웹훅 구독 상태는 아직 확인하지 않았습니다.", "hint");
     healthResults.delete(account.id);
     healthStatus.setAttribute("role", "status");
@@ -1579,11 +1573,11 @@ async function loadWorkspace() {
         const result = await api(`/api/connections/${account.id}/health`);
         const message = {
           fields_present: "Meta가 이 계정의 댓글·DM·확인 버튼 구독 필드를 반환했습니다. 이 앱으로 실제 이벤트가 오는지는 별도로 확인해야 합니다.",
-          fields_missing: "Meta 응답에서 필수 웹훅 구독 필드가 모두 확인되지 않았습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
-          reconnect_required: "Meta가 계정 접근이나 앱 권한을 거부했습니다. 앱 권한을 확인하고 필요한 경우 같은 Instagram 계정을 다시 연결해 주세요.",
+          fields_missing: `Meta 응답에서 필수 웹훅 구독 필드가 모두 확인되지 않았습니다. ${reconnectHelp}`,
+          reconnect_required: `Meta가 계정 접근이나 앱 권한을 거부했습니다. 앱 권한을 확인해 주세요. ${reconnectHelp}`,
           unverified: "Meta 상태를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.",
-          expired: "연결 토큰이 만료됐습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
-          missing: "연결 토큰이 없습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
+          expired: `연결 토큰이 만료됐습니다. ${reconnectHelp}`,
+          missing: `연결 토큰이 없습니다. ${reconnectHelp}`,
         }[result.status];
         healthStatus.textContent = message ? `${formatTime(result.checked_at)} 확인 · ${message}` : "Meta 상태 응답을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.";
         // The check also stores the subscription record and the reconnect marker; reload so the badges match.

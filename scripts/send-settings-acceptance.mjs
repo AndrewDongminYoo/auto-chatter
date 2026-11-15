@@ -190,6 +190,7 @@
   fixture.connectAvailable = false;
   await page.loadWorkspace();
   check(get("connect").disabled && get("rule-send-settings").textContent.includes("연결 제한이 해제된 뒤"), "Restricted connection action contradicted contextual guidance");
+  check(!get("connections").textContent.includes("상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요."), "Account details still recommend a restricted connection action");
   fixture.connectAvailable = true;
   account.credential_status = "valid";
   account.active = false;
