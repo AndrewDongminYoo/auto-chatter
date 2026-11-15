@@ -1228,6 +1228,31 @@ addEventListener("hashchange", () => {
   showView(name, true);
   scrollToSectionHash();
 });
+// A help popover opens under the info button that toggles it, kept inside the viewport. toggle does not bubble, so
+// the document listens in the capture phase.
+document.addEventListener(
+  "toggle",
+  (event) => {
+    const popover = event.target;
+    if (!(popover instanceof HTMLElement) || !popover.classList.contains("help-popover") || event.newState !== "open") return;
+    const button = document.querySelector(`[popovertarget="${popover.id}"]`);
+    if (!button) return;
+    const anchor = button.getBoundingClientRect();
+    const gap = 8;
+    const left = Math.max(gap, Math.min(anchor.left, innerWidth - popover.offsetWidth - gap));
+    const below = anchor.bottom + gap;
+    const preferred = below + popover.offsetHeight > innerHeight - gap ? anchor.top - popover.offsetHeight - gap : below;
+    // The stylesheet caps the height to the viewport, so the popover always fits between the gaps.
+    const top = Math.max(gap, Math.min(preferred, innerHeight - popover.offsetHeight - gap));
+    popover.style.left = `${left}px`;
+    popover.style.top = `${top}px`;
+  },
+  true,
+);
+// Scrolling moves the button away from a fixed popover, so an open one closes.
+addEventListener("scroll", () => {
+  for (const popover of document.querySelectorAll(".help-popover:popover-open")) popover.hidePopover();
+});
 // Clicking the menu that is already in the address changes no fragment, so no hashchange follows.
 document.querySelector(".workspace-nav").addEventListener("click", (event) => {
   const link = event.target.closest("a");

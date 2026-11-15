@@ -1477,7 +1477,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       if (epoch !== session || request !== listRequest) return;
       dueCheckedAt = Date.parse(page.checked_at);
       clockOffset = dueCheckedAt - Date.now();
-      dueCount = page.due_reminder_count;
+      // The server always sends an integer; anything else counts as none rather than showing NaN.
+      dueCount = Number.isSafeInteger(page.due_reminder_count) ? page.due_reminder_count : 0;
       for (const row of page.conversations) {
         // A read mark applied after this request started may have committed after the list snapshot; the row's
         // read position shows which came first, so an older count cannot bring the badge back and a newer DM
