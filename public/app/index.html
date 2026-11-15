@@ -107,9 +107,15 @@
       </section>
       <div id="workspace" hidden>
         <nav class="workspace-nav" aria-label="메뉴">
-          <a href="#home">홈</a><a href="#accounts">계정</a><a href="#automation">자동화</a><a href="#inbox">인박스</a><a href="#contacts">연락처</a><a id="nav-campaigns" href="#campaigns" hidden>캠페인</a><a href="#settings">설정</a>
+          <a href="#home">홈</a><a href="#accounts">계정</a><a href="#automation">자동화</a><a href="#inbox">인박스</a><a href="#contacts">연락처</a><a id="nav-campaigns" href="#campaigns" hidden>캠페인</a><a id="nav-reports" href="#reports" hidden>보고서</a
+          ><a href="#settings">설정</a>
         </nav>
         <div id="view-home" class="view" data-view="home" role="region" aria-label="홈" tabindex="-1" hidden>
+          <div id="delivery-banner" class="delivery-banner" role="status" aria-live="polite">
+            <strong id="delivery-title">발송 상태</strong>
+            <p id="delivery-status"></p>
+            <button type="button" id="send-settings-refresh" class="secondary">발송 설정 다시 확인</button>
+          </div>
           <section id="getting-started" class="card getting-started" aria-labelledby="getting-started-title" hidden>
             <div class="section-heading">
               <div>
@@ -144,11 +150,11 @@
               </li>
             </ol>
           </section>
-          <div id="delivery-banner" class="delivery-banner" role="status" aria-live="polite">
-            <strong id="delivery-title">발송 상태</strong>
-            <p id="delivery-status"></p>
-            <button type="button" id="send-settings-refresh" class="secondary">발송 설정 다시 확인</button>
-          </div>
+          <section id="home-actions" class="card" aria-labelledby="home-actions-title" hidden>
+            <h2 id="home-actions-title">작업 이어가기</h2>
+            <p class="hint">계정과 규칙 설정을 확인하거나 인박스에서 대화를 이어가세요.</p>
+            <div class="section-heading"><a href="#accounts">계정·발송 설정</a><a href="#automation">댓글 규칙·플로 관리</a><a href="#inbox">인박스 열기</a></div>
+          </section>
           <section id="activity-section" class="card" aria-labelledby="activity-title">
             <div class="section-heading">
               <div>
@@ -159,6 +165,14 @@
             <p class="hint">최근 50건입니다. 결과가 불명확한 메시지는 자동으로 다시 보내지 않습니다.</p>
             <div id="activity"></div>
           </section>
+          <p id="home-reports-link" hidden><a href="#reports">상세 보고서 보기</a> · 기간별 수동 답장·플로·상담 전환·캠페인 결과를 확인합니다.</p>
+        </div>
+        <div id="view-reports" class="view" data-view="reports" role="region" aria-label="보고서" tabindex="-1" hidden>
+          <div class="section-heading">
+            <h2>상세 보고서</h2>
+            <button type="button" id="reports-refresh" class="secondary" data-loading-label="목록 확인 중…">보고서 목록 새로고침</button>
+          </div>
+          <p class="hint">조회 조건을 정해 결과를 확인하고 같은 결과를 CSV로 저장할 수 있습니다.</p>
           <section id="manual-reports-section" class="card" aria-labelledby="manual-reports-title" hidden>
             <div class="section-heading">
               <h2 id="manual-reports-title">수동 답장 현황</h2>

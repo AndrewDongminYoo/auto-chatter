@@ -73,10 +73,10 @@ function createCampaignRunReports({ api, node }) {
     draftNotice.textContent = "";
     byId("campaign-report-zone").textContent = "";
   }
-  async function configure(role, zone) {
+  async function configure(role, zone, loadOptions = true) {
     const next = JSON.stringify([role, zone]);
     if (configuration === next) {
-      if (permitted && timeZone) await refreshOptions();
+      if (loadOptions && permitted && timeZone) await refreshOptions();
       return;
     }
     reset();
@@ -101,7 +101,7 @@ function createCampaignRunReports({ api, node }) {
       byId("campaign-report-zone").textContent += " 이 브라우저에서는 시작일과 종료일을 직접 입력해 주세요.";
     }
     invalidate();
-    await refreshOptions();
+    if (loadOptions) await refreshOptions();
   }
   async function refreshOptions() {
     const current = ++contextGeneration;

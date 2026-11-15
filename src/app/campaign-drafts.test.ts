@@ -557,7 +557,7 @@ test("a rate-limited retry cannot forget the id of an earlier ambiguous create",
   assert.equal(h.fields.body.disabled, false);
 });
 
-test("session invalidation prevents a pending workspace bootstrap from reconfiguring campaign data", async () => {
+test("session invalidation prevents a pending workspace bootstrap from configuring report access", async () => {
   const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
   const start = source.indexOf("async function loadWorkspace() {");
   const end = source.indexOf("\n}\n", start);
@@ -587,15 +587,20 @@ test("session invalidation prevents a pending workspace bootstrap from reconfigu
       workspacePlan: undefined,
       contactCsvPreview: controller,
       segmentSnapshots: controller,
-      manualReports: controller,
+      manualReports: {
+        reset: noOp,
+        configure: () => {
+          configurations++;
+          throw new Error("fixture stops after report configuration");
+        },
+      },
       flowReports: controller,
       handoffReports: controller,
       campaignReports: controller,
       campaignDrafts: {
         reset: noOp,
         configure: () => {
-          configurations++;
-          throw new Error("fixture stops after campaign configuration");
+          return;
         },
       },
       segmentControls: noOp,
@@ -631,14 +636,14 @@ test("session invalidation prevents a pending workspace bootstrap from reconfigu
     vm.runInContext(source.slice(readStart, source.indexOf("\n}\n", readStart) + 3), context);
     vm.runInContext(source.slice(start, end + 3) + "\n" + source.slice(invalidationStart, invalidationEnd + 3) + "\nglobalThis.invalidate = invalidateContactSession;", context);
     const pending = context.loadWorkspace().catch((error: Error) => {
-      if (error.message !== "fixture stops after campaign configuration") throw error;
+      if (error.message !== "fixture stops after report configuration") throw error;
     });
     await draftSettle();
     context.invalidate();
     release(pausedAt === "/api/me" ? { user: { id: "old-user" } } : { role: "admin", workspace_id: "old-workspace", time_zone: "UTC" });
     await pending;
-    assert.equal(configurations, 0, `${pausedAt} response from before invalidation must not restore campaign data`);
-    await assert.rejects(context.loadWorkspace(), /fixture stops after campaign configuration/);
+    assert.equal(configurations, 0, `${pausedAt} response from before invalidation must not restore feature access`);
+    await assert.rejects(context.loadWorkspace(), /fixture stops after report configuration/);
     assert.equal(configurations, 1, "the fixture must reach configuration for a current session");
   }
 });

@@ -23,6 +23,10 @@ Session invalidation clears the entire protected dashboard, advances its generat
 Workspace refresh reads the user, membership, accounts and rules before applying the core snapshot, and only the newest refresh may apply it.
 User, workspace or role changes clear the preceding context before further reads; same-context refreshes preserve unrelated drafts and report snapshots.
 Discarding a context exposes reload immediately, and a failed replacement read reports its error even when the original action has been retired.
+Home bootstrap reads the core workspace snapshot and recent activity only; each menu shares its first feature load until the next core snapshot, and session reset retires that cache.
+Detailed reports live in the reports view, including legacy report section hashes; their context configuration still invalidates changed permissions or time zones before optional option-list reads.
+The explicit report-list refresh retries option reads without discarding unchanged report inputs or accepted CSV snapshots.
+The synthetic browser regression in `scripts/home-actions-acceptance.mjs` measures request counts and menu entry, report/CSV retention and role boundaries; it makes no production latency claim.
 Reports own their query and result invalidation: unchanged role, time zone and account options preserve them, while changed context resets them and a session reset retires pending responses.
 Flow and campaign report option lists can retry independently of report dates and results.
 An in-flight same-context refresh cannot overwrite a time zone saved after that refresh began; new contexts still take their membership's zone.

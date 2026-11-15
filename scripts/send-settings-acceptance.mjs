@@ -132,6 +132,8 @@
   };
   await page.start();
   await until(() => !get("workspace").hidden);
+  page.showView("inbox", false);
+  await page.loadView("inbox");
   await until(() => get("inbox-conversations").querySelector("button"));
   get("inbox-conversations").querySelector("button").click();
   await until(() => get("inbox-eligibility").textContent);
