@@ -2084,6 +2084,10 @@ section {
   position: fixed;
   inset: auto;
   max-width: min(32rem, calc(100vw - var(--space-8)));
+  /* A page scroll closes the popover, so text taller than the viewport scrolls inside it without moving the page. */
+  max-height: calc(100vh - var(--space-8));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   margin: 0;
   padding: var(--space-4);
   border: 1px solid var(--border);

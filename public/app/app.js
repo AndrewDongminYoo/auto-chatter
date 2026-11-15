@@ -1241,7 +1241,9 @@ document.addEventListener(
     const gap = 8;
     const left = Math.max(gap, Math.min(anchor.left, innerWidth - popover.offsetWidth - gap));
     const below = anchor.bottom + gap;
-    const top = below + popover.offsetHeight > innerHeight - gap ? Math.max(gap, anchor.top - popover.offsetHeight - gap) : below;
+    const preferred = below + popover.offsetHeight > innerHeight - gap ? anchor.top - popover.offsetHeight - gap : below;
+    // The stylesheet caps the height to the viewport, so the popover always fits between the gaps.
+    const top = Math.max(gap, Math.min(preferred, innerHeight - popover.offsetHeight - gap));
     popover.style.left = `${left}px`;
     popover.style.top = `${top}px`;
   },
