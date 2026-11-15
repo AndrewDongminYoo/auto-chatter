@@ -41,6 +41,7 @@ interface FlowModel {
   flowErrorMessage(code: string): string;
   flowKnownError(code: string): boolean;
   flowPlaceErrors(document: Doc, errors: FlowError[]): { placed: { node_id: string; code: string; message: string }[]; general: { code: string; message: string }[] };
+  flowTestDocument(source: string, draft: Doc, published: { version_no?: number; definition: unknown } | null | undefined): Doc | null;
   flowTestStatus(status: string): string;
   flowFailureMessage(code: string | null): string;
   flowOutcome(outcome: string): string;
@@ -149,6 +150,27 @@ test("a flow with a DM trigger is edited like any flow and its outline starts at
   assert.equal(summary("instagram_dm_keyword", { match_mode: "contains" }), "계정 미선택 · 키워드 포함: 키워드 미입력");
   assert.equal(summary("instagram_dm_default", { connection_id: connection }), "shop · 키워드 트리거에 맞지 않은 DM에 답장");
   assert.equal(summary("instagram_dm_default", { connection_id: "55555555-5555-4555-8555-555555555555" }), "알 수 없는 계정 · 키워드 트리거에 맞지 않은 DM에 답장");
+});
+
+test("the published source takes its test inputs from the published version's trigger, never the draft's (#305)", () => {
+  const comment = triggerDoc().document;
+  const dm = dmDoc("instagram_dm_default").document;
+  // A draft saved through the API can have the other trigger kind than the published version.
+  assert.equal(model.flowIsDmFlow(model.flowTestDocument("published", dm, { version_no: 1, definition: comment })!), false);
+  assert.equal(model.flowIsDmFlow(model.flowTestDocument("published", comment, { version_no: 1, definition: dm })!), true);
+  assert.equal(model.flowTestDocument("draft", dm, { version_no: 1, definition: comment }), dm);
+  assert.equal(model.flowTestDocument("draft", comment, null), comment);
+  // Not read yet, unreadable or failed: no document, so the editor sends nothing chosen from the draft.
+  for (const published of [null, undefined, { definition: null }, { version_no: 1, definition: { nodes: [] } }]) {
+    assert.equal(model.flowTestDocument("published", dm, published), null, JSON.stringify(published));
+  }
+  // The editor reads both the form and the request body through that document, not the draft.
+  const editor = source("../../public/app/flow-editor.js");
+  for (const name of ["syncTestForm", "testRunBody"]) {
+    const body = new RegExp(`function ${name}\\(\\) \\{([\\s\\S]*?)\\n  \\}`).exec(editor)![1]!;
+    assert.match(body, /testDocument\(\)/, name);
+    assert.doesNotMatch(body, /flowIsDmFlow\(draft\)/, name);
+  }
 });
 
 test("DM trigger configs keep the schema's keys and pass the publish and execution checks with one message", () => {

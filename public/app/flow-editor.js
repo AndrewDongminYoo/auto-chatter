@@ -22,6 +22,9 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
   let pathEdges = new Set();
   let pathRan = null;
   let numbers = {};
+  // The published version the test form reads its inputs from ({ version_no, definition }), null until read.
+  let testPublished = null;
+  let publishedRequest = 0;
   const openMenus = new Set();
   const isAdmin = () => ["owner", "admin"].includes(getRole());
   const canEdit = isAdmin;
@@ -133,6 +136,8 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     path = new Set();
     pathEdges = new Set();
     pathRan = null;
+    testPublished = null;
+    publishedRequest++;
     openMenus.clear();
     byId("flow-name").value = flow.name;
     byId("flow-conflict").hidden = true;
@@ -157,6 +162,8 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     draft = null;
     changes = 0;
     savedChanges = 0;
+    testPublished = null;
+    publishedRequest++;
     byId("flow-editor").hidden = true;
     byId("flow-test-result").replaceChildren();
   }
@@ -172,7 +179,8 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     byId("flow-toggle").textContent = current.enabled ? "끄기" : "켜기";
     byId("flow-toggle").disabled = busy || archived || (!current.enabled && !current.published);
     byId("flow-archive").disabled = busy || archived;
-    byId("flow-test-run").disabled = busy || archived;
+    // A published source waits for that version's trigger before it can send inputs chosen from it.
+    byId("flow-test-run").disabled = busy || archived || testDocument() === null;
     byId("flow-status").textContent = !isAdmin()
       ? "플로는 관리자와 소유자만 바꿀 수 있어 읽기 전용으로 보여 줍니다."
       : archived
@@ -845,10 +853,43 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
   // Test run
 
   const testFields = new Map();
+  // The document whose trigger decides the test inputs: the draft on screen, or the published version once it
+  // is read (null until then or when it cannot be read). Undefined for the published source of a flow with
+  // no published version, which the server refuses (flow_not_published) whatever the inputs.
+  function testDocument() {
+    const source = byId("flow-test-form").elements.source.value;
+    if (source === "published" && !current.published) return undefined;
+    return flowTestDocument(source, draft, testPublished);
+  }
+  // Reads the current published version for the test form. A response for another flow, session or a later
+  // read is dropped; a failed or unreadable read leaves the run disabled until the published source is chosen again.
+  let testReadFailure = null;
+  async function loadTestPublished() {
+    const session = epoch;
+    const editing = current;
+    const request = ++publishedRequest;
+    testPublished = null;
+    testReadFailure?.remove();
+    testReadFailure = null;
+    controls();
+    const published = await publishedVersion(editing.id);
+    if (session !== epoch || current !== editing || request !== publishedRequest) return;
+    testPublished = published;
+    // A failed read and a version whose definition cannot be read both leave the run disabled; say why.
+    if (flowTestDocument("published", draft, published) === null) {
+      testReadFailure = node("p", "발행 버전을 불러오지 못했습니다. 테스트할 버전을 다시 골라 주세요.", "form-error");
+      byId("flow-test-result").replaceChildren(testReadFailure);
+    }
+    controls();
+    syncTestForm();
+  }
   // A DM flow holds no tag or field condition, action or reply wait (dm_trigger_unsupported_node), so a test
-  // run of it reads only the text; the other inputs are hidden and not sent. The draft on screen decides.
+  // run of it reads only the text; the other inputs are hidden and not sent. The tested document decides:
+  // the draft on screen, or the published version, whose trigger can differ from the draft's (#305).
   function syncTestForm() {
-    const dm = flowIsDmFlow(draft);
+    const tested = testDocument();
+    if (!tested) return;
+    const dm = flowIsDmFlow(tested);
     byId("flow-test-text-label").textContent = dm ? "DM 내용" : "댓글 본문";
     for (const id of ["flow-test-tags", "flow-test-values", "flow-test-reply", "flow-test-branch"]) byId(id).hidden = dm;
   }
@@ -883,9 +924,12 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     byId("flow-test-fields").append(row);
     control.focus();
   }
+  // Null while the published version is not read, so no run is sent with inputs chosen from the draft.
   function testRunBody() {
     const values = byId("flow-test-form").elements;
-    if (flowIsDmFlow(draft)) return { source: values.source.value, comment_text: values.comment_text.value };
+    const tested = testDocument();
+    if (tested === null) return null;
+    if (!tested || flowIsDmFlow(tested)) return { source: values.source.value, comment_text: values.comment_text.value };
     return {
       source: values.source.value,
       comment_text: values.comment_text.value,
@@ -1052,6 +1096,12 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
         const published = await api(`/api/flows/${id}/publish`, "POST", { expected_revision: current.revision });
         if (session !== epoch || current?.id !== id) return;
         current.published = published.version_no;
+        // The version just published is the saved draft that was checked, so the test form reads its trigger.
+        publishedRequest++;
+        testPublished = { version_no: published.version_no, definition: checked };
+        testReadFailure?.remove();
+        testReadFailure = null;
+        syncTestForm();
         clearErrors();
         renderOutline();
         renderGraph();
@@ -1134,9 +1184,23 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     });
   });
   byId("flow-test-add-field").addEventListener("click", addTestField);
+  byId("flow-test-form").elements.source.addEventListener("change", (event) => {
+    if (!current) return;
+    if (event.currentTarget.value === "published" && current.published) void loadTestPublished();
+    else {
+      // The draft source, or no published version to read: a read still in flight is dropped.
+      publishedRequest++;
+      testReadFailure?.remove();
+      testReadFailure = null;
+      controls();
+      syncTestForm();
+    }
+  });
   byId("flow-test-form").addEventListener("submit", (event) => {
     event.preventDefault();
     const body = testRunBody();
+    // The run stays disabled until the published version's trigger is read; Enter must not bypass that.
+    if (!body) return;
     if (body.source === "draft" && dirty()) {
       notice("저장하지 않은 변경 사항이 있습니다. 초안을 테스트하려면 먼저 저장해 주세요.", true);
       return;
