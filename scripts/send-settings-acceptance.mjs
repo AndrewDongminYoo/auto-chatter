@@ -20,6 +20,7 @@
     workspace: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
     role: "owner",
     zone: "Asia/Seoul",
+    connectAvailable: true,
     globalEnabled: false,
     replyAllowed: false,
     offline: false,
@@ -55,7 +56,7 @@
     if (fixture.unauthorized && (route === "/api/me" || route === "/api/auth/refresh")) return Response.json({ error: "login_required" }, { status: 401 });
     if (route === "/api/me") {
       if (fixture.offline) throw new TypeError("Synthetic network failure");
-      return Response.json({ user: { id: fixture.user }, global_send_enabled: fixture.globalEnabled, instagram_connect_available: true });
+      return Response.json({ user: { id: fixture.user }, global_send_enabled: fixture.globalEnabled, instagram_connect_available: fixture.connectAvailable });
     }
     if (route === "/api/auth/logout" && fixture.logoutFailure) return Response.json({ error: "remote_logout_unconfirmed" }, { status: 503 });
     if (route.startsWith("/api/auth/")) return Response.json({ ok: true });
@@ -179,12 +180,17 @@
   check(get("delivery-title").textContent.includes("확인하지 못했습니다"), "Failed read retained a positive state");
   check(get("rule-send-settings").textContent.includes("다시 확인"), "Editor omitted failed read");
   preserved();
+  check(!get("inbox-send").disabled, "Unknown global guidance replaced server reply eligibility");
   fixture.offline = false;
   await refresh();
   check(get("delivery-title").textContent.includes("켜져"), "Successful retry failed to recover");
   account.credential_status = "expired";
   await page.loadWorkspace();
   check(get("rule-send-settings").textContent.includes("다시 연결"), "Expired token omitted reconnection");
+  fixture.connectAvailable = false;
+  await page.loadWorkspace();
+  check(get("connect").disabled && get("rule-send-settings").textContent.includes("연결 제한이 해제된 뒤"), "Restricted connection action contradicted contextual guidance");
+  fixture.connectAvailable = true;
   account.credential_status = "valid";
   account.active = false;
   await page.loadWorkspace();

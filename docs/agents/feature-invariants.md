@@ -28,6 +28,7 @@ Flow and campaign report option lists can retry independently of report dates an
 An in-flight same-context refresh cannot overwrite a time zone saved after that refresh began; new contexts still take their membership's zone.
 Network failures keep the existing workspace visible with a retry action; only an authentication refusal shows login, and secondary reads retain their feature-level failure handling.
 Actions lock their own form; rule controls additionally follow the rule save's busy state, and a session reset retires action cleanup so an old completion cannot restore a new session's controls.
+Account and rule notices expose polite status regions and skip identical text updates; contextual reconnection instructions respect the service connection restriction.
 Send settings guidance shares one display policy across home, accounts, rule editor and the selected inbox conversation; it never grants delivery eligibility or changes manual reply controls.
 A failed service-wide settings reread marks the displayed setting unknown, preserves drafts and filters, and ignores responses retired by a workspace or session change.
 The account guidance uses the last workspace snapshot and distinguishes token expiry from verified provider authorization; `scripts/send-settings-acceptance.mjs` exercises the synthetic settings combinations and input preservation.

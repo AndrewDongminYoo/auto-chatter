@@ -264,3 +264,38 @@ test("send guidance distinguishes switches, unknown reads and connection checks 
   assert.match(summarize(true, { ...account, active: false }), /수신 설정/);
   assert.match(summarize(true, account), /연결 권한.*확인되지/);
 });
+
+test("context guidance respects a restricted connection action", () => {
+  const text = state.globalSendDeliveryStatus(true, false, { credential_status: "expired" });
+  assert.match(text, /연결.*제한/);
+  assert.doesNotMatch(text, /다시 연결해 주세요/);
+});
+
+test("account and rule notices announce changed settings without rewriting identical text", () => {
+  const attributes = new Map<string, string>();
+  let text = "",
+    writes = 0;
+  const element = {
+    setAttribute: (name: string, value: string) => attributes.set(name, value),
+    get textContent() {
+      return text;
+    },
+    set textContent(value: string) {
+      text = value;
+      writes++;
+    },
+  };
+  const updates: (() => void)[] = [];
+  const page = vm.createContext({ globalSendEnabled: true, instagramConnectAvailable: true, globalSendBadges: updates, node: () => element });
+  vm.runInContext(read("global-send-state.js"), page);
+  vm.runInContext(appFunction("sendSettingsNotice"), page);
+  page.sendSettingsNotice({ credential_status: "valid", active: true, send_enabled: true });
+  assert.equal(attributes.get("role"), "status");
+  assert.equal(attributes.get("aria-live"), "polite");
+  updates[0]();
+  assert.equal(writes, 1);
+  page.globalSendEnabled = null;
+  updates[0]();
+  assert.equal(writes, 2);
+  assert.match(text, /다시 확인/);
+});

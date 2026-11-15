@@ -1333,8 +1333,11 @@ function renderSendSettings() {
 }
 function sendSettingsNotice(account, ruleEnabled) {
   const element = node("p", "", "hint");
+  element.setAttribute("role", "status");
+  element.setAttribute("aria-live", "polite");
   const update = () => {
-    element.textContent = globalSendDeliveryStatus(globalSendEnabled, instagramConnectAvailable, account, ruleEnabled);
+    const text = globalSendDeliveryStatus(globalSendEnabled, instagramConnectAvailable, account, ruleEnabled);
+    if (element.textContent !== text) element.textContent = text;
   };
   update();
   globalSendBadges.push(update);

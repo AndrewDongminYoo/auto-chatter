@@ -34,7 +34,7 @@ function globalSendDeliveryTitle(globalSendEnabled) {
  * @returns {string} Settings guidance.
  */
 function globalSendDeliveryStatus(globalSendEnabled, connectAvailable, account, ruleEnabled) {
-  if (arguments.length > 2) return sendSettingsSummary(globalSendEnabled, account, ruleEnabled);
+  if (arguments.length > 2) return sendSettingsSummary(globalSendEnabled, connectAvailable, account, ruleEnabled);
   if (globalSendEnabled === null) return "상태를 다시 확인해 주세요. 이전 설정으로 현재 발송 여부를 판단할 수 없습니다.";
   if (globalSendEnabled) return "계정과 규칙 설정, 수신 동의 등 발송 조건은 별도로 확인합니다. 설정을 켜도 실제 발송·전달을 보장하지 않습니다.";
   return connectAvailable
@@ -67,20 +67,23 @@ function globalSendRuleBadge(ruleEnabled, globalSendEnabled) {
 /**
  * Describes settings only; the server remains authoritative for each recipient and send.
  * @param {boolean | null} globalEnabled
+ * @param {boolean} connectAvailable
  * @param {object} [account] The last workspace snapshot, not a live Meta verification.
  * @param {boolean} [ruleEnabled] The editor may pass its unsaved switch value.
  * @returns {string}
  */
-function sendSettingsSummary(globalEnabled, account, ruleEnabled) {
+function sendSettingsSummary(globalEnabled, connectAvailable, account, ruleEnabled) {
   const reasons = [];
   if (globalEnabled === null) reasons.push("전체 발송 설정을 확인하지 못했습니다. 상태를 다시 확인해 주세요.");
   else if (!globalEnabled) reasons.push("전체 발송 중지 · 서비스 운영자가 재개해야 합니다.");
-  if (!account) reasons.push("계정을 선택하고 연결 상태를 확인해 주세요.");
+  if (!connectAvailable) reasons.push("새 Instagram 연결이 제한되어 있습니다. 연결이 필요하면 서비스 운영자에게 제한 해제를 요청하세요.");
+  if (!account) reasons.push(connectAvailable ? "계정을 선택하고 연결 상태를 확인해 주세요." : "연결 제한이 해제된 뒤 계정을 연결해 주세요.");
   else {
     if (account.send_enabled) reasons.push("계정 발송 설정 켜짐.");
     if (!account.send_enabled) reasons.push("계정 발송 설정 꺼짐 · 계정 관리자에게 발송 설정 켜기를 요청하세요.");
     if (!account.active) reasons.push("계정 수신 설정 꺼짐 · 계정 관리자에게 수신 설정 확인을 요청하세요.");
-    if (account.credential_status !== "valid" || account.reauth_required_at || account.deauthorized_at) reasons.push("연결 확인 필요 · 계정 관리자가 같은 Instagram 계정을 다시 연결해 주세요.");
+    if (account.credential_status !== "valid" || account.reauth_required_at || account.deauthorized_at)
+      reasons.push(connectAvailable ? "연결 확인 필요 · 계정 관리자가 같은 Instagram 계정을 다시 연결해 주세요." : "연결 확인 필요 · 연결 제한이 해제된 뒤 계정 관리자가 같은 Instagram 계정을 다시 연결할 수 있습니다.");
     else reasons.push("토큰 만료 전 · 연결 권한과 실제 발송 가능 여부는 확인되지 않았습니다.");
     if (account.subscription_missing_at) reasons.push("웹후크 구독 확인 필요 · 계정 관리자가 Meta 상태를 확인해 주세요.");
   }
