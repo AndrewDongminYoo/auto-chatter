@@ -888,8 +888,8 @@ test("the app's other-tab session signal and BFCache restoration reset the campa
   const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
   const start = source.indexOf("const invalidateContactSession = () => {");
   const body = source.slice(start, source.indexOf("\n};", start));
-  assert.match(body, /resetSession\(\)/);
-  const reset = source.slice(source.indexOf("function resetSession()"), source.indexOf("function notice("));
+  assert.match(body, /resetSession\(\{ broadcast: false \}\)/);
+  const reset = source.slice(source.indexOf("function resetSession("), source.indexOf("function notice("));
   assert.match(reset, /campaignDrafts\.reset\(\)/);
   assert.match(source, /addEventListener\("message"[\s\S]{0,120}invalidateContactSession\(\)/);
   assert.match(source, /addEventListener\("pageshow"[\s\S]{0,80}event\.persisted\) invalidateContactSession\(\)/);

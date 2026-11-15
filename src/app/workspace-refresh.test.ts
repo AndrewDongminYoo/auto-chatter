@@ -241,3 +241,100 @@ test("an unrelated action cannot unlock a rule save already in progress", async 
   await context.action(button, async () => {});
   assert.equal(save.disabled, true);
 });
+
+test("two documents clear a session change without rebroadcasting it", () => {
+  const deliveries: (() => void)[] = [];
+  const channels: SessionChannel[] = [];
+  let broadcasts = 0;
+  class SessionChannel {
+    listeners: ((event: { data: unknown }) => void)[] = [];
+    constructor() {
+      channels.push(this);
+    }
+    addEventListener(_name: string, listener: (event: { data: unknown }) => void) {
+      this.listeners.push(listener);
+    }
+    postMessage(data: unknown) {
+      broadcasts++;
+      for (const channel of channels) {
+        if (channel !== this) deliveries.push(() => channel.listeners.forEach((listener) => listener({ data })));
+      }
+    }
+  }
+  const document = (sessionSource: string) => {
+    const noop = () => {};
+    const element = () => ({ hidden: false, value: "", disabled: false, reset: noop, replaceChildren: noop, addEventListener: noop, removeAttribute: noop });
+    const nodes = new Map<string, ReturnType<typeof element>>();
+    const byId = (id: string) => {
+      if (!nodes.has(id)) nodes.set(id, element());
+      return nodes.get(id)!;
+    };
+    const context = vm.createContext({
+      document: { getElementById: byId },
+      byId,
+      window: { addEventListener: noop },
+      BroadcastChannel: SessionChannel,
+      Option: class {},
+      contactSessionSource: sessionSource,
+      pendingActions: new Map(),
+      contactsDirty: new Set(),
+      purgedContactConnections: new Set(),
+      mediaCache: new Map(),
+      healthResults: new Map(),
+      ruleMediaObserver: { disconnect: noop },
+      form: { reset: noop, elements: { media_id: element(), connection_id: element() } },
+      startupRequest: 0,
+      workspaceGeneration: 0,
+      globalSendRevision: 0,
+      contactsGeneration: 0,
+      segmentsGeneration: 0,
+      fieldsGeneration: 0,
+      mediaSession: 0,
+      fieldFilterRows: () => [],
+    });
+    for (const name of ["campaignDrafts", "segmentSnapshots", "manualReports", "flowReports", "handoffReports", "campaignReports", "flowEditor"]) context[name] = { reset: noop };
+    for (const name of [
+      "invalidateContactExport",
+      "resetInbox",
+      "clearActionErrors",
+      "planControls",
+      "timeZoneControls",
+      "hideInviteLink",
+      "hideWebhookSecret",
+      "renderConditionTree",
+      "leaveSegmentEdit",
+      "fieldControls",
+      "segmentControls",
+      "contactTagControls",
+      "showFieldRows",
+      "fieldFilterControls",
+      "contactActivityControls",
+      "contactConsentControls",
+      "resetMedia",
+      "formConditions",
+      "ruleControls",
+      "editorState",
+      "notice",
+    ])
+      context[name] = noop;
+    vm.runInContext(readFileSync(new URL("../../public/app/contact-csv-preview.js", import.meta.url), "utf8"), context);
+    context.contactCsvPreview = context.createContactCsvPreview({ api: noop, node: element, sessionSource });
+    const resetStart = source.indexOf("function resetSession(");
+    vm.runInContext(source.slice(resetStart, source.indexOf("\n}", resetStart) + 2), context);
+    const listenerStart = source.indexOf("const invalidateContactSession = () => {");
+    vm.runInContext(source.slice(listenerStart, source.indexOf("// End contact session listeners.", listenerStart)), context);
+    return { context, byId };
+  };
+  const first = document("document-a");
+  const second = document("document-b");
+  first.context.resetSession();
+  // Drain the actual listener/controller graph with a finite queue instead of relying on timing.
+  for (let count = 0; deliveries.length && count < 20; count++) deliveries.shift()!();
+  assert.equal(broadcasts, 1, "a received invalidation must not publish a new source marker");
+  assert.equal(deliveries.length, 0, "the cross-document message queue must settle");
+  assert.equal(first.context.workspaceGeneration, 1);
+  assert.equal(second.context.workspaceGeneration, 1);
+  assert.equal(second.byId("workspace").hidden, true);
+  assert.equal(second.byId("auth").hidden, true);
+  assert.equal(second.byId("retry-load").hidden, false);
+});

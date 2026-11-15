@@ -107,7 +107,7 @@ test("the dashboard wires the notice and action errors through these decisions",
     /^ {2}if \(viewChangeClearsMessages\(currentView, name\)\) \{\n {4}notice\(""\);\n {4}clearActionErrors\(\);\n {2}\}\n {2}currentView = name;/m,
     "a menu change clears the notice and the action errors, comparing with the previous view before replacing it",
   );
-  const reset = app.match(/function resetSession\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const reset = app.match(/function resetSession\([^\n]*\) \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.match(reset, /\n {2}clearActionErrors\(\);\n/, "a sign-out or session expiry clears the action errors");
   const clearAll = app.match(/function clearActionErrors\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.match(clearAll, /document\.querySelectorAll\("\.action-error"\)\) element\.remove\(\);/);

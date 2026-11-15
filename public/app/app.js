@@ -49,7 +49,7 @@ const pendingActions = new Map();
 // Invalidate contact disclosures on cross-tab sessions and BFCache restoration.
 const invalidateContactSession = () => {
   startupRequest++;
-  resetSession();
+  resetSession({ broadcast: false });
   byId("auth").hidden = true;
   byId("retry-load").hidden = false;
   notice("로그인 상태를 다시 확인해야 합니다. ‘다시 불러오기’를 눌러 작업 공간을 확인해 주세요.");
@@ -229,7 +229,7 @@ window.addEventListener("beforeunload", (event) => {
     event.returnValue = "";
   }
 });
-function resetSession() {
+function resetSession({ broadcast = true } = {}) {
   for (const [button, restore] of pendingActions) {
     // Auth actions intentionally cross this boundary and still own their final outcome notice.
     if (button === byId("logout") || button.closest("#auth")) continue;
@@ -242,7 +242,9 @@ function resetSession() {
   workspaceRules = [];
   globalSendBadges = [];
   campaignDrafts.reset();
-  contactCsvPreview.sessionChanged();
+  // Receiving another document's change must not start a broadcast feedback loop.
+  if (broadcast) contactCsvPreview.sessionChanged();
+  else contactCsvPreview.reset();
   segmentSnapshots.reset();
   manualReports.reset();
   flowReports.reset();
