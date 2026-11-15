@@ -24,4 +24,4 @@ PR #210의 병합 커밋 `bc6fd8ef7b5fffcc3fc03775215f9e2c9192aee3`을 기준으
 최종 검사는 `corepack pnpm test`, 격리된 UTF8 PostgreSQL의 `corepack pnpm test:db`, `corepack pnpm test:cloudflare`, 변경 파일을 지정한 Trunk 검사입니다.
 예약 시각 전에 발송하지 않음·성공한 취소 후 POST 없음·실제 POST 직전 권한 재검사는 실제 워커를 호출하는 테스트로 검증합니다.
 화면 검증은 합성 API이며 운영 DB·Meta 권한·실제 DM 도착을 증명하지 않습니다.
-병합과 배포는 별도 권한이며 새 PR의 화면 승인은 운영자에게 받습니다.
+병합과 배포는 별도 권한이며 새 PR의 화면 승인은 별도로 받습니다.

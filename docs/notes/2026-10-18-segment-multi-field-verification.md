@@ -94,7 +94,7 @@ node --test --test-name-pattern='field_conditions set|one to three field conditi
 [UNVERIFIED: real browser] 실제 브라우저로는 실행하지 않았습니다.
 저장소의 `node_modules`에는 Playwright가 없고, 이 컴퓨터의 Playwright 캐시에는 Chromium revision 1248만 있습니다.
 그보다 큰 이유는 대시보드를 띄우려면 실제 Supabase 인증 세션과 workerd 실행 환경이 필요하다는 점입니다.
-운영자가 확인할 항목은 다음과 같습니다.
+제가 확인할 항목은 다음과 같습니다.
 
 - 첫 행에 필드를 고르면 "추가 정보 조건 추가"가 나타나고 최대 3행까지 열리며, 필드를 고른 행이 두 개 이상일 때만 "여러 정보 결합"을 고를 수 있습니다.
 - 행마다 필드 타입에 맞는 조건 선택지와 값 입력이 보이고, 2·3행 삭제가 뒤 행을 올립니다.

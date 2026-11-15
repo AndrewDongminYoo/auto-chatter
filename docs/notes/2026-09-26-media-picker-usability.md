@@ -55,7 +55,7 @@ API와 화면 상태를 분리해 독립 적대적 리뷰를 실행했습니다.
 - 실제 Meta 게시물 목록 응답과 권한은 배포 전에 확인해야 합니다.
 - 처음 사용하는 사람의 과제 성공률과 완료 시간은 측정하지 않았습니다.
 - 공개 PR의 현재 head CI와 호스팅 리뷰는 별도 관문입니다.
-- 구현 화면에 대한 운영자 승인은 병합 전에 별도로 받습니다.
+- 구현 화면에 대한 승인은 병합 전에 별도로 받습니다.
 
 Meta 개발자 문서는 로그인 요구 또는 429로 조회가 제한됐습니다.
 필드 참고 자료는 [Meta 공식 IGMedia SDK](https://github.com/facebook/facebook-nodejs-business-sdk/blob/main/src/objects/ig-media.js)이며, 이 자료만으로 Instagram Login의 실제 권한을 검증했다고 간주하지 않습니다.

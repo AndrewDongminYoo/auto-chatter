@@ -56,7 +56,7 @@ PostgreSQL 17.11_1의 별도 로컬 클러스터(`127.0.0.1:55437/automations_te
 브라우저는 종료했습니다.
 전체 로그인 흐름이나 실제 API와 연결한 대시보드를 검증한 것은 아니며, API 통합은 앞의 DB·workerd 검사로 별도 확인했습니다.
 캡처와 합성 fixture는 `/Users/dongminyu/Development/01_personal/pr-loop-reviews/auto-chatter/2026-10-19-segment-snapshot-comparison/`에 보존합니다.
-운영자의 화면 승인은 아직 받지 않았습니다.
+화면 승인은 아직 받지 않았습니다.
 
 ## 문서와 선례
 

@@ -83,7 +83,7 @@ node --test --test-name-pattern='tag filters repeat|legacy tag or a set' src/app
 저장소의 `node_modules`에는 Playwright가 없습니다.
 이 컴퓨터에는 전역 `@playwright/cli@0.1.15`가 Playwright 라이브러리를 함께 설치해 두었지만, 이 라이브러리가 요구하는 Chromium revision 1229가 캐시에 없고 캐시에는 revision 1248만 있어 `executablePath`를 따로 지정하지 않으면 실행되지 않습니다.
 그보다 큰 이유는 대시보드를 띄우려면 실제 인증 세션과 workerd 실행 환경이 필요하다는 점입니다.
-운영자가 확인할 항목은 다음과 같습니다.
+제가 확인할 항목은 다음과 같습니다.
 
 - 태그 입력칸에 값을 넣으면 다음 칸이 나타나고 최대 5칸까지 보이며, 서로 다른 태그가 두 개 이상일 때만 "여러 태그 결합"을 고를 수 있습니다.
 - 미리보기와 목록이 고른 모드를 따르고, 태그 제외 사유가 집계됩니다.

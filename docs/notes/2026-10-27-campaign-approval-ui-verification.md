@@ -4,7 +4,7 @@
 
 [#35](https://github.com/AndrewDongminYoo/auto-chatter/issues/35)의 후속 범위로, PR #264의 실행 승인 API를 관리자 캠페인 초안 상세에 표시하고 조작하는 화면을 추가했습니다.
 기준 로컬 HEAD는 `e3523cb`입니다.
-2026-10-27 운영자가 계획을 승인했습니다.
+2026-10-27 계획을 승인했습니다.
 변경 파일은 `public/app/campaign-drafts.js`, `public/app/app.js`, `public/app/index.html`, `public/app/styles.css`, `src/app/campaign-drafts.test.ts`와 문서입니다.
 서버 코드·DB 스키마·migration·의존성은 변경하지 않았고 새로 제공되는 정적 파일도 없습니다.
 `app.js`의 변경은 공용 API 래퍼가 409 응답의 `approval`·`draft`를 오류 객체에 전달하는 두 줄과, 승인한 사람을 ‘나’로 표시하기 위한 현재 사용자 ID 전달입니다.

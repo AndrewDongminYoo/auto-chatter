@@ -15,7 +15,7 @@
 5. 타입·전체 unit/DB/workerd·Trunk → 검증: check-types, test, test:db, test:cloudflare, trunk check.
 6. 로컬 적대적 코드·보안 검토와 수정 → 검증: 실제 후보 diff, 실패 재현과 수정 후 관련 테스트.
 7. 작은 의미 단위 커밋·푸시·PR → 검증: 현재 head CI, Code Review와 Security Review, 모든 리뷰 thread와 적용 가능한 CodeRabbit 신호.
-8. 운영자 merge 요청 → 검증: 원격 PR head와 로컬 HEAD 일치; 화면 변경 없음.
+8. merge 요청 → 검증: 원격 PR head와 로컬 HEAD 일치; 화면 변경 없음.
 
 ## 위험과 경계
 

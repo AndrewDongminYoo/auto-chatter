@@ -22,7 +22,7 @@
 6. `CLAUDE.md`, 기존 연락처·세그먼트·미리보기 명세, 수용 매트릭스와 새 검증 기록을 같은 PR에서 맞춥니다.
    README·AGENTS는 해당 설명을 대조하고 기존 검증 이력은 보존합니다.
 7. 타입·단위·격리된 UTF-8 DB·Cloudflare·변경 경로 Trunk 검사와 독립 로컬 리뷰를 마친 뒤 커밋·PR·호스팅 CI/리뷰를 진행합니다.
-   병합 전 운영자의 화면 승인을 받고 병합은 운영자에게 맡깁니다.
+   병합 전 화면 승인을 받고 병합은 제가 직접 합니다.
 
 최소 검사 명령은 `corepack pnpm check-types`, `corepack pnpm test`, 격리된 로컬 `automations_test`의 `corepack pnpm test:db`·`corepack pnpm test:cloudflare`, `trunk check --no-fix <변경 경로>`입니다.
 

@@ -16,7 +16,7 @@ Advisor의 조정 의견을 반영해 생성 기간의 현재 실행 상태와 �
 5. README·CLAUDE·역할 명세·수용 기준표의 변경된 주장과 검증 기록을 같은 PR에서 갱신합니다.
 6. `corepack pnpm check-types`, `corepack pnpm test`, 격리 DB의 `corepack pnpm test:db`·`corepack pnpm test:cloudflare`, 변경 경로 Trunk 검사를 통과시킵니다.
 7. 규모에 맞는 독립 검토와 적대적 점검, 의미별 커밋·푸시·PR, 현재 커밋의 CI·코드·보안 리뷰를 이어갑니다.
-8. 화면 자료를 보존하고 운영자의 시각 승인과 merge commit 병합을 요청합니다.
+8. 화면 자료를 보존하고 시각 승인과 merge commit 병합을 요청합니다.
 
 ## 제한
 

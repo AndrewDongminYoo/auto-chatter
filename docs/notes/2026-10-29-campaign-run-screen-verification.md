@@ -4,7 +4,7 @@
 
 [#36](https://github.com/AndrewDongminYoo/auto-chatter/issues/36)의 세 번째 PR(③ 화면)로, 실행된 승인 아래에 실행 현황과 실행 취소를 표시하는 관리자 화면을 추가했습니다.
 기준 로컬 HEAD는 `9ecc418`입니다.
-2026-10-29 운영자가 계획을 승인했고, 자동 갱신 없이 명시적 새로고침만 쓰기로 했습니다.
+2026-10-29 계획을 승인했고, 자동 갱신 없이 명시적 새로고침만 쓰기로 했습니다.
 변경 파일은 `public/app/campaign-drafts.js`, `public/app/app.js`, `public/app/index.html`, `public/app/styles.css`, `src/app/campaign-drafts.test.ts`와 문서입니다.
 서버 코드, DB 스키마, migration, 의존성, `SEND_ENABLED`는 바꾸지 않았습니다. 승인 응답에 이미 `run_id`가 있어 서버 API를 추가할 필요가 없었습니다.
 `app.js`의 변경은 공용 API 래퍼가 409 응답의 `run`을 오류 객체에 전달하는 한 줄입니다.

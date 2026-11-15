@@ -4,7 +4,7 @@
 
 최대 10회 ManyChat 대체 PR 루프의 4회차로 연락처별 자동화 중지·재개를 추가한다.
 기존 main 작업 공간과 `codex/contact-automation-control` 브랜치를 사용한다.
-병합은 운영자가 수행하고 운영 마이그레이션·배포·실발송은 하지 않는다.
+병합은 제가 수행하고 운영 마이그레이션·배포·실발송은 하지 않는다.
 
 ## 순서와 검증
 
@@ -21,7 +21,7 @@
 6. `corepack pnpm check-types`, `corepack pnpm test`, 별도 로컬 DB의 `corepack pnpm test:db`, `corepack pnpm test:cloudflare`, 명시적 경로 Trunk를 실행한다.
 7. 서버 전달·데이터 경계와 화면 상태를 독립적으로 적대적 리뷰하고 확인된 오류만 수정한다.
 8. DB/API·워커·화면·문서를 의미 단위로 커밋하고 PR을 만든다.
-   현재 head의 CI·코드·보안 리뷰와 운영자 시각 승인을 거친다.
+   현재 head의 CI·코드·보안 리뷰와 시각 승인을 거친다.
 
 ## 소유 경로
 

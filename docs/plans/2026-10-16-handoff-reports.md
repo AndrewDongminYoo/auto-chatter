@@ -17,7 +17,7 @@ PR #213의 화면 확인·병합 후 다음 이슈 선정과 pr-loop를 계속 �
 5. README·CLAUDE·역할 명세·수용표와 검증 기록을 같은 PR에서 갱신합니다.
 6. `corepack pnpm check-types`, `corepack pnpm test`, 격리 DB의 `corepack pnpm test:db`·`corepack pnpm test:cloudflare`, 변경 경로 Trunk 검사를 통과시킵니다.
 7. 독립 API·UI 검토와 루트의 적대적 점검 후 의미별 커밋·푸시·PR을 만들고 현재 커밋의 CI·코드·보안 리뷰를 확인합니다.
-8. 화면 검토 자료를 보존하고 운영자 시각 승인과 merge commit 병합을 요청합니다.
+8. 화면 검토 자료를 보존하고 시각 승인과 merge commit 병합을 요청합니다.
 
 ## 제한
 

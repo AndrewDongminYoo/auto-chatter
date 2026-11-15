@@ -4,7 +4,7 @@
 
 [#35](https://github.com/AndrewDongminYoo/auto-chatter/issues/35)의 후속 범위로, PR #258의 읽기 전용 미리보기 API(`GET /api/campaign-drafts/:id/preview`)를 관리자 캠페인 초안 상세에 표시하는 화면을 추가했습니다.
 기준 로컬 HEAD는 `52263dd`입니다.
-2026-10-26 운영자가 계획을 승인했습니다(명시적 버튼으로만 조회, 상단 경고와 사유별 표).
+2026-10-26 계획을 승인했습니다(명시적 버튼으로만 조회, 상단 경고와 사유별 표).
 변경 파일은 `public/app/campaign-drafts.js`, `public/app/index.html`, `public/app/styles.css`, `src/app/campaign-drafts.test.ts`와 문서이며 서버 코드·DB 스키마·migration·의존성은 변경하지 않았습니다.
 새로 제공되는 정적 파일은 없습니다.
 화면 계약은 [관리 화면의 발송 조건 미리보기 화면](../specs/2026-10-21-campaign-drafts.md#발송-조건-미리보기-화면)에 기록합니다.

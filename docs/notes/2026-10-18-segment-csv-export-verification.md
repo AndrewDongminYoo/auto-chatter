@@ -66,7 +66,7 @@ node --test --test-name-pattern='segment CSV export' src/app/api.test.ts
 
 [UNVERIFIED: real browser] 실제 브라우저로는 실행하지 않았습니다.
 대시보드를 띄우려면 실제 Supabase 인증 세션과 workerd 실행 환경이 필요하고, 저장소의 `node_modules`에는 Playwright가 없습니다.
-운영자가 확인할 항목은 다음과 같습니다.
+제가 확인할 항목은 다음과 같습니다.
 
 - 소유자·관리자에게만 "전체 연락처 CSV" 옆에 "선택한 필터로 내보내기"와 안내 문구가 보입니다.
 - 저장된 필터를 고르지 않았을 때, 조건을 직접 바꿔 선택이 풀렸을 때, 필터 수정 중 조건이나 이름을 바꿨을 때, 필터 저장·보관 중, 다른 내보내기 중에는 버튼을 누를 수 없습니다.

@@ -134,7 +134,7 @@ Meta 문서는 Instagram Login의 Deauthorize 콜백이 어떤 ID를 담는지 �
 ### 주기와 대상
 
 - 예약 단계 `subscription_check`는 `token_refresh` 바로 뒤에 실행합니다. 전역 발송이 꺼져 있어도 수신은 구독에 달려 있으므로 실행합니다.
-- 연결 하나는 `SUBSCRIPTION_CHECK_INTERVAL_HOURS`마다 한 번만 시도하고, 한 실행은 `SUBSCRIPTION_CHECKS_PER_RUN`개까지 확인합니다. 두 값은 운영자 결정(2026-10-11)이며 `src/app/instagram-subscription-check.ts`가 소유합니다. 확인 한 번은 Meta GET 두 번(`me?fields=user_id`, `subscribed_apps`)이며, 예약 작업의 [호출당 subrequest 예산](2026-10-01-flow-webhook-delivery.md#전달)을 함께 씁니다.
+- 연결 하나는 `SUBSCRIPTION_CHECK_INTERVAL_HOURS`마다 한 번만 시도하고, 한 실행은 `SUBSCRIPTION_CHECKS_PER_RUN`개까지 확인합니다. 두 값은 2026-10-11 결정이며 `src/app/instagram-subscription-check.ts`가 소유합니다. 확인 한 번은 Meta GET 두 번(`me?fields=user_id`, `subscribed_apps`)이며, 예약 작업의 [호출당 subrequest 예산](2026-10-01-flow-webhook-delivery.md#전달)을 함께 씁니다.
 - 대상은 수신 중(`active`)이고 토큰이 있으며 만료되지 않았고 권한 해제 기록(`deauthorized_at`)이 없는 연결 가운데, 시도한 적이 없거나 마지막 시도에서 주기가 지난 연결입니다. 시도한 적이 없는 연결부터, 그다음 가장 오래전에 시도한 연결부터 고릅니다.
 - claim은 `token_refresh`처럼 `FOR UPDATE SKIP LOCKED`로 한 행씩 고르고 같은 문장에서 `subscription_check_attempted_at`을 씁니다. 그래서 일시적인 실패가 계속돼도 매분이 아니라 주기마다 다시 시도합니다. 연결 상태 수동 확인도 이 시각을 쓰므로, 수동으로 확인한 토큰은 예약 작업이 한 주기 동안 다시 확인하지 않습니다.
 

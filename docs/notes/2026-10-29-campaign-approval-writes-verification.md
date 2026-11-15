@@ -3,7 +3,7 @@
 ## 범위
 
 [#277](https://github.com/AndrewDongminYoo/auto-chatter/issues/277)과 [#278](https://github.com/AndrewDongminYoo/auto-chatter/issues/278)을 한 PR에서 다룹니다.
-2026-10-29 운영자가 계획을 승인했고, 같은 날 #278을 이 PR에 더했습니다.
+2026-10-29 계획을 승인했고, 같은 날 #278을 이 PR에 더했습니다.
 변경 파일은 `public/app/campaign-drafts.js`, `public/app/index.html`, `src/app/campaign-drafts.test.ts`, `src/app/segment-snapshots.db.test.ts`와 문서입니다.
 서버 코드, API, DB 스키마, migration, 의존성, `SEND_ENABLED`는 바꾸지 않았습니다.
 화면 계약은 [실행 승인 화면](../specs/2026-10-21-campaign-drafts.md#실행-승인-화면)의 2026-10-29 보강 항목에 기록합니다.

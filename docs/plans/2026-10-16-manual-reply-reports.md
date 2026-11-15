@@ -18,7 +18,7 @@
    `AGENTS.md`는 CLAUDE 위임이 여전히 맞는지 확인합니다.
 6. `corepack pnpm check-types`, `corepack pnpm test`, 격리 DB의 `corepack pnpm test:db`, `corepack pnpm test:cloudflare`와 변경 경로의 Trunk 검사를 수행합니다.
 7. 최종 변경 규모에 맞는 독립 검토와 적대적 재검토 후 의미별 커밋, 푸시, PR 및 현재 커밋의 호스팅 리뷰·CI를 진행합니다.
-8. 화면 자료를 보존하고 운영자의 시각 승인과 병합을 요청합니다.
+8. 화면 자료를 보존하고 시각 승인과 병합을 요청합니다.
 
 ## 호스팅 리뷰 보완
 

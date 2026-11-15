@@ -2,7 +2,7 @@
 
 ## 증상과 원인
 
-운영자가 `/api/auth/signup`의 HTTP 503을 보고했습니다.
+`/api/auth/signup`에서 HTTP 503을 받았습니다.
 동일한 운영 Worker에서 존재하지 않는 진단 계정의 로그인 요청도 503 `auth_unavailable`을 반환했고, 같은 로그인 요청을 Supabase Auth에 직접 보냈을 때는 400 `invalid_credentials`였습니다.
 진단에는 예약된 `example.invalid` 주소를 사용했으며 사용자 생성이나 이메일 발송은 수행하지 않았습니다.
 
@@ -48,11 +48,11 @@ trunk check --no-fix src/app/auth.ts src/cloudflare/runtime.db.test.mjs
 | `/app/` 조회                     | 200                                          |
 
 배포 직후에는 실제 이메일 주소의 회원가입과 인증 메일 수신을 검증하지 않았습니다.
-이후 운영자가 `ydm2790@gmail.com`의 회원가입 완료를 보고했고, 운영 DB에서 해당 사용자의 `email_confirmed_at`과 `last_sign_in_at`을 확인했습니다.
+이후 `ydm2790@gmail.com`으로 회원가입을 마쳤고, 운영 DB에서 해당 사용자의 `email_confirmed_at`과 `last_sign_in_at`을 확인했습니다.
 이는 사용자 생성·이메일 인증·로그인 완료 상태를 확인한 결과이며 메일 수신 화면이나 확인 링크 복귀를 직접 관찰한 것은 아닙니다.
 기존 관리자 스크립트로 해당 사용자를 기존 수신 작업 공간에 배정했고 COMMIT 후 소유권을 재조회했습니다.
 소유권 배정 시점에는 Instagram OAuth 토큰이 없었습니다.
-이후 운영자의 OAuth 연결과 저장된 토큰의 Meta 프로필·웹훅 구독 조회를 확인했으며 상세 결과는 [다중 사용자 배포 전환](2026-09-26-multi-user-cutover.md)에 기록합니다.
+이후 제 OAuth 연결과 저장된 토큰의 Meta 프로필·웹훅 구독 조회를 확인했으며 상세 결과는 [다중 사용자 배포 전환](2026-09-26-multi-user-cutover.md)에 기록합니다.
 이 인증 수정 검증 당시 발송은 비활성화 상태였습니다.
 이후 승인된 첫 실발송 테스트의 현재 상태는 [첫 실발송 테스트 기록](2026-09-26-first-live-reply-test.md)에 기록합니다.
 DB 통합 테스트 전체는 실행하지 않았으며 이 수정에는 DB·마이그레이션 변경이 없습니다.

@@ -23,7 +23,7 @@ README·CLAUDE·운영 마이그레이션·수동 삭제 안내와 기능 매트
 4. 전체 gate와 독립 로컬 적대적 검토를 수행합니다.
    검증: `corepack pnpm check-types`, `corepack pnpm test`, 격리된 DB의 `corepack pnpm test:db`·`corepack pnpm test:cloudflare`, `trunk check --all`입니다.
 5. 스키마·API와 guard를 의미론적 커밋으로 보존하고 PR·호스팅 코드/보안 리뷰·CI를 확인합니다.
-   검증: 최신 head의 모든 결과와 운영자 병합입니다.
+   검증: 최신 head의 모든 결과와 병합입니다.
 
 ## 남은 일
 
