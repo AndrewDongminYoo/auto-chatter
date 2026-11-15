@@ -498,3 +498,31 @@ test("saving a changed time zone retires the reports view load", async () => {
   assert.equal(loads.has("inbox"), true);
   assert.equal(context.workspaceTimeZone, "UTC");
 });
+
+test("a retired view retries after a failed refresh and preserves a newer load", async () => {
+  for (const newer of [false, true]) {
+    const h = viewHarness();
+    let release!: (value: boolean) => void;
+    h.context.loadContactFields = () =>
+      new Promise<boolean>((resolve) => {
+        release = resolve;
+      });
+    const pending = h.load("contacts");
+    await Promise.resolve();
+    h.context.workspaceLoadRequest++;
+    h.context.loadContactFields = async () => true;
+    if (newer) {
+      h.context.viewLoads.clear();
+      await h.load("contacts");
+    }
+    const replacement = h.context.viewLoads.get("contacts");
+    release(true);
+    await pending;
+    if (newer) assert.equal(h.context.viewLoads.get("contacts"), replacement);
+    else {
+      assert.equal(h.context.viewLoads.has("contacts"), false);
+      await h.load("contacts");
+    }
+    assert.equal(h.calls.filter((name) => name === "contacts").length, 1);
+  }
+});

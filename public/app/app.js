@@ -1298,6 +1298,9 @@ async function loadView(name) {
       if (!current()) return;
       if (viewLoads.get(name) === promise) viewLoads.delete(name);
       if (currentView === name) notice(errorMessage(error), true);
+    })
+    .finally(() => {
+      if (!current() && viewLoads.get(name) === promise) viewLoads.delete(name);
     });
   viewLoads.set(name, promise);
   return promise;
