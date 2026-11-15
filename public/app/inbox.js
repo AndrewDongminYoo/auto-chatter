@@ -1,5 +1,11 @@
-function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZone }) {
+function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZone, getSendSettings }) {
   const byId = (id) => document.getElementById(id);
+  function renderSendSettings() {
+    const account = getConnections().find((entry) => entry.id === selected?.row.connection_id);
+    const element = byId("inbox-send-settings");
+    const text = getSendSettings?.(account) ?? "";
+    if (element.textContent !== text) element.textContent = text;
+  }
   const states = new Map();
   // Listed conversation buttons by key, so a read mark can update its unread badge without reloading the list.
   const listed = new Map();
@@ -1037,6 +1043,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     check.hidden = !state.operation || state.busy;
     check.textContent = "같은 요청의 접수 확인";
     check.disabled = state.busy;
+    renderSendSettings();
     byId("inbox-eligibility").textContent = !status
       ? "답장 가능 상태를 확인해 주세요."
       : status.blocked_by_unknown
@@ -1804,6 +1811,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       }
       if (listed.size) void loadList();
     },
+    renderSendSettings,
     hasDrafts: () =>
       replyTemplates.hasDrafts() || [...states.values()].some((state) => state.draft || state.scheduleLocal || state.scheduleEdits.size || state.operation || state.memoDraft.trim() || state.labelDraft || reminderDirty(state) || [...state.notes.values()].some(Boolean)),
     initialize() {

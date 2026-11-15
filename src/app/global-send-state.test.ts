@@ -13,10 +13,10 @@ interface RereadState {
 
 interface GlobalSendState {
   globalSendRereadDue(state: RereadState): boolean;
-  globalSendDeliveryTitle(globalSendEnabled: boolean): string;
-  globalSendDeliveryStatus(globalSendEnabled: boolean, connectAvailable: boolean): string;
-  globalSendAccountBadge(sendEnabled: boolean, credentialValid: boolean, globalSendEnabled: boolean): [string, string];
-  globalSendRuleBadge(ruleEnabled: boolean, globalSendEnabled: boolean): [string, string];
+  globalSendDeliveryTitle(globalSendEnabled: boolean | null): string;
+  globalSendDeliveryStatus(globalSendEnabled: boolean | null, connectAvailable: boolean, account?: object, ruleEnabled?: boolean): string;
+  globalSendAccountBadge(sendEnabled: boolean, credentialValid: boolean, globalSendEnabled: boolean | null): [string, string];
+  globalSendRuleBadge(ruleEnabled: boolean, globalSendEnabled: boolean | null): [string, string];
 }
 
 // public/app/global-send-state.js is a classic browser script; its top-level functions become context globals.
@@ -52,9 +52,9 @@ test("a clock that moved backwards reads again", () => {
 });
 
 test("the banner and badges name the global state", () => {
-  assert.equal(state.globalSendDeliveryTitle(true), "자동 발송을 시작할 수 있습니다");
+  assert.equal(state.globalSendDeliveryTitle(true), "전체 발송 설정이 켜져 있습니다");
   assert.equal(state.globalSendDeliveryTitle(false), "전체 발송이 중지되어 있습니다");
-  assert.equal(state.globalSendDeliveryStatus(true, false), "계정별로 발송을 켜고 규칙을 활성화하면 자동화를 시작합니다.");
+  assert.equal(state.globalSendDeliveryStatus(true, false), "계정과 규칙 설정, 수신 동의 등 발송 조건은 별도로 확인합니다. 설정을 켜도 실제 발송·전달을 보장하지 않습니다.");
   assert.match(state.globalSendDeliveryStatus(false, true), /계정 연결과 규칙 저장은 계속할 수 있습니다\.$/);
   assert.match(state.globalSendDeliveryStatus(false, false), /새 Instagram 연결은 현재 제한됩니다\.$/);
   assert.deepEqual(plain(state.globalSendAccountBadge(true, true, true)), ["발송 설정 켜짐", "success"]);
@@ -93,7 +93,7 @@ test("a re-read changes only the global state displays and keeps drafts and the 
   // A response that arrives after a workspace reload, a session reset or a logout is ignored.
   assert.match(reread, /revision !== globalSendRevision \|\| workspaceSession !== workspaceGeneration \|\| generation !== segmentsGeneration/);
   for (const forbidden of ["loadWorkspace(", "resetSession(", "replaceChildren", "form.", "contacts", "segment", "notice(", "throw"]) {
-    assert.ok(!reread.replace("generation !== segmentsGeneration", "").replace("generation = segmentsGeneration", "").includes(forbidden), `rereadGlobalSend uses ${forbidden}`);
+    assert.ok(!reread.replaceAll("generation !== segmentsGeneration", "").replace("generation = segmentsGeneration", "").includes(forbidden), `rereadGlobalSend uses ${forbidden}`);
   }
   for (const forbidden of ["replaceChildren", "form.", "contacts", "segment"]) assert.ok(!appFunction("renderGlobalSend").includes(forbidden), `renderGlobalSend uses ${forbidden}`);
   // The wrapper resets the session on a 401 unless the caller keeps it.
@@ -149,10 +149,12 @@ function rereadHarness() {
     return self;
   };
   const responses: { resolve(value: unknown): void; reject(error: Error): void }[] = [];
-  const steps: boolean[] = [];
+  const steps: (boolean | null)[] = [];
   const clock = { now: 200_000 };
   const context = vm.createContext({
     globalSendEnabled: false,
+    renderSendSettings: () => {},
+    inbox: { renderSendSettings: () => {} },
     globalSendReadAt: 100_000,
     globalSendInFlight: false,
     globalSendRevision: 1,
@@ -169,7 +171,7 @@ function rereadHarness() {
       return elements.get(id)!;
     },
     badge: (text: string, tone = "") => ({ textContent: text, className: `badge ${tone}` }),
-    renderGettingStarted: (_rules: unknown, enabled: boolean) => steps.push(enabled),
+    renderGettingStarted: (_rules: unknown, enabled: boolean | null) => steps.push(enabled),
     api: (...args: unknown[]) => {
       assert.deepEqual(args, ["/api/me", "GET", undefined, false, false, true]);
       return new Promise((resolve, reject) => responses.push({ resolve, reject }));
@@ -178,7 +180,7 @@ function rereadHarness() {
   vm.runInContext(read("global-send-state.js"), context);
   vm.runInContext(["globalSendBadge", "renderGlobalSend", "rereadGlobalSend"].map(appFunction).join("\n"), context);
   const page = context as unknown as {
-    globalSendEnabled: boolean;
+    globalSendEnabled: boolean | null;
     globalSendRevision: number;
     workspaceGeneration: number;
     globalSendBadge(label: (enabled: boolean) => [string, string]): { textContent: string; className: string };
@@ -201,9 +203,9 @@ test("a changed global state reaches the banner, the getting-started steps and t
   h.responses[0].resolve({ global_send_enabled: true });
   await pending;
   assert.equal(h.page.globalSendEnabled, true);
-  assert.equal(h.elements.get("delivery-title")?.textContent, "자동 발송을 시작할 수 있습니다");
+  assert.equal(h.elements.get("delivery-title")?.textContent, "전체 발송 설정이 켜져 있습니다");
   assert.equal(h.elements.get("delivery-banner")?.enabled, true);
-  assert.equal(h.elements.get("delivery-status")?.textContent, "계정별로 발송을 켜고 규칙을 활성화하면 자동화를 시작합니다.");
+  assert.equal(h.elements.get("delivery-status")?.textContent, "계정과 규칙 설정, 수신 동의 등 발송 조건은 별도로 확인합니다. 설정을 켜도 실제 발송·전달을 보장하지 않습니다.");
   assert.deepEqual(h.steps, [true]);
   assert.deepEqual([h.account.textContent, h.account.className], ["발송 설정 켜짐", "badge success"]);
   assert.deepEqual([h.rule.textContent, h.rule.className], ["활성", "badge success"]);
@@ -215,7 +217,7 @@ test("a changed global state reaches the banner, the getting-started steps and t
   assert.equal(h.responses.length, 1);
 });
 
-test("an unchanged, failed or outdated re-read leaves the screen as it is", async () => {
+test("a failed read marks settings unknown and outdated reads cannot replace it", async () => {
   const h = rereadHarness();
   let pending = h.page.rereadGlobalSend();
   h.responses[0].resolve({ global_send_enabled: false });
@@ -237,8 +239,63 @@ test("an unchanged, failed or outdated re-read leaves the screen as it is", asyn
   h.page.workspaceGeneration++;
   h.responses[3].resolve({ global_send_enabled: true });
   await pending;
-  assert.equal(h.page.globalSendEnabled, false);
-  assert.deepEqual(h.steps, []);
-  assert.deepEqual([...h.touched], ["workspace"]);
-  assert.equal(h.account.textContent, "발송 설정 켜짐 · 전체 중지 중");
+  assert.equal(h.page.globalSendEnabled, null);
+  assert.deepEqual(h.steps, [null]);
+  assert.equal(h.account.textContent, "전체 발송 설정 확인 필요");
+  assert.equal(h.elements.get("delivery-title")?.textContent, "전체 발송 설정을 확인하지 못했습니다");
+});
+
+test("send guidance distinguishes switches, unknown reads and connection checks without promising delivery", () => {
+  const summarize = (global: boolean | null, account?: object, rule?: boolean) => state.globalSendDeliveryStatus(global, true, account, rule);
+  const account = { active: true, send_enabled: true, credential_status: "valid" };
+  for (const global of [true, false, null]) {
+    for (const enabled of [true, false]) {
+      for (const rule of [true, false]) {
+        const result = summarize(global, { ...account, send_enabled: enabled }, rule);
+        assert.match(result, /전달을 보장하지 않습니다/);
+        if (global === null) assert.match(result, /다시 확인/);
+        if (global === false) assert.match(result, /서비스 운영자/);
+        if (!enabled) assert.match(result, /계정 발송 설정/);
+        if (!rule) assert.match(result, /규칙.*중지/);
+      }
+    }
+  }
+  assert.match(summarize(true, { ...account, credential_status: "expired" }), /다시 연결/);
+  assert.match(summarize(true, { ...account, active: false }), /수신 설정/);
+  assert.match(summarize(true, account), /연결 권한.*확인되지/);
+});
+
+test("context guidance respects a restricted connection action", () => {
+  const text = state.globalSendDeliveryStatus(true, false, { credential_status: "expired" });
+  assert.match(text, /연결.*제한/);
+  assert.doesNotMatch(text, /다시 연결해 주세요/);
+});
+
+test("account and rule notices announce changed settings without rewriting identical text", () => {
+  const attributes = new Map<string, string>();
+  let text = "",
+    writes = 0;
+  const element = {
+    setAttribute: (name: string, value: string) => attributes.set(name, value),
+    get textContent() {
+      return text;
+    },
+    set textContent(value: string) {
+      text = value;
+      writes++;
+    },
+  };
+  const updates: (() => void)[] = [];
+  const page = vm.createContext({ globalSendEnabled: true, instagramConnectAvailable: true, globalSendBadges: updates, node: () => element });
+  vm.runInContext(read("global-send-state.js"), page);
+  vm.runInContext(appFunction("sendSettingsNotice"), page);
+  page.sendSettingsNotice({ credential_status: "valid", active: true, send_enabled: true });
+  assert.equal(attributes.get("role"), "status");
+  assert.equal(attributes.get("aria-live"), "polite");
+  updates[0]();
+  assert.equal(writes, 1);
+  page.globalSendEnabled = null;
+  updates[0]();
+  assert.equal(writes, 2);
+  assert.match(text, /다시 확인/);
 });

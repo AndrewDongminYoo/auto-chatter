@@ -214,6 +214,7 @@ function formConditions() {
   form.elements.excluded_keywords.setCustomValidity("");
   byId("message-count").textContent = `${form.elements.private_reply_text.value.length.toLocaleString("ko-KR")} / ${button ? "640" : "1,000"}`;
   updatePreview();
+  renderSendSettings();
 }
 function markDirty() {
   formConditions();
@@ -1293,7 +1294,7 @@ function renderGettingStarted(rules, globalSendEnabled, connectAvailable) {
   const steps = [
     ["step-connect", connected, true, connectAvailable ? "" : "연결 제한 중"],
     ["step-rule", rules.length > 0, connected, ""],
-    ["step-send", sendSet && globalSendEnabled, connected, sendSet && !globalSendEnabled ? "전체 발송 재개 대기" : ""],
+    ["step-send", sendSet && globalSendEnabled, connected, globalSendEnabled === null ? "전체 발송 설정 확인 필요" : sendSet && !globalSendEnabled ? "전체 발송 재개 대기" : ""],
   ];
   byId("getting-started").hidden = (currentRole !== "owner" && currentRole !== "admin") || steps.every(([, done]) => done);
   for (const [id, done, available, waiting] of steps) {
@@ -1305,7 +1306,12 @@ function renderGettingStarted(rules, globalSendEnabled, connectAvailable) {
     step.querySelector(".step-action").hidden = done || !available || waiting !== "";
   }
   byId("step-connect-help").textContent = connectAvailable ? "관리하는 전문 계정을 연결합니다." : "새 Instagram 계정 연결이 현재 제한되어 있습니다. 연결이 열리면 이 단계부터 시작할 수 있습니다.";
-  byId("step-send-help").textContent = globalSendEnabled ? "계정의 발송 설정을 켜면 규칙에 맞는 댓글에 DM을 보냅니다." : "전체 발송이 중지되어 있어, 계정의 발송 설정을 켜도 재개되기 전에는 메시지가 전송되지 않습니다.";
+  byId("step-send-help").textContent =
+    globalSendEnabled === null
+      ? "전체 발송 설정을 확인하지 못했습니다. 홈에서 발송 설정을 다시 확인해 주세요."
+      : globalSendEnabled
+        ? "계정의 발송 설정과 규칙을 켜도 수신 동의 등 발송 조건을 별도로 확인합니다."
+        : "전체 발송이 중지되어 있어, 계정의 발송 설정을 켜도 재개되기 전에는 메시지가 전송되지 않습니다.";
 }
 
 // Everything on screen that shows the service-wide send switch, drawn from the already loaded accounts and rules.
@@ -1315,6 +1321,27 @@ function renderGlobalSend() {
   byId("delivery-status").textContent = globalSendDeliveryStatus(globalSendEnabled, instagramConnectAvailable);
   renderGettingStarted(workspaceRules, globalSendEnabled, instagramConnectAvailable);
   for (const update of globalSendBadges) update();
+  renderSendSettings();
+  inbox.renderSendSettings();
+}
+// Updates guidance in place without touching editor inputs, inbox drafts or filters.
+function renderSendSettings() {
+  const account = connections.find((entry) => entry.id === form.elements.connection_id.value);
+  const element = byId("rule-send-settings");
+  const text = globalSendDeliveryStatus(globalSendEnabled, instagramConnectAvailable, account, form.elements.enabled.checked);
+  if (element.textContent !== text) element.textContent = text;
+}
+function sendSettingsNotice(account, ruleEnabled) {
+  const element = node("p", "", "hint");
+  element.setAttribute("role", "status");
+  element.setAttribute("aria-live", "polite");
+  const update = () => {
+    const text = globalSendDeliveryStatus(globalSendEnabled, instagramConnectAvailable, account, ruleEnabled);
+    if (element.textContent !== text) element.textContent = text;
+  };
+  update();
+  globalSendBadges.push(update);
+  return element;
 }
 // A badge that renderGlobalSend rewrites in place; label(globalSendEnabled) returns its [text, tone].
 function globalSendBadge(label) {
@@ -1329,7 +1356,7 @@ function globalSendBadge(label) {
   return element;
 }
 // Reads only /api/me again, so the rule being edited, the contact filters and the segment drafts stay as they are. A
-// failed read, including a 401, changes nothing: the next user action handles an expired session.
+// failed read marks settings unknown without resetting the session or any feature state.
 async function rereadGlobalSend() {
   const due = globalSendRereadDue({ loaded: !byId("workspace").hidden && globalSendReadAt > 0, visible: document.visibilityState === "visible", inFlight: globalSendInFlight, lastReadAt: globalSendReadAt, now: Date.now() });
   if (!due) return;
@@ -1346,11 +1373,19 @@ async function rereadGlobalSend() {
     globalSendEnabled = enabled;
     renderGlobalSend();
   } catch {
-    // Left to the next read or user action.
+    if (revision !== globalSendRevision || workspaceSession !== workspaceGeneration || generation !== segmentsGeneration) return;
+    globalSendEnabled = null;
+    renderGlobalSend();
   } finally {
     globalSendInFlight = false;
   }
 }
+byId("send-settings-refresh").addEventListener("click", (event) =>
+  action(event.currentTarget, async () => {
+    globalSendReadAt = 1;
+    await rereadGlobalSend();
+  }),
+);
 addEventListener("focus", () => void rereadGlobalSend());
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") void rereadGlobalSend();
@@ -1483,7 +1518,7 @@ async function loadWorkspace() {
       badge(account.active ? "수신 설정 켜짐" : "수신 설정 꺼짐", account.active && credentialStatus === "valid" ? "success" : ""),
       globalSendBadge((enabled) => globalSendAccountBadge(account.send_enabled, credentialStatus === "valid", enabled)),
     );
-    item.append(state);
+    item.append(state, sendSettingsNotice(account));
     const inboxToggle = node("button", account.inbox_enabled ? "DM 보관 끄기" : "DM 보관 켜기", "secondary");
     inboxToggle.addEventListener("click", () => {
       if (!account.inbox_enabled && !confirm("지금부터 받은 텍스트 DM과 확인 버튼 응답을 인박스에 보관할까요? 기존 수동 삭제 정책이 적용됩니다. 과거 메시지는 가져오지 않습니다.")) return;
@@ -1499,6 +1534,7 @@ async function loadWorkspace() {
       });
     });
     item.append(inboxToggle);
+    const reconnectHelp = connectAvailable ? "상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요." : "연결 제한이 해제된 뒤 계정 관리자가 같은 Instagram 계정을 다시 연결할 수 있습니다.";
     const unconfirmed = account.subscription_checked_at ? "철회·권한 여부는 확인되지 않았습니다." : "철회·권한·구독 여부는 확인되지 않았습니다.";
     item.append(
       node(
@@ -1507,11 +1543,11 @@ async function loadWorkspace() {
           ? account.active
             ? `토큰 만료일: ${formatDate(account.token_expires_at)} · 만료 30일 전부터 갱신을 시도합니다. ${unconfirmed}`
             : `토큰 만료일: ${formatDate(account.token_expires_at)} · 수신 중지 중에는 갱신하지 않습니다. ${unconfirmed}`
-          : `${credentialStatus === "expired" ? "토큰이 만료됐습니다." : "연결 토큰이 없습니다."} 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`,
+          : `${credentialStatus === "expired" ? "토큰이 만료됐습니다." : "연결 토큰이 없습니다."} ${reconnectHelp}`,
         "hint",
       ),
     );
-    if (reauthReason) item.append(node("p", `${formatDateTime(account.reauth_required_at)} · ${reauthReason} 다시 연결하기 전까지 대기 중인 답장이 발송 전 확인에서 차단될 수 있습니다. 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`, "hint"));
+    if (reauthReason) item.append(node("p", `${formatDateTime(account.reauth_required_at)} · ${reauthReason} 다시 연결하기 전까지 대기 중인 답장이 발송 전 확인에서 차단될 수 있습니다. ${reconnectHelp}`, "hint"));
     // The periodic or manual check found a required webhook subscription field missing for the stored token;
     // the server records it, display only.
     const subscriptionChecked = account.subscription_checked_at ? ` 마지막 확인: ${formatDateTime(account.subscription_checked_at)}.` : "";
@@ -1519,20 +1555,13 @@ async function loadWorkspace() {
       item.append(
         node(
           "p",
-          `${formatDateTime(account.subscription_missing_at)} 처음 기록 · Meta가 이 계정의 댓글·DM·확인 버튼 웹후크 구독 필드를 모두 반환하지 않았습니다. 새 댓글과 DM이 이 앱에 도착하지 않을 수 있습니다. 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택하거나 'Meta 상태 확인'을 실행해 주세요.${subscriptionChecked}`,
+          `${formatDateTime(account.subscription_missing_at)} 처음 기록 · Meta가 이 계정의 댓글·DM·확인 버튼 웹후크 구독 필드를 모두 반환하지 않았습니다. 새 댓글과 DM이 이 앱에 도착하지 않을 수 있습니다. ${reconnectHelp}${credentialStatus === "valid" ? " 'Meta 상태 확인'으로 구독 상태도 확인할 수 있습니다." : ""}${subscriptionChecked}`,
           "hint",
         ),
       );
     else if (account.subscription_checked_at) item.append(node("p", `Meta가 필수 웹후크 구독 필드를 반환했습니다.${subscriptionChecked}`, "hint"));
     // Meta reported that the account owner removed the app in Instagram; the server disconnected the account.
-    if (account.deauthorized_at)
-      item.append(
-        node(
-          "p",
-          `${formatDateTime(account.deauthorized_at)} · 계정 소유자가 Instagram에서 이 앱의 권한을 해제해 연결이 해제됐습니다. 수신과 발송, 이 계정의 댓글 규칙과 플로우가 꺼졌습니다. 다시 사용하려면 상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요.`,
-          "hint",
-        ),
-      );
+    if (account.deauthorized_at) item.append(node("p", `${formatDateTime(account.deauthorized_at)} · 계정 소유자가 Instagram에서 이 앱의 권한을 해제해 연결이 해제됐습니다. 수신과 발송, 이 계정의 댓글 규칙과 플로우가 꺼졌습니다. 다시 사용하려면 ${reconnectHelp}`, "hint"));
     const healthStatus = node("p", healthResults.get(account.id) ?? "Meta 계정과 웹훅 구독 상태는 아직 확인하지 않았습니다.", "hint");
     healthResults.delete(account.id);
     healthStatus.setAttribute("role", "status");
@@ -1544,11 +1573,11 @@ async function loadWorkspace() {
         const result = await api(`/api/connections/${account.id}/health`);
         const message = {
           fields_present: "Meta가 이 계정의 댓글·DM·확인 버튼 구독 필드를 반환했습니다. 이 앱으로 실제 이벤트가 오는지는 별도로 확인해야 합니다.",
-          fields_missing: "Meta 응답에서 필수 웹훅 구독 필드가 모두 확인되지 않았습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
-          reconnect_required: "Meta가 계정 접근이나 앱 권한을 거부했습니다. 앱 권한을 확인하고 필요한 경우 같은 Instagram 계정을 다시 연결해 주세요.",
+          fields_missing: `Meta 응답에서 필수 웹훅 구독 필드가 모두 확인되지 않았습니다. ${reconnectHelp}`,
+          reconnect_required: `Meta가 계정 접근이나 앱 권한을 거부했습니다. 앱 권한을 확인해 주세요. ${reconnectHelp}`,
           unverified: "Meta 상태를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.",
-          expired: "연결 토큰이 만료됐습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
-          missing: "연결 토큰이 없습니다. 같은 Instagram 계정을 다시 연결해 주세요.",
+          expired: `연결 토큰이 만료됐습니다. ${reconnectHelp}`,
+          missing: `연결 토큰이 없습니다. ${reconnectHelp}`,
         }[result.status];
         healthStatus.textContent = message ? `${formatTime(result.checked_at)} 확인 · ${message}` : "Meta 상태 응답을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.";
         // The check also stores the subscription record and the reconnect marker; reload so the badges match.
@@ -1603,6 +1632,12 @@ async function loadWorkspace() {
     state.append(
       globalSendBadge((enabled) => globalSendRuleBadge(rule.enabled, enabled)),
       badge(rule.follow_gate_enabled ? "팔로우 확인" : "바로 답장"),
+    );
+    item.append(
+      sendSettingsNotice(
+        connections.find((account) => account.id === rule.connection_id),
+        rule.enabled,
+      ),
     );
     item.append(state, node("p", rule.match_mode === "all" ? "모든 댓글" : `${rule.match_mode === "exact" ? "정확히 일치" : "키워드 포함"} · ${(rule.keywords.length ? rule.keywords : [rule.keyword]).join(", ")}`, "rule-summary"));
     const button = node("button", "수정");
@@ -3865,6 +3900,7 @@ const inbox = createInbox({
   getRole: () => currentRole,
   getUserId: () => currentUserId,
   getTimeZone: () => workspaceTimeZone,
+  getSendSettings: (account) => globalSendDeliveryStatus(globalSendEnabled, instagramConnectAvailable, account),
 });
 function resetInbox() {
   inbox.reset();
