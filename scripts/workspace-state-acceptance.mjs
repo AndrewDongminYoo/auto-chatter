@@ -191,6 +191,7 @@
   await page.start();
   check(get("auth").hidden && get("retry-load").hidden && !get("notice").textContent, "Retry retained the old failure");
   fixture.activityFailure = true;
+  page.showView("home", false);
   await page.start();
   check(get("auth").hidden && !get("workspace").hidden && get("activity").textContent.includes("불러오지 못했습니다"), "Partial failure hid the workspace");
   fixture.activityFailure = false;

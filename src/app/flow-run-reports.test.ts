@@ -485,3 +485,17 @@ test("flow option failure can retry without discarding report dates", async () =
   assert.equal(h.inputs.from.value, "2026-10-01");
   assert.equal(h.inputs.flow_id.children.length, 2);
 });
+
+test("hidden flow reports configure context without fetching options", async () => {
+  let reads = 0;
+  const h = harness(async () => {
+    reads++;
+    return { flows: [] };
+  });
+  await h.controller.configure("owner", "Asia/Seoul", [], false);
+  assert.equal(reads, 0);
+  h.inputs.from.value = "2026-10-01";
+  await h.controller.configure("owner", "Asia/Seoul", []);
+  assert.equal(reads, 1);
+  assert.equal(h.inputs.from.value, "2026-10-01");
+});

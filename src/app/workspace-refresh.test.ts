@@ -104,6 +104,8 @@ function workspaceHarness() {
     pendingInvite: null,
     segmentsGeneration: 0,
     workspaceGeneration: 0,
+    viewLoads: new Map(),
+    contactSnapshotContext: undefined,
     workspaceLoadRequest: 0,
     globalSendRevision: 0,
     currentUserId: "user-a",
@@ -150,6 +152,7 @@ function workspaceHarness() {
     "loadMembers",
     "renderGlobalSend",
     "showView",
+    "loadView",
     "formConditions",
     "loadMedia",
     "initializeContacts",
@@ -268,6 +271,8 @@ test("an unrelated action cannot unlock a rule save already in progress", async 
     byId: (id: string) => (id === "rules" ? { querySelectorAll: () => [] } : nodes.get(id)),
     connections: [{}],
     workspaceGeneration: 0,
+    viewLoads: new Map(),
+    contactSnapshotContext: undefined,
     pendingActions: new Map(),
     holdFocus: () => () => {},
     clearActionError: () => {},
@@ -322,6 +327,8 @@ test("two documents clear a session change without rebroadcasting it", () => {
       form: { reset: noop, elements: { media_id: element(), connection_id: element() } },
       startupRequest: 0,
       workspaceGeneration: 0,
+      viewLoads: new Map(),
+      contactSnapshotContext: undefined,
       globalSendRevision: 0,
       contactsGeneration: 0,
       segmentsGeneration: 0,
@@ -374,4 +381,77 @@ test("two documents clear a session change without rebroadcasting it", () => {
   assert.equal(second.byId("workspace").hidden, true);
   assert.equal(second.byId("auth").hidden, true);
   assert.equal(second.byId("retry-load").hidden, false);
+});
+
+test("home bootstrap does not initialize hidden feature data", async () => {
+  const h = workspaceHarness();
+  const calls: string[] = [];
+  for (const name of ["initializeInbox", "loadContactFields", "loadContacts", "loadOperations", "loadWebhooks", "loadMembers", "loadMedia"]) h.context[name] = () => calls.push(name);
+  await h.load();
+  assert.deepEqual(calls, []);
+});
+
+function viewHarness() {
+  const calls: string[] = [];
+  const context = vm.createContext({
+    currentWorkspaceId: "one",
+    workspaceLoadRequest: 1,
+    workspaceGeneration: 1,
+    viewLoads: new Map(),
+    currentView: "home",
+    currentRole: "owner",
+    workspaceTimeZone: "Asia/Seoul",
+    contactSnapshotContext: undefined,
+    connections: [],
+    contactsDirty: new Set(),
+    contactsSaving: false,
+    loadActivity: async () => {
+      calls.push("activity");
+    },
+    initializeContacts: () => calls.push("contacts-options"),
+    segmentSnapshots: { configure: () => calls.push("snapshots") },
+    loadContactSegments: async () => {
+      calls.push("segments");
+    },
+    loadContactFields: async () => {
+      calls.push("fields");
+      return true;
+    },
+    loadContacts: async () => {
+      calls.push("contacts");
+    },
+    initializeInbox: () => calls.push("inbox"),
+    notice: (text: string) => calls.push(text),
+    errorMessage: (error: Error) => error.message,
+  });
+  vm.runInContext(appFunction("loadView"), context);
+  return { context, calls, load: (name: string) => context.loadView(name) as Promise<void> };
+}
+
+test("view entry shares initialization and leaves other views idle", async () => {
+  const h = viewHarness();
+  await Promise.all([h.load("home"), h.load("home")]);
+  await h.load("home");
+  assert.deepEqual(h.calls, ["activity"]);
+  await Promise.all([h.load("contacts"), h.load("contacts")]);
+  assert.deepEqual(h.calls, ["activity", "contacts-options", "snapshots", "segments", "fields", "contacts"]);
+  h.context.viewLoads.clear();
+  await h.load("home");
+  assert.equal(h.calls.filter((name) => name === "activity").length, 2);
+});
+
+test("retired view initialization cannot continue into a new session", async () => {
+  const h = viewHarness();
+  let release!: (value: boolean) => void;
+  h.context.loadContactFields = () =>
+    new Promise<boolean>((resolve) => {
+      release = resolve;
+    });
+  const pending = h.load("contacts");
+  await Promise.resolve();
+  h.context.workspaceGeneration++;
+  h.context.viewLoads.clear();
+  release(true);
+  await pending;
+  assert.ok(!h.calls.includes("contacts"));
 });

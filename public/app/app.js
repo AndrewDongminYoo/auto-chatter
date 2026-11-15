@@ -128,6 +128,8 @@ let refreshPromise;
 let currentUserId;
 let currentRole;
 let currentView;
+const viewLoads = new Map();
+let contactSnapshotContext;
 // The workspace time zone, which the inbox reminder editor shows its date and time in.
 let workspaceTimeZone;
 let timeZoneWriteRevision = 0;
@@ -239,6 +241,8 @@ function resetSession({ broadcast = true } = {}) {
     pendingActions.delete(button);
   }
   workspaceGeneration++;
+  viewLoads.clear();
+  contactSnapshotContext = undefined;
   globalSendRevision++;
   globalSendReadAt = 0;
   workspaceRules = [];
@@ -1212,7 +1216,7 @@ async function loadWebhooks() {
 }
 
 // Menu views: each one shows a group of sections. Switching only hides the others, so drafts and inputs stay.
-const views = ["home", "accounts", "automation", "inbox", "contacts", "campaigns", "settings"];
+const views = ["home", "accounts", "automation", "inbox", "contacts", "campaigns", "reports", "settings"];
 // A menu whose link is hidden for the current role (campaigns for members and viewers) is not opened from an address.
 function viewAvailable(name) {
   return !document.querySelector(`.workspace-nav a[href="#${name}"]`)?.hidden;
@@ -1239,10 +1243,74 @@ function showView(name, focus) {
     if (link.hash === `#${name}`) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
+  void loadView(name);
   if (!focus) return;
   scrollTo({ top: 0 });
   byId(`view-${name}`).focus({ preventScroll: true });
 }
+// Share each view's first load until the next core snapshot. A hidden view keeps its inputs and result.
+async function loadView(name) {
+  if (currentWorkspaceId === undefined) return;
+  if (viewLoads.has(name)) return viewLoads.get(name);
+  const request = workspaceLoadRequest,
+    session = workspaceGeneration;
+  const current = () => request === workspaceLoadRequest && session === workspaceGeneration;
+  const promise = Promise.resolve()
+    .then(async () => {
+      if (!current()) return;
+      if (name === "home") {
+        try {
+          await loadActivity();
+        } catch (error) {
+          if (!current()) return;
+          if (error.status === 401) throw error;
+          byId("activity").replaceChildren(emptyState("처리 내역을 불러오지 못했습니다", "새로고침을 눌러 다시 시도해 주세요. 계정과 규칙 설정은 계속할 수 있습니다."));
+          if (viewLoads.get(name) === promise) viewLoads.delete(name);
+        }
+      } else if (name === "automation") {
+        void loadMedia();
+        flowEditor.initialize();
+      } else if (name === "contacts") {
+        initializeContacts();
+        const snapshotContext = JSON.stringify([currentRole, workspaceTimeZone]);
+        if (contactSnapshotContext !== snapshotContext) {
+          segmentSnapshots.configure(currentRole, workspaceTimeZone);
+          contactSnapshotContext = snapshotContext;
+        }
+        void loadContactSegments();
+        const fieldsLoaded = await loadContactFields();
+        if (!current()) return;
+        if (!fieldsLoaded) {
+          if (viewLoads.get(name) === promise) viewLoads.delete(name);
+          return;
+        }
+        if (!contactsDirty.size && !contactsSaving) await loadContacts();
+      } else if (name === "inbox") initializeInbox();
+      else if (name === "campaigns") await campaignDrafts.configure(currentRole, currentWorkspaceId, workspaceTimeZone);
+      else if (name === "reports") {
+        await Promise.all([flowReports.configure(currentRole, workspaceTimeZone, connections), campaignReports.configure(currentRole, workspaceTimeZone)]);
+      } else if (name === "settings") {
+        const admin = currentRole === "owner" || currentRole === "admin";
+        if (admin) await Promise.all([loadOperations(), loadWebhooks(), ...(currentRole === "owner" ? [loadMembers()] : [])]);
+      }
+    })
+    .catch((error) => {
+      if (!current()) return;
+      if (viewLoads.get(name) === promise) viewLoads.delete(name);
+      if (currentView === name) notice(errorMessage(error), true);
+    });
+  viewLoads.set(name, promise);
+  return promise;
+}
+byId("reports-refresh").addEventListener("click", (event) =>
+  action(event.currentTarget, async () => {
+    const session = workspaceGeneration;
+    await viewLoads.get("reports");
+    if (session !== workspaceGeneration) return;
+    viewLoads.delete("reports");
+    await loadView("reports");
+  }),
+);
 // After the view is shown, an older section link scrolls to its section; the browser could not while it was hidden.
 function scrollToSectionHash() {
   const target = location.hash.slice(1);
@@ -1286,9 +1354,10 @@ document.querySelector(".workspace-nav").addEventListener("click", (event) => {
   if (link && link.hash === location.hash) showView(link.hash.slice(1), true);
 });
 
-// The getting-started steps on the home view, for owners and admins until every step is done.
+// Getting-started steps for owners and admins until an account and first rule are configured.
 function renderGettingStarted(rules, globalSendEnabled, connectAvailable) {
   const connected = connections.length > 0;
+  byId("home-actions").hidden = !connected || !rules.length;
   const sendSet = connections.some((account) => account.send_enabled);
   // [id, done, available, waiting]: a waiting step is blocked by a service setting the owner cannot change.
   const steps = [
@@ -1296,7 +1365,7 @@ function renderGettingStarted(rules, globalSendEnabled, connectAvailable) {
     ["step-rule", rules.length > 0, connected, ""],
     ["step-send", sendSet && globalSendEnabled, connected, globalSendEnabled === null ? "전체 발송 설정 확인 필요" : sendSet && !globalSendEnabled ? "전체 발송 재개 대기" : ""],
   ];
-  byId("getting-started").hidden = (currentRole !== "owner" && currentRole !== "admin") || steps.every(([, done]) => done);
+  byId("getting-started").hidden = (connected && rules.length > 0) || (currentRole !== "owner" && currentRole !== "admin") || steps.every(([, done]) => done);
   for (const [id, done, available, waiting] of steps) {
     const step = byId(id);
     step.classList.toggle("done", done);
@@ -1437,7 +1506,6 @@ async function loadWorkspace() {
   const firstContext = currentWorkspaceId === undefined;
   // A save completed after this membership read started; its zone is newer than the snapshot.
   const timeZone = firstContext || zoneWrite === timeZoneWriteRevision ? membership.time_zone : workspaceTimeZone;
-  const zoneChanged = workspaceTimeZone !== timeZone;
   currentUserId = me.user?.id;
   currentWorkspaceId = membership.workspace_id;
   currentRole = membership.role;
@@ -1454,22 +1522,17 @@ async function loadWorkspace() {
   byId("contacts-segment-export").hidden = !operationsVisible;
   byId("contacts-segment-export-help").hidden = !operationsVisible;
   byId("contacts-export-format").hidden = !operationsVisible;
-  if (firstContext || zoneChanged) segmentSnapshots.configure(currentRole, workspaceTimeZone);
   byId("nav-campaigns").hidden = !operationsVisible;
-  void campaignDrafts.configure(currentRole, membership.workspace_id, workspaceTimeZone);
   byId("operations-section").hidden = !operationsVisible;
   byId("webhooks-section").hidden = !operationsVisible;
-  if (operationsVisible) {
-    void loadOperations();
-    void loadWebhooks();
-  }
+  byId("nav-reports").hidden = !operationsVisible;
+  byId("home-reports-link").hidden = !operationsVisible;
   byId("members-section").hidden = currentRole !== "owner";
-  if (currentRole === "owner") void loadMembers();
   connections = accounts.connections;
   manualReports.configure(currentRole, workspaceTimeZone, connections);
-  void flowReports.configure(currentRole, workspaceTimeZone, connections);
+  void flowReports.configure(currentRole, workspaceTimeZone, connections, false);
   handoffReports.configure(currentRole, workspaceTimeZone, connections);
-  void campaignReports.configure(currentRole, workspaceTimeZone);
+  void campaignReports.configure(currentRole, workspaceTimeZone, false);
   const selectedConnection = form.elements.connection_id.value;
   byId("startup").hidden = true;
   byId("retry-load").hidden = true;
@@ -1490,7 +1553,6 @@ async function loadWorkspace() {
   byId("workspace").hidden = false;
   byId("logout").hidden = false;
   const firstDisplay = currentView === undefined;
-  if (firstDisplay) showView(viewFromHash() ?? "home", false);
   const connectAvailable = instagramConnectAvailable;
   byId("connect").disabled = !connectAvailable;
   byId("connect-help").hidden = connectAvailable;
@@ -1666,21 +1728,10 @@ async function loadWorkspace() {
   }
   ruleControls();
   formConditions();
-  void loadMedia();
-  initializeContacts();
-  initializeInbox();
-  flowEditor.initialize();
-  void loadContactSegments();
-  await loadContactFields();
+  viewLoads.clear();
+  if (firstDisplay) showView(viewFromHash() ?? "home", false);
+  await loadView(currentView);
   if (request !== workspaceLoadRequest || generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
-  if (!contactsDirty.size && !contactsSaving) void loadContacts();
-  try {
-    await loadActivity();
-  } catch (error) {
-    if (request !== workspaceLoadRequest || generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
-    if (error.status === 401) throw error;
-    byId("activity").replaceChildren(emptyState("처리 내역을 불러오지 못했습니다", "새로고침을 눌러 다시 시도해 주세요. 계정과 규칙 설정은 계속할 수 있습니다."));
-  }
   if (firstDisplay) scrollToSectionHash();
 }
 
@@ -2032,9 +2083,9 @@ byId("time-zone-form").addEventListener("submit", (event) => {
       inbox.timeZoneChanged();
       campaignDrafts.timeZoneChanged(workspaceTimeZone);
       manualReports.configure(currentRole, workspaceTimeZone, connections);
-      void flowReports.configure(currentRole, workspaceTimeZone, connections);
+      void flowReports.configure(currentRole, workspaceTimeZone, connections, currentView === "reports");
       handoffReports.configure(currentRole, workspaceTimeZone, connections);
-      void campaignReports.configure(currentRole, workspaceTimeZone);
+      void campaignReports.configure(currentRole, workspaceTimeZone, currentView === "reports");
     }
     notice(`시간대를 저장했습니다(${saved.time_zone}). 지금부터 정한 시각까지 기다리기 시작하는 실행에 적용됩니다.`);
   });

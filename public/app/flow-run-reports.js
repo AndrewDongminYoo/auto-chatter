@@ -81,10 +81,10 @@ function createFlowRunReports({ api, node }) {
     flowNotice.textContent = "";
     byId("flow-report-zone").textContent = "";
   }
-  async function configure(role, zone, connections) {
+  async function configure(role, zone, connections, loadOptions = true) {
     const next = JSON.stringify([role, zone, connections.map(({ id, username }) => [id, username]).sort(([a], [b]) => a.localeCompare(b))]);
     if (configuration === next) {
-      if (permitted && timeZone) await refreshOptions();
+      if (loadOptions && permitted && timeZone) await refreshOptions();
       return;
     }
     reset();
@@ -114,7 +114,7 @@ function createFlowRunReports({ api, node }) {
       form.elements.connection_id.append(new Option(label, connection.id));
     }
     invalidate();
-    await refreshOptions();
+    if (loadOptions) await refreshOptions();
   }
   async function refreshOptions() {
     const current = ++contextGeneration;
