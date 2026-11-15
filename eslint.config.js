@@ -99,6 +99,8 @@ const dashboardGlobals = [
   { readers: ["app"], names: ["createFlowRunReports"] },
   // focus-keeper.js
   { readers: ["app", "inbox"], names: ["holdFocus"] },
+  // global-send-state.js
+  { readers: ["app"], names: ["globalSendAccountBadge", "globalSendDeliveryStatus", "globalSendDeliveryTitle", "globalSendRereadDue", "globalSendRuleBadge"] },
   // handoff-reports.js
   { readers: ["app"], names: ["createHandoffReports"] },
   // inbox.js

@@ -570,6 +570,7 @@ test("session invalidation prevents a pending workspace bootstrap from reconfigu
     const context = vm.createContext({
       segmentsGeneration: 0,
       workspaceGeneration: 0,
+      globalSendRevision: 0,
       editingSegment: null,
       pendingInvite: null,
       currentUserId: undefined,

@@ -29,6 +29,17 @@ const contactCsvPreview = createContactCsvPreview({
 });
 const form = byId("rule-form");
 let connections = [];
+// The service-wide send switch from /api/me. rereadGlobalSend reads it again while the dashboard stays open and
+// rewrites only the banner, the getting-started steps and the badges below, never the lists or the rule editor (#338).
+let globalSendEnabled = false;
+let globalSendReadAt = 0;
+let globalSendInFlight = false;
+// Advanced by every workspace load and session reset, so a re-read that started before them is ignored.
+let globalSendRevision = 0;
+let instagramConnectAvailable = false;
+let workspaceRules = [];
+// One update function per rendered badge whose text depends on the switch.
+let globalSendBadges = [];
 let contactsGeneration = 0;
 let workspaceGeneration = 0;
 // Invalidate contact disclosures on cross-tab sessions and BFCache restoration.
@@ -223,6 +234,10 @@ window.addEventListener("beforeunload", (event) => {
 });
 function resetSession() {
   workspaceGeneration++;
+  globalSendRevision++;
+  globalSendReadAt = 0;
+  workspaceRules = [];
+  globalSendBadges = [];
   campaignDrafts.reset();
   contactCsvPreview.sessionChanged();
   segmentSnapshots.reset();
@@ -516,7 +531,8 @@ function authSessionRevision() {
 // storage most recently. Other documents' broadcasts may not have arrived yet.
 let acceptedAuthRevision = authSessionRevision();
 
-async function api(path, method = "GET", body, retry = true, asText = false) {
+// keepSessionOn401 leaves a 401 to the caller instead of resetting the session; pass it only with retry = false.
+async function api(path, method = "GET", body, retry = true, asText = false, keepSessionOn401 = false) {
   const requestSession = workspaceGeneration;
   const requestRevision = acceptedAuthRevision;
   const requireCurrentSession = () => {
@@ -605,11 +621,11 @@ async function api(path, method = "GET", body, retry = true, asText = false) {
     result = await response.json();
   } catch {
     if (protectedRequest) requireCurrentSession();
-    if (response.status === 401) resetSession();
+    if (response.status === 401 && !keepSessionOn401) resetSession();
     throw new Error("서버 응답을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.");
   }
   if (protectedRequest) requireCurrentSession();
-  if (response.status === 401) resetSession();
+  if (response.status === 401 && !keepSessionOn401) resetSession();
   if (!response.ok) {
     const error = new Error(errors[result.error] ?? "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
     error.status = response.status;
@@ -1190,6 +1206,7 @@ function showView(name, focus) {
     clearActionErrors();
   }
   currentView = name;
+  void rereadGlobalSend();
   for (const view of document.querySelectorAll("#workspace .view")) view.hidden = view.dataset.view !== name;
   for (const link of document.querySelectorAll(".workspace-nav a")) {
     if (link.hash === `#${name}`) link.setAttribute("aria-current", "page");
@@ -1240,6 +1257,54 @@ function renderGettingStarted(rules, globalSendEnabled, connectAvailable) {
   byId("step-send-help").textContent = globalSendEnabled ? "계정의 발송 설정을 켜면 규칙에 맞는 댓글에 DM을 보냅니다." : "전체 발송이 중지되어 있어, 계정의 발송 설정을 켜도 재개되기 전에는 메시지가 전송되지 않습니다.";
 }
 
+// Everything on screen that shows the service-wide send switch, drawn from the already loaded accounts and rules.
+function renderGlobalSend() {
+  byId("delivery-title").textContent = globalSendDeliveryTitle(globalSendEnabled);
+  byId("delivery-banner").classList.toggle("enabled", globalSendEnabled);
+  byId("delivery-status").textContent = globalSendDeliveryStatus(globalSendEnabled, instagramConnectAvailable);
+  renderGettingStarted(workspaceRules, globalSendEnabled, instagramConnectAvailable);
+  for (const update of globalSendBadges) update();
+}
+// A badge that renderGlobalSend rewrites in place; label(globalSendEnabled) returns its [text, tone].
+function globalSendBadge(label) {
+  const element = badge("");
+  const update = () => {
+    const [text, tone] = label(globalSendEnabled);
+    element.textContent = text;
+    element.className = `badge ${tone}`;
+  };
+  update();
+  globalSendBadges.push(update);
+  return element;
+}
+// Reads only /api/me again, so the rule being edited, the contact filters and the segment drafts stay as they are. A
+// failed read, including a 401, changes nothing: the next user action handles an expired session.
+async function rereadGlobalSend() {
+  const due = globalSendRereadDue({ loaded: !byId("workspace").hidden && globalSendReadAt > 0, visible: document.visibilityState === "visible", inFlight: globalSendInFlight, lastReadAt: globalSendReadAt, now: Date.now() });
+  if (!due) return;
+  const revision = globalSendRevision,
+    workspaceSession = workspaceGeneration,
+    generation = segmentsGeneration;
+  globalSendInFlight = true;
+  try {
+    const me = await api("/api/me", "GET", undefined, false, false, true);
+    if (revision !== globalSendRevision || workspaceSession !== workspaceGeneration || generation !== segmentsGeneration) return;
+    globalSendReadAt = Date.now();
+    const enabled = me.global_send_enabled === true;
+    if (enabled === globalSendEnabled) return;
+    globalSendEnabled = enabled;
+    renderGlobalSend();
+  } catch {
+    // Left to the next read or user action.
+  } finally {
+    globalSendInFlight = false;
+  }
+}
+addEventListener("focus", () => void rereadGlobalSend());
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") void rereadGlobalSend();
+});
+
 async function loadWorkspace() {
   contactCsvPreview.reset();
   segmentSnapshots.reset();
@@ -1254,6 +1319,7 @@ async function loadWorkspace() {
   invalidateContactExport();
   const generation = segmentsGeneration,
     workspaceSession = workspaceGeneration;
+  globalSendRevision++;
   const me = await api("/api/me");
   if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
   currentUserId = me.user?.id;
@@ -1302,21 +1368,21 @@ async function loadWorkspace() {
   byId("save-rule").disabled = connections.length === 0;
   byId("new-rule").disabled = connections.length === 0;
   byId("editor-empty").hidden = connections.length > 0;
-  byId("delivery-title").textContent = me.global_send_enabled ? "자동 발송을 시작할 수 있습니다" : "전체 발송이 중지되어 있습니다";
-  byId("delivery-banner").classList.toggle("enabled", me.global_send_enabled);
-  renderGettingStarted(settings.rules, me.global_send_enabled, me.instagram_connect_available === true);
+  workspaceRules = settings.rules;
+  globalSendBadges = [];
+  // Assigned only beside the render, so a load that fails after /api/me leaves the value that is on screen and a
+  // later re-read still sees the change.
+  globalSendEnabled = me.global_send_enabled === true;
+  instagramConnectAvailable = me.instagram_connect_available === true;
+  globalSendReadAt = Date.now();
+  renderGlobalSend();
 
   byId("auth").hidden = true;
   byId("workspace").hidden = false;
   byId("logout").hidden = false;
   const firstDisplay = currentView === undefined;
   showView(viewFromHash() ?? (currentView && viewAvailable(currentView) ? currentView : "home"), false);
-  const connectAvailable = me.instagram_connect_available === true;
-  byId("delivery-status").textContent = me.global_send_enabled
-    ? "계정별로 발송을 켜고 규칙을 활성화하면 자동화를 시작합니다."
-    : connectAvailable
-      ? "전체 발송은 서비스 운영 측에서 재개합니다. 그전까지는 계정이나 규칙이 켜져 있어도 메시지가 전송되지 않으며, 계정 연결과 규칙 저장은 계속할 수 있습니다."
-      : "전체 발송은 서비스 운영 측에서 재개합니다. 그전까지는 계정이나 규칙이 켜져 있어도 메시지가 전송되지 않습니다. 새 Instagram 연결은 현재 제한됩니다.";
+  const connectAvailable = instagramConnectAvailable;
   byId("connect").disabled = !connectAvailable;
   byId("connect-help").hidden = connectAvailable;
   byId("connect-help").textContent = connectAvailable ? "" : errors.instagram_public_access_restricted;
@@ -1341,8 +1407,7 @@ async function loadWorkspace() {
       ...(account.subscription_missing_at ? [badge("웹후크 구독 유실", "warning")] : []),
       ...(account.deauthorized_at ? [badge("Instagram에서 권한 해제됨", "warning")] : []),
       badge(account.active ? "수신 설정 켜짐" : "수신 설정 꺼짐", account.active && credentialStatus === "valid" ? "success" : ""),
-      // The account switch alone never means messages go out: the service-wide switch must also be on.
-      badge(account.send_enabled ? (me.global_send_enabled ? "발송 설정 켜짐" : "발송 설정 켜짐 · 전체 중지 중") : "발송 설정 꺼짐", account.send_enabled && credentialStatus === "valid" && me.global_send_enabled ? "success" : ""),
+      globalSendBadge((enabled) => globalSendAccountBadge(account.send_enabled, credentialStatus === "valid", enabled)),
     );
     item.append(state);
     const inboxToggle = node("button", account.inbox_enabled ? "DM 보관 끄기" : "DM 보관 켜기", "secondary");
@@ -1461,7 +1526,10 @@ async function loadWorkspace() {
     item.append(target);
     observeRuleMedia(target, rule);
     const state = node("div", "", "badges");
-    state.append(badge(rule.enabled ? (me.global_send_enabled ? "활성" : "활성 · 전체 중지 중") : "중지", rule.enabled && me.global_send_enabled ? "success" : ""), badge(rule.follow_gate_enabled ? "팔로우 확인" : "바로 답장"));
+    state.append(
+      globalSendBadge((enabled) => globalSendRuleBadge(rule.enabled, enabled)),
+      badge(rule.follow_gate_enabled ? "팔로우 확인" : "바로 답장"),
+    );
     item.append(state, node("p", rule.match_mode === "all" ? "모든 댓글" : `${rule.match_mode === "exact" ? "정확히 일치" : "키워드 포함"} · ${(rule.keywords.length ? rule.keywords : [rule.keyword]).join(", ")}`, "rule-summary"));
     const button = node("button", "수정");
     button.className = "secondary";
