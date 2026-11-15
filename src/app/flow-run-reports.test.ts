@@ -450,3 +450,38 @@ test("flow report defaults to the last seven days of the workspace calendar, not
     assert.doesNotMatch(h.get("flow-report-zone").textContent, /직접 입력/);
   }
 });
+
+test("same-context refresh keeps flow report inputs and the displayed snapshot", async () => {
+  const h = harness(async (_url) => {
+    const url = _url;
+    return url === "/api/flows" ? { flows: [] } : snapshot;
+  }, "2026-11-15T03:00:00Z");
+  await h.controller.configure("owner", "Asia/Seoul", []);
+  h.inputs.from.value = "2026-10-01";
+  h.inputs.before.value = "2026-10-02";
+  await h.form.dispatch("submit");
+  const summary = h.get("flow-report-summary").textContent;
+  await h.controller.configure("owner", "Asia/Seoul", []);
+  assert.equal(h.inputs.from.value, "2026-10-01");
+  assert.equal(h.inputs.before.value, "2026-10-02");
+  assert.equal(h.get("flow-report-summary").textContent, summary);
+  assert.equal(h.get("flow-report-download").disabled, false);
+  await h.controller.configure("agent", "Asia/Seoul", []);
+  assert.equal(h.get("flow-reports-section").hidden, true);
+  assert.equal(h.get("flow-report-download").disabled, true);
+});
+
+test("flow option failure can retry without discarding report dates", async () => {
+  let available = false;
+  const h = harness(async (url) => {
+    assert.equal(url, "/api/flows");
+    if (!available) throw new Error("offline");
+    return { flows: [{ id: "choice", name: "Choice" }] };
+  }, "2026-11-15T03:00:00Z");
+  await h.controller.configure("owner", "Asia/Seoul", []);
+  h.inputs.from.value = "2026-10-01";
+  available = true;
+  await h.controller.configure("owner", "Asia/Seoul", []);
+  assert.equal(h.inputs.from.value, "2026-10-01");
+  assert.equal(h.inputs.flow_id.children.length, 2);
+});

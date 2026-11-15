@@ -567,10 +567,14 @@ test("session invalidation prevents a pending workspace bootstrap from reconfigu
   for (const pausedAt of ["/api/me", "/api/workspace"]) {
     let release!: (value: unknown) => void;
     let configurations = 0;
+    let paused = false;
     const elements = new Map<string, { hidden: boolean; elements: { time_zone: { value: string } } }>();
     const noOp = () => {};
     const controller = { reset: noOp, configure: noOp };
     const context = vm.createContext({
+      startupRequest: 0,
+      workspaceLoadRequest: 0,
+      currentWorkspaceId: undefined,
       segmentsGeneration: 0,
       workspaceGeneration: 0,
       globalSendRevision: 0,
@@ -579,6 +583,7 @@ test("session invalidation prevents a pending workspace bootstrap from reconfigu
       currentUserId: undefined,
       currentRole: undefined,
       workspaceTimeZone: undefined,
+      timeZoneWriteRevision: 0,
       workspacePlan: undefined,
       contactCsvPreview: controller,
       segmentSnapshots: controller,
@@ -590,6 +595,7 @@ test("session invalidation prevents a pending workspace bootstrap from reconfigu
         reset: noOp,
         configure: () => {
           configurations++;
+          throw new Error("fixture stops after campaign configuration");
         },
       },
       segmentControls: noOp,
@@ -606,16 +612,23 @@ test("session invalidation prevents a pending workspace bootstrap from reconfigu
         return elements.get(id)!;
       },
       api: async (path: string) => {
-        if (path === pausedAt)
+        if (path === pausedAt && !paused)
           return new Promise((resolve) => {
+            paused = true;
             release = resolve;
           });
         if (path === "/api/me") return { user: { id: "old-user" } };
         if (path === "/api/workspace") return { role: "admin", workspace_id: "old-workspace", time_zone: "UTC" };
-        // The unwanted configure sink occurs before these unrelated later reads.
-        throw new Error("fixture stops after campaign configuration");
+        if (path === "/api/connections") return { connections: [] };
+        if (path === "/api/rules") return { rules: [] };
+        throw new Error(`Unexpected request: ${path}`);
       },
     });
+    context.resetSession = () => {
+      context.workspaceGeneration++;
+    };
+    const readStart = source.indexOf("async function readWorkspace(");
+    vm.runInContext(source.slice(readStart, source.indexOf("\n}\n", readStart) + 3), context);
     vm.runInContext(source.slice(start, end + 3) + "\n" + source.slice(invalidationStart, invalidationEnd + 3) + "\nglobalThis.invalidate = invalidateContactSession;", context);
     const pending = context.loadWorkspace().catch((error: Error) => {
       if (error.message !== "fixture stops after campaign configuration") throw error;
@@ -625,6 +638,8 @@ test("session invalidation prevents a pending workspace bootstrap from reconfigu
     release(pausedAt === "/api/me" ? { user: { id: "old-user" } } : { role: "admin", workspace_id: "old-workspace", time_zone: "UTC" });
     await pending;
     assert.equal(configurations, 0, `${pausedAt} response from before invalidation must not restore campaign data`);
+    await assert.rejects(context.loadWorkspace(), /fixture stops after campaign configuration/);
+    assert.equal(configurations, 1, "the fixture must reach configuration for a current session");
   }
 });
 
@@ -874,7 +889,9 @@ test("the app's other-tab session signal and BFCache restoration reset the campa
   const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
   const start = source.indexOf("const invalidateContactSession = () => {");
   const body = source.slice(start, source.indexOf("\n};", start));
-  assert.match(body, /campaignDrafts\.reset\(\)/);
+  assert.match(body, /resetSession\(\{ broadcast: false \}\)/);
+  const reset = source.slice(source.indexOf("function resetSession("), source.indexOf("function notice("));
+  assert.match(reset, /campaignDrafts\.reset\(\)/);
   assert.match(source, /addEventListener\("message"[\s\S]{0,120}invalidateContactSession\(\)/);
   assert.match(source, /addEventListener\("pageshow"[\s\S]{0,80}event\.persisted\) invalidateContactSession\(\)/);
 });

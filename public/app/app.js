@@ -42,20 +42,17 @@ let workspaceRules = [];
 let globalSendBadges = [];
 let contactsGeneration = 0;
 let workspaceGeneration = 0;
+let workspaceLoadRequest = 0;
+let startupRequest = 0;
+let currentWorkspaceId;
+const pendingActions = new Map();
 // Invalidate contact disclosures on cross-tab sessions and BFCache restoration.
 const invalidateContactSession = () => {
-  workspaceGeneration++;
-  campaignDrafts.reset();
-  manualReports.reset();
-  flowReports.reset();
-  handoffReports.reset();
-  campaignReports.reset();
-  contactsSaving = false;
-  clearContactResults();
-  if (!byId("workspace").hidden) {
-    byId("retry-load").hidden = false;
-    notice("로그인 상태를 다시 확인해야 합니다. ‘다시 불러오기’를 눌러 작업 공간을 확인해 주세요.");
-  }
+  startupRequest++;
+  resetSession({ broadcast: false });
+  byId("auth").hidden = true;
+  byId("retry-load").hidden = false;
+  notice("로그인 상태를 다시 확인해야 합니다. ‘다시 불러오기’를 눌러 작업 공간을 확인해 주세요.");
 };
 try {
   const contactSessionChannel = new BroadcastChannel("auto-chatter-session");
@@ -133,6 +130,7 @@ let currentRole;
 let currentView;
 // The workspace time zone, which the inbox reminder editor shows its date and time in.
 let workspaceTimeZone;
+let timeZoneWriteRevision = 0;
 // The workspace plan, its limits and usage (#52) from the latest workspace or member list response.
 let workspacePlan;
 let pendingInvite = null;
@@ -232,14 +230,22 @@ window.addEventListener("beforeunload", (event) => {
     event.returnValue = "";
   }
 });
-function resetSession() {
+function resetSession({ broadcast = true } = {}) {
+  for (const [button, restore] of pendingActions) {
+    // Auth actions intentionally cross this boundary and still own their final outcome notice.
+    if (button === byId("logout") || button.closest("#auth")) continue;
+    restore();
+    pendingActions.delete(button);
+  }
   workspaceGeneration++;
   globalSendRevision++;
   globalSendReadAt = 0;
   workspaceRules = [];
   globalSendBadges = [];
   campaignDrafts.reset();
-  contactCsvPreview.sessionChanged();
+  // Receiving another document's change must not start a broadcast feedback loop.
+  if (broadcast) contactCsvPreview.sessionChanged();
+  else contactCsvPreview.reset();
   segmentSnapshots.reset();
   manualReports.reset();
   flowReports.reset();
@@ -256,6 +262,7 @@ function resetSession() {
   flowEditor.reset();
   connections = [];
   currentUserId = undefined;
+  currentWorkspaceId = undefined;
   currentRole = undefined;
   currentView = undefined;
   clearActionErrors();
@@ -334,6 +341,7 @@ function resetSession() {
   byId("auth").hidden = false;
   byId("logout").hidden = true;
   formConditions();
+  ruleControls();
   editorState();
 }
 
@@ -652,30 +660,48 @@ async function api(path, method = "GET", body, retry = true, asText = false, kee
   return result;
 }
 
+function ruleControls() {
+  const saving = byId("save-rule").hasAttribute("aria-busy");
+  const disabled = connections.length === 0 || saving;
+  byId("rule-fields").disabled = disabled;
+  byId("save-rule").disabled = disabled;
+  byId("new-rule").disabled = disabled;
+  for (const button of byId("rules").querySelectorAll("button")) button.disabled = saving;
+}
+
 async function action(button, task) {
   if (button.disabled) return;
-  const relatedControls = button === byId("save-rule") ? document.querySelectorAll("#workspace button, #logout") : (button.closest("form")?.querySelectorAll("button") ?? []);
+  const relatedControls = button.closest("form")?.querySelectorAll("button") ?? [];
   const controls = [...new Set([button, ...relatedControls])];
   const original = controls.map((control) => [control, control.disabled]);
   const label = button.textContent;
   const restoreFocus = holdFocus();
+  const restore = () => {
+    for (const [control, disabled] of original) control.disabled = disabled;
+    button.textContent = label;
+    button.removeAttribute("aria-busy");
+    ruleControls();
+  };
+  pendingActions.set(button, restore);
   clearActionError(button);
   for (const control of controls) control.disabled = true;
   button.textContent = button.dataset.loadingLabel ?? "처리 중…";
   button.setAttribute("aria-busy", "true");
+  ruleControls();
   try {
     await task();
   } catch (error) {
+    if (pendingActions.get(button) !== restore) return;
     // An inline error also clears the page notice, which the failure used to replace, so an earlier result is not
     // shown beside it.
     if (showActionError(button, errorMessage(error))) notice("");
     else notice(errorMessage(error), true);
   } finally {
-    for (const [control, disabled] of original) control.disabled = disabled;
-    button.textContent = label;
-    button.removeAttribute("aria-busy");
-    byId("save-rule").disabled = connections.length === 0;
-    restoreFocus();
+    if (pendingActions.get(button) === restore) {
+      pendingActions.delete(button);
+      restore();
+      restoreFocus();
+    }
   }
 }
 
@@ -1330,34 +1356,62 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") void rereadGlobalSend();
 });
 
+// Read the core snapshot before touching feature state. A different identity is the exception:
+// discard its predecessor immediately, even if a later read fails.
+async function readWorkspace(request) {
+  let session = workspaceGeneration;
+  let discardedPrevious = false;
+  const current = () => request === workspaceLoadRequest && session === workspaceGeneration;
+  const discardPrevious = () => {
+    resetSession();
+    byId("auth").hidden = true;
+    byId("retry-load").hidden = false;
+    discardedPrevious = true;
+    session = workspaceGeneration;
+  };
+  try {
+    const me = await api("/api/me");
+    if (!current()) return;
+    if (currentUserId !== undefined && currentUserId !== me.user?.id) discardPrevious();
+    if (pendingInvite) await acceptPendingInvite();
+    if (!current()) return;
+    const membership = await api("/api/workspace", "POST");
+    if (!current()) return;
+    if (currentWorkspaceId !== undefined && (currentWorkspaceId !== membership.workspace_id || currentRole !== membership.role)) discardPrevious();
+    const [accounts, settings] = await Promise.all([api("/api/connections"), api("/api/rules")]);
+    if (!current()) return;
+    return { me, membership, accounts, settings, session };
+  } catch (error) {
+    // Session retirement or a newer reload owns the screen, including its errors.
+    if (!current()) return;
+    // The action that requested this reload was retired with the old context.
+    if (discardedPrevious) notice(errorMessage(error), true);
+    throw error;
+  }
+}
+
 async function loadWorkspace() {
-  contactCsvPreview.reset();
-  segmentSnapshots.reset();
-  // A workspace reload ends a segment edit but keeps the draft: the name and conditions stay, and a changed draft
-  // stays marked unsaved.
-  if (editingSegment) leaveSegmentEdit();
-  segmentControls();
-  manualReports.reset();
-  flowReports.reset();
-  handoffReports.reset();
-  campaignReports.reset();
-  invalidateContactExport();
+  const request = ++workspaceLoadRequest;
+  const zoneWrite = timeZoneWriteRevision;
+  globalSendRevision++;
+  const snapshot = await readWorkspace(request);
+  if (!snapshot || request !== workspaceLoadRequest || snapshot.session !== workspaceGeneration) return;
+  const { me, membership, accounts, settings } = snapshot;
   const generation = segmentsGeneration,
     workspaceSession = workspaceGeneration;
-  globalSendRevision++;
-  const me = await api("/api/me");
-  if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
+  const firstContext = currentWorkspaceId === undefined;
+  // A save completed after this membership read started; its zone is newer than the snapshot.
+  const timeZone = firstContext || zoneWrite === timeZoneWriteRevision ? membership.time_zone : workspaceTimeZone;
+  const zoneChanged = workspaceTimeZone !== timeZone;
   currentUserId = me.user?.id;
-  if (pendingInvite) await acceptPendingInvite();
-  if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
-  const membership = await api("/api/workspace", "POST");
-  if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
+  currentWorkspaceId = membership.workspace_id;
   currentRole = membership.role;
-  contactCsvPreview.configure(currentRole);
-  workspaceTimeZone = membership.time_zone ?? undefined;
+  if (firstContext) contactCsvPreview.configure(currentRole);
+  const zoneInput = byId("time-zone-form").elements.time_zone;
+  if (firstContext || zoneInput.value === (workspaceTimeZone ?? "")) zoneInput.value = timeZone ?? "";
+  workspaceTimeZone = timeZone ?? undefined;
   workspacePlan = { plan: membership.plan, limits: membership.limits, usage: membership.usage };
   planControls();
-  byId("time-zone-form").elements.time_zone.value = membership.time_zone ?? "";
   timeZoneControls();
   const operationsVisible = currentRole === "owner" || currentRole === "admin";
   byId("contacts-export").hidden = !operationsVisible;
@@ -1365,7 +1419,7 @@ async function loadWorkspace() {
   byId("contacts-segment-export").hidden = !operationsVisible;
   byId("contacts-segment-export-help").hidden = !operationsVisible;
   byId("contacts-export-format").hidden = !operationsVisible;
-  segmentSnapshots.configure(currentRole, workspaceTimeZone);
+  if (firstContext || zoneChanged) segmentSnapshots.configure(currentRole, workspaceTimeZone);
   byId("nav-campaigns").hidden = !operationsVisible;
   void campaignDrafts.configure(currentRole, membership.workspace_id, workspaceTimeZone);
   byId("operations-section").hidden = !operationsVisible;
@@ -1376,9 +1430,6 @@ async function loadWorkspace() {
   }
   byId("members-section").hidden = currentRole !== "owner";
   if (currentRole === "owner") void loadMembers();
-  if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
-  const [accounts, settings] = await Promise.all([api("/api/connections"), api("/api/rules")]);
-  if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
   connections = accounts.connections;
   manualReports.configure(currentRole, workspaceTimeZone, connections);
   void flowReports.configure(currentRole, workspaceTimeZone, connections);
@@ -1389,9 +1440,7 @@ async function loadWorkspace() {
   byId("retry-load").hidden = true;
   byId("account-count").textContent = connections.length;
   byId("rule-count").textContent = settings.rules.length;
-  byId("rule-fields").disabled = connections.length === 0;
-  byId("save-rule").disabled = connections.length === 0;
-  byId("new-rule").disabled = connections.length === 0;
+  ruleControls();
   byId("editor-empty").hidden = connections.length > 0;
   workspaceRules = settings.rules;
   globalSendBadges = [];
@@ -1406,7 +1455,7 @@ async function loadWorkspace() {
   byId("workspace").hidden = false;
   byId("logout").hidden = false;
   const firstDisplay = currentView === undefined;
-  showView(viewFromHash() ?? (currentView && viewAvailable(currentView) ? currentView : "home"), false);
+  if (firstDisplay) showView(viewFromHash() ?? "home", false);
   const connectAvailable = instagramConnectAvailable;
   byId("connect").disabled = !connectAvailable;
   byId("connect-help").hidden = connectAvailable;
@@ -1580,6 +1629,7 @@ async function loadWorkspace() {
     item.append(button);
     byId("rules").append(item);
   }
+  ruleControls();
   formConditions();
   void loadMedia();
   initializeContacts();
@@ -1587,12 +1637,12 @@ async function loadWorkspace() {
   flowEditor.initialize();
   void loadContactSegments();
   await loadContactFields();
-  if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
+  if (request !== workspaceLoadRequest || generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
   if (!contactsDirty.size && !contactsSaving) void loadContacts();
   try {
     await loadActivity();
   } catch (error) {
-    if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
+    if (request !== workspaceLoadRequest || generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
     if (error.status === 401) throw error;
     byId("activity").replaceChildren(emptyState("처리 내역을 불러오지 못했습니다", "새로고침을 눌러 다시 시도해 주세요. 계정과 규칙 설정은 계속할 수 있습니다."));
   }
@@ -1938,6 +1988,7 @@ byId("time-zone-form").addEventListener("submit", (event) => {
   const zoneForm = event.currentTarget;
   action(zoneForm.querySelector("button[type=submit]"), async () => {
     const saved = await api("/api/workspace/settings", "PUT", { time_zone: zoneForm.elements.time_zone.value.trim() });
+    timeZoneWriteRevision++;
     zoneForm.elements.time_zone.value = saved.time_zone;
     const changed = saved.time_zone !== workspaceTimeZone;
     workspaceTimeZone = saved.time_zone;
@@ -2133,10 +2184,12 @@ form.addEventListener("submit", (event) => {
     confirmation_button_title: form.elements.follow_gate_enabled.checked && form.elements.confirmation_button_enabled.checked ? data.confirmation_button_title : "",
   };
   action(byId("save-rule"), async () => {
+    const session = workspaceGeneration;
     byId("rule-fields").disabled = true;
     editorState("규칙을 저장하고 있습니다…");
     try {
       const saved = await api("/api/rules", "PUT", payload);
+      if (session !== workspaceGeneration) return;
       editingRuleId = saved.id;
       dirty = false;
       form.elements.connection_id.disabled = true;
@@ -2146,13 +2199,13 @@ form.addEventListener("submit", (event) => {
       try {
         await loadWorkspace();
       } catch (error) {
-        notice(`저장은 완료했습니다. ${errorMessage(error)}`, true);
+        if (session === workspaceGeneration) notice(`저장은 완료했습니다. ${errorMessage(error)}`, true);
       }
     } catch (error) {
-      editorState("저장하지 못했습니다. 입력한 내용은 유지됩니다.");
+      if (session === workspaceGeneration) editorState("저장하지 못했습니다. 입력한 내용은 유지됩니다.");
       throw error;
     } finally {
-      byId("rule-fields").disabled = connections.length === 0;
+      if (session === workspaceGeneration) ruleControls();
     }
   });
 });
@@ -2165,6 +2218,8 @@ async function start() {
     location.reload();
     return;
   }
+  const request = ++startupRequest;
+  notice("");
   const instagramResult = new URLSearchParams(location.search).get("instagram");
   if (instagramErrors.includes(instagramResult)) {
     authLinkNotice = errors[instagramResult];
@@ -2200,15 +2255,21 @@ async function start() {
     }
     await loadWorkspace();
   } catch (error) {
+    if (request !== startupRequest) return;
     if (error.status !== 401) {
       notice(errorMessage(error), true);
       byId("retry-load").hidden = location.protocol !== "file:" ? false : true;
     }
-    byId("auth").hidden = false;
+    if (error.status === 401) {
+      byId("workspace").hidden = true;
+      byId("auth").hidden = false;
+    }
     if (error.status === 401 && pendingInvite) authLinkNotice ??= "초대 링크를 받았습니다. 초대받은 이메일로 로그인하면 작업 공간에 참여합니다. 새로 가입했다면 이메일 인증을 마친 뒤 초대 링크를 다시 열어 주세요.";
   } finally {
-    byId("startup").hidden = true;
-    if (authLinkNotice) notice(authLinkNotice, authLinkNotice.startsWith("인증 또는 변경 링크") || instagramErrors.includes(instagramResult));
+    if (request === startupRequest) {
+      byId("startup").hidden = true;
+      if (authLinkNotice) notice(authLinkNotice, authLinkNotice.startsWith("인증 또는 변경 링크") || instagramErrors.includes(instagramResult));
+    }
   }
 }
 byId("retry-load").addEventListener("click", (event) => action(event.currentTarget, start));

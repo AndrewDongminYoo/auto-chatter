@@ -12,6 +12,7 @@ function createHandoffReports({ api, node }) {
     ["cleared", "상담 전환 해제"],
     ["conversations", "변경된 대화 수"],
   ];
+  let configuration;
   let generation = 0;
   let timeZone;
   let result = null;
@@ -27,6 +28,7 @@ function createHandoffReports({ api, node }) {
     summary.textContent = message;
   }
   function reset() {
+    configuration = undefined;
     permitted = false;
     timeZone = undefined;
     invalidate("");
@@ -36,7 +38,10 @@ function createHandoffReports({ api, node }) {
     byId("handoff-report-zone").textContent = "";
   }
   function configure(role, zone, connections) {
+    const next = JSON.stringify([role, zone, connections.map(({ id, username }) => [id, username]).sort(([a], [b]) => a.localeCompare(b))]);
+    if (configuration === next) return;
     reset();
+    configuration = next;
     permitted = role === "owner" || role === "admin";
     if (!permitted || !zone) return;
     timeZone = zone;

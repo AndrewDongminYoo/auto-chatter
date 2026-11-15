@@ -46,6 +46,7 @@ function createFlowRunReports({ api, node }) {
   const dimensions = { day: "날짜", connection: "계정", flow: "플로" };
   // Names for group keys from the lists this card already loads; never sent in the CSV.
   const labels = { connection: new Map(), flow: new Map() };
+  let configuration;
   let generation = 0;
   let contextGeneration = 0;
   let timeZone;
@@ -65,6 +66,7 @@ function createFlowRunReports({ api, node }) {
     summary.textContent = message;
   }
   function reset() {
+    configuration = undefined;
     contextGeneration++;
     permitted = false;
     timeZone = undefined;
@@ -80,7 +82,13 @@ function createFlowRunReports({ api, node }) {
     byId("flow-report-zone").textContent = "";
   }
   async function configure(role, zone, connections) {
+    const next = JSON.stringify([role, zone, connections.map(({ id, username }) => [id, username]).sort(([a], [b]) => a.localeCompare(b))]);
+    if (configuration === next) {
+      if (permitted && timeZone) await refreshOptions();
+      return;
+    }
     reset();
+    configuration = next;
     permitted = role === "owner" || role === "admin";
     if (!permitted || !zone) return;
     timeZone = zone;
@@ -106,14 +114,26 @@ function createFlowRunReports({ api, node }) {
       form.elements.connection_id.append(new Option(label, connection.id));
     }
     invalidate();
-    const current = contextGeneration;
+    await refreshOptions();
+  }
+  async function refreshOptions() {
+    const current = ++contextGeneration;
+    const selected = form.elements.flow_id.value;
+    form.elements.flow_id.disabled = true;
     flowNotice.textContent = "플로 목록을 불러오고 있습니다. 전체 조회는 바로 할 수 있습니다.";
     try {
       const { flows } = await api("/api/flows");
       if (current !== contextGeneration || !permitted) return;
+      form.elements.flow_id.replaceChildren(new Option("모든 플로(보관 포함)", ""));
+      labels.flow.clear();
       for (const flow of flows) {
         labels.flow.set(flow.id, flow.name);
         form.elements.flow_id.append(new Option(flow.name, flow.id));
+      }
+      if (flows.some((flow) => flow.id === selected)) form.elements.flow_id.value = selected;
+      else if (selected) {
+        form.elements.flow_id.value = "";
+        invalidate();
       }
       flowNotice.textContent = "목록에는 보관하지 않은 플로만 표시됩니다. 전체 조회에는 보관한 플로의 실행도 포함됩니다.";
     } catch {

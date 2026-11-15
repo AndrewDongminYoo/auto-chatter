@@ -17,6 +17,7 @@ function createManualReplyReports({ api, node }) {
     ["unknown_resolved", "검토 완료·재전송 안 함"],
     ["cancelled", sendStatusLabel("cancelled")],
   ];
+  let configuration;
   let generation = 0;
   let timeZone;
   let result = null;
@@ -32,6 +33,7 @@ function createManualReplyReports({ api, node }) {
     summary.textContent = message;
   }
   function reset() {
+    configuration = undefined;
     permitted = false;
     timeZone = undefined;
     invalidate("");
@@ -41,7 +43,10 @@ function createManualReplyReports({ api, node }) {
     byId("manual-report-zone").textContent = "";
   }
   function configure(role, zone, connections) {
+    const next = JSON.stringify([role, zone, connections.map(({ id, username }) => [id, username]).sort(([a], [b]) => a.localeCompare(b))]);
+    if (configuration === next) return;
     reset();
+    configuration = next;
     permitted = role === "owner" || role === "admin";
     if (!permitted || !zone) return;
     timeZone = zone;

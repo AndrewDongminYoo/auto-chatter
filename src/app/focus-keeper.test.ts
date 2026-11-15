@@ -48,7 +48,7 @@ test("the dashboard and the inbox restore focus after their busy controls", () =
   assert.match(html, /<button id="inbox-back-to-list" type="button" class="secondary" hidden>목록으로<\/button>/);
   const action = read("app.js").match(/async function action\(button, task\) \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.ok(action.indexOf("holdFocus()") < action.indexOf("control.disabled = true"), "action holds focus first");
-  assert.match(action, /finally \{[\s\S]*restoreFocus\(\);\n {2}\}/);
+  assert.match(action, /finally \{[\s\S]*restoreFocus\(\);/);
   const inbox = read("inbox.js");
   for (const name of ["saveLabels", "saveReminder", "finishReminder", "addMemo", "manageLabels", "manageRules", "changeConversation", "submitOperation"]) {
     const body = inbox.match(new RegExp(`async function ${name}\\([\\s\\S]*?\\n {2}\\}\\n`))?.[0] ?? "";

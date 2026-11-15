@@ -107,7 +107,7 @@ test("the dashboard wires the notice and action errors through these decisions",
     /^ {2}if \(viewChangeClearsMessages\(currentView, name\)\) \{\n {4}notice\(""\);\n {4}clearActionErrors\(\);\n {2}\}\n {2}currentView = name;/m,
     "a menu change clears the notice and the action errors, comparing with the previous view before replacing it",
   );
-  const reset = app.match(/function resetSession\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const reset = app.match(/function resetSession\([^\n]*\) \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.match(reset, /\n {2}clearActionErrors\(\);\n/, "a sign-out or session expiry clears the action errors");
   const clearAll = app.match(/function clearActionErrors\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.match(clearAll, /document\.querySelectorAll\("\.action-error"\)\) element\.remove\(\);/);
@@ -115,11 +115,7 @@ test("the dashboard wires the notice and action errors through these decisions",
   const action = app.match(/async function action\(button, task\) \{[\s\S]*?\n\}/)?.[0] ?? "";
   const clearAt = action.indexOf("clearActionError(button)");
   assert.ok(clearAt >= 0 && clearAt < action.indexOf("await task()"), "a new run clears the error");
-  assert.match(
-    action,
-    /catch \(error\) \{\n(?: {4}\/\/.*\n)* {4}if \(showActionError\(button, errorMessage\(error\)\)\) notice\(""\);\n {4}else notice\(errorMessage\(error\), true\);/,
-    "an inline error replaces an earlier page notice; a failure without an owner still goes to the notice",
-  );
+  assert.match(action, /if \(showActionError\(button, errorMessage\(error\)\)\) notice\(""\);\n {4}else notice\(errorMessage\(error\), true\);/, "an inline error replaces an earlier page notice; a failure without an owner still goes to the notice");
   const show = app.match(/function showActionError\(button, message\) \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.match(show, /setAttribute\("role", "alert"\)/);
   assert.doesNotMatch(show, /focus|scroll/, "an inline error moves neither focus nor the page");
