@@ -52,7 +52,7 @@ node --test --test-name-pattern="seven-day boundary" src/instagram/reply-policy.
 
 ## Code conventions forced by the runtime
 
-- Relative imports carry the `.ts` extension (`./store.ts`); `tsconfig.json` uses `NodeNext` with `allowImportingTsExtensions`.
+- Relative imports carry the `.ts` extension (`./store.ts`); `tsconfig.src.json` uses `NodeNext` with `allowImportingTsExtensions`, and the root `tsconfig.json` only references it and `tsconfig.public.json` ([type checking](docs/agents/javascript-conventions.md#type-checking)).
 - Only erasable TypeScript syntax works under Node's type stripping: no `enum`, `namespace`, or constructor parameter properties.
 - The only runtime dependency is `pg`. HTTP uses `node:http`, tests use `node:test` + `node:assert/strict`, and Graph calls use global `fetch`.
 - The `.mjs` workerd harness avoids Miniflare's incomplete published TypeScript declarations; application TypeScript remains strict.
