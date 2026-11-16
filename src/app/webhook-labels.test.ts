@@ -21,6 +21,7 @@ interface WebhookLabels {
 
 // public/app/webhook-labels.js is a classic browser script; its top-level functions become context globals.
 const context = vm.createContext({});
+vm.runInContext(readFileSync(new URL("../../public/app/display-values.js", import.meta.url), "utf8"), context);
 vm.runInContext(readFileSync(new URL("../../public/app/webhook-labels.js", import.meta.url), "utf8"), context);
 const labels = context as unknown as WebhookLabels;
 

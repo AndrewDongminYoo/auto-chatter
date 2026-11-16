@@ -112,7 +112,7 @@ function createCampaignRunReports({ api, node }) {
       const { drafts } = await api("/api/campaign-drafts");
       if (current !== contextGeneration || !permitted) return;
       form.elements.draft_id.replaceChildren(new Option("모든 캠페인(보관 포함)", ""));
-      for (const draft of drafts) if (!draft.archived) form.elements.draft_id.append(new Option(draft.name, draft.id));
+      for (const draft of drafts) if (!draft.archived) form.elements.draft_id.append(new Option(formatText(draft.name), draft.id));
       if (drafts.some((draft) => draft.id === selected && !draft.archived)) form.elements.draft_id.value = selected;
       else if (selected) {
         form.elements.draft_id.value = "";
@@ -144,11 +144,11 @@ function createCampaignRunReports({ api, node }) {
     try {
       const report = await api(`/api/reports/campaign-runs?${query}`);
       if (current !== generation || !permitted) return;
-      // Build every row first so a malformed count changes nothing on screen.
+      // Build every row first; invalid display counts use a dash while the CSV retains its response snapshot.
       const rendered = groups.map(([, property, , metrics]) =>
         metrics.map(([key, label]) => {
           const item = node("div");
-          item.append(node("dt", label), node("dd", BigInt(report[property][key]).toLocaleString("ko-KR")));
+          item.append(node("dt", label), node("dd", formatCount(report[property]?.[key])));
           return item;
         }),
       );
@@ -157,10 +157,10 @@ function createCampaignRunReports({ api, node }) {
       try {
         checkedAt = formatDateTime(report.checked_at, { timeZone: report.time_zone });
       } catch {
-        checkedAt = `${report.checked_at} (UTC)`;
+        checkedAt = `${formatText(report.checked_at)} (UTC)`;
       }
       result = report;
-      summary.textContent = `${report.from}부터 ${report.before} 전까지 시작 · ${report.time_zone} · ${campaign} · ${checkedAt} 조회`;
+      summary.textContent = `${formatText(report.from)}부터 ${formatText(report.before)} 전까지 시작 · ${formatText(report.time_zone)} · ${campaign} · ${checkedAt} 조회`;
       groups.forEach(([, , output], index) => output.append(...rendered[index]));
       download.disabled = false;
     } catch (error) {

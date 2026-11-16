@@ -17,6 +17,10 @@ Signed-in writes outside `/api/auth/*` spend fixed default per-user and per-work
 `public/app/` is a build-free static client (`app.js`, `inbox.js`, `reply-templates.js`, `manual-reply-reports.js`, `flow-run-reports.js`, `handoff-reports.js`, `contact-csv-preview.js`, `segment-snapshots.js`, `contact-identity-links.js`) served by Wrangler assets.
 The auth client wraps injected fetch in a standalone call because workerd rejects a native fetch invoked with the client object as its receiver.
 
+Dashboard display helpers in `public/app/display-values.js` guard API counts, dates and text before interpolation.
+Plain count displays retain their ungrouped form, decimal-string counts retain integer precision, and absent or invalid display values use `–`.
+Report range strings and CSV audit timestamps retain their existing ISO representation.
+
 ### Dashboard session and auth client
 
 Session invalidation clears the entire protected dashboard, advances its generation and exposes the existing reload action; it does not imply an authentication refusal.

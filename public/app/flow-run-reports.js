@@ -128,7 +128,7 @@ function createFlowRunReports({ api, node }) {
       labels.flow.clear();
       for (const flow of flows) {
         labels.flow.set(flow.id, flow.name);
-        form.elements.flow_id.append(new Option(flow.name, flow.id));
+        form.elements.flow_id.append(new Option(formatText(flow.name), flow.id));
       }
       if (flows.some((flow) => flow.id === selected)) form.elements.flow_id.value = selected;
       else if (selected) {
@@ -168,14 +168,14 @@ function createFlowRunReports({ api, node }) {
       try {
         checkedAt = formatDateTime(report.checked_at, { timeZone: report.time_zone });
       } catch {
-        checkedAt = `${report.checked_at} (UTC)`;
+        checkedAt = `${formatText(report.checked_at)} (UTC)`;
       }
       const dimension = dimensions[report.group_by];
-      summary.textContent = `${report.from}부터 ${report.before} 전까지 생성 · ${report.time_zone} · ${account} · ${flow}${dimension ? ` · ${dimension}별` : ""} · ${checkedAt} 조회`;
+      summary.textContent = `${formatText(report.from)}부터 ${formatText(report.before)} 전까지 생성 · ${formatText(report.time_zone)} · ${account} · ${flow}${dimension ? ` · ${dimension}별` : ""} · ${checkedAt} 조회`;
       for (const [, property, output, metrics] of groups)
         for (const [key, label] of metrics) {
           const item = node("div");
-          item.append(node("dt", label), node("dd", BigInt(report[property][key]).toLocaleString("ko-KR")));
+          item.append(node("dt", label), node("dd", formatCount(report[property]?.[key])));
           output.append(item);
         }
       if (dimension) renderBreakdown(report, dimension);
@@ -235,7 +235,7 @@ function createFlowRunReports({ api, node }) {
       const name = node("th", known ?? `${group.key.slice(0, 8)}…`);
       name.scope = "row";
       row.append(name);
-      for (const [, property, , metrics] of groups) for (const [key] of metrics) row.append(node("td", BigInt(group[property][key]).toLocaleString("ko-KR")));
+      for (const [, property, , metrics] of groups) for (const [key] of metrics) row.append(node("td", formatCount(group[property]?.[key])));
       tbody.append(row);
     }
     table.append(thead, tbody);

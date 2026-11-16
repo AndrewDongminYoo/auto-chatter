@@ -511,6 +511,7 @@ test("saving a changed time zone retires the reports view load", async () => {
   ]);
   const noop = () => {};
   const context = vm.createContext({
+    formatText: (value: unknown) => (typeof value === "string" ? value : "–"),
     byId: () => ({
       addEventListener: (_name: string, listener: typeof submit) => {
         submit = listener;

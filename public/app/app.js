@@ -863,7 +863,7 @@ function connectionData(account, generation) {
     );
     const helpId = `deletion-help-${account.id}`;
     help.id = helpId;
-    const label = node("label", `확인을 위해 Instagram 계정 ID(${account.account_id})를 입력하세요`);
+    const label = node("label", `확인을 위해 Instagram 계정 ID(${formatText(account.account_id)})를 입력하세요`);
     const input = document.createElement("input");
     input.name = "confirm_account_id";
     input.autocomplete = "off";
@@ -965,7 +965,7 @@ function memberItem(member) {
     role.disabled = true;
     try {
       await api(`/api/workspace/members/${member.user_id}`, "PATCH", { role: role.value });
-      notice(`멤버(${member.email ?? "이메일 미기록"})의 역할을 ${roleLabelsAs[role.value]} 바꿨습니다. 다음 요청부터 적용됩니다.`);
+      notice(`멤버(${member.email ?? "이메일 미기록"})의 역할을 ${formatText(roleLabelsAs[role.value])} 바꿨습니다. 다음 요청부터 적용됩니다.`);
     } catch (error) {
       role.value = member.role;
       notice(errorMessage(error), true);
@@ -979,7 +979,7 @@ function memberItem(member) {
     action(remove, async () => {
       if (!confirm(`이 멤버(${member.email ?? "이메일 미기록"})를 작업 공간에서 제거할까요? 다음 요청부터 접근할 수 없고, 담당한 대화는 미배정으로 바뀝니다. 이미 예약한 답장과 시작한 상담은 취소되지 않습니다.`)) return;
       const removed = await api(`/api/workspace/members/${member.user_id}`, "DELETE");
-      notice(removed.unassigned_conversations ? `멤버를 작업 공간에서 제거하고 담당하던 대화 ${removed.unassigned_conversations}개를 미배정으로 바꿨습니다.` : "멤버를 작업 공간에서 제거했습니다.");
+      notice(removed.unassigned_conversations ? `멤버를 작업 공간에서 제거하고 담당하던 대화 ${formatCount(removed.unassigned_conversations, { useGrouping: false })}개를 미배정으로 바꿨습니다.` : "멤버를 작업 공간에서 제거했습니다.");
       await loadMembers();
     }),
   );
@@ -1062,17 +1062,18 @@ function timeZoneControls() {
 
 // Admins and owners see delivery metrics and alerts; the route refuses agents, so the section stays hidden for them.
 const operationAlertLabels = {
-  oldest_pending: (limits) => `발송 대기 ${limits.oldest_pending_minutes}분 초과`,
-  sending_dwell: (limits) => `발송 처리 ${limits.sending_dwell_minutes}분 초과`,
+  oldest_pending: (limits) => `발송 대기 ${formatCount(limits.oldest_pending_minutes, { useGrouping: false })}분 초과`,
+  sending_dwell: (limits) => `발송 처리 ${formatCount(limits.sending_dwell_minutes, { useGrouping: false })}분 초과`,
   unknown_outcome: () => "결과 확인이 필요한 발송 있음",
-  token_expiring: (limits) => `토큰 만료 ${limits.token_expiry_days}일 이내`,
-  cron_stale: (limits) => `정기 작업이 ${limits.cron_stale_minutes}분 넘게 성공하지 않음`,
+  token_expiring: (limits) => `토큰 만료 ${formatCount(limits.token_expiry_days, { useGrouping: false })}일 이내`,
+  cron_stale: (limits) => `정기 작업이 ${formatCount(limits.cron_stale_minutes, { useGrouping: false })}분 넘게 성공하지 않음`,
 };
 function operationAlert(name, limits) {
   return badge(operationAlertLabels[name]?.(limits) ?? name, "warning");
 }
 function operationDuration(seconds) {
   if (seconds === null || seconds === undefined) return "없음";
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return "–";
   if (seconds < 60) return `${seconds}초`;
   const minutes = Math.floor(seconds / 60);
   return minutes < 60 ? `${minutes}분` : `${Math.floor(minutes / 60)}시간 ${minutes % 60}분`;
@@ -1097,11 +1098,11 @@ async function loadOperations() {
               node("strong", connection.username ?? "이름 없는 계정"),
               badges,
               node("p", `가장 오래 기다린 발송: ${operationDuration(connection.oldest_due_pending_seconds)} · 가장 오래 처리 중인 발송: ${operationDuration(connection.longest_sending_seconds)}`, "hint"),
-              node("p", `최근 24시간: 결과 확인 필요 ${connection.unknown_24h}건 · 실패 ${connection.failed_24h}건 · 차단 ${connection.blocked_24h}건`, "hint"),
+              node("p", `최근 24시간: 결과 확인 필요 ${formatCount(connection.unknown_24h, { useGrouping: false })}건 · 실패 ${formatCount(connection.failed_24h, { useGrouping: false })}건 · 차단 ${formatCount(connection.blocked_24h, { useGrouping: false })}건`, "hint"),
               node(
                 "p",
                 [
-                  connection.token_expires_in_days === null ? "연결 토큰 없음" : connection.token_expires_in_days < 0 ? "토큰 만료됨" : `토큰 만료까지 ${connection.token_expires_in_days}일`,
+                  connection.token_expires_in_days === null ? "연결 토큰 없음" : connection.token_expires_in_days < 0 ? "토큰 만료됨" : `토큰 만료까지 ${formatCount(connection.token_expires_in_days, { useGrouping: false })}일`,
                   ...(connection.send_paused_until ? [`발송 제한으로 ${formatTime(connection.send_paused_until)}까지 일시 중지`] : []),
                 ].join(" · "),
                 "hint",
@@ -1145,7 +1146,7 @@ async function webhookSecretAction(button, task) {
 }
 function showWebhookSecret(endpointName, key) {
   byId("webhook-secret-value").value = key.secret;
-  byId("webhook-secret-help").textContent = `"${endpointName}" 주소의 키 ${key.id} 비밀입니다. 지금 한 번만 보여 주며 닫거나 새로 고치면 다시 볼 수 없으니 수신 서버에 저장한 뒤 닫아 주세요. 닫기 전에는 주소를 추가하거나 키를 교체할 수 없습니다.`;
+  byId("webhook-secret-help").textContent = `"${endpointName}" 주소의 키 ${formatText(key.id)} 비밀입니다. 지금 한 번만 보여 주며 닫거나 새로 고치면 다시 볼 수 없으니 수신 서버에 저장한 뒤 닫아 주세요. 닫기 전에는 주소를 추가하거나 키를 교체할 수 없습니다.`;
   byId("webhook-secret").hidden = false;
   byId("webhook-secret-value").select();
   webhookSecretControls();
@@ -1161,7 +1162,7 @@ function webhookEndpointItem(endpoint) {
   const badges = node("div", "", "badges");
   badges.append(badge(endpoint.active ? "켜짐" : "꺼짐", endpoint.active ? "success" : "warning"), badge(webhookKeyState(endpoint.keys)));
   item.append(node("strong", endpoint.name), badges, node("p", endpoint.url, "hint"));
-  for (const key of endpoint.keys) item.append(node("p", `키 ${key.id} · ${formatDateTime(key.created_at)} 발급`, "hint"));
+  for (const key of endpoint.keys) item.append(node("p", `키 ${formatText(key.id)} · ${formatDateTime(key.created_at)} 발급`, "hint"));
   const rotate = node("button", "키 교체", "secondary");
   rotate.dataset.loadingLabel = "발급 중…";
   rotate.dataset.keyCount = String(endpoint.keys.length);
@@ -1181,7 +1182,7 @@ function webhookEndpointItem(endpoint) {
   retire.disabled = endpoint.keys.length < 2;
   retire.addEventListener("click", () =>
     action(retire, async () => {
-      if (!confirm(`"${endpoint.name}" 주소의 이전 키를 폐기할까요? 폐기하면 그 키로 서명하지 않으므로, 수신 서버가 새 비밀로 검증하는지 먼저 확인해 주세요.`)) return;
+      if (!confirm(`"${formatText(endpoint.name)}" 주소의 이전 키를 폐기할까요? 폐기하면 그 키로 서명하지 않으므로, 수신 서버가 새 비밀로 검증하는지 먼저 확인해 주세요.`)) return;
       await api(`/api/webhooks/endpoints/${endpoint.id}/retire`, "POST");
       notice("이전 키를 폐기했습니다. 이제 새 키로만 서명합니다.");
       await loadWebhooks();
@@ -1190,7 +1191,7 @@ function webhookEndpointItem(endpoint) {
   const toggle = node("button", endpoint.active ? "끄기" : "켜기", "secondary");
   toggle.addEventListener("click", () =>
     action(toggle, async () => {
-      if (endpoint.active && !confirm(`"${endpoint.name}" 주소를 끌까요? 꺼진 동안 이 주소로 보낼 전송은 보내지 않고 중단됩니다. 다시 켜도 자동으로 다시 보내지 않습니다.`)) return;
+      if (endpoint.active && !confirm(`"${formatText(endpoint.name)}" 주소를 끌까요? 꺼진 동안 이 주소로 보낼 전송은 보내지 않고 중단됩니다. 다시 켜도 자동으로 다시 보내지 않습니다.`)) return;
       await api(`/api/webhooks/endpoints/${endpoint.id}/${endpoint.active ? "disable" : "enable"}`, "POST");
       notice(endpoint.active ? "주소를 껐습니다." : "주소를 켰습니다.");
       await loadWebhooks();
@@ -2081,7 +2082,7 @@ byId("invite-form").addEventListener("submit", async (event) => {
       if (generation !== segmentsGeneration) return;
       showInviteLink(created.link);
       inviteForm.reset();
-      notice(`${created.email} 초대 링크를 만들었습니다. 이 화면을 벗어나면 링크를 다시 볼 수 없습니다.`);
+      notice(`${formatText(created.email)} 초대 링크를 만들었습니다. 이 화면을 벗어나면 링크를 다시 볼 수 없습니다.`);
       await loadMembers();
     } finally {
       invitePending = false;
@@ -2116,7 +2117,7 @@ byId("time-zone-form").addEventListener("submit", (event) => {
       handoffReports.configure(currentRole, workspaceTimeZone, connections);
       void campaignReports.configure(currentRole, workspaceTimeZone, currentView === "reports");
     }
-    notice(`시간대를 저장했습니다(${saved.time_zone}). 지금부터 정한 시각까지 기다리기 시작하는 실행에 적용됩니다.`);
+    notice(`시간대를 저장했습니다(${formatText(saved.time_zone)}). 지금부터 정한 시각까지 기다리기 시작하는 실행에 적용됩니다.`);
   });
 });
 byId("operations-refresh").addEventListener("click", (event) => action(event.currentTarget, loadOperations));
@@ -2133,7 +2134,7 @@ byId("webhook-form").addEventListener("submit", (event) => {
     if (generation !== segmentsGeneration) return;
     showWebhookSecret(created.name, created.key);
     webhookForm.reset();
-    notice(`"${created.name}" 주소를 추가했습니다. 서명 비밀은 지금 한 번만 보여 줍니다.`);
+    notice(`"${formatText(created.name)}" 주소를 추가했습니다. 서명 비밀은 지금 한 번만 보여 줍니다.`);
     await loadWebhooks();
   });
 });
@@ -2234,8 +2235,8 @@ byId("contacts-segment-export").addEventListener("click", (event) => {
     event.currentTarget,
     `/api/contacts/export.csv?${new URLSearchParams({ segment_id: segment.id })}`,
     (exportedOn) => `auto-chatter-contacts-v1-segment-${segment.id}-${exportedOn}.csv`,
-    `저장된 "${segment.name}" 필터에 맞는 연락처 CSV를 만들고 있습니다…`,
-    `"${segment.name}" 필터에 맞는 연락처 CSV를 저장했습니다. 저장된 필터 조건으로 만들었고 화면의 저장 전 수정은 적용하지 않았습니다. 개인정보가 포함되므로 안전하게 보관하세요.`,
+    `저장된 "${formatText(segment.name)}" 필터에 맞는 연락처 CSV를 만들고 있습니다…`,
+    `"${formatText(segment.name)}" 필터에 맞는 연락처 CSV를 저장했습니다. 저장된 필터 조건으로 만들었고 화면의 저장 전 수정은 적용하지 않았습니다. 개인정보가 포함되므로 안전하게 보관하세요.`,
     segment.id,
   );
 });
@@ -2412,9 +2413,9 @@ async function loadActivity() {
   byId("activity").replaceChildren();
   if (!result.activity.length) byId("activity").append(emptyState("첫 댓글을 기다리고 있습니다", "활성 규칙에 맞는 댓글을 받으면 첫 DM과 후속 메시지의 처리 상태가 여기에 표시됩니다."));
   for (const row of result.activity) {
-    const item = node("div", `게시물 ${row.media_id} · 첫 DM: ${labels[row.first_reply_status] ?? row.first_reply_status}`);
+    const item = node("div", `게시물 ${formatText(row.media_id)} · 첫 DM: ${formatText(labels[row.first_reply_status] ?? row.first_reply_status)}`);
     item.className = "item";
-    if (row.follow_reply_status) item.append(node("p", `후속 DM: ${labels[row.follow_reply_status] ?? row.follow_reply_status} · ${row.follow_status === "unknown" ? "팔로우 확인 전 또는 확인 불가" : labels[row.follow_status]}`));
+    if (row.follow_reply_status) item.append(node("p", `후속 DM: ${formatText(labels[row.follow_reply_status] ?? row.follow_reply_status)} · ${row.follow_status === "unknown" ? "팔로우 확인 전 또는 확인 불가" : formatText(labels[row.follow_status])}`));
     const reason = row.follow_reply_error ?? row.first_reply_error;
     if (reason) {
       const reasons = {
@@ -2452,7 +2453,7 @@ function contactCard(contact) {
   const item = node("article", "", "contact-row");
   item.dataset.connectionId = contact.connection_id;
   const summary = node("div", "", "contact-summary");
-  summary.append(node("h3", `참여자 ${contact.sender_id}`), node("p", `연결 계정 ${contact.username ? `@${contact.username}` : "이름 확인 전"} · 댓글 ${contact.comment_count}개`, "hint"));
+  summary.append(node("h3", `참여자 ${formatText(contact.sender_id)}`), node("p", `연결 계정 ${contact.username ? `@${contact.username}` : "이름 확인 전"} · 댓글 ${formatCount(contact.comment_count, { useGrouping: false })}개`, "hint"));
   const automation = node("div");
   const automationStatus = badge("");
   const toggle = node("button", "", "secondary");
@@ -2555,7 +2556,7 @@ function contactCard(contact) {
   const fieldNames = new Map(contactFields.map((field) => [field.id, field]));
   for (const [id, value] of Object.entries(contact.fields || {})) {
     const field = fieldNames.get(id);
-    if (field) fieldSummary.append(node("p", `${field.name} · ${displayFieldValue(value)}`, "hint"));
+    if (field) fieldSummary.append(node("p", `${formatText(field.name)} · ${displayFieldValue(value)}`, "hint"));
   }
   summary.append(fieldSummary);
   if (contactFields.length) editors.append(contactFieldEditor(contact, fieldSummary));
@@ -2603,13 +2604,13 @@ function contactDetail(contact) {
   }
   function render(detail) {
     const facts = section("저장된 연락처 정보");
-    facts.append(node("p", `댓글 참여자 ${detail.sender_id} · 댓글 ${detail.comment_count}개`), node("p", `첫 댓글 ${date(detail.first_comment_at)} · 최근 댓글 ${date(detail.last_comment_at)}`, "hint"));
+    facts.append(node("p", `댓글 참여자 ${formatText(detail.sender_id)} · 댓글 ${formatCount(detail.comment_count, { useGrouping: false })}개`), node("p", `첫 댓글 ${date(detail.first_comment_at)} · 최근 댓글 ${date(detail.last_comment_at)}`, "hint"));
     const tags = node("div", "", "badges");
     for (const tag of detail.tags) tags.append(badge(tag));
     if (!detail.tags.length) tags.append(node("span", "태그 없음", "hint"));
     facts.append(tags);
     const fields = section("추가 정보");
-    for (const field of detail.fields) fields.append(node("p", `${field.name} · ${fieldTypeLabels[field.type]} · ${field.value === null ? "미설정" : displayFieldValue(field.value)}`));
+    for (const field of detail.fields) fields.append(node("p", `${formatText(field.name)} · ${formatText(fieldTypeLabels[field.type])} · ${field.value === null ? "미설정" : displayFieldValue(field.value)}`));
     if (!detail.fields.length) fields.append(node("p", "활성 필드가 없습니다.", "hint"));
     const pause = section("자동화 중지 사유");
     const reasons = [];
@@ -2623,10 +2624,10 @@ function contactDetail(contact) {
     for (const conversation of detail.conversations) {
       const row = node("article", "", "contact-detail-conversation");
       row.append(
-        node("h5", `DM 상대 ${conversation.recipient_id}`),
-        node("p", `저장 메시지 ${conversation.message_count}개 · ${conversation.state === "closed" ? "종료된 대화" : "열린 대화"} · ${conversation.handoff_active ? "상담 전환 중" : "상담 전환 없음"}`),
+        node("h5", `DM 상대 ${formatText(conversation.recipient_id)}`),
+        node("p", `저장 메시지 ${formatCount(conversation.message_count, { useGrouping: false })}개 · ${conversation.state === "closed" ? "종료된 대화" : "열린 대화"} · ${conversation.handoff_active ? "상담 전환 중" : "상담 전환 없음"}`),
         node("p", `첫 수신 ${date(conversation.first_message_at)} · 최근 수신 ${date(conversation.last_message_at)}`, "hint"),
-        node("p", `연결 근거 답장 기록 ${conversation.evidence_reply_id}`, "hint"),
+        node("p", `연결 근거 답장 기록 ${formatText(conversation.evidence_reply_id)}`, "hint"),
         consentRecords(conversation.consent),
       );
       conversations.append(row);
@@ -2736,13 +2737,13 @@ function relativeActivitySummary(window, days, label = "") {
   const valid = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(value);
   const milliseconds = (value) => Date.parse(value.slice(0, -4) + "Z");
   if (!valid(window?.from) || !valid(window?.before) || milliseconds(window.before) - milliseconds(window.from) !== Number(days) * 86400000) throw new Error(`최근 ${label}활동의 조회 기간을 확인할 수 없습니다.`);
-  return ` 이번 ${label}조회 기간(UTC): ${window.from} 이상, ${window.before} 미만. 조회와 다음 페이지마다 다시 계산합니다.`;
+  return ` 이번 ${label}조회 기간(UTC): ${formatText(window.from)} 이상, ${formatText(window.before)} 미만. 조회와 다음 페이지마다 다시 계산합니다.`;
 }
 function calendarActivitySummary(window, period) {
   if (!period) return "";
   const valid = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(value);
   if (!Object.hasOwn(calendarPeriodLabels, period) || !valid(window?.from) || !valid(window?.before) || window.from >= window.before || typeof window.time_zone !== "string" || !window.time_zone) throw new Error("달력 기간의 조회 경계를 확인할 수 없습니다.");
-  return ` 이번 조회 기간: ${window.time_zone} 시간대의 ${calendarPeriodLabels[period]}, UTC ${window.from} 이상 ${window.before} 미만.` + " 조회와 다음 페이지마다 작업 공간 시간대로 다시 계산합니다.";
+  return ` 이번 조회 기간: ${formatText(window.time_zone)} 시간대의 ${formatText(calendarPeriodLabels[period])}, UTC ${formatText(window.from)} 이상 ${formatText(window.before)} 미만.` + " 조회와 다음 페이지마다 작업 공간 시간대로 다시 계산합니다.";
 }
 function contactTagInputs() {
   const fields = byId("contacts-filter").elements;
@@ -2952,13 +2953,16 @@ byId("segment-preview").addEventListener("click", async () => {
     if (counts.some((value) => typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value))) throw new Error("대상 수와 제외 사유를 확인할 수 없습니다.");
     const excludedTotal = BigInt(activityCount) + BigInt(consentCount) + BigInt(dmIdentityCount) + BigInt(dmConsentCount) + BigInt(dmActivityCount) + conditionReasons.reduce((total, [count]) => total + BigInt(count), 0n);
     if (BigInt(page.evaluated) !== BigInt(page.total) + excludedTotal) throw new Error("대상 수와 제외 사유를 확인할 수 없습니다.");
-    status.textContent = `조회 시점의 대상은 총 ${page.total}명입니다. 선택 계정 범위 ${page.evaluated}명 중 ${excludedTotal}명이 조건과 맞지 않습니다.` + (page.total === "0" ? " 조건에 맞는 연락처가 없습니다." : " 아래에 최대 5명의 예시를 표시합니다.") + period;
+    status.textContent =
+      `조회 시점의 대상은 총 ${formatCount(page.total, { useGrouping: false })}명입니다. 선택 계정 범위 ${formatCount(page.evaluated, { useGrouping: false })}명 중 ${excludedTotal}명이 조건과 맞지 않습니다.` +
+      (page.total === "0" ? " 조건에 맞는 연락처가 없습니다." : " 아래에 최대 5명의 예시를 표시합니다.") +
+      period;
     for (const [count, label] of [[activityCount, "활동 기간 밖 (먼저 제외)"], [consentCount, "동의 기록 조건 불일치"], [dmIdentityCount, "확인된 DM 대화 없음"], [dmConsentCount, "DM 동의 기록 조건 불일치"], [dmActivityCount, "최근 받은 DM 없음"], ...conditionReasons]) {
       if (count !== "0") byId("segment-preview-exclusions").append(node("li", `${label}: ${count}명`));
     }
     for (const contact of page.contacts.slice(0, 5)) {
       const item = node("li");
-      item.append(node("p", `참여자 ${contact.sender_id} · 연결 계정 ${contact.username ? `@${contact.username}` : "이름 확인 전"}`));
+      item.append(node("p", `참여자 ${formatText(contact.sender_id)} · 연결 계정 ${contact.username ? `@${contact.username}` : "이름 확인 전"}`));
       byId("segment-preview-list").append(item);
     }
   } catch (error) {
@@ -3254,20 +3258,20 @@ function segmentSummary(segment) {
   const fields = byId("contacts-filter").elements;
   const account = connections.find((connection) => connection.id === segment.connection_id);
   const parts = [
-    `이름 ${segment.name}`,
+    `이름 ${formatText(segment.name)}`,
     `계정 ${segment.connection_id ? account?.username || account?.account_id || "확인할 수 없는 계정" : "모든 계정"}`,
     segment.condition_tree ? `그룹 조건 ${segmentTreeSummary(segment.condition_tree, fieldConditionSummary)}` : segment.tags ? `태그 ${segment.tags.join(", ")} (${segment.tag_mode === "any" ? "하나 이상 포함" : "모두 포함"})` : `태그 ${segment.tag || "조건 없음"}`,
   ];
   const savedFields = segmentFieldConditions(segment).map(fieldConditionSummary);
   if (savedFields.length > 1) parts.push(`추가 정보 ${savedFields.join(", ")} (${segment.field_mode === "any" ? "하나 이상 만족" : "모두 만족"})`);
-  else if (savedFields.length) parts.push(`추가 정보 ${savedFields[0]}`);
+  else if (savedFields.length) parts.push(`추가 정보 ${formatText(savedFields[0])}`);
   if (segment.condition_operator === "or") parts.push("태그와 추가 정보 중 하나만 맞아도 포함");
   if (segment.last_comment_period) parts.push(`달력 기간 ${calendarPeriodLabels[segment.last_comment_period] ?? segment.last_comment_period} (작업 공간 시간대)`);
-  else if (segment.last_comment_days) parts.push(`최근 ${segment.last_comment_days}일 활동`);
-  else if (segment.last_comment_from) parts.push(`활동 기간(UTC) ${segment.last_comment_from} 이상 ${segment.last_comment_before} 미만`);
+  else if (segment.last_comment_days) parts.push(`최근 ${formatCount(segment.last_comment_days, { useGrouping: false })}일 활동`);
+  else if (segment.last_comment_from) parts.push(`활동 기간(UTC) ${formatText(segment.last_comment_from)} 이상 ${formatText(segment.last_comment_before)} 미만`);
   if (segment.consent_purpose) parts.push(`동의 기록 ${optionLabel(fields.consent_purpose, segment.consent_purpose)} ${optionLabel(fields.consent_state, segment.consent_state)}`);
   if (segment.dm_consent_purpose) parts.push(`DM 동의 기록 ${optionLabel(fields.dm_consent_purpose, segment.dm_consent_purpose)} ${optionLabel(fields.dm_consent_state, segment.dm_consent_state)}`);
-  if (segment.last_dm_days) parts.push(`최근 ${segment.last_dm_days}일 안에 받은 DM`);
+  if (segment.last_dm_days) parts.push(`최근 ${formatCount(segment.last_dm_days, { useGrouping: false })}일 안에 받은 DM`);
   return parts.join(" · ");
 }
 async function loadContactSegments(force = false) {
@@ -3280,7 +3284,7 @@ async function loadContactSegments(force = false) {
     contactSegments = result.segments;
     const select = byId("contact-segment");
     select.replaceChildren(new Option("직접 조건 설정", ""));
-    for (const segment of contactSegments) select.add(new Option(segment.name, segment.id));
+    for (const segment of contactSegments) select.add(new Option(formatText(segment.name), segment.id));
     if (!contactSegments.some((segment) => segment.id === activeSegmentId)) activeSegmentId = "";
     if (editingSegment && !contactSegments.some((segment) => segment.id === editingSegment.id)) {
       leaveSegmentEdit();
@@ -3444,7 +3448,7 @@ byId("segment-edit").addEventListener("click", () => {
   byId("segment-save").elements.name.value = segment.name;
   segmentNameDirty = false;
   byId("segment-save").closest("details").open = true;
-  byId("segment-edit-status").textContent = `"${segment.name}" 필터를 수정하고 있습니다. 위 조건과 이름을 바꾼 뒤 변경 저장을 눌러 주세요.`;
+  byId("segment-edit-status").textContent = `"${formatText(segment.name)}" 필터를 수정하고 있습니다. 위 조건과 이름을 바꾼 뒤 변경 저장을 눌러 주세요.`;
   segmentControls();
   byId("segment-save").elements.name.focus();
 });
@@ -3468,7 +3472,7 @@ byId("segment-edit-reload").addEventListener("click", () => {
   segmentNameDirty = false;
   byId("segment-edit-conflict").hidden = true;
   byId("segment-edit-saved").textContent = "";
-  byId("segment-edit-status").textContent = `저장된 "${saved.name}" 필터 값을 불러왔습니다. 필요한 부분을 다시 바꾼 뒤 변경 저장을 눌러 주세요.`;
+  byId("segment-edit-status").textContent = `저장된 "${formatText(saved.name)}" 필터 값을 불러왔습니다. 필요한 부분을 다시 바꾼 뒤 변경 저장을 눌러 주세요.`;
   segmentControls();
 });
 async function saveSegmentEdit(editing, payload, generation) {
@@ -3628,7 +3632,7 @@ byId("segment-archive").addEventListener("click", (event) => {
 
 const fieldTypeLabels = { text: "텍스트", number: "숫자", boolean: "예 / 아니요", date: "날짜" };
 function displayFieldValue(value) {
-  return value === true ? "예" : value === false ? "아니요" : value === "" ? "빈 텍스트" : String(value);
+  return value === true ? "예" : value === false ? "아니요" : value === "" ? "빈 텍스트" : typeof value === "number" ? formatCount(value, { useGrouping: false }) : formatText(value);
 }
 function typedFieldValue(field, raw) {
   if (field.type === "number") {
@@ -3784,7 +3788,7 @@ async function loadContactFields(force = false) {
     for (const { field: select } of fieldFilterRows()) {
       const previous = select.value;
       select.replaceChildren(new Option("조건 없음", ""));
-      for (const field of contactFields) select.add(new Option(field.name, field.id));
+      for (const field of contactFields) select.add(new Option(formatText(field.name), field.id));
       if (previous && !contactFields.some((field) => field.id === previous)) select.add(new Option("사용할 수 없는 필드", previous));
       select.value = previous;
     }
@@ -3795,10 +3799,10 @@ async function loadContactFields(force = false) {
     byId("field-definitions").replaceChildren();
     for (const field of contactFields) {
       const row = node("div", "", "field-definition");
-      row.append(node("span", `${field.name} · ${fieldTypeLabels[field.type]}`));
+      row.append(node("span", `${formatText(field.name)} · ${formatText(fieldTypeLabels[field.type])}`));
       const archive = node("button", "보관", "secondary");
       archive.type = "button";
-      archive.setAttribute("aria-label", `${field.name} 필드 보관`);
+      archive.setAttribute("aria-label", `${formatText(field.name)} 필드 보관`);
       archive.addEventListener("click", () => archiveField(field, archive));
       row.append(archive);
       byId("field-definitions").append(row);
@@ -3843,7 +3847,7 @@ byId("field-create").addEventListener("submit", (event) => {
 function archiveField(field, button) {
   const selects = fieldFilterRows().map((row) => row.field);
   const filterNotice = selects.some((select) => select.value === field.id) || segmentTreeRemoveField(draftConditionTree, field.id).removed ? " 이 필드의 검색 조건은 해제됩니다." : "";
-  if (!canReloadContacts() || !confirm(`${field.name} 필드를 보관할까요? 저장한 값은 유지됩니다.${filterNotice}`)) return;
+  if (!canReloadContacts() || !confirm(`${formatText(field.name)} 필드를 보관할까요? 저장한 값은 유지됩니다.${filterNotice}`)) return;
   const generation = fieldsGeneration;
   void action(button, async () => {
     fieldBusy = true;
@@ -3865,7 +3869,7 @@ function archiveField(field, button) {
         renderConditionTree();
         conditionTreeEdited();
         const incomplete = segmentTreeBuild(draftConditionTree, contactFields).error;
-        treeNotice = ` 그룹 조건에서 이 필드를 쓰던 조건 ${tree.removed}개를 지웠습니다.` + (incomplete ? ` 그룹 조건을 완성해야 조회할 수 있습니다. ${incomplete}` : "");
+        treeNotice = ` 그룹 조건에서 이 필드를 쓰던 조건 ${formatCount(tree.removed, { useGrouping: false })}개를 지웠습니다.` + (incomplete ? ` 그룹 조건을 완성해야 조회할 수 있습니다. ${incomplete}` : "");
       }
       fieldFilterControls();
       clearContactResults();
@@ -3887,7 +3891,7 @@ function contactFieldEditor(contact, summary) {
   details.append(node("summary", "추가 정보 편집"));
   const editor = document.createElement("form");
   const select = document.createElement("select");
-  for (const field of contactFields) select.add(new Option(`${field.name} · ${fieldTypeLabels[field.type]}`, field.id));
+  for (const field of contactFields) select.add(new Option(`${formatText(field.name)} · ${formatText(fieldTypeLabels[field.type])}`, field.id));
   const label = node("label", "필드");
   label.append(select);
   const valueLabel = node("label", "값");
@@ -3948,7 +3952,7 @@ function contactFieldEditor(contact, summary) {
         if (saved.value === null) delete contact.fields[id];
         else contact.fields[id] = saved.value;
         summary.replaceChildren();
-        for (const field of contactFields) if (Object.hasOwn(contact.fields, field.id)) summary.append(node("p", `${field.name} · ${displayFieldValue(contact.fields[field.id])}`, "hint"));
+        for (const field of contactFields) if (Object.hasOwn(contact.fields, field.id)) summary.append(node("p", `${formatText(field.name)} · ${displayFieldValue(contact.fields[field.id])}`, "hint"));
         populate();
         notice(value === null ? "값을 제거했습니다." : "값을 저장했습니다. 검색 결과는 필터를 다시 적용하면 갱신됩니다.");
       } finally {

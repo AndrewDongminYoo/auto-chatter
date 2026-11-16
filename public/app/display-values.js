@@ -18,10 +18,22 @@ function errorMessage(error) {
 
 /**
  * @param {unknown} value
+ * @param {{ useGrouping?: boolean }} [options]
  * @returns {string}
  */
-function formatCount(value) {
-  return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("ko-KR") : displayEmptyValue;
+function formatCount(value, options) {
+  // PostgreSQL counts can be decimal strings larger than Number.MAX_SAFE_INTEGER.
+  if (typeof value === "string" && /^\d+$/.test(value)) return options?.useGrouping === false ? value : BigInt(value).toLocaleString("ko-KR");
+  if (typeof value !== "number" || !Number.isFinite(value)) return displayEmptyValue;
+  return options?.useGrouping === false ? String(value) : value.toLocaleString("ko-KR");
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string}
+ */
+function formatText(value) {
+  return typeof value === "string" && value.length > 0 ? value : displayEmptyValue;
 }
 
 // A Date, an ISO string or epoch milliseconds; null and booleans are rejected although new Date() accepts them.
