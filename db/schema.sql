@@ -1502,6 +1502,20 @@ CREATE TABLE IF NOT EXISTS instagram_message_reads (
   PRIMARY KEY(connection_id,message_id,recipient_id),
   FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id)
 );
+-- One row per (connection, messaging sender ID): the latest inbound text DM time (#300). Ingestion upserts it for every
+-- active connection of the receiving account, whether or not inbox storage is on, and keeps the later time. The time
+-- is capped at the moment it was stored, because ingestion accepts a DM dated up to 60 s ahead. It holds no DM text,
+-- attachment or postback; the DM flow 24-hour window reads it. Server roles never delete rows; the deletion
+-- functions do (person deletion by the dm_recipient identity).
+CREATE TABLE IF NOT EXISTS instagram_dm_last_inbound (
+  workspace_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  recipient_id text NOT NULL CHECK(recipient_id ~ '^[0-9]{1,40}$'),
+  last_message_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(connection_id,recipient_id),
+  FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id)
+);
 -- Every read event looks its read.mid up among one connection's sent messages in each send table.
 CREATE INDEX IF NOT EXISTS private_reply_outbox_provider_message_idx
   ON private_reply_outbox(connection_id,provider_message_id) WHERE provider_message_id IS NOT NULL;
@@ -1763,6 +1777,9 @@ BEGIN
   DELETE FROM public.instagram_message_reads WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_message_reads', affected);
+  DELETE FROM public.instagram_dm_last_inbound WHERE workspace_id=p_workspace AND connection_id=p_connection;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_dm_last_inbound', affected);
   DELETE FROM public.instagram_contact_tags WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_tags', affected);
@@ -2090,6 +2107,11 @@ BEGIN
   WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients);
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_message_reads', affected);
+  -- The time of the person's latest inbound text DM, keyed by the messaging sender ID like the inbox.
+  DELETE FROM public.instagram_dm_last_inbound
+  WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients);
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_dm_last_inbound', affected);
   DELETE FROM public.instagram_contact_tags
   WHERE workspace_id=p_workspace AND connection_id=p_connection AND sender_id=ANY(senders);
   GET DIAGNOSTICS affected = ROW_COUNT;
@@ -2343,6 +2365,9 @@ BEGIN
   DELETE FROM public.instagram_message_reads WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_message_reads', affected);
+  DELETE FROM public.instagram_dm_last_inbound WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_dm_last_inbound', affected);
   DELETE FROM public.instagram_contact_tags WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_tags', affected);

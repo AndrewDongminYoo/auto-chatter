@@ -281,6 +281,7 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
   );
   await pool.query("INSERT INTO instagram_dm_automation(workspace_id,connection_id,recipient_id,paused) VALUES($1,$2,'901',true)", [workspace, connection]);
   await pool.query("INSERT INTO instagram_message_reads(workspace_id,connection_id,recipient_id,message_id,read_at) VALUES($1,$2,'901',$3,now())", [workspace, connection, `read-mid-${account}`]);
+  await pool.query("INSERT INTO instagram_dm_last_inbound(workspace_id,connection_id,recipient_id,last_message_at) VALUES($1,$2,'901',now())", [workspace, connection]);
   const endpoint = (await pool.query("INSERT INTO webhook_endpoints(workspace_id,name,url) VALUES($1,'crm',$2) RETURNING id", [workspace, `https://hooks.example.test/${account}`])).rows[0].id;
   await pool.query(
     `INSERT INTO webhook_signing_keys(id,workspace_id,endpoint_id,slot,secret_encrypted)

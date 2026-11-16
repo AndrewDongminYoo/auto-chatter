@@ -757,6 +757,7 @@ const deletedLabels = {
   instagram_follow_conversations: "팔로우 후속 메시지",
   instagram_message_receipts: "확인 메시지 수신",
   instagram_message_reads: "보낸 메시지 읽음",
+  instagram_dm_last_inbound: "마지막 수신 DM 시각",
   instagram_inbox_messages: "보관한 수신 DM",
   instagram_unmatched_replies: "연결 대기 응답 DM",
   instagram_inbox_handoffs: "상담 전환",

@@ -27,6 +27,7 @@ export async function ingestMessages(pool: Pool, messages: readonly InstagramMes
       // Only a DM that neither the reply wait nor the follow confirmation took may start a DM trigger flow (#33).
       await startDmTriggerFlow(client, message);
     }
+    await recordLastInboundDms(client, messages, now);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -48,6 +49,35 @@ async function lockMessageIds(client: PoolClient, messages: readonly InstagramMe
      FROM (SELECT DISTINCT account_id,message_id FROM unnest($1::text[],$2::text[]) AS input(account_id,message_id)
            ORDER BY account_id,message_id) m`,
     [messages.map((message) => message.accountId), messages.map((message) => message.messageId)],
+  );
+}
+
+// Keeps the latest inbound text DM time per connection and messaging sender ID (#300), whether or not inbox storage
+// is on, so the DM flow 24-hour window sees a DM that started nothing and was not stored. Only the time is kept: no
+// text and no postback, which does not open the window. A DM dated more than a minute ahead is skipped, as the inbox
+// skips it, and each time is capped at the database clock. A sender ID the table cannot store (more than 40 digits)
+// is skipped instead of failing the batch. The connections are locked FOR SHARE in ID order first, as
+// lockInboxConversations does, so a person or connection deletion waits for this transaction instead of missing a
+// row it inserts. It runs last, just before COMMIT: a row lock taken here is held only for that final statement, so
+// two batches of one sender do not queue on it while the reply wait and the DM triggers run, and a batch waits on
+// this table only for another batch that is in this same last statement. One statement writes every row in
+// (connection, sender) order, so two such batches queue instead of deadlocking, and an older redelivery never moves
+// a time back.
+async function recordLastInboundDms(client: PoolClient, messages: readonly InstagramMessage[], now: Date): Promise<void> {
+  const batch = messages.filter((message) => !message.confirmationReplyId && message.timestamp.getTime() <= now.getTime() + 60000);
+  if (!batch.length) return;
+  await client.query("SELECT 1 FROM instagram_connections WHERE account_id=ANY($1::text[]) AND active ORDER BY id FOR SHARE", [[...new Set(batch.map((message) => message.accountId))]]);
+  await client.query(
+    `INSERT INTO instagram_dm_last_inbound AS stored(workspace_id,connection_id,recipient_id,last_message_at)
+     SELECT c.workspace_id,c.id,m.sender_id,least(max(m.message_at),now())
+     FROM unnest($1::text[],$2::text[],$3::timestamptz[]) AS m(account_id,sender_id,message_at)
+     JOIN instagram_connections c ON c.account_id=m.account_id AND c.active
+     WHERE m.sender_id ~ '^[0-9]{1,40}$'
+     GROUP BY c.workspace_id,c.id,m.sender_id
+     ORDER BY c.id,m.sender_id
+     ON CONFLICT(connection_id,recipient_id) DO UPDATE SET last_message_at=excluded.last_message_at,updated_at=now()
+     WHERE excluded.last_message_at>stored.last_message_at`,
+    [batch.map((message) => message.accountId), batch.map((message) => message.senderId), batch.map((message) => message.timestamp)],
   );
 }
 
