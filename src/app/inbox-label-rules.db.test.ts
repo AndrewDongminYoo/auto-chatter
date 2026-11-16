@@ -752,6 +752,7 @@ test("migration 035 replays, the export lists the rules, and a rule alone keeps 
     "069_dm_flow_delivery.sql",
     "070_instagram_message_reads.sql",
     "071_instagram_follow_messages.sql",
+    "072_instagram_dm_last_inbound.sql",
   ])
     await pool.query(await readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8"));
   assert.deepEqual(await functions(), current);

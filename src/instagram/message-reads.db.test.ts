@@ -207,8 +207,9 @@ test("migration 070 replays over stored reads, keeps the canonical deletion func
   const sql = await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8");
   await pool.query(sql);
   await pool.query(sql);
-  // Migration 071 (#321) redefines the deletion functions after 070 in the runner.
+  // Migrations 071 (#321) and 072 (#300) redefine the deletion functions after 070 in the runner.
   await pool.query(await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/072_instagram_dm_last_inbound.sql", import.meta.url), "utf8"));
   assert.deepEqual(await definitions(), canonical);
   assert.equal((await storedReads()).length, 3);
   const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
@@ -241,9 +242,11 @@ test("migration 071 copies each follow row's current message ID, replays and run
     },
   ];
   assert.deepEqual(await copied(), expected);
-  // A replay copies nothing twice and keeps the canonical deletion functions.
+  // A replay copies nothing twice and, with migration 072 (#300) after it as in the runner, keeps the canonical
+  // deletion functions.
   await pool.query(sql);
   assert.deepEqual(await copied(), expected);
+  await pool.query(await readFile(new URL("../../db/migrations/072_instagram_dm_last_inbound.sql", import.meta.url), "utf8"));
   assert.deepEqual(await definitions(), canonical);
   // A read of the copied ID is stored once the follow row's own ID has moved on.
   await pool.query("UPDATE instagram_follow_conversations SET provider_message_id='later-mid' WHERE connection_id=$1", [connectionId]);

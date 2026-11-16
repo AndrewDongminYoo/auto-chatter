@@ -8,6 +8,7 @@ import { connectionMetrics, evaluateAlerts } from "../app/operations-health.ts";
 import { resetTestSchema } from "../test-schema.ts";
 import { recordChannelConsentEvent } from "./channel-consent.ts";
 import { assertDmFlowDeliveryAllowed, processNextDmFlowDelivery, recoverStaleDmFlowDeliveries } from "./dm-flow-delivery-worker.ts";
+import { ingestMessages } from "./follow-flow.ts";
 import { InstagramFollowTransport } from "./follow-transport.ts";
 
 // The DM flow delivery worker (#291) against a real PostgreSQL database. Graph is mocked through fetchImpl and
@@ -666,9 +667,10 @@ test("migration 069 replays over stored rows, keeps the canonical deletion funct
   // The second replay runs over a sent row and keeps the installed constraints.
   await pool.query(sql);
   assert.deepEqual(await constraints(), named);
-  // Migrations 070 (#312) and 071 (#321) redefine the deletion functions after 069 in the runner.
+  // Migrations 070 (#312), 071 (#321) and 072 (#300) redefine the deletion functions after 069 in the runner.
   await pool.query(await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/072_instagram_dm_last_inbound.sql", import.meta.url), "utf8"));
   assert.deepEqual(await definitions(), canonical);
   const stored = (await pool.query("SELECT id,status FROM flow_dm_deliveries WHERE id=ANY($1) ORDER BY status", [[first, second]])).rows;
   assert.deepEqual(
@@ -684,4 +686,121 @@ test("migration 069 replays over stored rows, keeps the canonical deletion funct
   });
   const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
   assert.ok(runner.indexOf("069_dm_flow_delivery.sql") > runner.indexOf("068_dm_start_triggers.sql") && runner.indexOf("069_dm_flow_delivery.sql") < runner.indexOf("supabase-access.sql"));
+});
+
+// #300: the latest inbound text DM time per connection and messaging sender ID, kept whether or not inbox storage is
+// on. Only a time is stored; a postback and a DM dated more than a minute ahead leave no time.
+const lastInbound = async () => (await pool.query("SELECT connection_id,recipient_id,last_message_at FROM instagram_dm_last_inbound ORDER BY connection_id,recipient_id")).rows;
+const dm = (account: string, sender: string, id: string, offsetMs: number, confirmationReplyId?: string) => ({
+  accountId: account,
+  senderId: sender,
+  messageId: id,
+  text: "anything",
+  timestamp: new Date(Date.now() + offsetMs),
+  ...(confirmationReplyId ? { confirmationReplyId } : {}),
+});
+
+test("a later text DM that started nothing keeps the window open on a connection whose inbox storage is off (#300)", async () => {
+  const kept = await dmRow("9010", { messageAt: "now()-interval '25 hours'" });
+  const tapped = await dmRow("9011", { messageAt: "now()-interval '25 hours'" });
+  const elsewhere = await dmRow("9012", { messageAt: "now()-interval '25 hours'" });
+  await pool.query("UPDATE instagram_dm_start_events SET created_at=now()-interval '25 hours'");
+  // The flow is off while the DMs arrive, so they start no run; both connections store no inbox messages.
+  await pool.query("UPDATE flows SET enabled=false");
+  await ingestMessages(pool, [dm("100", "9010", "late-text", -3_600_000), dm("100", "9011", "late-tap", -60_000, "1"), dm("200", "9012", "other-text", -60_000)]);
+  await pool.query("UPDATE flows SET enabled=true");
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM instagram_inbox_messages")).rows[0].n, 0);
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM instagram_dm_start_events")).rows[0].n, 3);
+  assert.deepEqual(
+    (await lastInbound()).map(({ connection_id, recipient_id }) => [connection_id, recipient_id]),
+    [
+      [C, "9010"],
+      [OTHER, "9012"],
+    ],
+  );
+  const seen = graph();
+  for (let claimed = 0; claimed < 3; claimed++) assert.equal(await deliver(seen), true);
+  assert.equal((await row(kept)).status, "sent");
+  // A postback leaves no time, and another connection's DM does not reopen this connection's window.
+  assert.deepEqual([(await row(tapped)).status, (await row(tapped)).failure_code], ["blocked", "reply_window_closed"]);
+  assert.deepEqual([(await row(elsewhere)).status, (await row(elsewhere)).failure_code], ["blocked", "reply_window_closed"]);
+  assert.deepEqual(recipients(seen), ["9010"]);
+});
+
+test("ingestion keeps one capped last inbound time per connection and sender that never moves back (#300)", async () => {
+  const early = dm("100", "9020", "a-1", -7_200_000);
+  const late = dm("100", "9020", "a-2", -3_600_000);
+  const ahead = dm("100", "9021", "b-1", 30_000);
+  // Two DMs of one sender in one batch, a DM 30 s ahead, one too far ahead and a sender ID the table cannot store.
+  await ingestMessages(pool, [late, ahead, early, dm("100", "9022", "c-1", 120_000), dm("100", "9".repeat(41), "d-1", -60_000)]);
+  let rows = await lastInbound();
+  assert.deepEqual(
+    rows.map(({ recipient_id }) => recipient_id),
+    ["9020", "9021"],
+  );
+  assert.equal(rows[0].last_message_at.getTime(), late.timestamp.getTime());
+  // The DM dated ahead is capped at the database clock when it was stored.
+  assert.ok(rows[1].last_message_at.getTime() < ahead.timestamp.getTime());
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM instagram_dm_last_inbound WHERE last_message_at>now()")).rows[0].n, 0);
+  // An older redelivery does not move the time back; a later DM moves it forward.
+  await ingestMessages(pool, [dm("100", "9020", "a-0", -10_800_000)]);
+  assert.equal((await lastInbound())[0].last_message_at.getTime(), late.timestamp.getTime());
+  const newer = dm("100", "9020", "a-3", -600_000);
+  await ingestMessages(pool, [newer]);
+  assert.equal((await lastInbound())[0].last_message_at.getTime(), newer.timestamp.getTime());
+  // An inactive connection keeps nothing, and inbox storage being on does not stop the time from being kept.
+  await pool.query("UPDATE instagram_connections SET active=false WHERE id=$1", [OTHER]);
+  await pool.query("UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now()-interval '1 day' WHERE id=$1", [C]);
+  await ingestMessages(pool, [dm("200", "9023", "e-1", -60_000), dm("100", "9024", "f-1", -60_000)]);
+  rows = await lastInbound();
+  assert.deepEqual(
+    rows.map(({ connection_id, recipient_id }) => [connection_id, recipient_id]),
+    [
+      [C, "9020"],
+      [C, "9021"],
+      [C, "9024"],
+    ],
+  );
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM instagram_inbox_messages WHERE recipient_id='9024'")).rows[0].n, 1);
+});
+
+test("the three deletion functions remove the last inbound times (#300)", async () => {
+  await pool.query(
+    `INSERT INTO instagram_dm_last_inbound(workspace_id,connection_id,recipient_id,last_message_at)
+     VALUES($1,$2,'9030',now()),($1,$2,'9031',now()),($1,$3,'9030',now())`,
+    [W, C, OTHER],
+  );
+  await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL");
+  const person = (kind: string, value: string) => pool.query("SELECT public.delete_person_data($1,$2,$3,$4,$5) AS result", [W, C, owner, kind, value]);
+  // The same number as a comment sender reaches no messaging identity, and person deletion stays in its connection.
+  assert.equal((await person("comment_sender", "9030")).rows[0].result.deleted_counts.instagram_dm_last_inbound, 0);
+  assert.equal((await person("dm_recipient", "9030")).rows[0].result.deleted_counts.instagram_dm_last_inbound, 1);
+  assert.deepEqual(
+    (await lastInbound()).map(({ connection_id, recipient_id }) => [connection_id, recipient_id]),
+    [
+      [C, "9031"],
+      [OTHER, "9030"],
+    ],
+  );
+  const connection = (await pool.query("SELECT public.delete_connection_data($1,$2,$3,'100') AS result", [W, C, owner])).rows[0].result;
+  assert.equal(connection.deleted_counts.instagram_dm_last_inbound, 1);
+  const workspace = (await pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [W, owner])).rows[0].result;
+  assert.equal(workspace.deleted_counts.instagram_dm_last_inbound, 1);
+  assert.deepEqual(await lastInbound(), []);
+});
+
+test("migration 072 replays over stored rows, keeps the canonical deletion functions and runs in the runner (#300)", async () => {
+  const definitions = async () => (await pool.query("SELECT proname,pg_get_functiondef(oid) AS definition FROM pg_proc WHERE proname IN ('delete_person_data','delete_connection_data','delete_workspace_data') ORDER BY proname")).rows;
+  const canonical = await definitions();
+  for (const { definition } of canonical) assert.match(definition, /instagram_dm_last_inbound/);
+  await ingestMessages(pool, [dm("100", "9040", "g-1", -60_000)]);
+  const stored = await lastInbound();
+  assert.equal(stored.length, 1);
+  const sql = await readFile(new URL("../../db/migrations/072_instagram_dm_last_inbound.sql", import.meta.url), "utf8");
+  await pool.query(sql);
+  await pool.query(sql);
+  assert.deepEqual(await definitions(), canonical);
+  assert.deepEqual(await lastInbound(), stored);
+  const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
+  assert.ok(runner.indexOf("072_instagram_dm_last_inbound.sql") > runner.indexOf("071_instagram_follow_messages.sql") && runner.indexOf("072_instagram_dm_last_inbound.sql") < runner.indexOf("supabase-access.sql"));
 });
