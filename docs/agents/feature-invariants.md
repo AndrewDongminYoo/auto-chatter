@@ -32,6 +32,10 @@ Flow and campaign report option lists can retry independently of report dates an
 An in-flight same-context refresh cannot overwrite a time zone saved after that refresh began; new contexts still take their membership's zone.
 Network failures keep the existing workspace visible with a retry action; only an authentication refusal shows login, and secondary reads retain their feature-level failure handling.
 Actions lock their own form; rule controls additionally follow the rule save's busy state, and a session reset retires action cleanup so an old completion cannot restore a new session's controls.
+The comment-rule editor shares one form and save action between composition and preview; mobile switches visibility without replacing inputs or clearing dirty state, while desktop shows both.
+Returning from preview restores the last available input focus, and captured native validation reveals composition before invalid-field focus; session reset retires the remembered input.
+The mobile save bar and its save-failure error remain available in either mode, and no-account state prioritizes account connection instead of showing an unusable editor.
+`scripts/mobile-rule-acceptance.mjs` covers synthetic preview, validation, focus, save failure/retry, busy controls, discard warnings and empty states; viewport checks do not prove physical-device keyboards or Safari behavior.
 Account and rule notices expose polite status regions and skip identical text updates; contextual reconnection instructions respect the service connection restriction.
 Send settings guidance shares one display policy across home, accounts, rule editor and the selected inbox conversation; it never grants delivery eligibility or changes manual reply controls.
 A failed service-wide settings reread marks the displayed setting unknown, preserves drafts and filters, and ignores responses retired by a workspace or session change.

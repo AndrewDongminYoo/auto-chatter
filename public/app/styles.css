@@ -580,9 +580,31 @@ body:has(#workspace:not([hidden]))::before {
 }
 .columns {
   display: grid;
-  grid-template-columns: 190px minmax(0, 1fr) 260px;
+  grid-template-columns: 190px minmax(0, 1fr);
   border-top: 1px solid var(--border);
   align-items: start;
+}
+.columns:has(.rule-list-card[hidden]) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.rule-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  align-items: start;
+  min-width: 0;
+}
+.rule-actions {
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  padding: var(--space-5) var(--space-6);
+}
+.rule-actions > .action-error {
+  grid-column: 1 / -1;
+  flex-basis: 100%;
+  order: 1;
+}
+#rule-preview-toggle {
+  display: none;
 }
 .rule-list-card {
   padding: var(--space-6) var(--space-5) 0 0;
@@ -1382,7 +1404,10 @@ section {
 }
 @media (min-width: 1600px) {
   .columns {
-    grid-template-columns: 230px minmax(0, 1fr) 320px;
+    grid-template-columns: 230px minmax(0, 1fr);
+  }
+  .rule-workbench {
+    grid-template-columns: minmax(0, 1fr) 320px;
   }
 }
 @media (max-width: 1200px) {
@@ -1390,10 +1415,13 @@ section {
     grid-template-columns: 180px minmax(0, 1fr);
   }
   .conversation-preview {
-    grid-column: 2;
+    grid-column: 1;
     position: static;
     border-left: 1px solid var(--border);
     padding: var(--space-6);
+  }
+  .rule-workbench {
+    grid-template-columns: minmax(0, 1fr);
   }
   .editor {
     border-right: 0;
@@ -1438,10 +1466,10 @@ section {
     position: static;
     width: auto;
     flex-direction: row;
+    flex-wrap: wrap;
     gap: var(--space-1);
     margin: 0 0 var(--space-5);
     border-bottom: 1px solid var(--border);
-    overflow-x: auto;
   }
   .workspace-nav a {
     flex-shrink: 0;
@@ -1450,6 +1478,41 @@ section {
   }
   .columns {
     display: block;
+  }
+  .rule-workbench {
+    display: flex;
+    flex-direction: column;
+  }
+  .rule-workbench > * {
+    width: 100%;
+  }
+  .rule-actions {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    order: -1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: var(--space-2);
+    padding: var(--space-3) 0;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+  }
+  .rule-actions #save-status {
+    grid-column: 1 / -1;
+  }
+  #rule-preview-toggle {
+    display: block;
+    white-space: normal;
+  }
+  .rule-workbench:not(.preview-open) .conversation-preview,
+  .rule-workbench.preview-open .editor {
+    display: none;
+  }
+  #rule-fields :is(input, select, textarea),
+  #media-title,
+  #preview-title {
+    scroll-margin-top: 160px;
   }
   .rule-list-card {
     padding: var(--space-5) 0;

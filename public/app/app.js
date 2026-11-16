@@ -141,6 +141,7 @@ let inviteNoticeShown = false;
 let activityRequest = 0;
 let editingRuleId;
 let dirty = false;
+let ruleInputFocus;
 let mediaGeneration = 0;
 let mediaAfter = null;
 let mediaBusy = false;
@@ -165,6 +166,7 @@ function canDiscardRule() {
   return !dirty || confirm("저장하지 않은 규칙 변경 사항을 버릴까요?");
 }
 function focusEditor() {
+  setRulePreview(false, { focus: false });
   const target = editingRuleId ? form.elements[form.elements.match_mode.value === "all" ? "private_reply_text" : "keywords"] : byId("media-title");
   target.focus({ preventScroll: true });
   target.scrollIntoView({
@@ -172,6 +174,24 @@ function focusEditor() {
     block: "center",
   });
 }
+
+function setRulePreview(preview, { focus = true } = {}) {
+  form.classList.toggle("preview-open", preview);
+  const toggle = byId("rule-preview-toggle");
+  toggle.textContent = preview ? "작성하기" : "미리보기";
+  toggle.setAttribute("aria-expanded", String(preview));
+  updatePreview();
+  if (!focus) return;
+  const target = preview ? byId("preview-title") : ruleInputFocus?.isConnected && !ruleInputFocus.disabled && ruleInputFocus.getClientRects().length ? ruleInputFocus : byId("media-title");
+  target.focus({ preventScroll: true });
+  target.scrollIntoView({ block: "center" });
+}
+byId("rule-preview-toggle").addEventListener("click", () => setRulePreview(!form.classList.contains("preview-open")));
+form.addEventListener("focusin", (event) => {
+  if (byId("rule-fields").contains(event.target)) ruleInputFocus = event.target;
+});
+// Native validation must reveal the fields before the browser focuses an invalid input.
+form.addEventListener("invalid", () => setRulePreview(false, { focus: false }), true);
 
 function emptyState(title, description) {
   const element = node("div", "", "empty-state");
@@ -332,6 +352,8 @@ function resetSession({ broadcast = true } = {}) {
   mediaSession++;
   ruleMediaObserver.disconnect();
   dirty = false;
+  ruleInputFocus = undefined;
+  setRulePreview(false, { focus: false });
   byId("startup").hidden = true;
   editingRuleId = undefined;
   form.reset();
@@ -384,7 +406,8 @@ function showActionError(button, message) {
     element.setAttribute("role", "alert");
     actionErrors.set(placement.owner, element);
   }
-  placement.row.after(element);
+  if (button.id === "save-rule") byId("save-status").after(element);
+  else placement.row.after(element);
   element.textContent = message;
   return true;
 }
@@ -671,6 +694,7 @@ function ruleControls() {
   byId("rule-fields").disabled = disabled;
   byId("save-rule").disabled = disabled;
   byId("new-rule").disabled = disabled;
+  byId("rule-preview-toggle").disabled = disabled;
   for (const button of byId("rules").querySelectorAll("button")) button.disabled = saving;
 }
 
@@ -1543,6 +1567,8 @@ async function loadWorkspace() {
   byId("rule-count").textContent = settings.rules.length;
   ruleControls();
   byId("editor-empty").hidden = connections.length > 0;
+  form.hidden = connections.length === 0;
+  byId("rule-list-panel").hidden = settings.rules.length === 0;
   workspaceRules = settings.rules;
   globalSendBadges = [];
   // Assigned only beside the render, so a load that fails after /api/me leaves the value that is on screen and a
@@ -1683,7 +1709,6 @@ async function loadWorkspace() {
   }
   if (connections.some((account) => account.id === selectedConnection)) form.elements.connection_id.value = selectedConnection;
   byId("rules").replaceChildren();
-  if (!settings.rules.length) byId("rules").append(emptyState("아직 만든 규칙이 없습니다", connections.length ? "오른쪽 설정에서 첫 규칙을 만들어 보세요. 모바일에서는 아래로 내려가면 됩니다." : "계정을 먼저 연결한 뒤 첫 규칙을 만들어 보세요."));
   for (const rule of settings.rules) {
     const item = node("div", "");
     item.className = "item";
