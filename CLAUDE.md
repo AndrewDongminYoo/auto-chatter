@@ -17,7 +17,7 @@ Use `corepack pnpm` (pnpm 10, pinned by `packageManager`).
 
 ```bash
 corepack pnpm install --frozen-lockfile
-corepack pnpm check-types          # tsc --noEmit, the only compile check
+corepack pnpm check-types          # tsc over src/ and the @ts-check files in public/app/, the only compile check
 corepack pnpm lint                 # eslint .
 corepack pnpm test                 # unit tests, no DB needed
 python3 -m unittest discover -s .trunk/configs/tests -p 'test_*.py' -v # offline secret-scan reader
