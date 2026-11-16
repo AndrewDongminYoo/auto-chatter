@@ -27,7 +27,7 @@
   };
   for (mode of ["missing", "null", "wrong", "normal"]) {
     await loadWorkspace();
-    for (const menu of ["home", "automation", "contacts", "inbox", "campaigns", "reports", "settings"]) {
+    for (const menu of ["home", "accounts", "automation", "contacts", "inbox", "campaigns", "reports", "settings"]) {
       showView(menu, false);
       await loadView(menu);
       if (menu === "reports") {
