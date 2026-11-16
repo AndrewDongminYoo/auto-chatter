@@ -4,6 +4,47 @@ import test from "node:test";
 import vm from "node:vm";
 
 const source = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
+
+test("mobile preview preserves the draft and restores the last input focus", () => {
+  const focused: string[] = [];
+  const element = (id: string) => ({
+    isConnected: true,
+    disabled: false,
+    getClientRects: () => [1],
+    focus: () => focused.push(id),
+    scrollIntoView: () => {},
+    setAttribute: () => {},
+  });
+  const input = { ...element("message"), value: "keep this draft" };
+  const nodes = new Map([
+    ["preview-title", element("preview")],
+    ["media-title", element("media")],
+    ["rule-preview-toggle", element("toggle")],
+  ]);
+  const modes: boolean[] = [];
+  const context = vm.createContext({
+    form: { classList: { toggle: (_name: string, value: boolean) => modes.push(value) } },
+    byId: (id: string) => nodes.get(id),
+    ruleInputFocus: input,
+    updatePreview: () => {},
+    dirty: true,
+  });
+  const begin = source.indexOf("function setRulePreview(");
+  vm.runInContext(source.slice(begin, source.indexOf("\n}", begin) + 2), context);
+  assert.equal(typeof context.setRulePreview, "function", "preview interaction is available");
+  context.setRulePreview(true);
+  context.setRulePreview(false);
+  assert.deepEqual(modes, [true, false]);
+  assert.deepEqual(focused, ["preview", "message"]);
+  assert.equal(input.value, "keep this draft");
+  assert.equal(context.dirty, true);
+  context.setRulePreview(false, { focus: false });
+  assert.deepEqual(focused, ["preview", "message"], "validation keeps ownership of the next focus");
+  input.isConnected = false;
+  context.setRulePreview(false);
+  assert.equal(focused.at(-1), "media", "a retired input cannot receive focus");
+});
+
 function appFunction(name: string) {
   const begin = source.indexOf(`async function ${name}(`);
   return source.slice(begin, source.indexOf("\n}", begin) + 2);
@@ -266,6 +307,7 @@ test("an unrelated action cannot unlock a rule save already in progress", async 
     ["save-rule", save],
     ["rule-fields", { disabled: true }],
     ["new-rule", { disabled: true }],
+    ["rule-preview-toggle", { disabled: true }],
   ]);
   const context = vm.createContext({
     byId: (id: string) => (id === "rules" ? { querySelectorAll: () => [] } : nodes.get(id)),
@@ -358,6 +400,7 @@ test("two documents clear a session change without rebroadcasting it", () => {
       "formConditions",
       "ruleControls",
       "editorState",
+      "setRulePreview",
       "notice",
     ])
       context[name] = noop;
