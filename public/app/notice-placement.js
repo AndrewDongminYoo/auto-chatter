@@ -1,3 +1,4 @@
+// @ts-check
 // Decides where a dashboard message appears: the page notice (#notice) or an inline error next to the control that
 // failed. src/app/notice-placement.test.ts runs this classic script in a node:vm context, so nothing here reads
 // document at the top level.

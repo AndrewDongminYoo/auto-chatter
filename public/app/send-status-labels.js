@@ -1,3 +1,4 @@
+// @ts-check
 // One name for each provider send status of manual replies, private replies, follow replies, flow DMs and campaign
 // deliveries, on every screen that shows one. Pure functions only: src/app/send-status-labels.test.ts runs this classic
 // script in a node:vm context. "Meta 접수" is Meta's acceptance of the request only, not delivery or a read.

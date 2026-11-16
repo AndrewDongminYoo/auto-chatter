@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "noEmit": true,
+    "noImplicitAny": false,
+    "strict": true,
+    "target": "ES2022",
+    "types": []
+  },
+  "include": ["public/app/*.js"]
+}

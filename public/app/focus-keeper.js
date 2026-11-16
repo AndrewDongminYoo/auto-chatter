@@ -1,3 +1,4 @@
+// @ts-check
 // Keeps keyboard focus on a control that a running request disabled. When the focused element becomes disabled,
 // the browser moves focus to body, which sends a keyboard user back to the top of the page. src/app/focus-keeper.test.ts
 // runs this classic script in a node:vm context, so nothing here reads document at the top level.

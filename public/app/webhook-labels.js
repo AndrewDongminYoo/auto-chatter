@@ -1,3 +1,4 @@
+// @ts-check
 // Text for the outbound webhook settings (#47). Pure functions only: src/app/webhook-labels.test.ts runs this
 // classic script in a node:vm context.
 const webhookStatusLabels = {

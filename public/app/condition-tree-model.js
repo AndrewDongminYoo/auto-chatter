@@ -1,3 +1,4 @@
+// @ts-check
 // Pure helpers for the contact filter's condition tree editor (#26): draft operations, limits, build and Korean text.
 // Classic script with top-level functions only: src/app/condition-tree-model.test.ts runs it in a node:vm context,
 // and every name starts with "segmentTree" so it cannot collide with app.js in the shared global scope.
