@@ -1,3 +1,4 @@
+// @ts-check
 // Display guards for caught errors and API values, so browser-generated English error text, NaN and Invalid Date do
 // not reach the screen. Pure functions only: src/app/display-values.test.ts runs this classic script in a node:vm
 // context.

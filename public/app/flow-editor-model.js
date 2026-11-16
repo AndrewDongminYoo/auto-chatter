@@ -1,3 +1,4 @@
+// @ts-check
 // Pure helpers for the flow editor (#30): node catalog, outline, layered layout, edits and Korean text.
 // Classic script with top-level functions only: src/app/flow-editor-model.test.ts runs it in a node:vm
 // context, and every name starts with "flow" so it cannot collide with app.js in the shared global scope.
@@ -324,6 +325,7 @@ function flowOutline(document) {
         id = flowEdge(document, node.id, ports[0])?.to;
         continue;
       }
+      /** @type {{ kind: string, id: string, branches: { port: string, items: object[] }[] }} */
       const item = { kind: "step", id: node.id, branches: [] };
       items.push(item);
       for (const branchPort of ports)

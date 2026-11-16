@@ -1,3 +1,4 @@
+// @ts-check
 // Text for the workspace plan and its limits (#52). Pure functions only: src/app/plan-labels.test.ts runs this
 // classic script in a node:vm context. The values come from POST /api/workspace and GET /api/workspace/members.
 const planNames = {

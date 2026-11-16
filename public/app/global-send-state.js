@@ -1,3 +1,4 @@
+// @ts-check
 // The service-wide send switch (SEND_ENABLED, read from /api/me) as the dashboard shows it, and when to read it again
 // while the dashboard stays open (#338). Pure functions only: src/app/global-send-state.test.ts runs this classic script
 // in a node:vm context. The workspace load and the re-read both use these labels, so the two cannot drift apart.
