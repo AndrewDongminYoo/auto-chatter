@@ -297,8 +297,9 @@ test("campaign report keeps a malformed count off screen and parses counts beyon
   const broken = harness(async (url) => (url === "/api/campaign-drafts" ? { drafts: [] } : { ...snapshot, start_counts: { ...snapshot.start_counts, candidate: "1.5" } }));
   await broken.controller.configure("owner", "Factory");
   await broken.form.dispatch("submit");
-  assert.equal(broken.get("campaign-report-run-counts").children.length, 0);
-  assert.equal(broken.get("campaign-report-download").disabled, true);
+  assert.equal(broken.get("campaign-report-run-counts").children.length, 5);
+  assert.equal(broken.get("campaign-report-start-counts").children[8]!.children[1]!.textContent, "–");
+  assert.equal(broken.get("campaign-report-download").disabled, false);
 });
 
 test("campaign report clears results on edits and ignores late report and picker responses after reset", async () => {

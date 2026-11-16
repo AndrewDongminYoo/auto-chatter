@@ -71,10 +71,10 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
   function flowItem(flow) {
     const item = node("div", "", "item");
     const badges = node("div", "", "badges");
-    badges.append(badge(flow.published_version_no ? `발행 v${flow.published_version_no}` : "미발행"), badge(flow.enabled ? "켜짐" : "꺼짐", flow.enabled ? "success" : ""));
+    badges.append(badge(flow.published_version_no ? `발행 v${formatCount(flow.published_version_no, { useGrouping: false })}` : "미발행"), badge(flow.enabled ? "켜짐" : "꺼짐", flow.enabled ? "success" : ""));
     const open = node("button", "열기", "secondary");
     open.type = "button";
-    open.setAttribute("aria-label", `${flow.name} 플로 열기`);
+    open.setAttribute("aria-label", `${formatText(flow.name)} 플로 열기`);
     open.addEventListener("click", () => openFlow(flow.id, open));
     item.append(node("strong", flow.name), badges, node("p", `${formatDateTime(flow.updated_at)} 수정`, "hint"), open);
     return item;
@@ -188,9 +188,9 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
         : unsaved
           ? "저장하지 않은 변경 사항이 있습니다. 발행과 초안 테스트는 저장한 초안으로 하므로 먼저 저장해 주세요."
           : current.published
-            ? `저장한 초안입니다. 발행 버전은 v${current.published}이며, 초안을 발행해야 실행에 반영됩니다.`
+            ? `저장한 초안입니다. 발행 버전은 v${formatCount(current.published, { useGrouping: false })}이며, 초안을 발행해야 실행에 반영됩니다.`
             : `저장한 초안입니다. 발행하고 켜야 새 ${flowStartName(draft)}에 실행됩니다.`;
-    byId("flow-badges").replaceChildren(badge(current.published ? `발행 v${current.published}` : "미발행"), badge(current.enabled ? "켜짐" : "꺼짐", current.enabled ? "success" : ""), ...(unsaved ? [badge("저장 전", "warning")] : []));
+    byId("flow-badges").replaceChildren(badge(current.published ? `발행 v${formatCount(current.published, { useGrouping: false })}` : "미발행"), badge(current.enabled ? "켜짐" : "꺼짐", current.enabled ? "success" : ""), ...(unsaved ? [badge("저장 전", "warning")] : []));
   }
   function renderEditor() {
     const admin = canEdit();
@@ -252,7 +252,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     if (checked === undefined || flowSameDocument(checked?.definition, draft)) ({ placed, general } = flowPlaceErrors(draft, errors));
     else {
       placed = [];
-      general = flowErrorsElsewhere(checked?.definition, errors, checked?.label ?? (checked ? `발행 버전 v${checked.version_no}` : "발행 버전"));
+      general = flowErrorsElsewhere(checked?.definition, errors, checked?.label ?? (checked ? `발행 버전 v${formatCount(checked.version_no, { useGrouping: false })}` : "발행 버전"));
     }
     generalHeading = heading;
     renderOutline();
@@ -315,7 +315,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     return element;
   }
   function fieldSelect(filter, value, emptyLabel) {
-    const options = fields.filter(filter).map((field) => [field.id, `${field.name} · ${fieldTypeLabels[field.type]}`]);
+    const options = fields.filter(filter).map((field) => [field.id, `${formatText(field.name)} · ${formatText(fieldTypeLabels[field.type])}`]);
     const element = select(emptyLabel ? [["", emptyLabel], ...options] : options, value || (emptyLabel ? "" : undefined));
     for (const option of element.options) if (option.text === "사용할 수 없는 항목") option.text = "사용할 수 없는 필드";
     return element;
@@ -441,7 +441,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
           box.append(labelled("보낼 메시지", text, "최대 1,000자입니다. DM 트리거 플로의 메시지에는 변수를 쓸 수 없습니다."));
           break;
         }
-        const variables = select([["{{comment.text}}", "댓글 본문"], ...fields.filter((field) => field.type !== "boolean").map((field) => [`{{field:${field.id}}}`, `${field.name} 필드 값`])]);
+        const variables = select([["{{comment.text}}", "댓글 본문"], ...fields.filter((field) => field.type !== "boolean").map((field) => [`{{field:${field.id}}}`, `${formatText(field.name)} 필드 값`])]);
         const insert = node("button", "넣기", "secondary");
         insert.type = "button";
         insert.addEventListener("click", () => {
@@ -563,7 +563,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
           checks.append(label);
           return check;
         };
-        const boxes = fields.map((field) => checkbox(field.id, chosen.has(field.id.toLowerCase()), `${field.name} · ${fieldTypeLabels[field.type]}`));
+        const boxes = fields.map((field) => checkbox(field.id, chosen.has(field.id.toLowerCase()), `${formatText(field.name)} · ${formatText(fieldTypeLabels[field.type])}`));
         // Fields the list no longer has (archived) stay checked so publish names this step; unchecking one
         // removes it from the step.
         const unknown = flowUnavailableFieldIds(config.field_ids, fields).map((id, index) => checkbox(id, true, `사용할 수 없는 필드 ${index + 1} · 보관됐거나 없음`));
@@ -898,7 +898,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     form.reset();
     testFields.clear();
     byId("flow-test-fields").replaceChildren();
-    form.elements.field_pick.replaceChildren(...fields.map((field) => new Option(`${field.name} · ${fieldTypeLabels[field.type]}`, field.id)));
+    form.elements.field_pick.replaceChildren(...fields.map((field) => new Option(`${formatText(field.name)} · ${formatText(fieldTypeLabels[field.type])}`, field.id)));
     byId("flow-test-add-field").disabled = !fields.length;
   }
   function addTestField() {
@@ -913,13 +913,13 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     const control = valueControl(field, undefined);
     const remove = node("button", "빼기", "secondary");
     remove.type = "button";
-    remove.setAttribute("aria-label", `${field.name} 필드 값 빼기`);
+    remove.setAttribute("aria-label", `${formatText(field.name)} 필드 값 빼기`);
     remove.addEventListener("click", () => {
       testFields.delete(field.id);
       row.remove();
       byId("flow-test-form").elements.field_pick.focus();
     });
-    row.append(labelled(`${field.name} 값`, control), remove);
+    row.append(labelled(`${formatText(field.name)} 값`, control), remove);
     testFields.set(field.id, { field, control });
     byId("flow-test-fields").append(row);
     control.focus();
@@ -953,7 +953,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     renderGraph();
     const label = same ? stepName : flowStepLabels(ran);
     const box = byId("flow-test-result");
-    const source = result.source === "published" ? `발행 버전 v${result.version_no}` : "저장한 초안";
+    const source = result.source === "published" ? `발행 버전 v${formatCount(result.version_no, { useGrouping: false })}` : "저장한 초안";
     const status = node("p", `${source} · ${flowTestStatus(result.status)}${result.failure_code ? ` ${flowFailureMessage(result.failure_code)}` : ""}`, `flow-test-status${result.status === "failed" ? " form-error" : ""}`);
     status.setAttribute("role", "status");
     const parts = [node("h5", "테스트 결과"), status];
@@ -964,7 +964,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
           result.source !== "published"
             ? "테스트하는 동안 초안이 바뀌어 단계 목록과 그래프에는 경로를 표시하지 않았습니다. 아래 단계 번호는 테스트한 초안 기준입니다."
             : ran
-              ? `발행 버전 v${result.version_no}이 지금 화면의 초안과 달라 단계 목록과 그래프에는 경로를 표시하지 않았습니다. 아래 단계 번호는 발행 버전 기준입니다.`
+              ? `발행 버전 v${formatCount(result.version_no, { useGrouping: false })}이 지금 화면의 초안과 달라 단계 목록과 그래프에는 경로를 표시하지 않았습니다. 아래 단계 번호는 발행 버전 기준입니다.`
               : "발행 버전을 불러오지 못해 단계 목록과 그래프에는 경로를 표시하지 않았습니다.",
           "hint",
         ),
@@ -1107,8 +1107,8 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
         renderGraph();
         notice(
           published.replayed
-            ? `이미 발행한 초안입니다. 발행 버전은 v${published.version_no}입니다.`
-            : `v${published.version_no}을 발행했습니다. ${current.enabled ? `켜져 있으므로 새 ${flowStartName(checked)}부터 이 버전으로 실행합니다.` : `켜야 새 ${flowStartName(checked)}에 실행됩니다.`}`,
+            ? `이미 발행한 초안입니다. 발행 버전은 v${formatCount(published.version_no, { useGrouping: false })}입니다.`
+            : `v${formatCount(published.version_no, { useGrouping: false })}을 발행했습니다. ${current.enabled ? `켜져 있으므로 새 ${flowStartName(checked)}부터 이 버전으로 실행합니다.` : `켜야 새 ${flowStartName(checked)}에 실행됩니다.`}`,
         );
         void loadList();
       } catch (error) {
@@ -1157,7 +1157,7 @@ function createFlowEditor({ api, node, badge, action, notice, getRole, getConnec
     });
   });
   byId("flow-archive").addEventListener("click", (event) => {
-    if (!confirm(`"${current.name}" 플로를 보관할까요? 꺼지고 발행 버전이 해제되며 목록에서 사라집니다. 기다리는 중인 실행은 재개할 때 취소됩니다. 보관한 플로는 이 화면에서 다시 열 수 없습니다.`)) return;
+    if (!confirm(`"${formatText(current.name)}" 플로를 보관할까요? 꺼지고 발행 버전이 해제되며 목록에서 사라집니다. 기다리는 중인 실행은 재개할 때 취소됩니다. 보관한 플로는 이 화면에서 다시 열 수 없습니다.`)) return;
     void run(event.currentTarget, async () => {
       const session = epoch;
       const id = current.id;

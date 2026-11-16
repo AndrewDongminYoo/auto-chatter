@@ -93,12 +93,12 @@ function createManualReplyReports({ api, node }) {
       try {
         checkedAt = formatDateTime(report.checked_at, { timeZone: report.time_zone });
       } catch {
-        checkedAt = `${report.checked_at} (UTC)`;
+        checkedAt = `${formatText(report.checked_at)} (UTC)`;
       }
-      summary.textContent = `${report.from}부터 ${report.before} 전까지 접수 · ${report.time_zone} · ${account} · ${checkedAt} 조회`;
+      summary.textContent = `${formatText(report.from)}부터 ${formatText(report.before)} 전까지 접수 · ${formatText(report.time_zone)} · ${account} · ${checkedAt} 조회`;
       for (const [key, label] of metrics) {
         const item = node("div");
-        item.append(node("dt", label), node("dd", BigInt(report.counts[key]).toLocaleString("ko-KR")));
+        item.append(node("dt", label), node("dd", formatCount(report.counts?.[key])));
         output.append(item);
       }
       download.disabled = false;

@@ -69,9 +69,9 @@ function createContactCsvPreview({ api, node, reloadContacts, sessionSource }) {
     const next = rows.slice(shown, shown + 20);
     const tags = (value) => value.join(", ") || "태그 없음";
     for (const row of next) {
-      const item = node("li", `${row.row}행 · ${labels[row.status]}`);
+      const item = node("li", `${formatCount(row.row, { useGrouping: false })}행 · ${formatText(labels[row.status])}`);
       if (detailKeys.includes(row.status)) {
-        item.append(node("p", `계정 ${row.connection_id} · 참여자 ${row.sender_id}`, "hint"));
+        item.append(node("p", `계정 ${formatText(row.connection_id)} · 참여자 ${formatText(row.sender_id)}`, "hint"));
         item.append(node("p", row.status === "applied" ? `이전: ${tags(row.current_tags)} → 현재: ${tags(row.proposed_tags)}` : `현재: ${tags(row.current_tags)} → 예상: ${tags(row.proposed_tags)}`, "hint"));
       }
       list.append(item);
@@ -115,7 +115,9 @@ function createContactCsvPreview({ api, node, reloadContacts, sessionSource }) {
   function showPreview(result, lead) {
     const counts = result.counts;
     rows = result.rows;
-    status.textContent = `${lead}전체 ${counts.total}행 · 변경 예상 ${counts.changed} · 변경 없음 ${counts.unchanged} · 오류 ${counts.invalid} · 중복 ${counts.duplicate} · 조회 불가 ${counts.not_found}. ` + `저장된 변경은 없습니다. 검사 시각: ${result.checked_at}.`;
+    status.textContent =
+      `${lead}전체 ${formatCount(counts.total, { useGrouping: false })}행 · 변경 예상 ${formatCount(counts.changed, { useGrouping: false })} · 변경 없음 ${formatCount(counts.unchanged, { useGrouping: false })} · 오류 ${formatCount(counts.invalid, { useGrouping: false })} · 중복 ${formatCount(counts.duplicate, { useGrouping: false })} · 조회 불가 ${formatCount(counts.not_found, { useGrouping: false })}. ` +
+      `저장된 변경은 없습니다. 검사 시각: ${formatText(result.checked_at)}.`;
     showMore();
   }
   // The apply is offered only for a clean check with changes; it sends the same CSV string and the checked rows.
@@ -126,7 +128,7 @@ function createContactCsvPreview({ api, node, reloadContacts, sessionSource }) {
       csv,
       expected: result.rows.filter((row) => row.status === "changed").map((row) => ({ row: row.row, current_tags: row.current_tags })),
     };
-    acknowledgeText.textContent = `${counts.changed}행의 태그를 파일의 값으로 교체합니다. 다른 열과 동의·추가 정보·중지 상태는 바꾸지 않습니다.`;
+    acknowledgeText.textContent = `${formatCount(counts.changed, { useGrouping: false })}행의 태그를 파일의 값으로 교체합니다. 다른 열과 동의·추가 정보·중지 상태는 바꾸지 않습니다.`;
     applyForm.hidden = false;
   }
   input.addEventListener("change", () => invalidate());
@@ -196,7 +198,7 @@ function createContactCsvPreview({ api, node, reloadContacts, sessionSource }) {
           current_tags: row.previous_tags,
           proposed_tags: row.tags,
         }));
-      status.textContent = `태그 교체 완료 · 전체 ${result.counts.total}행 · 적용 ${result.counts.applied} · 변경 없음 ${result.counts.unchanged}. 적용 시각: ${result.applied_at}. 다시 적용하려면 파일을 다시 검사해 주세요.`;
+      status.textContent = `태그 교체 완료 · 전체 ${formatCount(result.counts.total, { useGrouping: false })}행 · 적용 ${formatCount(result.counts.applied, { useGrouping: false })} · 변경 없음 ${formatCount(result.counts.unchanged, { useGrouping: false })}. 적용 시각: ${formatText(result.applied_at)}. 다시 적용하려면 파일을 다시 검사해 주세요.`;
       showMore();
       // The host skips the reload over an unsaved contact draft; say so, or the list below shows the old tags silently.
       if (reloadContacts && reloadContacts() === false) status.textContent += " 편집 중인 연락처가 있어 목록은 새로 고치지 않았습니다. 편집을 마친 뒤 목록을 다시 불러오면 바뀐 태그가 보입니다.";

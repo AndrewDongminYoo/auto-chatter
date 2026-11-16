@@ -226,7 +226,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   function monthText(value) {
     const match = typeof value === "string" ? /^(\d{4})-(\d{2})$/.exec(value) : null;
     if (!match) throw new Error("invalid month");
-    return `${match[1]}년 ${Number(match[2])}월`;
+    return `${formatText(match[1])}년 ${Number(match[2])}월`;
   }
   // The preview's limit, the month's rows already used, the approvals in force due in it and what remains.
   function limitText(value) {
@@ -265,10 +265,10 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     if (typeof value !== "string" || Number.isNaN(date.getTime())) throw new Error("invalid approval time");
     return `${date.toLocaleString("ko-KR", { timeZone: zone })} (${zone})`;
   }
-  const member = (id) => (id && id === userId() ? "나" : `다른 멤버 (${String(id).slice(0, 8)})`);
+  const member = (id) => (id && id === userId() ? "나" : `다른 멤버 (${formatText(id).slice(0, 8)})`);
   const snapshotLabel = (id) => {
     const snapshot = snapshots.find((item) => item.id === id);
-    return snapshot ? `${snapshot.segment_name} · ${formatDateTime(snapshot.as_of, { timeZone })} · 고정 당시 ${snapshot.member_count}명` : "목록에서 찾을 수 없는 고정 대상";
+    return snapshot ? `${formatText(snapshot.segment_name)} · ${formatDateTime(snapshot.as_of, { timeZone })} · 고정 당시 ${formatCount(snapshot.member_count, { useGrouping: false })}명` : "목록에서 찾을 수 없는 고정 대상";
   };
   // Scheduled times show in the zone the approval stored, which a later workspace zone change does not move.
   const scheduleText = (value) => (value.schedule_kind === "immediate" ? "즉시" : instant(value.scheduled_at, value.schedule_time_zone));
@@ -283,7 +283,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     const limited = executed && value.run_limited === true;
     const entries = [
       ["상태", active ? "승인됨 · 실행 시점에 서비스 발송이 켜져 있으면 시작" : limited ? "실행을 시작하지 않음 · 이번 달 캠페인 발송 한도 초과" : executed ? "실행 시작됨 · 보내기 직전에 조건을 다시 확인해 발송" : "취소됨"],
-      ["승인한 초안", `${value.name} · 버전 ${value.draft_version}`],
+      ["승인한 초안", `${formatText(value.name)} · 버전 ${formatCount(value.draft_version, { useGrouping: false })}`],
       ["실행 시점", scheduleText(value)],
       ["승인", `${instant(value.approved_at, timeZone)} · ${member(value.approved_by)}`],
     ];
@@ -550,7 +550,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     placeholder.value = "";
     const choices = snapshots.map((snapshot) => {
       const date = formatDateTime(snapshot.as_of, { timeZone });
-      const option = node("option", `${snapshot.segment_name}${snapshot.segment_archived ? " · 필터 보관됨" : ""} · ${date} · 고정 당시 ${snapshot.member_count}명`);
+      const option = node("option", `${formatText(snapshot.segment_name)}${snapshot.segment_archived ? " · 필터 보관됨" : ""} · ${date} · 고정 당시 ${formatCount(snapshot.member_count, { useGrouping: false })}명`);
       option.value = snapshot.id;
       return option;
     });
@@ -570,10 +570,10 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     if (!drafts.length) list.append(node("p", "저장한 초안이 없습니다. 고정한 대상을 선택하고 메시지를 작성해 주세요.", "hint"));
     for (const draft of drafts) {
       const card = node("article", "", "campaign-draft-card");
-      const label = node("h3", `${draft.name}${draft.archived ? " · 보관됨" : ""}`);
+      const label = node("h3", `${formatText(draft.name)}${draft.archived ? " · 보관됨" : ""}`);
       const open = node("button", "초안 보기", "secondary");
       open.type = "button";
-      open.setAttribute("aria-label", `${draft.name} 초안 보기`);
+      open.setAttribute("aria-label", `${formatText(draft.name)} 초안 보기`);
       open.addEventListener("click", () => openDraft(draft.id));
       card.append(label, open);
       list.append(card);
@@ -589,7 +589,8 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     fields.body.value = draft.body;
     options(draft.snapshot_id);
     byId("campaign-draft-editor-title").textContent = draft.archived ? "보관된 초안" : "초안 수정";
-    byId("campaign-draft-summary").textContent = `원래 ${draft.original_member_count}명 · 현재 ${draft.stored_member_count}명 · 버전 ${draft.version}${draft.archived ? " · 보관됨" : ""}. 계정·이용자 데이터 삭제로 명단이 줄어들 수 있습니다. 발송 가능한 인원 수는 아닙니다.`;
+    byId("campaign-draft-summary").textContent =
+      `원래 ${formatCount(draft.original_member_count, { useGrouping: false })}명 · 현재 ${formatCount(draft.stored_member_count, { useGrouping: false })}명 · 버전 ${formatCount(draft.version, { useGrouping: false })}${draft.archived ? " · 보관됨" : ""}. 계정·이용자 데이터 삭제로 명단이 줄어들 수 있습니다. 발송 가능한 인원 수는 아닙니다.`;
     controls();
   }
   function authorizationLost(error) {
@@ -696,7 +697,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     };
     byId("campaign-approval-confirm-summary").replaceChildren(
       ...definitions([
-        ["초안", `${editing.name} · 버전 ${editing.version}`],
+        ["초안", `${formatText(editing.name)} · 버전 ${formatCount(editing.version, { useGrouping: false })}`],
         ["고정 대상", snapshotLabel(editing.snapshot_id)],
         ["실행 시점", staged.body.schedule_local === null ? "즉시" : `${staged.body.schedule_local.replace("T", " ")} (${staged.body.expected_time_zone})`],
       ]),

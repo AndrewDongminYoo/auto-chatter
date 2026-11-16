@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
+import ts from "typescript";
 
 interface DisplayValues {
   errorMessage(error: unknown): string;
-  formatCount(value: unknown): string;
+  formatCount(value: unknown, options?: { useGrouping?: boolean }): string;
+  formatText(value: unknown): string;
   formatDateTime(value: unknown, options?: Intl.DateTimeFormatOptions): string;
   formatDate(value: unknown, options?: Intl.DateTimeFormatOptions): string;
   formatTime(value: unknown, options?: Intl.DateTimeFormatOptions): string;
@@ -55,7 +57,7 @@ test("counts format finite numbers and show a dash for anything else", () => {
   assert.equal(values.formatCount(0), "0");
   assert.equal(values.formatCount(1234567), "1,234,567");
   assert.equal(values.formatCount(-12.5), "-12.5");
-  for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, undefined, null, "12", "", 12n]) assert.equal(values.formatCount(value), "–", String(value));
+  for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, undefined, null, "wrong", "", {}, true, 12n]) assert.equal(values.formatCount(value), "–", String(value));
 });
 
 test("date helpers format valid dates exactly like the calls they replace", () => {
@@ -84,7 +86,7 @@ test("the dashboard loads the display helpers before every script that uses them
   const html = read("index.html");
   const position = (name: string) => html.indexOf(`<script src="./${name}" defer></script>`);
   assert.ok(position("display-values.js") > 0, "display-values.js is not loaded with defer");
-  const users = readdirSync(directory).filter((name) => name.endsWith(".js") && name !== "display-values.js" && /\b(?:errorMessage|formatCount|formatDateTime|formatDate|formatTime)\(/.test(read(name)));
+  const users = readdirSync(directory).filter((name) => name.endsWith(".js") && name !== "display-values.js" && /\b(?:errorMessage|formatText|formatCount|formatDateTime|formatDate|formatTime)\(/.test(read(name)));
   assert.ok(users.length > 0);
   for (const name of users) assert.ok(position(name) > position("display-values.js"), `${name} loads before the display helpers`);
 });
@@ -114,4 +116,65 @@ test("no dashboard script shows a caught error's message without errorMessage", 
         `${name} no longer has the allowed line ${pattern}`,
       );
   }
+});
+
+test("plain counts preserve existing grouping and precision", () => {
+  assert.equal(values.formatCount(1234, { useGrouping: false }), "1234");
+  assert.equal(values.formatCount("9007199254740993", { useGrouping: false }), "9007199254740993");
+  assert.equal(values.formatCount("9007199254740993"), "9,007,199,254,740,993");
+});
+
+test("text display preserves strings and replaces absent or wrong types", () => {
+  assert.equal(values.formatText("12345678901234567890"), "12345678901234567890");
+  assert.equal(values.formatText("상점"), "상점");
+  for (const value of [undefined, null, "", 123, NaN, {}, true]) assert.equal(values.formatText(value), "–");
+});
+
+// Inspect syntax, rather than a field-name regex: identifiers and labels need guards too.
+// Local array lengths and already-formatted limit strings are the bounded exceptions.
+function unguardedDisplayValues(source: string): string[] {
+  const ast = ts.createSourceFile("dashboard.js", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const found: string[] = [];
+  function visit(node: ts.Node) {
+    if (ts.isTemplateExpression(node) && /[가-힣]/.test(node.head.text + node.templateSpans.map((span) => span.literal.text).join(""))) {
+      for (const span of node.templateSpans) {
+        const expression = span.expression;
+        const text = expression.getText(ast);
+        if ((ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) && !/\.length$/.test(text) && !/^counts\[[0-3]\]$/.test(text)) found.push(text);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(ast);
+  return found;
+}
+
+test("the display interpolation reader rejects missing values and accepts guarded values", () => {
+  assert.deepEqual(unguardedDisplayValues("`댓글 ${contact.comment_count}개 · ${contact.sender_id}`"), ["contact.comment_count", "contact.sender_id"]);
+  assert.deepEqual(unguardedDisplayValues("`댓글 ${formatCount(contact.comment_count)}개 · ${formatText(contact.sender_id)}`"), []);
+});
+
+test("UI templates guard direct API properties beyond count field names", () => {
+  for (const name of ["app", "campaign-drafts", "flow-editor", "inbox", "contact-csv-preview", "webhook-labels", "contact-identity-links", "manual-reply-reports", "flow-run-reports", "campaign-run-reports", "handoff-reports"]) {
+    assert.deepEqual(unguardedDisplayValues(read(`${name}.js`)), [], name);
+  }
+});
+
+test("report metrics guard absent decimal counts instead of coercing null to zero", () => {
+  for (const name of ["manual-reply-reports", "handoff-reports", "flow-run-reports", "campaign-run-reports"]) assert.doesNotMatch(read(`${name}.js`), /BigInt\((?:report|group)/);
+  assert.equal(values.formatCount(null), "–");
+  assert.equal(values.formatCount("0"), "0");
+});
+
+test("contact field display keeps booleans and zero without leaking invalid values", () => {
+  const source = read("app.js");
+  const start = source.indexOf("function displayFieldValue(");
+  const end = source.indexOf("function typedFieldValue(", start);
+  const local = vm.createContext({ formatText: values.formatText, formatCount: values.formatCount });
+  vm.runInContext(source.slice(start, end), local);
+  const show = local.displayFieldValue as (value: unknown) => string;
+  for (const value of [undefined, null, NaN, Infinity, {}]) assert.equal(show(value), "–");
+  assert.equal(show(false), "아니요");
+  assert.equal(show(0), "0");
+  assert.equal(show(""), "빈 텍스트");
 });

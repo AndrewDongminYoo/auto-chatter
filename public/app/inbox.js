@@ -97,7 +97,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   const summary = (convo) => `${convo.status === "closed" ? "완료" : "진행 중"} · ${convo.assignee ? `담당 ${person(convo.assignee)}` : "미배정"}`;
   const filtered = () => Boolean(searchText || byId("inbox-status-filter").value || byId("inbox-assignee-filter").value || byId("inbox-label-filter").value || byId("inbox-unread").checked || reminderFilter);
   const conversationPath = (state) => `/api/inbox/conversations/${state.row.connection_id}/${state.row.recipient_id}`;
-  const labelText = (label) => (label.archived ? `${label.name} (보관됨)` : label.name);
+  const labelText = (label) => (label.archived ? `${formatText(label.name)} (보관됨)` : label.name);
   const serverNow = () => Date.now() + clockOffset;
   const isDue = (reminder) => serverNow() >= Date.parse(reminder.due_at);
   // A stored "YYYY-MM-DDTHH:MM" wall-clock value as Korean text, with the year only when it is not this year.
@@ -142,13 +142,13 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   function rowContent(button, row) {
     const head = node("span", "", "conversation-head");
     head.append(node("span", `@${row.username || "연결 계정"}`));
-    if (row.unread_count > 0) head.append(node("span", `안 읽음 ${row.unread_count}`, "unread-badge"));
+    if (row.unread_count > 0) head.append(node("span", `안 읽음 ${formatCount(row.unread_count, { useGrouping: false })}`, "unread-badge"));
     // The newest DM leads so the list says what to answer first; the numeric DM user ID stays as a secondary line.
     button.replaceChildren(
       head,
       node("span", row.last_message_preview ?? "", "conversation-line conversation-snippet"),
-      node("span", `DM 사용자 ${row.recipient_id}`, "conversation-line conversation-id"),
-      node("span", `${row.message_count}개 · ${date(row.last_message_at)}`, "conversation-line"),
+      node("span", `DM 사용자 ${formatText(row.recipient_id)}`, "conversation-line conversation-id"),
+      node("span", `${formatCount(row.message_count, { useGrouping: false })}개 · ${date(row.last_message_at)}`, "conversation-line"),
       node("span", summary(row.state), "conversation-line"),
     );
     const chips = node("span", "", "label-chips");
@@ -234,7 +234,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     const save = byId("inbox-label-save");
     save.disabled = state.labelBusy || !dirty;
     save.textContent = state.labelBusy ? "저장 중…" : "라벨 저장";
-    byId("inbox-label-status").textContent = state.labelNotice || (dirty ? `저장하지 않은 변경 · ${chosen.size} / 10` : `${chosen.size} / 10`);
+    byId("inbox-label-status").textContent = state.labelNotice || (dirty ? `저장하지 않은 변경 · ${formatCount(chosen.size, { useGrouping: false })} / 10` : `${chosen.size} / 10`);
   }
 
   function toggleLabel(id, checked) {
@@ -655,7 +655,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         input.autocomplete = "off";
         input.addEventListener("input", () => checkLabelName(input));
         input.value = label.name;
-        input.setAttribute("aria-label", `${label.name} 라벨 이름`);
+        input.setAttribute("aria-label", `${formatText(label.name)} 라벨 이름`);
         const save = node("button", "이름 저장", "secondary");
         save.type = "submit";
         form.append(input, save);
@@ -670,7 +670,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         const archive = node("button", "보관", "secondary danger");
         archive.type = "button";
         archive.addEventListener("click", () => {
-          if (!confirm(`"${label.name}" 라벨을 보관할까요? 보관한 라벨은 대화에 새로 붙일 수 없고, 이미 붙은 대화에는 보관됨으로 남습니다. 보관은 되돌릴 수 없습니다.`)) return;
+          if (!confirm(`"${formatText(label.name)}" 라벨을 보관할까요? 보관한 라벨은 대화에 새로 붙일 수 없고, 이미 붙은 대화에는 보관됨으로 남습니다. 보관은 되돌릴 수 없습니다.`)) return;
           void manageLabels(async () => {
             await api(`/api/inbox/labels/${label.id}`, "DELETE");
             return "라벨을 보관했습니다.";
@@ -800,13 +800,13 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         badges.append(node("span", rule.label.name, `label-chip${rule.label.archived ? " archived" : ""}`), ...(rule.label.archived ? [node("span", "보관된 라벨", "badge warning")] : []), node("span", ruleModes[rule.match_mode] ?? rule.match_mode, "badge"));
         const edit = node("button", "수정", "secondary");
         edit.type = "button";
-        edit.setAttribute("aria-label", `${rule.label.name} 라벨 규칙 수정`);
+        edit.setAttribute("aria-label", `${formatText(rule.label.name)} 라벨 규칙 수정`);
         edit.addEventListener("click", () => editRule(rule));
         const archive = node("button", "보관", "secondary danger");
         archive.type = "button";
-        archive.setAttribute("aria-label", `${rule.label.name} 라벨 규칙 보관`);
+        archive.setAttribute("aria-label", `${formatText(rule.label.name)} 라벨 규칙 보관`);
         archive.addEventListener("click", () => {
-          if (!confirm(`"${rule.label.name}" 라벨 규칙을 보관할까요? 다음 DM부터 이 규칙으로 라벨을 붙이지 않고, 이미 붙은 라벨은 그대로 둡니다. 보관은 되돌릴 수 없습니다.`)) return;
+          if (!confirm(`"${formatText(rule.label.name)}" 라벨 규칙을 보관할까요? 다음 DM부터 이 규칙으로 라벨을 붙이지 않고, 이미 붙은 라벨은 그대로 둡니다. 보관은 되돌릴 수 없습니다.`)) return;
           void manageRules(
             async () => {
               await api(`/api/inbox/label-rules/${rule.id}`, "DELETE");
@@ -1076,7 +1076,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     const label = reply.status === "unknown" && reply.resolved_at ? "검토 완료 · 재전송 안 함" : reply.status === "pending" && reply.scheduled_at ? "예약 대기" : sendStatusLabel(reply.status);
     item.append(node("p", reply.text, "bubble outgoing"), node("p", `${label} · ${date(reply.sent_at || reply.created_at)}`, `hint ${["failed", "unknown"].includes(reply.status) ? "reply-warning" : ""}`));
     if (reply.scheduled_at) {
-      item.append(node("p", `예정 · ${reminderLabel(wallClock(Date.parse(reply.scheduled_at), reply.schedule_time_zone))} (${reply.schedule_time_zone})`, "hint"));
+      item.append(node("p", `예정 · ${reminderLabel(wallClock(Date.parse(reply.scheduled_at), reply.schedule_time_zone))} (${formatText(reply.schedule_time_zone)})`, "hint"));
       scheduledReplyActions(state, reply, item);
     }
     if (reply.failure_code) item.append(node("p", failure(reply.failure_code), "hint"));
@@ -1180,7 +1180,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     local.required = true;
     local.value = draft.local;
     const textLabel = node("label", "예약 메시지"),
-      timeLabel = node("label", `예약 시각 · ${draft.zone}`);
+      timeLabel = node("label", `예약 시각 · ${formatText(draft.zone)}`);
     textLabel.htmlFor = text.id;
     timeLabel.htmlFor = local.id;
     const remember = () => {
@@ -1439,7 +1439,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       });
     replyTemplates.conversationChanged();
     selected = states.get(key);
-    byId("inbox-conversation-title").textContent = `@${row.username || "연결 계정"} · DM 사용자 ${row.recipient_id}`;
+    byId("inbox-conversation-title").textContent = `@${row.username || "연결 계정"} · DM 사용자 ${formatText(row.recipient_id)}`;
     byId("inbox-thread-refresh").hidden = false;
     byId("inbox-back-to-list").hidden = false;
     for (const button of byId("inbox-conversations").children) button.setAttribute("aria-pressed", String(button.dataset.key === key));
