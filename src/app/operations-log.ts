@@ -84,8 +84,17 @@ export class CampaignStartFailedError extends Error {
   }
 }
 
+// pg raises a query read timeout (query_timeout) and a dropped connection as plain Errors without a code (#367).
+// Their messages are fixed strings that pg writes itself, so an exact comparison reads no submitted content.
+// operations-log.test.ts provokes both from a real pg client, so a pg upgrade that changes either string fails it.
+const PG_FIXED_MESSAGES: ReadonlyMap<string, string> = new Map([
+  ["Connection terminated unexpectedly", "database_unavailable"],
+  ["Query read timeout", "database_timeout"],
+]);
+
 // A fixed failure code for an error, read from its class and error code only; the message is never used
-// because SQL and provider messages can carry submitted content.
+// because SQL and provider messages can carry submitted content. The one exception is an exact match on a
+// fixed pg message above, on a plain Error without a code.
 export function failureCode(error: unknown): string {
   if (error instanceof ConfigurationError) return "not_configured";
   if (error instanceof TokenRefreshFailedError) return "token_refresh_failed";
@@ -96,5 +105,6 @@ export function failureCode(error: unknown): string {
     // SQLSTATE classes 08 (connection exception) and 57 (operator intervention) mean the database is unreachable.
     return code.startsWith("08") || code.startsWith("57") ? "database_unavailable" : "database_error";
   if (typeof code === "string" && /^E[A-Z]+$/.test(code)) return "connection_unavailable";
+  if (error instanceof Error && Object.getPrototypeOf(error) === Error.prototype && code === undefined) return PG_FIXED_MESSAGES.get(error.message) ?? "unexpected_error";
   return "unexpected_error";
 }

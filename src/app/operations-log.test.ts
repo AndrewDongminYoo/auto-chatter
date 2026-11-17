@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { createServer, type Socket } from "node:net";
 import { mock, test } from "node:test";
+import { Client } from "pg";
 import { ConfigurationError, failureCode, logOperation, operationLogEntry, SubscriptionCheckFailedError, TokenRefreshFailedError } from "./operations-log.ts";
 
 test("operation logs drop disallowed keys and allowed keys whose value has the wrong shape", () => {
@@ -84,4 +86,64 @@ test("failure codes come from the error class and code, never from the message",
   assert.equal(failureCode(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" })), "connection_unavailable");
   assert.equal(failureCode(new Error("owner@example.test")), "unexpected_error");
   assert.equal(failureCode("thrown string"), "unexpected_error");
+  // The fixed pg messages count only on a plain Error without a code and only as an exact match.
+  assert.equal(failureCode(new Error("Query read timeout (owner@example.test)")), "unexpected_error");
+  assert.equal(failureCode(new TypeError("Query read timeout")), "unexpected_error");
+  assert.equal(failureCode(Object.assign(new Error("Connection terminated unexpectedly"), { code: "XX000" })), "database_error");
+  assert.equal(failureCode({ message: "Query read timeout" }), "unexpected_error");
+});
+
+// A minimal PostgreSQL server for one real pg client: it accepts the startup message without a password
+// (AuthenticationOk, then ReadyForQuery) and hands each later client message to onMessage.
+async function fakePostgres(onMessage: (socket: Socket) => void): Promise<{ port: number; close: () => Promise<void> }> {
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    let started = false;
+    socket.on("data", () => {
+      if (started) return onMessage(socket);
+      started = true;
+      const authenticationOk = Buffer.from([0x52, 0, 0, 0, 8, 0, 0, 0, 0]);
+      const readyForQuery = Buffer.from([0x5a, 0, 0, 0, 5, 0x49]);
+      socket.write(Buffer.concat([authenticationOk, readyForQuery]));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  return {
+    port: address.port,
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const socket of sockets) socket.destroy();
+        server.close(() => resolve());
+      }),
+  };
+}
+
+async function realPgQueryError(onMessage: (socket: Socket) => void): Promise<unknown> {
+  const server = await fakePostgres(onMessage);
+  const client = new Client({ host: "127.0.0.1", port: server.port, user: "test", database: "test", query_timeout: 50 });
+  // A dropped connection is also emitted on the client; the query's rejection is what the callers see.
+  client.on("error", () => {});
+  try {
+    await client.connect();
+    return await client.query("SELECT 1").then(
+      () => assert.fail("the query should fail"),
+      (error: unknown) => error,
+    );
+  } finally {
+    await server.close();
+    await client.end().catch(() => {});
+  }
+}
+
+test("failure codes classify the query timeout and dropped connection errors a real pg client raises", async () => {
+  // The server never answers the query, so pg's query_timeout fires.
+  const timeout = await realPgQueryError(() => {});
+  assert.equal(failureCode(timeout), "database_timeout");
+  // The server closes the socket on the query, as a dropped database connection does.
+  const dropped = await realPgQueryError((socket) => socket.destroy());
+  assert.equal(failureCode(dropped), "database_unavailable");
 });
