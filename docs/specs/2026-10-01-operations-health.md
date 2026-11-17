@@ -15,7 +15,8 @@
 그래서 Node 워커와 Compose의 표준 출력에서도 줄 단위 수집기가 한 줄씩 JSON으로 읽을 수 있습니다.
 `event`와 `code`는 `^[a-z][a-z0-9_]{0,63}$`, `connection_id`는 UUID, `correlation_id`는 영문·숫자·`-` 64자 이하, `step`은 정해진 단계 이름, `part`는 `campaign_start` 단계의 부분 이름(`start`·`sweep`·`complete`)이어야 하며, 그 밖의 키와 형식이 맞지 않는 값은 버립니다.
 그래서 요청 본문, 토큰, 이메일, 댓글·DM 본문, Meta·SQL 오류 원문은 호출자가 실수로 넘겨도 기록되지 않습니다.
-실패 코드는 `failureCode`가 오류 클래스와 오류 코드만 보고 정합니다(`not_configured`, `token_refresh_failed`, `subscription_check_failed`, `database_unavailable`, `database_error`, `connection_unavailable`, `unexpected_error`). 오류 메시지는 읽지 않습니다.
+실패 코드는 `failureCode`가 오류 클래스와 오류 코드만 보고 정합니다(`not_configured`, `token_refresh_failed`, `subscription_check_failed`, `database_unavailable`, `database_timeout`, `database_error`, `connection_unavailable`, `unexpected_error`). 오류 메시지는 읽지 않습니다.
+예외는 `pg`가 코드 없는 일반 `Error`로 내는 두 고정 문구입니다([#367](https://github.com/AndrewDongminYoo/auto-chatter/issues/367)). 메시지가 정확히 `Query read timeout`(질의 시간 초과)이면 `database_timeout`, `Connection terminated unexpectedly`(연결 끊김)이면 `database_unavailable`입니다. 실제 `pg` 클라이언트로 두 오류를 만드는 테스트가 있어 `pg`가 문구를 바꾸면 실패합니다.
 상관 ID는 웹훅·API 요청이면 Cloudflare의 `cf-ray` 헤더(없으면 새 UUID), Queue 메시지 묶음과 Cron 실행마다 새 UUID입니다. Worker는 요청마다 한 번 정한 ID를 `appApi`와 그 요청의 DB 연결 풀에도 넘기므로 풀 오류 줄도 같은 ID를 가집니다.
 `database_connection_error`는 웹훅·API 요청, Queue 메시지, Cron 실행이 풀을 쓰는 동안의 오류만 남기며, 풀의 `end()`가 시작된 뒤 풀에 오는 오류는 남기지 않습니다([#319](https://github.com/AndrewDongminYoo/auto-chatter/issues/319)).
 pg-pool은 연결이 닫히기 전에 `end()`를 끝내고, workerd 소켓을 닫으면 대기 중인 읽기가 오류로 끝나 그 오류가 `end()` 도중이나 뒤에 풀로 오기 때문입니다.
