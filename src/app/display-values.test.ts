@@ -155,7 +155,7 @@ test("the display interpolation reader rejects missing values and accepts guarde
 });
 
 test("UI templates guard direct API properties beyond count field names", () => {
-  for (const name of ["app", "campaign-drafts", "flow-editor", "inbox", "contact-csv-preview", "webhook-labels", "contact-identity-links", "manual-reply-reports", "flow-run-reports", "campaign-run-reports", "handoff-reports"]) {
+  for (const name of ["app", "campaign-drafts", "deletion-labels", "flow-editor", "inbox", "contact-csv-preview", "webhook-labels", "contact-identity-links", "manual-reply-reports", "flow-run-reports", "campaign-run-reports", "handoff-reports"]) {
     assert.deepEqual(unguardedDisplayValues(read(`${name}.js`)), [], name);
   }
 });

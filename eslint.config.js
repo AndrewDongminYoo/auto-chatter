@@ -44,9 +44,11 @@ const dashboardGlobals = [
   { readers: ["app"], names: ["createContactCsvPreview"] },
   // contact-identity-links.js
   { readers: ["app"], names: ["createContactIdentityLinks"] },
+  // deletion-labels.js
+  { readers: ["app"], names: ["countSummary", "countTotal", "deletedLabels", "retainedLabels"] },
   // display-values.js
   {
-    readers: ["app", "campaign-drafts", "campaign-run-reports", "contact-csv-preview", "contact-identity-links", "flow-editor", "flow-run-reports", "handoff-reports", "inbox", "manual-reply-reports", "plan-labels", "segment-snapshots", "webhook-labels"],
+    readers: ["app", "campaign-drafts", "campaign-run-reports", "contact-csv-preview", "contact-identity-links", "deletion-labels", "flow-editor", "flow-run-reports", "handoff-reports", "inbox", "manual-reply-reports", "plan-labels", "segment-snapshots", "webhook-labels"],
     names: ["formatText", "errorMessage", "formatCount", "formatDate", "formatDateTime", "formatTime"],
   },
   // flow-editor-model.js
