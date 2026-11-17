@@ -124,7 +124,7 @@ async function fakePostgres(onMessage: (socket: Socket) => void): Promise<{ port
 
 async function realPgQueryError(onMessage: (socket: Socket) => void): Promise<unknown> {
   const server = await fakePostgres(onMessage);
-  const client = new Client({ host: "127.0.0.1", port: server.port, user: "test", database: "test", query_timeout: 50 });
+  const client = new Client({ host: "127.0.0.1", port: server.port, user: "test", database: "test", query_timeout: 50, ssl: false });
   // A dropped connection is also emitted on the client; the query's rejection is what the callers see.
   client.on("error", () => {});
   try {
