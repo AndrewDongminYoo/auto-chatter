@@ -100,6 +100,7 @@ test("agents are refused the administrative routes that admins can reach", async
         follow_gate_enabled: false,
       },
     ],
+    ["DELETE", `/api/rules/${missingId}`],
     ["POST", "/api/contact-fields", { name: "tier", type: "text" }],
     ["DELETE", `/api/contact-fields/${fieldId}`],
     ["POST", "/api/contact-segments", { name: "vips", connection_id: connectionId }],

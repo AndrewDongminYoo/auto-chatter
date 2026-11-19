@@ -646,6 +646,9 @@ body:has(#workspace:not([hidden]))::before {
   font-size: var(--font-size-body);
   padding: var(--space-2) var(--space-3);
 }
+#rules .item button + button {
+  margin-left: var(--space-2);
+}
 .rule-summary {
   color: var(--muted-foreground);
   font-size: var(--font-size-help);
@@ -726,6 +729,10 @@ body:has(#workspace:not([hidden]))::before {
   display: flex;
   gap: var(--space-3);
   align-items: center;
+}
+/* A failed post lookup (title plus hint, no image) stacks instead of squeezing the title into one column. */
+.rule-target:has(> span) {
+  display: block;
 }
 .selected-media {
   flex-wrap: wrap;

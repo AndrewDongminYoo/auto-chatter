@@ -18,7 +18,7 @@ import { changeReminder, closeReminder, createReminder, listReminders } from "./
 import type { Pool } from "pg";
 import { ApiError, AuthClient, clearSession, isUuid, json, readJson, readOptionalJson, requireSameOrigin, type AuthEnv, type User } from "./auth.ts";
 import { limitAuthRequest, type AuthRateLimitEnv, type RateLimitBinding } from "./auth-rate-limit.ts";
-import { listActivity, currentWorkspace, disconnectConnection, ensureWorkspace, listConnections, listRules, saveRule, saveWorkspaceSettings, parseRule, updateConnection } from "./settings.ts";
+import { archiveRule, listActivity, currentWorkspace, disconnectConnection, ensureWorkspace, listConnections, listRules, saveRule, saveWorkspaceSettings, parseRule, updateConnection } from "./settings.ts";
 import { acceptInvite, changeMemberRole, createInvite, listInvites, listMembers, memberEntitlements, removeMember, revokeInvite } from "./workspace-members.ts";
 import { beginInstagramOAuth, finishInstagramOAuth, type InstagramOAuthEnv } from "./instagram-oauth.ts";
 import { archiveContactSegment, createContactSegment, listContactSegments, listContacts, saveContactTags, saveContactAutomation, SEGMENT_REQUEST_BYTES, updateContactSegment } from "./contacts.ts";
@@ -525,6 +525,8 @@ export async function appApi(
         if (!rule.id) await connectionMedia(pool, user, rule.connection_id, env, { mediaId: rule.media_id }, fetchImpl);
         return json(await saveRule(pool, user, input));
       }
+      const commentRule = /^\/api\/rules\/([a-f0-9-]+)$/.exec(url.pathname);
+      if (commentRule && request.method === "DELETE") return json(await archiveRule(pool, user, commentRule[1]!));
       const media = /^\/api\/connections\/([a-f0-9-]+)\/media(?:\/(\d{1,40}))?$/.exec(url.pathname);
       if (media && request.method === "GET") {
         if (url.searchParams.getAll("after").length > 1) throw new ApiError(400, "invalid_media_request");

@@ -176,7 +176,7 @@
     });
   rule.requestSubmit();
   await until(() => Boolean(releaseSave));
-  const otherRule = get("rules").querySelectorAll("button")[1];
+  const otherRule = get("rules").children[1].querySelector("button");
   check(otherRule.disabled, "Rule editing remained enabled during save");
   otherRule.click();
   check(rule.elements.private_reply_text.value === "아직 저장하지 않은 수정", "Rule selection changed during save");

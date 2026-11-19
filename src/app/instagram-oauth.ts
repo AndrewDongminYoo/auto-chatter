@@ -137,7 +137,7 @@ function providerFailure(step: OAuthProviderStep, failure: string, correlationId
 }
 
 // Reads at most errorBodyLimit bytes of an error body as JSON; a larger, unreadable or non-JSON body gives undefined.
-async function readErrorBody(response: Response): Promise<unknown> {
+export async function readErrorBody(response: Response): Promise<unknown> {
   const declared = Number(response.headers.get("content-length"));
   const reader = response.body?.getReader();
   if (!reader) return undefined;

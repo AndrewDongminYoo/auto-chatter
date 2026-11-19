@@ -218,9 +218,20 @@ CREATE TABLE IF NOT EXISTS instagram_comment_rules (
   confirmation_keyword text NOT NULL DEFAULT '확인' CHECK (length(btrim(confirmation_keyword)) > 0),
   enabled boolean NOT NULL DEFAULT false,
   FOREIGN KEY (connection_id, workspace_id) REFERENCES instagram_connections (id, workspace_id),
-  UNIQUE (connection_id, media_id),
   UNIQUE (id, connection_id, workspace_id)
 );
+-- The rule archive (#371): an archived rule is hidden from the rule list and final, never enabled again. A new rule on
+-- the same media is a new row, so one rule per media holds only for rows that are not archived.
+ALTER TABLE instagram_comment_rules ADD COLUMN IF NOT EXISTS archived_at timestamptz;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='instagram_comment_rules'::regclass AND conname='instagram_comment_rules_archived_disabled') THEN
+    ALTER TABLE instagram_comment_rules ADD CONSTRAINT instagram_comment_rules_archived_disabled
+      CHECK(archived_at IS NULL OR NOT enabled);
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS instagram_comment_rules_active_media
+  ON instagram_comment_rules(connection_id, media_id) WHERE archived_at IS NULL;
+ALTER TABLE instagram_comment_rules DROP CONSTRAINT IF EXISTS instagram_comment_rules_connection_id_media_id_key;
 
 CREATE TABLE IF NOT EXISTS instagram_comment_events (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
