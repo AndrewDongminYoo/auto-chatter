@@ -693,6 +693,8 @@ migration 적용과 Worker 배포 사이에는 이 Mac의 Wrangler 로그인 정
 `stale_recovery`·`wake`·`webhook_delivery`·`campaign_start`의 마지막 성공은 2026-11-10 05:04:13~14Z 그대로였습니다. 이 단계들은 `SEND_ENABLED`가 참일 때만 실행됩니다.
 이번 반영은 팔로우 응답을 실제로 보내거나 새 테이블에 발송 기록이 쌓이는 것을 확인하지 않았습니다.
 
+2026-11-18~19에는 #293과 #36의 실계정 검증을 위해 5절의 발송 전환 절차를 따랐습니다. Deploy 워크플로를 끈 뒤 2026-11-18 03:45Z에 `6bb5e31`을 `--var SEND_ENABLED:true`로 배포했고(버전 `032f0027`), 2026-11-19 04:36Z에 같은 커밋을 기본값으로 다시 배포했습니다(버전 `e5aa60ff`, `SEND_ENABLED=false`). 워크플로를 다시 켜고 그 사이 들어온 `eec10e9`를 수동 실행 44459583505로 배포했습니다(버전 `02ed9fbf`, `SEND_ENABLED=false`). 시험 결과는 [실계정 검증 기록](2026-11-19-live-dm-trigger-campaign-verification.md)에 있습니다.
+
 ## 2. Cloudflare 준비
 
 Queue `auto-chatter-replies`를 생성합니다.
