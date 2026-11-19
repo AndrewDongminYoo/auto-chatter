@@ -11,6 +11,7 @@ PR ②([#291](https://github.com/AndrewDongminYoo/auto-chatter/issues/291))가 C
 #33은 이 PR들 뒤에도 열린 상태로 남습니다.
 migration 068과 069는 코드 배포 전에 전체 실행기(`deploy/migrate-multi-user.sql`)로 적용해야 합니다.
 이 문서는 로컬 검사의 범위만 기록합니다. 운영 적용과 실계정 발송 확인은 하지 않았습니다(#293).
+2026-11-19 후속: 운영 Worker에서 키워드·기본 응답 트리거의 시작과 첫 메시지 실수신, 팔로우 확인 대기 중의 트리거 미시작을 실계정으로 확인했습니다([실계정 검증](../notes/2026-11-19-live-dm-trigger-campaign-verification.md)).
 
 ## 트리거 종류
 
