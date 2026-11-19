@@ -1716,8 +1716,10 @@ async function loadWorkspace() {
     if (currentRole === "owner" || currentRole === "admin") {
       const archive = node("button", "보관", "secondary danger");
       archive.type = "button";
-      archive.addEventListener("click", () =>
-        action(archive, async () => {
+      archive.addEventListener("click", () => {
+        // Read before action() disables the button, which moves focus to body.
+        const hadFocus = document.activeElement === archive;
+        return action(archive, async () => {
           if (rule.id === editingRuleId && !canDiscardRule()) return;
           if (!confirm("이 규칙을 보관할까요? 목록에서 사라지고, 이 게시물의 댓글에 더 이상 답장하지 않으며 대기 중인 답장도 보내지 않습니다. 발송 기록은 남고, 보관한 규칙은 되돌릴 수 없습니다. 같은 게시물에는 새 규칙을 만들 수 있습니다.")) return;
           const session = workspaceGeneration;
@@ -1750,8 +1752,15 @@ async function loadWorkspace() {
             // The archive is done; only the reload failed, so keep the success visible (same as the rule save path).
             if (session === workspaceGeneration) notice(`보관은 완료했습니다. ${errorMessage(error)}`, true);
           }
-        }),
-      );
+          // The archived card and its button are gone, so action()'s holdFocus() has nothing to restore. Move a keyboard
+          // user to a surviving rule action, or to the new-rule button, unless focus went somewhere on purpose meanwhile.
+          const active = document.activeElement;
+          if (hadFocus && session === workspaceGeneration && (!active || active === document.body)) {
+            const next = byId("rules").querySelector("button:not(:disabled)") ?? byId("new-rule");
+            next.focus({ preventScroll: true });
+          }
+        });
+      });
       item.append(archive);
     }
     byId("rules").append(item);
