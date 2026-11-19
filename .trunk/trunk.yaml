@@ -41,7 +41,7 @@ lint:
   enabled:
     - actionlint@1.7.12
     - black@26.10.1
-    - cspell@10.5.1
+    - cspell@10.5.2
     - eslint@10.15.0
     - git-diff-check
     - hadolint@2.15.1
