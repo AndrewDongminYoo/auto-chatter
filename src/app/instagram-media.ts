@@ -2,7 +2,7 @@ import type { Pool } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { workspaceFor } from "./settings.ts";
 import { openSecret } from "./secrets.ts";
-import type { InstagramOAuthEnv } from "./instagram-oauth.ts";
+import { readErrorBody, type InstagramOAuthEnv } from "./instagram-oauth.ts";
 
 const fields = "id,owner,caption,media_type,media_product_type,media_url,thumbnail_url,permalink,timestamp";
 const validCursor = (value: string) => /^[A-Za-z0-9_+/=-]{1,2048}$/.test(value);
@@ -32,6 +32,13 @@ function displayMedia(value: unknown) {
   };
 }
 
+// Graph's answer for an object that does not exist (#371): a 4xx whose error has code 100 and subcode 33. Meta's
+// payload for a deleted post was not verified live, so only this exact pair counts; anything else stays
+// media_unavailable.
+export function isMissingMediaError(status: number, body: unknown): boolean {
+  return status >= 400 && status < 500 && isRecord(body) && isRecord(body.error) && body.error.code === 100 && body.error.error_subcode === 33;
+}
+
 export async function connectionMedia(pool: Pool, user: User, connectionId: string, env: InstagramOAuthEnv, options: { after?: string; mediaId?: string } = {}, fetchImpl: typeof fetch = fetch) {
   if (!isUuid(connectionId) || (options.after !== undefined && !validCursor(options.after)) || (options.mediaId !== undefined && !/^\d{1,40}$/.test(options.mediaId))) throw new ApiError(400, "invalid_media_request");
   const workspaceId = await workspaceFor(pool, user, "agent");
@@ -51,7 +58,8 @@ export async function connectionMedia(pool: Pool, user: User, connectionId: stri
   } catch {
     throw new ApiError(409, "media_reconnect_required");
   }
-  async function graph(resource: string, params: Record<string, string>) {
+  // Only the single-media request reads an error body (bounded), to tell a deleted post apart.
+  async function graph(resource: string, params: Record<string, string>, detectMissing = false) {
     const url = new URL(`https://graph.instagram.com/${env.META_GRAPH_VERSION}/${resource}`);
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
     let response: Response;
@@ -65,7 +73,9 @@ export async function connectionMedia(pool: Pool, user: User, connectionId: stri
       throw new ApiError(502, "media_unavailable");
     }
     if (!response.ok) {
-      await response.body?.cancel();
+      if (detectMissing && response.status >= 400 && response.status < 500) {
+        if (isMissingMediaError(response.status, await readErrorBody(response))) throw new ApiError(404, "media_not_found");
+      } else await response.body?.cancel();
       throw new ApiError(502, "media_unavailable");
     }
     try {
@@ -79,7 +89,7 @@ export async function connectionMedia(pool: Pool, user: User, connectionId: stri
   if (!isRecord(profile) || profile.user_id !== connection.account_id) throw new ApiError(409, "media_reconnect_required");
   const owned = (value: unknown) => isRecord(value) && isRecord(value.owner) && (value.owner.id === connection.account_id || (typeof profile.id === "string" && /^\d+$/.test(profile.id) && value.owner.id === profile.id));
   if (options.mediaId) {
-    const media = await graph(options.mediaId, { fields });
+    const media = await graph(options.mediaId, { fields }, true);
     if (!owned(media)) throw new ApiError(400, "media_not_owned");
     const item = displayMedia(media);
     if (item.id !== options.mediaId) throw new ApiError(502, "media_unavailable");

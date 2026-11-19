@@ -141,6 +141,10 @@ let inviteNoticeShown = false;
 let activityRequest = 0;
 let editingRuleId;
 let dirty = false;
+// The running rule archive request's token; while it is set, the rule editor and the rule cards stay locked like during
+// a save. resetSession clears it, and a request only clears its own token, so an old workspace's request cannot unlock
+// or keep locked the next workspace's rules.
+let archivingRule;
 let ruleInputFocus;
 let mediaGeneration = 0;
 let mediaAfter = null;
@@ -266,6 +270,7 @@ function resetSession({ broadcast = true } = {}) {
   globalSendRevision++;
   globalSendReadAt = 0;
   workspaceRules = [];
+  archivingRule = undefined;
   globalSendBadges = [];
   campaignDrafts.reset();
   // Receiving another document's change must not start a broadcast feedback loop.
@@ -515,6 +520,9 @@ const errors = {
   media_reconnect_required: "계정을 다시 연결한 뒤 게시물을 불러와 주세요.",
   media_unavailable: "게시물을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.",
   media_not_owned: "선택한 계정의 게시물만 사용할 수 있습니다. 게시물을 다시 선택해 주세요.",
+  media_not_found: "Instagram에서 게시물을 찾을 수 없습니다. 삭제된 게시물일 수 있으니 게시물을 다시 선택해 주세요.",
+  rule_archived: "보관된 규칙은 수정할 수 없습니다. 목록을 새로 고쳐 주세요.",
+  rule_not_found: "규칙을 찾을 수 없습니다. 목록을 새로 고쳐 주세요.",
   media_unsupported: "이 게시물은 댓글 자동화를 지원하지 않습니다. 피드 게시물이나 릴스를 선택해 주세요.",
   media_rate_limited: "게시물 조회 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
   remote_logout_unconfirmed: "브라우저에서 로그아웃했습니다. 서버 세션 종료를 확인하지 못했으니 다시 로그인해 로그아웃하거나 운영자에게 문의해 주세요.",
@@ -689,7 +697,7 @@ async function api(path, method = "GET", body, retry = true, asText = false, kee
 }
 
 function ruleControls() {
-  const saving = byId("save-rule").hasAttribute("aria-busy");
+  const saving = byId("save-rule").hasAttribute("aria-busy") || archivingRule !== undefined;
   const disabled = connections.length === 0 || saving;
   byId("rule-fields").disabled = disabled;
   byId("save-rule").disabled = disabled;
@@ -1704,6 +1712,57 @@ async function loadWorkspace() {
       focusEditor();
     });
     item.append(button);
+    // Archiving needs the admin role on the server (archiveRule), so agents do not see the button.
+    if (currentRole === "owner" || currentRole === "admin") {
+      const archive = node("button", "보관", "secondary danger");
+      archive.type = "button";
+      archive.addEventListener("click", () => {
+        // Read before action() disables the button, which moves focus to body.
+        const hadFocus = document.activeElement === archive;
+        return action(archive, async () => {
+          if (rule.id === editingRuleId && !canDiscardRule()) return;
+          if (!confirm("이 규칙을 보관할까요? 목록에서 사라지고, 이 게시물의 댓글에 더 이상 답장하지 않으며 대기 중인 답장도 보내지 않습니다. 발송 기록은 남고, 보관한 규칙은 되돌릴 수 없습니다. 같은 게시물에는 새 규칙을 만들 수 있습니다.")) return;
+          const session = workspaceGeneration;
+          // The editor and the other rule cards stay locked until the request ends, so the draft accepted for
+          // discarding above cannot change and no other rule can be opened meanwhile.
+          const archiveToken = {};
+          archivingRule = archiveToken;
+          ruleControls();
+          try {
+            await api(`/api/rules/${rule.id}`, "DELETE");
+            if (session !== workspaceGeneration) return;
+            if (rule.id === editingRuleId) resetRuleEditor();
+            // Drop the rule from the card list, the count and the loaded rule state now, so all of them are right even if
+            // the reload below fails. A reload during the request may have replaced the cards, so find the current one.
+            for (const card of [...byId("rules").children]) if (card.dataset.ruleId === rule.id) card.remove();
+            workspaceRules = workspaceRules.filter((loaded) => loaded.id !== rule.id);
+            byId("rule-count").textContent = workspaceRules.length;
+            byId("rule-list-panel").hidden = workspaceRules.length === 0;
+            renderGlobalSend();
+            notice("규칙을 보관했습니다.");
+          } finally {
+            if (archivingRule === archiveToken) {
+              archivingRule = undefined;
+              ruleControls();
+            }
+          }
+          try {
+            await loadWorkspace();
+          } catch (error) {
+            // The archive is done; only the reload failed, so keep the success visible (same as the rule save path).
+            if (session === workspaceGeneration) notice(`보관은 완료했습니다. ${errorMessage(error)}`, true);
+          }
+          // The archived card and its button are gone, so action()'s holdFocus() has nothing to restore. Move a keyboard
+          // user to a surviving rule action, or to the new-rule button, unless focus went somewhere on purpose meanwhile.
+          const active = document.activeElement;
+          if (hadFocus && session === workspaceGeneration && (!active || active === document.body)) {
+            const next = byId("rules").querySelector("button:not(:disabled)") ?? byId("new-rule");
+            next.focus({ preventScroll: true });
+          }
+        });
+      });
+      item.append(archive);
+    }
     byId("rules").append(item);
   }
   ruleControls();
@@ -1804,12 +1863,19 @@ const ruleMediaObserver = new IntersectionObserver(
             }, 60_000);
             return;
           }
-          target.replaceChildren(node("strong", "게시물 정보를 확인할 수 없습니다"), node("span", "규칙 수정에서 다시 확인하세요."));
+          const [title, hint] = ruleMediaFailure(error.code);
+          target.replaceChildren(node("strong", title), node("span", hint));
         });
     }
   },
   { rootMargin: "100px" },
 );
+// The rule card's text when its post lookup fails (#371). Graph's "object does not exist" answer (media_not_found) also
+// covers a missing permission or an unsupported request, so the text does not claim the post is certainly deleted.
+function ruleMediaFailure(code) {
+  if (code === "media_not_found") return ["게시물이 삭제되었거나 볼 수 없습니다", "Instagram에서 이 게시물을 찾을 수 없습니다. 삭제한 게시물이라면 규칙을 보관해 목록에서 정리하세요."];
+  return ["게시물 정보를 확인할 수 없습니다", "규칙 수정에서 다시 확인하세요."];
+}
 function observeRuleMedia(target, rule) {
   target.rule = rule;
   ruleMediaObserver.observe(target);
@@ -2207,8 +2273,8 @@ byId("export-data").addEventListener("click", (event) =>
     notice("작업 공간 데이터를 JSON 파일로 저장했습니다. 댓글·메시지 내용이 들어 있으니 안전한 곳에 보관해 주세요.");
   }),
 );
-byId("new-rule").addEventListener("click", () => {
-  if (!canDiscardRule()) return;
+// Clears the rule editor for a new rule; the caller has already asked before discarding changes.
+function resetRuleEditor() {
   dirty = false;
   editingRuleId = undefined;
   form.elements.connection_id.disabled = false;
@@ -2219,6 +2285,10 @@ byId("new-rule").addEventListener("click", () => {
   editorState("새 규칙을 작성하고 저장하세요.");
   for (const element of byId("rules").children) element.classList.remove("active-rule");
   void loadMedia();
+}
+byId("new-rule").addEventListener("click", () => {
+  if (!canDiscardRule()) return;
+  resetRuleEditor();
   focusEditor();
 });
 form.addEventListener("submit", (event) => {

@@ -72,5 +72,6 @@ BEGIN;
 \ir ../db/migrations/070_instagram_message_reads.sql
 \ir ../db/migrations/071_instagram_follow_messages.sql
 \ir ../db/migrations/072_instagram_dm_last_inbound.sql
+\ir ../db/migrations/073_comment_rule_archive.sql
 \ir supabase-access.sql
 COMMIT;

@@ -164,7 +164,7 @@ export async function listRules(pool: Pool, user: User) {
   const workspaceId = await workspaceFor(pool, user, "agent");
   return (
     await pool.query(
-      `SELECT id,connection_id,media_id,keyword,keywords,excluded_keywords,match_mode,private_reply_text,enabled,follow_gate_enabled,follower_reply_text,non_follower_reply_text,confirmation_keyword,confirmation_button_title FROM instagram_comment_rules WHERE workspace_id=$1 ORDER BY id`,
+      `SELECT id,connection_id,media_id,keyword,keywords,excluded_keywords,match_mode,private_reply_text,enabled,follow_gate_enabled,follower_reply_text,non_follower_reply_text,confirmation_keyword,confirmation_button_title FROM instagram_comment_rules WHERE workspace_id=$1 AND archived_at IS NULL ORDER BY id`,
       [workspaceId],
     )
   ).rows;
@@ -177,10 +177,10 @@ export async function saveRule(pool: Pool, user: User, input: unknown) {
       rule.id
         ? `UPDATE instagram_comment_rules SET keyword=$5,keywords=$6,excluded_keywords=$7,match_mode=$8,
  private_reply_text=$9,enabled=$10,follow_gate_enabled=$11,follower_reply_text=$12,non_follower_reply_text=$13,confirmation_keyword=$14,confirmation_button_title=$15
- WHERE id=$1 AND workspace_id=$2 AND connection_id=$3 AND media_id=$4 RETURNING id`
+ WHERE id=$1 AND workspace_id=$2 AND connection_id=$3 AND media_id=$4 AND archived_at IS NULL RETURNING id`
         : `INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,keywords,excluded_keywords,match_mode,private_reply_text,enabled,follow_gate_enabled,follower_reply_text,non_follower_reply_text,confirmation_keyword,confirmation_button_title)
  SELECT $1,$2,c.id,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15 FROM instagram_connections c WHERE c.id=$3 AND c.workspace_id=$2
- ON CONFLICT(connection_id,media_id) DO UPDATE SET keyword=EXCLUDED.keyword,keywords=EXCLUDED.keywords,excluded_keywords=EXCLUDED.excluded_keywords,match_mode=EXCLUDED.match_mode,private_reply_text=EXCLUDED.private_reply_text,enabled=EXCLUDED.enabled,follow_gate_enabled=EXCLUDED.follow_gate_enabled,follower_reply_text=EXCLUDED.follower_reply_text,non_follower_reply_text=EXCLUDED.non_follower_reply_text,confirmation_keyword=EXCLUDED.confirmation_keyword,confirmation_button_title=EXCLUDED.confirmation_button_title WHERE instagram_comment_rules.workspace_id=$2 RETURNING id`,
+ ON CONFLICT(connection_id,media_id) WHERE archived_at IS NULL DO UPDATE SET keyword=EXCLUDED.keyword,keywords=EXCLUDED.keywords,excluded_keywords=EXCLUDED.excluded_keywords,match_mode=EXCLUDED.match_mode,private_reply_text=EXCLUDED.private_reply_text,enabled=EXCLUDED.enabled,follow_gate_enabled=EXCLUDED.follow_gate_enabled,follower_reply_text=EXCLUDED.follower_reply_text,non_follower_reply_text=EXCLUDED.non_follower_reply_text,confirmation_keyword=EXCLUDED.confirmation_keyword,confirmation_button_title=EXCLUDED.confirmation_button_title WHERE instagram_comment_rules.workspace_id=$2 RETURNING id`,
       [
         rule.id ?? randomUUID(),
         workspaceId,
@@ -199,7 +199,11 @@ export async function saveRule(pool: Pool, user: User, input: unknown) {
         rule.confirmation_button_title,
       ],
     );
-    if (!result.rows[0]) throw new ApiError(404, "connection_not_found");
+    if (!result.rows[0]) {
+      // An archived rule is final (#371): an edit by its ID is refused, and a save without an ID on its media inserts a new row.
+      if (rule.id && (await db.query("SELECT 1 FROM instagram_comment_rules WHERE id=$1 AND workspace_id=$2 AND archived_at IS NOT NULL", [rule.id, workspaceId])).rowCount) throw new ApiError(409, "rule_archived");
+      throw new ApiError(404, "connection_not_found");
+    }
     return { id: result.rows[0].id };
   };
   if (!rule.enabled) return write(pool);
@@ -223,6 +227,24 @@ export async function saveRule(pool: Pool, user: User, input: unknown) {
   } finally {
     client.release();
   }
+}
+// Archives a comment rule (#371): hides it from the rule list and turns it off in one statement. An archived row is
+// final and never enabled again (CHECK instagram_comment_rules_archived_disabled), so the pre-send rechecks that read
+// rule.enabled refuse its queued or late-ingested work, and a new rule on the same media is a new row with a new ID.
+// The row stays, so outbox rows keep their rule_id. A repeat archive changes nothing and returns the stored time.
+export async function archiveRule(pool: Pool, user: User, id: string): Promise<{ id: string; archived_at: Date }> {
+  if (!isUuid(id)) throw new ApiError(400, "invalid_rule");
+  const workspaceId = await workspaceFor(pool, user, "admin");
+  const result = await pool.query<{ id: string; archived_at: Date }>(
+    `WITH archived AS (UPDATE instagram_comment_rules SET archived_at=now(),enabled=false WHERE id=$1 AND workspace_id=$2 AND archived_at IS NULL RETURNING id,archived_at)
+     SELECT id,archived_at FROM archived
+     UNION ALL SELECT id,archived_at FROM instagram_comment_rules WHERE id=$1 AND workspace_id=$2 AND archived_at IS NOT NULL AND NOT EXISTS(SELECT 1 FROM archived)`,
+    [id, workspaceId],
+  );
+  // A concurrent archive that committed while this statement waited is outside its snapshot; a new statement sees it.
+  const row = result.rows[0] ?? (await pool.query<{ id: string; archived_at: Date }>("SELECT id,archived_at FROM instagram_comment_rules WHERE id=$1 AND workspace_id=$2 AND archived_at IS NOT NULL", [id, workspaceId])).rows[0];
+  if (!row) throw new ApiError(404, "rule_not_found");
+  return row;
 }
 export async function updateConnection(pool: Pool, user: User, id: string, input: unknown) {
   if (!isUuid(id) || !isRecord(input) || typeof input.active !== "boolean" || typeof input.send_enabled !== "boolean") throw new ApiError(400, "invalid_connection");
