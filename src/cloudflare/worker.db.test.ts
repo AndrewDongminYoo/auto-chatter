@@ -9,7 +9,7 @@ import worker, { type Env } from "./index.ts";
 import { operationsHealth } from "../app/operations-health.ts";
 import { signingKeyContext } from "../app/webhook-delivery.ts";
 import { CAMPAIGN_HOURLY_BUDGET, PRIVATE_REPLY_HOURLY_BUDGET } from "../instagram/send-quota.ts";
-import { startDueCampaignRuns } from "../app/campaign-runs.ts";
+import { getCampaignRun, startDueCampaignRuns } from "../app/campaign-runs.ts";
 import { resetTestSchema } from "../test-schema.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -2607,6 +2607,80 @@ test("the cron turns a stale sending campaign row unknown and completes its run 
   assert.deepEqual(await campaignRows(run), [{ sender_id: "campaign-sender", status: "unknown", failure_code: "worker_interrupted", provider_message_id: null }]);
   assert.equal((await pool.query("SELECT status FROM campaign_runs WHERE id=$1", [run])).rows[0].status, "completed");
   assert.equal(sends, 0);
+});
+
+test("campaign cron recovers an interrupted delivery and lost notifications without duplicate sends", async () => {
+  const run = await campaignFixture([
+    ["sender-1", "9101"],
+    ["sender-2", "9102"],
+    ["sender-3", "9103"],
+    ["sender-4", "9104"],
+    ["sender-5", "9105"],
+  ]);
+  // The old worker called Graph for 9101 and stopped before storing the outcome.
+  await pool.query(
+    `UPDATE campaign_deliveries SET status='sending',attempt_id=gen_random_uuid(),
+       attempt_started_at=now()-interval '11 minutes',provider_called_at=now()-interval '11 minutes'
+     WHERE run_id=$1 AND recipient_id='9101'`,
+    [run],
+  );
+  await pool.query(
+    `UPDATE campaign_deliveries SET next_attempt_at=now()-interval '1 minute'+recipient_id::int*interval '1 millisecond'
+     WHERE run_id=$1 AND status='pending'`,
+    [run],
+  );
+  await recordConsent("dm_recipient", "9105", crypto.randomUUID());
+  const recipients: string[] = [];
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const url = new URL(String(input));
+    assert.equal(url.origin, "https://graph.instagram.com");
+    if (url.pathname === "/v24.0/me") return Response.json({ user_id: "123" });
+    assert.equal(url.pathname, "/v24.0/123/messages");
+    assert.equal(init?.method, "POST");
+    const { recipient } = JSON.parse(String(init?.body));
+    recipients.push(recipient.id);
+    if (recipient.id === "9102") return Response.json({ error: { code: 100 } }, { status: 400 });
+    return Response.json({ message_id: `message-${recipient.id}` });
+  });
+
+  assert.deepEqual(published, []);
+  await worker.scheduled({}, env);
+  assert.deepEqual(
+    (await campaignRows(run)).map(({ status }) => status),
+    ["unknown", "pending", "pending", "pending", "pending"],
+  );
+  const consumePublished = async () => {
+    assert.deepEqual(published, [{ connectionId }]);
+    assert.equal(await consume(published.shift()), "ack");
+  };
+  await consumePublished();
+  assert.deepEqual(recipients, ["9102"]);
+
+  // Drop the follow-up message. A later cron tick must rediscover the remaining work.
+  assert.deepEqual(published, [{ connectionId }]);
+  published = [];
+  await worker.scheduled({}, env);
+  await consumePublished();
+  assert.deepEqual(recipients, ["9102", "9103"]);
+  await consumePublished();
+  await consumePublished();
+  const expected = [
+    { sender_id: "sender-1", status: "unknown", failure_code: "worker_interrupted", provider_message_id: null },
+    { sender_id: "sender-2", status: "failed", failure_code: "meta_error_100", provider_message_id: null },
+    { sender_id: "sender-3", status: "sent", failure_code: null, provider_message_id: "message-9103" },
+    { sender_id: "sender-4", status: "sent", failure_code: null, provider_message_id: "message-9104" },
+    { sender_id: "sender-5", status: "blocked", failure_code: "recipient_opted_out", provider_message_id: null },
+  ];
+  assert.deepEqual(await campaignRows(run), expected);
+  const completed = await getCampaignRun(pool, { id: campaignApprover, email: "approver@example.test" }, run);
+  assert.equal(completed.status, "completed");
+  assert.deepEqual(completed.delivery_counts, { pending: "0", sending: "0", sent: "2", failed: "1", blocked: "1", unknown: "1", cancelled: "0" });
+  assert.deepEqual(published, []);
+  assert.equal(await consume({ connectionId }), "ack");
+  await worker.scheduled({}, env);
+  assert.deepEqual(published, []);
+  assert.deepEqual(recipients, ["9102", "9103", "9104"]);
+  assert.deepEqual(await campaignRows(run), expected);
 });
 
 test("the cron ends a paused contact's campaign row whose window closed and completes its run in the same run", async () => {
