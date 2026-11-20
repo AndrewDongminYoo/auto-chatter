@@ -10,6 +10,7 @@ import { recordChannelConsentEvent } from "./channel-consent.ts";
 import { assertDmFlowDeliveryAllowed, processNextDmFlowDelivery, recoverStaleDmFlowDeliveries } from "./dm-flow-delivery-worker.ts";
 import { ingestMessages } from "./follow-flow.ts";
 import { InstagramFollowTransport } from "./follow-transport.ts";
+import { parseMessageEvents } from "./message-events.ts";
 
 // The DM flow delivery worker (#291) against a real PostgreSQL database. Graph is mocked through fetchImpl and
 // nothing here reaches Meta.
@@ -762,6 +763,30 @@ test("ingestion keeps one capped last inbound time per connection and sender tha
     ],
   );
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM instagram_inbox_messages WHERE recipient_id='9024'")).rows[0].n, 1);
+});
+
+// Security audit #62, fifth pass: only a DM that a person sent to the account keeps a time. An echo of the account's
+// own message, a self event and a DM addressed to another account would otherwise open the window for a person who
+// never wrote. The is_echo, is_self and misaddressed events are each refused by one parser condition; the event in a
+// real echo's shape (the account as sender) by two.
+test("echo, self and misaddressed DM events of a signed body keep no last inbound time (#300)", async () => {
+  const event = (fields: Record<string, unknown>, message: Record<string, unknown> = {}) => ({
+    sender: { id: "9050" },
+    recipient: { id: "100" },
+    timestamp: Date.now() - 60_000,
+    message: { mid: `m-${sequence++}`, text: "hello", ...message },
+    ...fields,
+  });
+  const body = (messaging: unknown[]) => new TextEncoder().encode(JSON.stringify({ object: "instagram", entry: [{ id: "100", time: Date.now(), messaging }] }));
+  const refused = [event({}, { is_echo: true }), event({ is_self: true }), event({ sender: { id: "100" }, recipient: { id: "9050" } }), event({ recipient: { id: "200" } })];
+  for (const forged of refused) await ingestMessages(pool, parseMessageEvents(body([forged])));
+  assert.deepEqual(await lastInbound(), []);
+  // The same event without the forged field keeps the sender's time on the receiving connection only.
+  await ingestMessages(pool, parseMessageEvents(body([event({})])));
+  assert.deepEqual(
+    (await lastInbound()).map(({ connection_id, recipient_id }) => [connection_id, recipient_id]),
+    [[C, "9050"]],
+  );
 });
 
 test("the three deletion functions remove the last inbound times (#300)", async () => {

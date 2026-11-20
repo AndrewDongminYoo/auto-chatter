@@ -120,6 +120,20 @@ test("reads of other messages, other connections and inactive connections leave 
   );
 });
 
+// Security audit #62, fifth pass: every send-table arm of the lookup is limited to the connection that received the
+// read, not only the private reply arm above.
+test("a read of a message ID that another connection stored in any send table leaves no row", async () => {
+  const foreign = [...sendTables.map((table) => mid(table, otherAccount)), `follow-mid-${otherAccount}`];
+  for (const messageId of foreign) await ingestMessageReads(pool, [read(messageId)]);
+  assert.deepEqual(await storedReads(), []);
+  // The same IDs reported to their own account are stored on that connection.
+  await ingestMessageReads(
+    pool,
+    foreign.map((messageId) => read(messageId, { accountId: otherAccount })),
+  );
+  assert.equal((await storedReads()).filter((row) => row.connection_id === otherConnectionId).length, foreign.length);
+});
+
 test("a read whose recipient is not the entry account is never parsed, so it stores nothing", async () => {
   const body = new TextEncoder().encode(
     JSON.stringify({

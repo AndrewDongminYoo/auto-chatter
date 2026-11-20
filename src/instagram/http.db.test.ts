@@ -344,5 +344,42 @@ test("a signed messaging_seen event stores one read of a sent message and stores
       read_at: new Date(readAt),
     },
   ]);
+  // A read is not an inbound DM, so it never keeps a last inbound time that would reopen the 24-hour window (#300).
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_dm_last_inbound")).rows[0].count, 0, "a read event must not open the DM window");
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM instagram_inbox_messages")).rows[0].count, 0, "the inbox must not store a read event");
+});
+
+// Security audit #62, fifth pass: the signature boundary also covers the read and DM events that #312 and #300 store.
+test("a wrongly signed or unsigned read or DM body stores no read and no last inbound time", async () => {
+  assert.equal((await signedPost(commentBody())).status, 200);
+  await pool.query("UPDATE private_reply_outbox SET status='sent',recipient_id='900',provider_message_id='sent-mid'");
+  const event = (kind: "read" | "message") =>
+    JSON.stringify({
+      object: "instagram",
+      entry: [
+        {
+          id: "account-1",
+          time: Date.now(),
+          messaging: [
+            {
+              sender: { id: "900" },
+              recipient: { id: "account-1" },
+              timestamp: Date.now() - 1000,
+              ...(kind === "read" ? { read: { mid: "sent-mid" } } : { message: { mid: "dm-mid", text: "hello" } }),
+            },
+          ],
+        },
+      ],
+    });
+  const counts = async () => (await pool.query("SELECT (SELECT count(*)::int FROM instagram_message_reads) AS reads,(SELECT count(*)::int FROM instagram_dm_last_inbound) AS inbound")).rows[0];
+  for (const body of [event("read"), event("message")]) {
+    const otherSecret = createHmac("sha256", "attacker-secret").update(body).digest("hex");
+    for (const signature of [`sha256=${otherSecret}`, `sha256=${"0".repeat(64)}`, "sha256="]) assert.equal((await signedPost(body, signature)).status, 403, signature);
+    const unsigned = await fetch(`${baseUrl}/webhooks/instagram`, { method: "POST", headers: { "content-type": "application/json" }, body });
+    assert.equal(unsigned.status, 403);
+  }
+  assert.deepEqual(await counts(), { reads: 0, inbound: 0 });
+  // The same bodies, correctly signed, store one read and one last inbound time.
+  for (const body of [event("read"), event("message")]) assert.equal((await signedPost(body)).status, 200);
+  assert.deepEqual(await counts(), { reads: 1, inbound: 1 });
 });
