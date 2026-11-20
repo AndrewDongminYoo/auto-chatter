@@ -15,6 +15,7 @@
 2026-11-10에 #50에서 분리한 [#312](https://github.com/AndrewDongminYoo/auto-chatter/issues/312)의 첫 PR로 서비스가 보낸 메시지의 읽음 수집·저장을 로컬에서 구현했습니다([명세](../specs/2026-11-10-instagram-message-reads.md), migration 070). 운영 적용, Meta 앱의 `messaging_seen` 구독, 실제 이벤트의 `read.mid` 일치는 확인하지 않았고 리포트 표시는 남아 있습니다.
 2026-11-10에 #312의 두 번째 PR로 수동 답장·플로 실행·캠페인 실행 리포트에 메시지 ID가 정확히 일치하는 읽음만 세는 ‘읽음 확인’(`read`) 건수, 읽음을 알려 줄 수 없는 연결의 ‘읽음 확인 불가’(`read_unavailable`) 건수와 CSV 행을 로컬에서 구현했습니다([명세](../specs/2026-11-10-instagram-message-reads.md#리포트의-읽음-확인-건수)). 운영 배포는 확인하지 않았습니다.
 2026-11-19에 #33, #35, #36 행을 [DM 시작 트리거와 캠페인 실발송 실계정 검증](2026-11-19-live-dm-trigger-campaign-verification.md)에 맞춰 갱신했습니다.
+2026-11-20에 #35의 완료 조건을 기존 실계정 기록과 [#376 배포 결과](https://github.com/AndrewDongminYoo/auto-chatter/actions/runs/44673108039)에 대조하고, #36의 로컬 검증 범위를 바로잡았습니다.
 
 [목표 명세](../specs/2026-09-25-messaging-automation-platform.md)와 [백로그](2026-09-27-manychat-backlog.md)의 알려진 필수 작업을 코드·로컬 검사·실계정·운영 적용으로 구분합니다.
 기준은 `591cc091e5e3cdb55bba20fe65d3c662df800fd4`이며 아래 이슈별 목록의 미완료는 구현된 첫 DM·팔로우·연락처 기능을 없다고 판정한 것이 아닙니다.
@@ -139,13 +140,36 @@
   - 공급자·실계정: 미검증
   - 운영 완료: 완료하지 않음
 - [#35](https://github.com/AndrewDongminYoo/auto-chatter/issues/35) 세그먼트 캠페인 초안·대상 확정·비용 미리보기
-  - 현재 코드: 대상 고정 구현(저장된 세그먼트의 한 `as_of` 명단과 미리보기 집계 저장, 목록·명단·CSV, 발송과 발송 가능 여부 판정 없음, migration 061); 관리자 캠페인 초안 생성·조회·수정·보관 API와 일반 텍스트 검증 구현(migration 063, [계약](../specs/2026-10-21-campaign-drafts.md)); 관리자 초안 관리 화면(고정 대상 선택·생성·조회·수정·보관, 응답 유실 재시도·충돌·세션 보호) 로컬 구현·검증([화면 검증](2026-10-22-campaign-draft-ui-verification.md)); 관리자 초안 발송 조건·비용 읽기 전용 미리보기 API(한 `as_of`의 고정 순서 단일 사유, `candidate`는 발송 가능이 아님, 공급자 호출 수, 방송 한도 없음) 로컬 구현·검증([미리보기 검증](2026-10-26-campaign-draft-preview-verification.md)); 관리자 초안 발송 조건 미리보기 화면(명시적 버튼으로만 조회, 상단 경고와 사유별 표, `candidate`는 ‘조건 통과’, 기존 세대로 무효화) 로컬 구현·검증([미리보기 화면 검증](2026-10-26-campaign-draft-preview-ui-verification.md)); 관리자 최종 실행 승인·예약 기록 API(초안 버전·사본·같은 트랜잭션의 미리보기 저장, 즉시 또는 작업 공간 현지 시각 1분 이상(고정 상한 없음, 수신자별 창은 #36), 초안당 유효 승인 하나, 승인 중 초안 수정·보관 409, 발송·outbox 없음, migration 064) 로컬 구현·검증([실행 승인 검증](2026-10-27-campaign-approvals-verification.md)); 관리자 초안 상세의 실행 승인 화면(확인 단계 후 즉시·예약 승인, 승인 시점 조건별 인원 표시, 유효한 승인 중 초안 잠금, 예약 변경·취소, 409 응답의 현재 상태로 다시 표시, 결과 불명·429는 같은 요청만 재시도, 기존 세대로 무효화) 로컬 구현·검증([승인 화면 검증](2026-10-27-campaign-approval-ui-verification.md)); 템플릿 치환 미구현(#265), 발송은 #36에서 구현; 미리보기의 요금제 월 캠페인 발송 한도 표시(`plan_broadcast_limit`)와 승인·기한 달이 바뀌는 예약 변경의 `409 broadcast_limit_reached`(#52) 로컬 구현·검증([한도 화면 검증](2026-11-09-campaign-monthly-limit-ui-verification.md))
-  - 로컬 증거: [고정 대상 계약](../specs/2026-10-18-segment-target-snapshots.md)·[고정 대상 검증](2026-10-18-segment-target-snapshots-verification.md)
-  - 공급자·실계정: 2026-11-19 운영 화면에서 DM 동의 필터, 대상 고정, 초안, 발송 조건 미리보기(조건 통과 1), 즉시 승인을 실사용([실계정 검증](2026-11-19-live-dm-trigger-campaign-verification.md)); 대상 고정 위치 개선은 #372, 템플릿은 #265에서 보류
-  - 운영 완료: 061·063·064 운영 적용, 월 캠페인 발송 한도(#52)는 `6bb5e31` 이후 배포에 포함, 수신자 1명 실사용 확인, 완료하지 않음
+  - 현재 코드: 저장된 필터의 명단과 제외 사유별 집계를 한 기준 시각에 고정합니다.
+    소유자와 관리자는 캠페인 초안에서 필터를 골라 새 대상을 고정하고 바로 선택할 수 있습니다.
+    초안 본문은 일반 텍스트로 검증하며, 해석되지 않은 템플릿 표기는 거절합니다.
+    템플릿 불러오기와 수신자별 치환은 #265에서 다룹니다.
+    [고정 대상 계약](../specs/2026-10-18-segment-target-snapshots.md)과 [캠페인 초안 계약](../specs/2026-10-21-campaign-drafts.md)을 따릅니다.
+  - 발송 조건·비용: 읽기 전용 미리보기는 확인된 DM 수신자, 수신 거부, 명시적 마케팅 동의, 24시간 응답 창 등을 평가해 대상마다 사유 하나를 표시합니다.
+    조건은 미리보기 시각의 기록을 기준으로 평가하며, 실제 발송 시 다시 검사합니다.
+    조건 통과 인원으로 예상 공급자 호출 수를 표시하고, 작업 공간 시간대의 이번 달 사용량·예약량·남은 발송 한도를 보여 줍니다.
+    Instagram 공급자 요금은 확인되지 않아 금액은 알 수 없습니다.
+    [발송 조건·비용 계약](../specs/2026-10-21-campaign-drafts.md#발송-조건비용-미리보기)을 따릅니다.
+  - 실행 승인: 승인한 초안 버전, 고정 대상, 이름·본문 사본과 승인 시점의 미리보기를 기록합니다.
+    즉시 실행이나 작업 공간 현지 시각의 예약을 선택할 수 있습니다.
+    승인이 유효한 동안 초안 수정과 보관을 막습니다.
+    승인과 기한이 속한 달을 바꾸는 예약 변경에 월 캠페인 발송 한도를 적용합니다.
+    [실행 승인 계약](../specs/2026-10-21-campaign-drafts.md#실행-승인)을 따릅니다.
+  - 로컬 증거: [고정 대상과 제외 집계](2026-10-18-segment-target-snapshots-verification.md), [미리보기 사유·발송 창](2026-10-26-campaign-draft-preview-verification.md), [월 한도](2026-11-09-campaign-monthly-limit-ui-verification.md), [승인과 예약 시각](2026-10-27-campaign-approvals-verification.md)을 검증했습니다.
+    브라우저 검증은 [초안 편집](2026-10-22-campaign-draft-ui-verification.md), [발송 조건 미리보기](2026-10-26-campaign-draft-preview-ui-verification.md), [승인과 예약 변경](2026-10-27-campaign-approval-ui-verification.md)을 다뤘습니다.
+    #376의 mock 화면과 회귀 테스트에서 초안 안의 대상 고정과 자동 선택을 확인했습니다.
+    [PR #376](https://github.com/AndrewDongminYoo/auto-chatter/pull/376)
+  - 공급자·실계정: 2026-11-19에 운영 화면에서 DM 동의 필터, 대상 고정, 초안, 발송 조건 미리보기(조건 통과 1명), 즉시 승인을 확인했습니다.
+    이 기록은 기존 연락처 메뉴에서 고정한 대상과 즉시 실행을 다룹니다.
+    [실계정 검증](2026-11-19-live-dm-trigger-campaign-verification.md)
+  - 운영 상태: migration 061·063·064를 적용했고, 월 캠페인 발송 한도(#52)는 `6bb5e31` 이후 배포에 포함됐습니다.
+    #372를 해결한 `f62d550`은 자동 배포와 공개 스모크 검사를 통과했습니다.
+    초안 안의 대상 고정과 예약 경로는 로컬 검증 증거를 사용합니다.
+    [#376 배포](https://github.com/AndrewDongminYoo/auto-chatter/actions/runs/44673108039)
 - [#36](https://github.com/AndrewDongminYoo/auto-chatter/issues/36) 캠페인 분할 발송·취소·진행률·부분 실패 복구
   - 현재 코드: 실행과 수신자별 발송 행 구현(PR ①: migration 065, 기한이 된 승인을 `campaign_start` cron 단계가 실행하고 후보마다 대기 행만 씀, 발송·outbox 없음, 실행 조회·취소 API, Cloudflare OAuth 표면의 마케팅 capability 지원, [계약](../specs/2026-10-27-campaign-runs.md)); 발송 worker 구현(PR ②: migration 066, Queue 경로에서 자동화 뒤에 행 하나, 저장된 수신자와 본문 사본, 미리보기 조건을 다시 쓰는 최종 guard와 승인자 검사, 결과 분류, 연결당 시간당 1,000회 예산, 실행 완료와 오래된 `sending` 복구, 실행된 초안 버전 재승인 409, [발송 계약](../specs/2026-10-27-campaign-runs.md#발송-worker)); 실행 현황 화면 구현(PR ③: 실행된 승인 아래 상태·시작 수·발송 행 일곱 상태, 새로고침만으로 다시 읽기, 확인 단계와 고정한 `expected_version`의 취소, 409 재표시, 결과 불명·429는 같은 요청만 재시도, [화면 계약](../specs/2026-10-27-campaign-runs.md#실행-현황-화면)); 세 PR 모두 구현; 실행 시작의 월 캠페인 발송 한도 검사(#52, 넘으면 발송 행 없는 `completed` 실행과 `start.broadcast_limit_exceeded` 표시, migration 없음) 로컬 구현·검증([한도 화면 검증](2026-11-09-campaign-monthly-limit-ui-verification.md))
-  - 로컬 증거: 로컬 DB·workerd 검증([실행 검증](2026-10-27-campaign-runs-verification.md), [발송 검증](2026-10-29-campaign-delivery-verification.md), [화면 검증](2026-10-29-campaign-run-screen-verification.md), Graph는 mock), 실제 발송·운영 화면 미검증
+  - 로컬 증거: Graph를 모의 응답으로 대체해 DB와 workerd의 실행·발송·화면 동작을 확인했습니다.
+    [실행 검증](2026-10-27-campaign-runs-verification.md) · [발송 검증](2026-10-29-campaign-delivery-verification.md) · [화면 검증](2026-10-29-campaign-run-screen-verification.md)
   - 공급자·실계정: 2026-11-19 수신자 1명 실발송(`campaign_start` 실행 시작, 발송 행 `sent`, 실수신, 실행 `completed`) 확인([실계정 검증](2026-11-19-live-dm-trigger-campaign-verification.md)); 여러 수신자의 분할 발송·한도·취소·부분 실패 복구는 미검증
   - 운영 완료: 065·066 운영 적용·배포, 월 캠페인 발송 한도(#52)는 `6bb5e31` 이후 배포에 포함, 2026-11-19 발송 창에서 실발송 1건 확인 후 발송 스위치 다시 꺼짐, 완료하지 않음
 - [#37](https://github.com/AndrewDongminYoo/auto-chatter/issues/37) 채널 이벤트·대화·발송 capability 계약과 정책 경계
