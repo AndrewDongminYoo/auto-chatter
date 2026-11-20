@@ -123,6 +123,7 @@ const dashboardGlobals = [
   { readers: ["inbox"], names: ["createReplyTemplates"] },
   // segment-snapshots.js
   { readers: ["app"], names: ["createSegmentSnapshots"] },
+  { readers: ["campaign-drafts"], names: ["segmentSnapshotLimitMessages"] },
   // send-status-labels.js
   {
     readers: ["app", "campaign-drafts", "campaign-run-reports", "flow-run-reports", "inbox", "manual-reply-reports"],

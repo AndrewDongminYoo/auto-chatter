@@ -1,3 +1,9 @@
+const segmentSnapshotLimitMessages = {
+  snapshot_too_large: "필터에 맞는 연락처가 5,000명을 넘어 고정하지 않았습니다. 조건을 좁혀 다시 시도해 주세요.",
+  snapshot_limit_reached: "작업 공간에 고정한 대상이 최대 200개라 더 고정할 수 없습니다. 고정한 명단은 데이터 내보내기에 함께 담기고 관리자도 지울 수 없어 둔 한도입니다. 고정한 대상은 작업 공간 데이터를 삭제할 때만 지워집니다.",
+  snapshot_members_limit_reached: "작업 공간에 저장한 명단이 모두 합쳐 20,000행을 넘게 되어 고정하지 않았습니다. 고정한 명단은 데이터 내보내기에 함께 담기고 관리자도 지울 수 없어 둔 한도입니다. 저장한 명단은 계정·이용자·작업 공간 데이터를 삭제할 때만 지워집니다.",
+};
+
 // Frozen target lists of a saved segment (#35). Freezing records who matches now and sends nothing; the list, its
 // member pages and its CSV show identifiers only. app.js calls sync() from segmentControls() with the selected saved
 // segment and whether a freeze must wait (a segment request in flight or an unsaved edit of that segment).
@@ -18,9 +24,7 @@ function createSegmentSnapshots({ api, node, connectionLabel }) {
   const compare = byId("segment-snapshot-compare");
   const comparison = byId("segment-snapshot-comparison");
   const messages = {
-    snapshot_too_large: "필터에 맞는 연락처가 5,000명을 넘어 고정하지 않았습니다. 조건을 좁혀 다시 시도해 주세요.",
-    snapshot_limit_reached: "작업 공간에 고정한 대상이 최대 200개라 더 고정할 수 없습니다. 고정한 명단은 데이터 내보내기에 함께 담기고 관리자도 지울 수 없어 둔 한도입니다. 고정한 대상은 작업 공간 데이터를 삭제할 때만 지워집니다.",
-    snapshot_members_limit_reached: "작업 공간에 저장한 명단이 모두 합쳐 20,000행을 넘게 되어 고정하지 않았습니다. 고정한 명단은 데이터 내보내기에 함께 담기고 관리자도 지울 수 없어 둔 한도입니다. 저장한 명단은 계정·이용자·작업 공간 데이터를 삭제할 때만 지워집니다.",
+    ...segmentSnapshotLimitMessages,
     snapshot_not_found: "고정한 대상을 찾을 수 없습니다. 목록을 다시 불러와 주세요.",
     segment_not_found: "원래 필터가 보관되었거나 찾을 수 없어 비교하지 못했습니다. 고정한 명단과 CSV는 계속 볼 수 있습니다.",
     role_forbidden: "소유자와 관리자만 대상을 고정하고 볼 수 있습니다.",
