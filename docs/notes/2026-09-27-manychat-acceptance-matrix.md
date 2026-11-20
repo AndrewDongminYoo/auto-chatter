@@ -169,9 +169,19 @@
 - [#36](https://github.com/AndrewDongminYoo/auto-chatter/issues/36) 캠페인 분할 발송·취소·진행률·부분 실패 복구
   - 현재 코드: 실행과 수신자별 발송 행 구현(PR ①: migration 065, 기한이 된 승인을 `campaign_start` cron 단계가 실행하고 후보마다 대기 행만 씀, 발송·outbox 없음, 실행 조회·취소 API, Cloudflare OAuth 표면의 마케팅 capability 지원, [계약](../specs/2026-10-27-campaign-runs.md)); 발송 worker 구현(PR ②: migration 066, Queue 경로에서 자동화 뒤에 행 하나, 저장된 수신자와 본문 사본, 미리보기 조건을 다시 쓰는 최종 guard와 승인자 검사, 결과 분류, 연결당 시간당 1,000회 예산, 실행 완료와 오래된 `sending` 복구, 실행된 초안 버전 재승인 409, [발송 계약](../specs/2026-10-27-campaign-runs.md#발송-worker)); 실행 현황 화면 구현(PR ③: 실행된 승인 아래 상태·시작 수·발송 행 일곱 상태, 새로고침만으로 다시 읽기, 확인 단계와 고정한 `expected_version`의 취소, 409 재표시, 결과 불명·429는 같은 요청만 재시도, [화면 계약](../specs/2026-10-27-campaign-runs.md#실행-현황-화면)); 세 PR 모두 구현; 실행 시작의 월 캠페인 발송 한도 검사(#52, 넘으면 발송 행 없는 `completed` 실행과 `start.broadcast_limit_exceeded` 표시, migration 없음) 로컬 구현·검증([한도 화면 검증](2026-11-09-campaign-monthly-limit-ui-verification.md))
   - 로컬 증거: Graph를 모의 응답으로 대체해 DB와 workerd의 실행·발송·화면 동작을 확인했습니다.
-    [실행 검증](2026-10-27-campaign-runs-verification.md) · [발송 검증](2026-10-29-campaign-delivery-verification.md) · [화면 검증](2026-10-29-campaign-run-screen-verification.md)
+    실행 시작이 겹쳐도 대상별 발송 행은 하나만 생성됩니다.
+    취소 API는 대기 행을 취소하며, 이미 공급자에게 보낸 요청은 되돌릴 수 없습니다.
+    [실행 검증](2026-10-27-campaign-runs-verification.md) · [화면 검증](2026-10-29-campaign-run-screen-verification.md)
+    발송 worker는 공급자 속도 제한과 연결별 시간당 호출 예산에 따라 대기 작업을 미룹니다.
+    DB 테스트는 대상 일시 중지, 수신 거부, 승인 권한 철회를 발송 전에 반영하는 것도 확인했습니다.
+    [발송 검증](2026-10-29-campaign-delivery-verification.md)
+    수신자 5명을 사용한 회귀 테스트에서는 오래된 `sending` 행이 재발송 없이 `unknown`으로 바뀌고, 큐 알림을 잃어도 다음 cron 실행이 대기 작업을 다시 깨우는 것을 확인했습니다.
+    명확한 공급자 거부 1건, 정상 발송 2건, 수신 거부로 인한 차단 1건, 결과 불명 1건을 집계한 뒤 실행이 `completed`가 됐으며, 같은 큐 알림을 다시 처리해도 추가 발송 요청은 없었습니다.
+    [PR #378](https://github.com/AndrewDongminYoo/auto-chatter/pull/378)
   - 공급자·실계정: 2026-11-19 수신자 1명 실발송(`campaign_start` 실행 시작, 발송 행 `sent`, 실수신, 실행 `completed`) 확인([실계정 검증](2026-11-19-live-dm-trigger-campaign-verification.md)); 여러 수신자의 분할 발송·한도·취소·부분 실패 복구는 미검증
-  - 운영 완료: 065·066 운영 적용·배포, 월 캠페인 발송 한도(#52)는 `6bb5e31` 이후 배포에 포함, 2026-11-19 발송 창에서 실발송 1건 확인 후 발송 스위치 다시 꺼짐, 완료하지 않음
+  - 운영 상태: migration 065·066을 운영에 적용했고, 월 캠페인 발송 한도(#52)는 `6bb5e31` 이후 배포에 포함됐습니다.
+    2026-11-19 실발송 1건을 확인한 뒤 발송 스위치를 다시 껐습니다.
+    선행 이슈 [#35](https://github.com/AndrewDongminYoo/auto-chatter/issues/35)와 [#60](https://github.com/AndrewDongminYoo/auto-chatter/issues/60)은 열린 상태입니다.
 - [#37](https://github.com/AndrewDongminYoo/auto-chatter/issues/37) 채널 이벤트·대화·발송 capability 계약과 정책 경계
   - 현재 코드: 공통 계약·Instagram 어댑터 경계·미지원 API/화면·테스트용 두 번째 어댑터 구현
   - 로컬 증거: [채널 계약 검증](2026-10-04-channel-contract-verification.md): 타입·단위·DB·workerd·Chromium 로컬 확인
