@@ -32,9 +32,9 @@ function displayMedia(value: unknown) {
   };
 }
 
-// Graph's answer for an object that does not exist (#371): a 4xx whose error has code 100 and subcode 33. Meta's
-// payload for a deleted post was not verified live, so only this exact pair counts; anything else stays
-// media_unavailable.
+// Graph's answer for an object that does not exist (#371): a 4xx whose error has code 100 and subcode 33. On
+// 2026-11-19 the production dashboard showed the deleted-post text, which only this answer produces, for every rule
+// whose post had been deleted. Only this exact pair counts; anything else stays media_unavailable.
 export function isMissingMediaError(status: number, body: unknown): boolean {
   return status >= 400 && status < 500 && isRecord(body) && isRecord(body.error) && body.error.code === 100 && body.error.error_subcode === 33;
 }

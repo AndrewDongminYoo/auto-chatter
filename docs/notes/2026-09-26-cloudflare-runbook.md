@@ -695,6 +695,15 @@ migration 적용과 Worker 배포 사이에는 이 Mac의 Wrangler 로그인 정
 
 2026-11-18~19에는 #293과 #36의 실계정 검증을 위해 5절의 발송 전환 절차를 따랐습니다. Deploy 워크플로를 끈 뒤 2026-11-18 03:45Z에 `6bb5e31`을 `--var SEND_ENABLED:true`로 배포했고(버전 `032f0027`), 2026-11-19 04:36Z에 같은 커밋을 기본값으로 다시 배포했습니다(버전 `e5aa60ff`, `SEND_ENABLED=false`). 워크플로를 다시 켜고 그 사이 들어온 `eec10e9`를 수동 실행 44459583505로 배포했습니다(버전 `02ed9fbf`, `SEND_ENABLED=false`). 시험 결과는 [실계정 검증 기록](2026-11-19-live-dm-trigger-campaign-verification.md)에 있습니다.
 
+2026-11-19 14:28Z에는 "운영 DB 조회, 백업, migration 073 적용, Worker 배포를 승인합니다" 요청에 따라 `main` 커밋 `9f1670e`를 적용했습니다. 이 커밋에 새로 들어온 변경은 PR #374(댓글 규칙 보관, migration 073)이며, 그 병합의 자동 배포는 migration 검사에서 멈췄습니다(실행 44536693310).
+읽기 전용 사전 조회에서 073의 열·CHECK·부분 인덱스가 없고 `(connection_id, media_id)` 전체 고유 제약이 있으며, 규칙 6개 중 켜진 규칙이 0개임을 확인했습니다.
+`public` 스키마를 Git에서 제외된 `deploy/secrets/backups/2026-11-19-migration-073/public-pre-073.dump`(402,090바이트, SHA-256 `ddf3c82ef250e8bf3911985811095add6de099e801a3bce2383e5e7883d4954e`)에 저장했고, 목록 읽기에서 테이블 60개를 확인했습니다.
+같은 관리자 연결로 `deploy/migrate-multi-user.sql`을 실행했습니다. 실행은 exit 0과 `COMMIT`으로 끝났고, 로그 674줄에 `ERROR`나 `FATAL`은 없었습니다.
+적용 후 `archived_at` 열, CHECK `instagram_comment_rules_archived_disabled`, 부분 고유 인덱스 `instagram_comment_rules_active_media`(`WHERE archived_at IS NULL`)가 있고 전체 고유 제약은 없습니다. 규칙 6개는 그대로이며 보관된 규칙은 0개였고, `auto_chatter_server`는 INSERT·SELECT·UPDATE만 가집니다.
+14:28:18Z에 적용을 마치고 바로 Deploy 워크플로를 `migrations_applied`를 켜고 수동 실행했습니다(실행 44544114591). Worker 버전 `bf0b8f10-204c-4e9c-91cd-941f224a3376`(태그 `9f1670e`, `SEND_ENABLED=false`)이 활성이 됐고 공개 스모크 검사가 통과했습니다. 적용과 배포 사이에 새 규칙 저장이 실패할 수 있던 구간은 약 1분이었습니다.
+`scheduled_steps`를 14:29:31Z, 14:30:36Z, 14:31:41Z에 조회했습니다. 발송과 무관한 8개 단계는 배포 뒤 매분 성공 시각이 갱신됐고 켜진 경보는 없었습니다. `kept_reply_cleanup`·`oauth_state_cleanup`·`cron`의 가장 최근 실패 기록은 배포 전인 2026-11-18 10:02Z이며 원인은 조사하지 않았습니다. 발송 단계 4개의 마지막 성공은 발송을 끈 2026-11-19 04:36Z 그대로였습니다.
+배포 뒤 운영 대시보드에서 게시물이 삭제된 규칙들이 "게시물이 삭제되었거나 볼 수 없습니다"로 표시되어, 삭제된 게시물에 Graph가 오류 코드 100·하위 코드 33을 준다는 판정이 맞음을 확인했습니다. 그 규칙들은 대시보드에서 모두 보관했습니다.
+
 ## 2. Cloudflare 준비
 
 Queue `auto-chatter-replies`를 생성합니다.
