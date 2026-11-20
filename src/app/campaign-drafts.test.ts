@@ -192,6 +192,8 @@ function draftHarness(override?: DraftApi, initialApprovals: Approval[] = []) {
     return nodes.get(id)!;
   };
   const fields = { name: new DraftElement(), body: new DraftElement(), snapshot_id: new DraftElement() };
+  const filter = get("campaign-target-filter");
+  Object.defineProperty(filter, "options", { get: () => filter.children });
   // A native select cannot retain a value that has no option.
   let selectedSnapshot = "";
   Object.defineProperty(fields.snapshot_id, "value", {
@@ -215,6 +217,7 @@ function draftHarness(override?: DraftApi, initialApprovals: Approval[] = []) {
       const result = await override(path, method, body);
       if (result !== undefined) return result;
     }
+    if (path === "/api/contact-segments") return { segments: [{ id: input.snapshot_id, name: "DM marketing" }] };
     if (path === "/api/segment-snapshots")
       return {
         snapshots: [
@@ -300,6 +303,7 @@ function draftHarness(override?: DraftApi, initialApprovals: Approval[] = []) {
   context.Error = Error;
   vm.runInContext(readFileSync(new URL("../../public/app/display-values.js", import.meta.url), "utf8"), context);
   vm.runInContext(readFileSync(new URL("../../public/app/send-status-labels.js", import.meta.url), "utf8"), context);
+  vm.runInContext(readFileSync(new URL("../../public/app/segment-snapshots.js", import.meta.url), "utf8"), context);
   vm.runInContext(existsSync(script) ? readFileSync(script, "utf8") : "", context);
   assert.equal(typeof context.createCampaignDrafts, "function", "campaign draft controller is missing");
   const requests: string[] = [];
@@ -350,6 +354,64 @@ test("campaign screen hides from agents without requesting workspace data", asyn
   await draftSettle();
   assert.equal(requests, 0);
   assert.equal(h.get("campaign-drafts-section").hidden, true);
+});
+
+const freezePath = `/api/contact-segments/${input.snapshot_id}/snapshots`;
+const newTarget = { id: "11111111-1111-4111-8111-111111111111", segment_name: "DM marketing", member_count: 2, as_of: "2026-10-21T03:00:00Z" };
+
+test("campaign screen freezes a saved filter once and selects the returned target for the draft", async () => {
+  const h = await adminDraft(async (path, method) => {
+    if (path === freezePath && method === "POST") {
+      await draftSettle();
+      return newTarget;
+    }
+  });
+  const filter = h.get("campaign-target-filter");
+  const freeze = h.get("campaign-target-freeze");
+  assert.equal(filter.children[1]?.textContent, "DM marketing");
+  assert.equal(freeze.disabled, true);
+  fillNew(h);
+  filter.value = input.snapshot_id;
+  await filter.dispatch("change");
+  const pending = freeze.dispatch("click");
+  assert.equal(freeze.disabled, true);
+  assert.equal(h.get("campaign-draft-save").disabled, true);
+  await freeze.dispatch("click");
+  await pending;
+  assert.equal(h.writes.length, 1);
+  assert.deepEqual(h.writes[0], { path: freezePath, method: "POST", body: undefined });
+  assert.equal(h.fields.name.value, "New draft");
+  assert.equal(h.fields.body.value, "New message");
+  assert.equal(h.fields.snapshot_id.value, newTarget.id);
+  await h.form.dispatch("submit");
+  assert.equal(h.writes[1]?.body.snapshot_id, newTarget.id);
+});
+
+test("campaign freeze preserves the selected target on a limit refusal and ignores a late result after reset", async () => {
+  let release: (value: unknown) => void = () => {};
+  let attempt = 0;
+  const h = await adminDraft(async (path) => {
+    if (path !== freezePath) return;
+    if (++attempt === 1) throw { status: 409, code: "snapshot_too_large" };
+    return new Promise((resolve) => {
+      release = resolve;
+    });
+  });
+  fillNew(h);
+  const filter = h.get("campaign-target-filter");
+  const freeze = h.get("campaign-target-freeze");
+  filter.value = input.snapshot_id;
+  await filter.dispatch("change");
+  await freeze.dispatch("click");
+  assert.match(h.get("campaign-target-status").textContent, /5,000명/);
+  assert.equal(h.fields.snapshot_id.value, input.snapshot_id);
+  const pending = freeze.dispatch("click");
+  h.controller.reset();
+  release(newTarget);
+  await pending;
+  assert.equal(h.fields.snapshot_id.value, "");
+  assert.equal(h.get("campaign-target-status").textContent, "");
+  assert.equal(freeze.disabled, true);
 });
 
 test("campaign screen creates a plain-text draft against an archived segment snapshot without sending", async () => {

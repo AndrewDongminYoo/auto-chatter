@@ -2,6 +2,9 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   const byId = (id) => document.getElementById(id);
   const form = byId("campaign-draft-form");
   const fields = form.elements;
+  const filter = byId("campaign-target-filter");
+  const freeze = byId("campaign-target-freeze");
+  const targetStatus = byId("campaign-target-status");
   const endpoint = "/api/campaign-drafts";
   let generation = 0,
     listRequest = 0,
@@ -18,6 +21,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   let loading = false,
     reading = false,
     saving = false,
+    freezing = false,
     conflict = false,
     unavailable = false,
     previewing = false;
@@ -102,7 +106,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     return editing ? fields.name.value !== editing.name || fields.body.value !== editing.body || fields.snapshot_id.value !== editing.snapshot_id : Boolean(fields.name.value || fields.body.value || fields.snapshot_id.value);
   }
   function hasChanges() {
-    if (operation || saving || approvalOperation || approving || runOperation || cancelling) return true;
+    if (operation || saving || freezing || approvalOperation || approving || runOperation || cancelling) return true;
     return draftChanged();
   }
   const canDiscard = () => !hasChanges() || confirm("저장하지 않은 캠페인 초안 변경 사항을 버릴까요?");
@@ -122,12 +126,16 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     return !(approval.schedule_kind === "scheduled" && approval.schedule_time_zone === timeZone && approval.schedule_local === choice);
   };
   function controls() {
-    const busy = loading || reading || saving || approving || cancelling;
+    const busy = loading || reading || saving || freezing || approving || cancelling;
     const pending = Boolean(operation || approvalOperation || runOperation);
     // A draft with an approval in force, or whose approval is being read or written, is read-only.
     const approvalLock = Boolean(editing) && (approvalActive() || approvalReading || Boolean(approvalOperation) || approving);
     const locked = !permitted || busy || pending || Boolean(editing?.archived) || unavailable || approvalLock;
     for (const key of ["name", "body", "snapshot_id"]) fields[key].disabled = locked;
+    filter.disabled = locked || !filter.options[1];
+    freeze.disabled = filter.disabled || !filter.value;
+    freeze.textContent = freezing ? "고정하는 중…" : "대상 고정";
+    freeze.setAttribute("aria-busy", String(freezing));
     byId("campaign-draft-approval-lock").hidden = !editing || !approvalActive();
     byId("campaign-draft-save").disabled = !permitted || busy || conflict || unavailable || Boolean(editing?.archived) || approvalLock || (!editing && !operation && drafts.length >= 100);
     byId("campaign-draft-save").textContent = saving ? "저장 중…" : operation ? "같은 요청 재시도" : editing ? "수정 저장" : "초안 저장";
@@ -539,6 +547,8 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     conflict = false;
     unavailable = false;
     form.reset();
+    filter.value = "";
+    targetStatus.textContent = "";
     fields.snapshot_id.value = "";
     byId("campaign-draft-editor-title").textContent = "새 초안";
     byId("campaign-draft-summary").textContent = "";
@@ -546,7 +556,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     controls();
   }
   function options(previous = fields.snapshot_id.value) {
-    const placeholder = node("option", snapshots.length ? "고정한 대상 선택" : "먼저 연락처 메뉴에서 대상을 고정해 주세요.");
+    const placeholder = node("option", snapshots.length ? "고정한 대상 선택" : "고정한 대상이 없습니다");
     placeholder.value = "";
     const choices = snapshots.map((snapshot) => {
       const date = formatDateTime(snapshot.as_of, { timeZone });
@@ -562,6 +572,45 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     }
     fields.snapshot_id.replaceChildren(placeholder, ...choices);
     fields.snapshot_id.value = previous;
+  }
+  function filterOptions(segments, label) {
+    const previous = filter.value;
+    const placeholder = node("option", label);
+    placeholder.value = "";
+    filter.replaceChildren(
+      placeholder,
+      ...segments.map((segment) => {
+        const option = node("option", formatText(segment.name));
+        option.value = segment.id;
+        return option;
+      }),
+    );
+    filter.value = segments.some((segment) => segment.id === previous) ? previous : "";
+  }
+  async function freezeTarget() {
+    if (freeze.disabled) return;
+    const session = generation;
+    freezing = true;
+    controls();
+    targetStatus.textContent = "저장된 필터에 맞는 연락처를 고정하고 있습니다…";
+    try {
+      const saved = await api(`/api/contact-segments/${filter.value}/snapshots`, "POST");
+      if (session !== generation) return;
+      snapshots = [saved, ...snapshots.filter((snapshot) => snapshot.id !== saved.id)];
+      options(saved.id);
+      filter.value = "";
+      clearPreview();
+      closeConfirmation();
+      targetStatus.textContent = `${formatCount(saved.member_count)}명을 고정해 선택했습니다. 발송할 때 수신 가능 여부를 다시 확인합니다.`;
+    } catch (error) {
+      if (session !== generation || authorizationLost(error)) return;
+      targetStatus.textContent = segmentSnapshotLimitMessages[error.code] || (error.code === "segment_not_found" ? "필터가 보관되었거나 찾을 수 없습니다. 목록을 새로고침해 주세요." : "대상 고정 결과를 확인하지 못했습니다. 목록을 새로고침해 고정한 대상이 있는지 확인해 주세요.");
+    } finally {
+      if (session === generation) {
+        freezing = false;
+        controls();
+      }
+    }
   }
   function renderList() {
     const list = byId("campaign-draft-list");
@@ -599,17 +648,25 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     return true;
   }
   async function load() {
-    if (!permitted || saving || reading || operation || approving) return;
+    if (!permitted || saving || freezing || reading || operation || approving) return;
     const session = generation,
       request = ++listRequest;
     loading = true;
     controls();
     byId("campaign-draft-list-status").textContent = "목록을 불러오는 중…";
+    targetStatus.textContent = "";
     try {
-      const [list, targets] = await Promise.all([api(endpoint), api("/api/segment-snapshots")]);
+      const [list, targets, filters] = await Promise.allSettled([api(endpoint), api("/api/segment-snapshots"), api("/api/contact-segments")]);
       if (session !== generation || request !== listRequest) return;
-      drafts = list.drafts;
-      snapshots = targets.snapshots;
+      for (const result of [list, targets, filters]) {
+        if (result.status === "rejected" && authorizationLost(result.reason)) return;
+      }
+      if (list.status === "rejected") throw list.reason;
+      if (targets.status === "rejected") throw targets.reason;
+      drafts = list.value.drafts;
+      snapshots = targets.value.snapshots;
+      const segments = filters.status === "fulfilled" ? filters.value.segments : [];
+      filterOptions(segments, segments.length ? "저장된 필터 선택" : filters.status === "rejected" ? "필터를 불러오지 못했습니다" : "저장된 필터가 없습니다");
       options();
       renderList();
       byId("campaign-draft-list-status").textContent = "";
@@ -617,6 +674,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
       if (session !== generation || request !== listRequest || authorizationLost(error)) return;
       drafts = [];
       snapshots = [];
+      filterOptions([], "목록을 새로고침해 주세요");
       renderList();
       options();
       byId("campaign-draft-list-status").textContent = message(error);
@@ -628,7 +686,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     }
   }
   async function openDraft(id) {
-    if (!permitted || loading || saving || reading || operation || approvalOperation || approving || runOperation || cancelling || !canDiscard()) return;
+    if (!permitted || loading || saving || freezing || reading || operation || approvalOperation || approving || runOperation || cancelling || !canDiscard()) return;
     const session = generation,
       request = ++detailRequest;
     clearEditor();
@@ -847,7 +905,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     return form.reportValidity() && fields.snapshot_id.value && name && [...name].length <= 60 && !/[\u0000-\u001f\u007f]/.test(name) && body.trim() && body.length <= 1000 && !body.includes("\u0000") && !body.includes("{{") && !body.includes("}}");
   }
   async function save(archive = false) {
-    if (!permitted || loading || reading || saving || conflict || unavailable || editing?.archived) return;
+    if (!permitted || loading || reading || saving || freezing || conflict || unavailable || editing?.archived) return;
     if (editing && (approvalActive() || approvalReading || approvalOperation || approving || runOperation || cancelling)) return;
     if (archive && (!editing || operation || !canDiscard() || !confirm("이 초안을 보관할까요? 보관한 초안은 다시 수정할 수 없으며 저장 한도에 포함됩니다."))) return;
     if (!operation) {
@@ -945,9 +1003,10 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     detailRequest++;
     permitted = false;
     workspace = undefined;
-    loading = reading = saving = approving = false;
+    loading = reading = saving = freezing = approving = false;
     drafts = [];
     snapshots = [];
+    filterOptions([], "저장된 필터 선택");
     clearEditor();
     options();
     byId("campaign-draft-list").replaceChildren();
@@ -958,11 +1017,17 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     event.preventDefault();
     return save();
   });
-  form.addEventListener("input", () => {
+  form.addEventListener("input", (event) => {
+    if (event.target === filter) return;
     clearPreview();
     closeConfirmation();
     controls();
   });
+  filter.addEventListener("change", () => {
+    targetStatus.textContent = "";
+    controls();
+  });
+  freeze.addEventListener("click", freezeTarget);
   // A zone change retires the approval shown in the old zone and reads it again; a pending write renders its own result.
   function zoneChanged() {
     closeConfirmation();
@@ -1005,7 +1070,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
   byId("campaign-draft-archive").addEventListener("click", () => save(true));
   byId("campaign-draft-reload").addEventListener("click", () => editing && openDraft(editing.id));
   byId("campaign-draft-new").addEventListener("click", () => {
-    if (!permitted || loading || reading || saving || operation || approvalOperation || approving || runOperation || cancelling || !canDiscard()) return;
+    if (!permitted || loading || reading || saving || freezing || operation || approvalOperation || approving || runOperation || cancelling || !canDiscard()) return;
     clearEditor();
     fields.name.focus();
   });
