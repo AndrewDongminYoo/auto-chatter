@@ -713,6 +713,12 @@ async function months() {
   ).rows[0] as { current: string; next: string; later: string; later2: string };
 }
 
+// True within five minutes of the next UTC month: rows seeded at now() would then fall in the previous month by the
+// time a lock-blocked request counts them, so a race test that needs a full current month skips instead of flaking.
+async function nearMonthEnd() {
+  return (await pool.query(`SELECT now() >= (date_trunc('month',now() AT TIME ZONE 'UTC')+interval '1 month'-interval '5 minutes') AT TIME ZONE 'UTC' AS near`)).rows[0].near as boolean;
+}
+
 test("the monthly campaign send limit refuses an approval that would exceed it and writes nothing", async () => {
   await setPlan("essential");
   await candidate("1001", "2001");
@@ -833,4 +839,89 @@ test("two approvals that each fit alone wait for the workspace lock and cannot b
     blocker.release();
   }
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM campaign_approvals WHERE status='approved'")).rows[0].n, 1);
+});
+
+// Security audit #62, fifth pass: a reschedule into a month counts that month under the same workspace lock as an
+// approval, so moving an approval in force into this month cannot race a new approval past the limit.
+test("a reschedule into this month and a new approval that each fit alone serialize and cannot both pass", async (t) => {
+  if (await nearMonthEnd()) return t.skip("too close to the UTC month boundary");
+  await setPlan("essential");
+  await candidate("1001", "2001");
+  await sends(999);
+  const { later } = await months();
+  const moved = await expect(await approve((await draftFor()).id, approval(1, later)), 201);
+  const { id: fresh } = await draftFor();
+  const blocker = await pool.connect();
+  const started: Promise<unknown>[] = [];
+  try {
+    await blocker.query("BEGIN");
+    await blocker.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [workspace]);
+    const first = reschedule(moved.id, { expected_version: 1, schedule_local: null, expected_time_zone: "UTC" });
+    started.push(first);
+    await waitingForLocks(1);
+    const second = approve(fresh, approval());
+    started.push(second);
+    await waitingForLocks(2);
+    await blocker.query("COMMIT");
+    const [rescheduled, approved] = await Promise.all([first, second]);
+    assert.equal(rescheduled.status, 200, "the reschedule took the workspace lock first");
+    const refused = await expect(approved, 409);
+    assert.equal(refused.error, "broadcast_limit_reached");
+    assert.equal(refused.broadcast_limit.reserved, "1");
+  } finally {
+    await blocker.query("ROLLBACK").catch(() => undefined);
+    blocker.release();
+    // A failed wait leaves the started requests running; let them finish before the next test truncates the tables.
+    await Promise.allSettled(started);
+  }
+  const { current } = await months();
+  const due = await pool.query(
+    `SELECT count(*)::int AS n FROM campaign_approvals
+     WHERE status='approved' AND to_char(coalesce(scheduled_at,now()) AT TIME ZONE 'UTC','YYYY-MM')=$1`,
+    [current],
+  );
+  assert.equal(due.rows[0].n, 1, "one approval is due this month");
+});
+
+// The opposite order: the approval holds the workspace lock first, so the reschedule must count this month after it
+// waits for that lock. A reschedule that read the limit before the lock would see no reservation and pass.
+test("a reschedule queued behind a new approval counts that approval and keeps its schedule", async (t) => {
+  if (await nearMonthEnd()) return t.skip("too close to the UTC month boundary");
+  await setPlan("essential");
+  await candidate("1001", "2001");
+  await sends(999);
+  const { later } = await months();
+  const moved = await expect(await approve((await draftFor()).id, approval(1, later)), 201);
+  assert.notEqual(moved.scheduled_at, null);
+  const original = await pool.query("SELECT schedule_kind,scheduled_at::text AS scheduled_at,version FROM campaign_approvals WHERE id=$1", [moved.id]);
+  const { id: fresh } = await draftFor();
+  const blocker = await pool.connect();
+  const started: Promise<unknown>[] = [];
+  try {
+    await blocker.query("BEGIN");
+    await blocker.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [workspace]);
+    const first = approve(fresh, approval());
+    started.push(first);
+    await waitingForLocks(1);
+    const second = reschedule(moved.id, { expected_version: 1, schedule_local: null, expected_time_zone: "UTC" });
+    started.push(second);
+    await waitingForLocks(2);
+    await blocker.query("COMMIT");
+    const [approved, rescheduled] = await Promise.all([first, second]);
+    await expect(approved, 201);
+    const refused = await expect(rescheduled, 409);
+    assert.equal(refused.error, "broadcast_limit_reached");
+    assert.equal(refused.broadcast_limit.reserved, "1", "the new approval is counted");
+    assert.equal(refused.approval.version, 1);
+    assert.equal(refused.approval.schedule_kind, "scheduled");
+    assert.equal(refused.approval.scheduled_at, moved.scheduled_at);
+  } finally {
+    await blocker.query("ROLLBACK").catch(() => undefined);
+    blocker.release();
+    await Promise.allSettled(started);
+  }
+  const kept = await pool.query("SELECT schedule_kind,scheduled_at::text AS scheduled_at,version FROM campaign_approvals WHERE id=$1", [moved.id]);
+  assert.deepEqual(kept.rows[0], original.rows[0], "the refused reschedule kept the original schedule");
+  assert.equal(kept.rows[0].schedule_kind, "scheduled");
+  assert.equal(kept.rows[0].version, 1);
 });

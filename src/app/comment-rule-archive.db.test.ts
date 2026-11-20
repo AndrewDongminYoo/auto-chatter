@@ -103,6 +103,24 @@ test("archiving another workspace's or an unknown rule answers 404 rule_not_foun
   assert.equal((await listRules(pool, a)).length, 1);
 });
 
+// Security audit #62, fifth pass: the role table in workspace-roles.db.test.ts sends an unknown ID; this one archives a
+// rule that exists, so a role check that ran after the archiving UPDATE would also be caught: the row would be archived.
+test("an agent or a removed administrator cannot archive an existing rule", async () => {
+  const { id } = await saveRule(pool, a, input);
+  const workspace = (await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1", [a.id])).rows[0].workspace_id;
+  await pool.query("UPDATE workspace_members SET workspace_id=$2,role='agent' WHERE user_id=$1", [b.id, workspace]);
+  const agent = await archive(id, b);
+  assert.equal(agent.status, 403);
+  assert.equal((await agent.json()).error, "role_forbidden");
+  await pool.query("UPDATE workspace_members SET role='admin',removed_at=now(),removed_by=$2 WHERE user_id=$1", [b.id, a.id]);
+  const removed = await archive(id, b);
+  assert.equal(removed.status, 403);
+  assert.equal((await removed.json()).error, "workspace_required");
+  assert.equal((await stored(id))?.archived_at, null);
+  assert.equal((await stored(id))?.enabled, true);
+  assert.equal((await listRules(pool, a)).length, 1);
+});
+
 test("archiving requires the same origin", async () => {
   const { id } = await saveRule(pool, a, input);
   const response = await appApi(
