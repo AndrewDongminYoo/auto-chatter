@@ -1214,6 +1214,17 @@ function viewFromHash() {
   const view = byId(name)?.closest(".view")?.dataset.view ?? null;
   return view && viewAvailable(view) ? view : null;
 }
+// The small label above the page heading names the current view, as in the approved screen designs.
+const viewEyebrows = {
+  accounts: "ACCOUNTS",
+  automation: "AUTOMATION STUDIO",
+  campaigns: "CAMPAIGNS",
+  contacts: "CONTACTS",
+  home: "WORKSPACE HOME",
+  inbox: "INBOX",
+  reports: "REPORTS",
+  settings: "SETTINGS",
+};
 function showView(name, focus) {
   // A notice the new view's loader writes after this point still appears.
   if (viewChangeClearsMessages(currentView, name)) {
@@ -1221,6 +1232,7 @@ function showView(name, focus) {
     clearActionErrors();
   }
   currentView = name;
+  byId("page-eyebrow").textContent = viewEyebrows[name] ?? "WORKSPACE";
   void rereadGlobalSend();
   for (const view of document.querySelectorAll("#workspace .view")) view.hidden = view.dataset.view !== name;
   for (const link of document.querySelectorAll(".workspace-nav a")) {
@@ -2012,7 +2024,16 @@ byId("resend-confirmation").addEventListener("click", (event) =>
 );
 let recoveryToken = null;
 let authLinkNotice = null;
+// Shows or hides the sign-in password; the field returns to hidden whenever the sign-in form is shown again.
+function setPasswordVisible(visible) {
+  byId("password").type = visible ? "text" : "password";
+  const toggle = byId("password-toggle");
+  toggle.setAttribute("aria-pressed", String(visible));
+  toggle.setAttribute("aria-label", visible ? "비밀번호 숨기기" : "비밀번호 보기");
+}
+byId("password-toggle").addEventListener("click", () => setPasswordVisible(byId("password").type === "password"));
 function showAuthMode(mode) {
+  setPasswordVisible(false);
   byId("login-form").hidden = mode !== "login";
   byId("recovery-request-form").hidden = mode !== "recover";
   byId("password-reset-form").hidden = mode !== "reset";
@@ -2431,44 +2452,95 @@ async function loadActivity() {
     throw error;
   }
   if (generation !== segmentsGeneration || request !== activityRequest) return;
-  const labels = {
-    ...sendStatusLabels,
-    waiting: "응답 대기",
-    following: "팔로우 확인",
-    not_following: "미팔로우 확인",
-  };
+  activityRows = result.activity;
+  renderActivity();
+}
+const activityLabels = {
+  ...sendStatusLabels,
+  waiting: "응답 대기",
+  following: "팔로우 확인",
+  not_following: "미팔로우 확인",
+};
+const activityReasons = {
+  follow_status_unavailable: "팔로우 상태를 확인하지 못해 잠시 후 다시 조회합니다.",
+  response_window_expired: "응답 가능 시간이 지나 새 확인 메시지를 기다립니다.",
+  follow_recipient_unavailable: "첫 DM은 발송했지만 후속 대상을 확인하지 못했습니다. 운영자에게 문의해 주세요.",
+  send_outcome_unknown: "전송 결과를 확인할 수 없어 재발송을 중지했습니다.",
+  worker_interrupted: "전송 중 처리가 중단돼 결과 확인이 필요합니다.",
+  inactive_rule: "규칙이 중지됐습니다.",
+  inactive_connection: "계정 수신이 중지됐습니다.",
+  delivery_not_permitted: "계정·규칙 또는 응답 가능 시간을 확인해 주세요.",
+  connection_paused: "요청 제한으로 잠시 대기합니다.",
+  contact_paused: "이 연락처의 자동화가 중지되어 대기합니다.",
+  connection_changed: "계정 연결 설정이 변경되어 중지됐습니다.",
+};
+// The badge tone of a send status: delivered to Meta, still waiting, or needing attention.
+function activityTone(status) {
+  if (status === "sent") return "success";
+  if (["failed", "blocked", "unknown"].includes(status)) return "danger";
+  return "warning";
+}
+function activityStatus(status) {
+  if (!status) return node("span", "—", "activity-none");
+  return badge(formatText(activityLabels[status] ?? status), activityTone(status));
+}
+// The latest loaded rows, filtered on the client by follow-up status; the filter never requests the server again.
+let activityRows = [];
+function renderActivity() {
+  const filter = byId("activity-filter");
+  const statuses = [...new Set(activityRows.map((row) => row.follow_reply_status ?? ""))];
+  const previous = filter.value;
+  filter.replaceChildren(new Option("후속 DM 전체", "all"), ...statuses.filter(Boolean).map((status) => new Option(formatText(activityLabels[status] ?? status), status)), ...(statuses.includes("") ? [new Option("후속 DM 없음", "none")] : []));
+  filter.value = [...filter.options].some((option) => option.value === previous) ? previous : "all";
+  const rows = activityRows.filter((row) => filter.value === "all" || (filter.value === "none" ? !row.follow_reply_status : row.follow_reply_status === filter.value));
+  byId("activity-count").textContent = `${rows.length}건`;
   byId("activity").replaceChildren();
-  if (!result.activity.length) {
+  if (!activityRows.length) {
     byId("activity").append(
       connections.length
         ? emptyState("첫 댓글을 기다리고 있습니다", "활성 규칙에 맞는 댓글을 받으면 첫 DM과 후속 메시지의 처리 상태가 여기에 표시됩니다.")
         : emptyState("아직 처리 내역이 없습니다", "Instagram 계정을 연결하고 규칙을 켜면 첫 DM과 후속 메시지의 처리 상태가 여기에 표시됩니다."),
     );
+    return;
   }
-  for (const row of result.activity) {
-    const item = node("div", `게시물 ${formatText(row.media_id)} · 첫 DM: ${formatText(labels[row.first_reply_status] ?? row.first_reply_status)}`);
-    item.className = "item";
-    if (row.follow_reply_status) item.append(node("p", `후속 DM: ${formatText(labels[row.follow_reply_status] ?? row.follow_reply_status)} · ${row.follow_status === "unknown" ? "팔로우 확인 전 또는 확인 불가" : formatText(labels[row.follow_status])}`));
+  const table = node("table", "", "activity-table");
+  const head = node("thead", "");
+  const headRow = node("tr", "");
+  for (const label of ["게시물 ID", "첫 DM", "후속 DM", "팔로우 상태"]) {
+    const cell = node("th", label);
+    cell.scope = "col";
+    headRow.append(cell);
+  }
+  head.append(headRow);
+  const body = node("tbody", "");
+  for (const row of rows) {
+    const line = node("tr", "");
+    const followStatus = !row.follow_reply_status ? "—" : row.follow_status === "unknown" ? "확인 전 또는 불가" : formatText(activityLabels[row.follow_status] ?? row.follow_status);
+    const media = node("td", formatText(row.media_id), "activity-media");
+    const first = node("td", "");
+    first.append(activityStatus(row.first_reply_status));
+    const follow = node("td", "");
+    follow.append(activityStatus(row.follow_reply_status));
+    const state = node("td", followStatus);
+    // Small screens stack each row and show these labels in place of the column headers.
+    [media, first, follow, state].forEach((cell, index) => (cell.dataset.label = ["게시물 ID", "첫 DM", "후속 DM", "팔로우 상태"][index]));
+    line.append(media, first, follow, state);
+    body.append(line);
     const reason = row.follow_reply_error ?? row.first_reply_error;
     if (reason) {
-      const reasons = {
-        follow_status_unavailable: "팔로우 상태를 확인하지 못해 잠시 후 다시 조회합니다.",
-        response_window_expired: "응답 가능 시간이 지나 새 확인 메시지를 기다립니다.",
-        follow_recipient_unavailable: "첫 DM은 발송했지만 후속 대상을 확인하지 못했습니다. 운영자에게 문의해 주세요.",
-        send_outcome_unknown: "전송 결과를 확인할 수 없어 재발송을 중지했습니다.",
-        worker_interrupted: "전송 중 처리가 중단돼 결과 확인이 필요합니다.",
-        inactive_rule: "규칙이 중지됐습니다.",
-        inactive_connection: "계정 수신이 중지됐습니다.",
-        delivery_not_permitted: "계정·규칙 또는 응답 가능 시간을 확인해 주세요.",
-        connection_paused: "요청 제한으로 잠시 대기합니다.",
-        contact_paused: "이 연락처의 자동화가 중지되어 대기합니다.",
-        connection_changed: "계정 연결 설정이 변경되어 중지됐습니다.",
-      };
-      item.append(node("p", reasons[reason] ?? (reason.startsWith("meta_error_") ? "Instagram이 요청을 제한하거나 거절했습니다." : "발송 조건을 확인할 수 없습니다. 연결과 규칙을 확인해 주세요.")));
+      const note = node("tr", "", "activity-reason");
+      const cell = node("td", activityReasons[reason] ?? (reason.startsWith("meta_error_") ? "Instagram이 요청을 제한하거나 거절했습니다." : "발송 조건을 확인할 수 없습니다. 연결과 규칙을 확인해 주세요."));
+      cell.colSpan = 4;
+      note.append(cell);
+      body.append(note);
     }
-    byId("activity").append(item);
   }
+  table.append(head, body);
+  const wrap = node("div", "", "table-scroll");
+  wrap.append(table);
+  byId("activity").append(wrap);
 }
+byId("activity-filter").addEventListener("change", renderActivity);
 byId("refresh-activity").addEventListener("click", (event) => action(event.currentTarget, loadActivity));
 
 function initializeContacts() {
