@@ -1,10 +1,9 @@
 /*
  * Dashboard design tokens. docs/specs/2026-11-11-dashboard-design-tokens.md owns every value and the contrast table.
- * The slate, red, amber, green, blue and jade color values are copied from @radix-ui/colors 3.0.0 (the sRGB blocks).
- * --primary, --primary-foreground (dark), --ring and --primary-hover-overlay are brand values, not Radix values.
- * In dark mode, --foreground, --muted-foreground, --border, --accent-foreground and the status text colors are adjusted
- * values between Radix steps, and --destructive-background is darker than red-3 (the spec's dark-mode hierarchy section
- * says why).
+ * Since 2026-11-21 the neutral, brand and accent values come from the landing page palette (the light values) and
+ * values derived from it (the dark values); the spec's palette section says which is which.
+ * The red, amber, green and blue status values are copied from @radix-ui/colors 3.0.0 (the sRGB blocks), and the
+ * dark status text colors and --destructive-background are adjusted values between Radix steps.
  *
  * MIT License
  *
@@ -29,19 +28,19 @@
  * SOFTWARE.
  */
 :root {
-  --background: #f0f0f3;
-  --card: #fcfcfd;
-  --muted: #e8e8ec;
-  --foreground: #1c2024;
-  --muted-foreground: #60646c;
-  --border: #d9d9e0;
-  --input: #80838d;
-  --primary: #122d50;
-  --primary-foreground: #fcfcfd;
-  --primary-hover-overlay: #7d97b51a;
-  --ring: #122d50;
-  --accent: #d6f1e3;
-  --accent-foreground: #1d3b31;
+  --background: #fbfbf7;
+  --card: #ffffff;
+  --muted: #edf3ea;
+  --foreground: #1a211d;
+  --muted-foreground: #465148;
+  --border: #c8cdc6;
+  --input: #646f65;
+  --primary: #202720;
+  --primary-foreground: #ffffff;
+  --primary-hover-overlay: #8ce2b726;
+  --ring: #00805a;
+  --accent: #b8e9c9;
+  --accent-foreground: #204a34;
 
   --destructive: #641723;
   --destructive-background: #feebec;
@@ -90,18 +89,18 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #111113;
-    --card: #212225;
-    --muted: #2e3135;
-    --foreground: #e2e4e7;
-    --muted-foreground: #9399a1;
-    --border: #2b2d31;
-    --input: #777b84;
-    --primary: #8ea6c6;
-    --primary-foreground: #122d50;
-    --ring: #b3cceb;
-    --accent: #0b3b2c;
-    --accent-foreground: #8cc9b2;
+    --background: #111512;
+    --card: #1b211d;
+    --muted: #252d27;
+    --foreground: #e1e8e1;
+    --muted-foreground: #9faba2;
+    --border: #29312b;
+    --input: #7a877c;
+    --primary: #7fcfa6;
+    --primary-foreground: #10261a;
+    --ring: #8ce2b7;
+    --accent: #1d4431;
+    --accent-foreground: #a6dcc0;
 
     --destructive: #f08a84;
     --destructive-background: #500f1c;

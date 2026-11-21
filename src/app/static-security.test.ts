@@ -69,12 +69,13 @@ test("the dashboard CSP allows only same-origin scripts, with no inline or eval 
   const policy = directives(csp[0]!.slice(csp[0]!.indexOf(":") + 1));
   // An allowlist of directive names, so any new directive (script-src-elem, script-src-attr, worker-src, ...)
   // that could override or widen script-src fails here and has to be reviewed on purpose.
-  assert.deepEqual([...policy.keys()].sort(), ["base-uri", "connect-src", "default-src", "form-action", "frame-ancestors", "img-src", "script-src", "style-src"]);
+  assert.deepEqual([...policy.keys()].sort(), ["base-uri", "connect-src", "default-src", "font-src", "form-action", "frame-ancestors", "img-src", "script-src", "style-src"]);
   assert.deepEqual(policy.get("default-src"), ["'none'"]);
   assert.deepEqual(policy.get("script-src"), ["'self'"]);
   assert.deepEqual(policy.get("base-uri"), ["'none'"]);
   assert.deepEqual(policy.get("frame-ancestors"), ["'none'"]);
   assert.deepEqual(policy.get("form-action"), ["'self'"]);
+  assert.deepEqual(policy.get("font-src"), ["'self'"]);
   for (const [name, sources] of policy) for (const source of sources) assert.ok(!["'unsafe-inline'", "'unsafe-eval'", "'unsafe-hashes'", "data:", "*"].includes(source), `${name} must not allow ${source}`);
 });
 
