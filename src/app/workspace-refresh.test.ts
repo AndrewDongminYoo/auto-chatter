@@ -635,3 +635,72 @@ test("a session reset drops the loaded activity so a filter change cannot redraw
   context.renderActivity();
   assert.doesNotMatch(text(nodes.get("activity")!), /previous-workspace-post/);
 });
+
+test("a connection data deletion drops the loaded activity before its reload, so a failed reload cannot be filtered back", async () => {
+  type Fake = { textContent: string; value: string; children: Fake[]; options: Fake[]; dataset: Record<string, string>; className: string; replaceChildren: (...items: Fake[]) => void; append: (...items: Fake[]) => void; querySelectorAll: () => Fake[] };
+  const make = (): Fake => {
+    const element: Fake = {
+      textContent: "",
+      value: "",
+      className: "",
+      children: [],
+      options: [],
+      dataset: {},
+      replaceChildren: (...items) => {
+        element.children = items;
+        element.options = items;
+      },
+      append: (...items) => {
+        element.children.push(...items);
+        element.options.push(...items);
+      },
+      querySelectorAll: () => [],
+    };
+    return element;
+  };
+  const text = (element: Fake): string => element.textContent + element.children.map(text).join("");
+  const nodes = new Map(["activity", "activity-count", "activity-filter", "contacts-list"].map((id) => [id, make()]));
+  const noop = () => {};
+  const context = vm.createContext({
+    activityRequest: 0,
+    activityRows: [],
+    segmentsGeneration: 1,
+    contactsSaving: false,
+    contactsDirty: new Set(),
+    purgedContactConnections: new Set(),
+    contactCsvPreview: { invalidate: noop },
+    inbox: { forgetConnection: noop },
+    invalidateSegmentPreview: noop,
+    invalidateContactExport: noop,
+    loadContacts: async () => {},
+    byId: (id: string) => nodes.get(id),
+    connections: [{ id: "c1" }],
+    sendStatusLabels: { sent: "Meta 접수" },
+    formatText: (value: unknown) => String(value ?? "—"),
+    badge: (label: string) => Object.assign(make(), { textContent: label }),
+    emptyState: (title: string) => Object.assign(make(), { textContent: title }),
+    node: (_tag: string, label: string, className = "") => Object.assign(make(), { textContent: label, className }),
+    Option: function (label: string, value: string) {
+      return Object.assign(make(), { textContent: label, value });
+    },
+  });
+  const begin = source.indexOf("const activityLabels = {");
+  const end = source.indexOf("\n}", source.indexOf("function resetActivity("));
+  vm.runInContext(source.slice(begin, end + 2), context);
+  const forget = source.indexOf("function forgetDeletedConnection(");
+  vm.runInContext(source.slice(forget, source.indexOf("\n}", forget) + 2), context);
+  // The reload after the deletion fails.
+  context.loadActivity = () => Promise.reject(new Error("offline"));
+  context.activityRows = [
+    { connection_id: "c1", media_id: "deleted-connection-post", first_reply_status: "sent", follow_reply_status: "sent", follow_status: "following" },
+    { connection_id: "c2", media_id: "other-connection-post", first_reply_status: "sent", follow_reply_status: "sent", follow_status: "following" },
+  ];
+  context.renderActivity();
+  context.forgetDeletedConnection("c1");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(text(nodes.get("activity")!), /처리 내역을 불러오지 못했습니다/);
+  nodes.get("activity-filter")!.value = "sent";
+  context.renderActivity();
+  assert.doesNotMatch(text(nodes.get("activity")!), /deleted-connection-post/);
+  assert.match(text(nodes.get("activity")!), /other-connection-post/, "another connection's rows stay");
+});

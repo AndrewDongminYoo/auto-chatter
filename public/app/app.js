@@ -779,6 +779,9 @@ function forgetDeletedConnection(connectionId) {
   for (const card of byId("contacts-list").querySelectorAll(".contact-row")) if (card.dataset.connectionId === connectionId) card.remove();
   inbox.forgetConnection(connectionId);
   if (!contactsDirty.size && !contactsSaving) void loadContacts();
+  // The deleted connection's loaded rows go before the reload, so a failed reload cannot be filtered back into view.
+  activityRows = activityRows.filter((row) => row.connection_id !== connectionId);
+  renderActivity();
   const generation = segmentsGeneration;
   loadActivity().catch(() => {
     if (generation !== segmentsGeneration) return;
