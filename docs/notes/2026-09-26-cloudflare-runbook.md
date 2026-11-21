@@ -6,7 +6,10 @@ Cloudflare 어댑터와 로컬 검증 경로를 구현했습니다.
 2026-09-26 승인된 개인 계정에서 Supabase 프로젝트와 Cloudflare 리소스를 생성하고 workers.dev에 배포했습니다.
 2026-09-28 `auto-chat.donminzzi.kr`를 같은 계정의 기존 `auto-chatter` Worker에 Custom Domain으로 연결했습니다.
 새 도메인의 `/app/`, `/privacy`, `/service`, `/data-deletion`은 HTTPS 200, 로그인하지 않은 `/api/me`는 401로 응답했습니다.
-도메인 루트 `/`에만 적용되는 Cloudflare Redirect Rule은 `/app/`로 302 이동시키며 쿼리 문자열을 보존합니다.
+이때 도메인 루트 `/`에만 적용되는 Cloudflare Redirect Rule(Single Redirects, 영역 `donminzzi.kr`)을 두어 `/app/`로 302 이동시키고 쿼리 문자열을 보존했습니다.
+이 규칙은 Worker의 정적 자산보다 먼저 실행되어 #383에서 배포한 소개 페이지를 가렸기 때문에, 2026-11-21 Cloudflare 대시보드에서 삭제했습니다.
+wrangler OAuth 토큰은 이 영역의 ruleset을 조회하거나 수정하지 못하므로(403, code 10000) 대시보드에서 작업했습니다.
+2026-11-21T06:33Z `curl`에서 `/`는 200과 `<title>AUTO-CHATTER | Instagram 댓글·DM 자동화</title>`(`public/index.html`)를, `/app/`은 200을 반환했습니다.
 기존 workers.dev 주소의 `/service`도 200으로 유지했습니다.
 Supabase Auth의 Site URL을 `https://auto-chat.donminzzi.kr/app/`로 변경하고 저장 후 재조회로 확인했습니다.
 확인 이메일의 실제 복귀는 아직 실사용 계정으로 검증하지 않았습니다.
