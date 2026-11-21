@@ -146,6 +146,8 @@ export default [
     rules: { "no-unused-vars": ["error", { ...unusedVars, vars: "local" }] },
   },
   ...dashboardGlobals.map(({ readers, names }) => ({ files: readers.map(dashboardScript), languageOptions: { globals: readonly(names) } })),
+  // The landing page script is a classic script loaded by public/index.html.
+  { files: ["public/landing/*.js"], languageOptions: { globals: globals.browser, sourceType: "script" } },
   { files: ["*.js", "scripts/**/*.mjs", "src/**/*.mjs"], languageOptions: { globals: globals.node } },
   {
     // Playwright callbacks in this file run inside the dashboard page and read app.js globals.

@@ -529,7 +529,7 @@ const errors = {
   instagram_not_configured: "Instagram 연결 서비스를 준비 중입니다.",
   instagram_connect_rate_limited: "계정 연결 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
   instagram_connect_unavailable: "지금은 계정 연결을 시작할 수 없습니다. 잠시 후 다시 시도해 주세요.",
-  instagram_public_access_restricted: "일반 사용자의 Instagram 연결에 필요한 Meta 승인을 확인하지 못해 계정 연결을 제한합니다. 검수에 참여하는 계정만 연결할 수 있습니다.",
+  instagram_public_access_restricted: "일반 사용자의 Instagram 연결에 필요한 Meta 승인을 확인하지 못해 계정 연결을 제한합니다. 검수에 참여하는 계정만 연결할 수 있으며, 참여 신청은 서비스 이용약관 페이지의 문의처로 보내 주세요.",
   instagram_authorization_denied: "Instagram 연결이 완료되지 않았습니다. 권한 동의를 취소했거나 요청이 거부됐습니다.",
   instagram_permissions_required: "필수 Instagram 권한을 받지 못했습니다. 계정과 앱 권한을 확인해 주세요.",
   health_rate_limited: "상태 확인 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
@@ -1361,7 +1361,8 @@ function renderGettingStarted(rules, globalSendEnabled, connectAvailable) {
     state.className = `step-state${done ? " badge success" : !available || waiting ? " badge" : ""}`;
     step.querySelector(".step-action").hidden = done || !available || waiting !== "";
   }
-  byId("step-connect-help").textContent = connectAvailable ? "관리하는 전문 계정을 연결합니다." : "새 Instagram 계정 연결이 현재 제한되어 있습니다. 연결이 열리면 이 단계부터 시작할 수 있습니다.";
+  byId("step-connect-help").textContent = connectAvailable ? "관리하는 전문 계정을 연결합니다." : "Meta 검수가 끝나기 전이라 검수에 참여하는 계정만 Instagram을 연결할 수 있습니다.";
+  byId("step-connect-contact").hidden = connectAvailable || connected;
   byId("step-send-help").textContent =
     globalSendEnabled === null
       ? "전체 발송 설정을 확인하지 못했습니다. 홈에서 발송 설정을 다시 확인해 주세요."
@@ -2432,7 +2433,13 @@ async function loadActivity() {
     not_following: "미팔로우 확인",
   };
   byId("activity").replaceChildren();
-  if (!result.activity.length) byId("activity").append(emptyState("첫 댓글을 기다리고 있습니다", "활성 규칙에 맞는 댓글을 받으면 첫 DM과 후속 메시지의 처리 상태가 여기에 표시됩니다."));
+  if (!result.activity.length) {
+    byId("activity").append(
+      connections.length
+        ? emptyState("첫 댓글을 기다리고 있습니다", "활성 규칙에 맞는 댓글을 받으면 첫 DM과 후속 메시지의 처리 상태가 여기에 표시됩니다.")
+        : emptyState("아직 처리 내역이 없습니다", "Instagram 계정을 연결하고 규칙을 켜면 첫 DM과 후속 메시지의 처리 상태가 여기에 표시됩니다."),
+    );
+  }
   for (const row of result.activity) {
     const item = node("div", `게시물 ${formatText(row.media_id)} · 첫 DM: ${formatText(labels[row.first_reply_status] ?? row.first_reply_status)}`);
     item.className = "item";

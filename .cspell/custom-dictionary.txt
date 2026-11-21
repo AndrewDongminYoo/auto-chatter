@@ -67,6 +67,8 @@ pids
 pinact
 pooler
 postbacks
+Pretendard
+pretendardvariable
 reconsent
 requestfailed
 requestfinished
