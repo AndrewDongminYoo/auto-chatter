@@ -39,6 +39,7 @@
     </header>
     <main id="main" tabindex="-1">
       <div class="page-heading">
+        <p class="page-eyebrow" aria-hidden="true"><span class="page-eyebrow-dot"></span><span id="page-eyebrow">WORKSPACE</span></p>
         <h1>자동화 작업실</h1>
         <p class="intro">댓글 조건부터 마지막 답장까지, 한곳에서 설정하세요.</p>
       </div>
@@ -52,69 +53,93 @@
       <button id="retry-load" class="secondary" hidden>다시 불러오기</button>
       <section id="auth" class="card auth-card" aria-labelledby="auth-title" hidden>
         <div class="auth-copy">
-          <img class="auth-mark" src="../icons/auto-chatter.png" width="64" height="64" alt="" />
-          <h1 id="auth-title">내 계정으로 로그인</h1>
-          <p>계정과 자동화 설정은 로그인한 사용자에게만 표시됩니다.</p>
-          <p><a href="/">AUTO-CHATTER 소개 보기</a></p>
+          <h1 class="auth-headline">댓글에서 DM까지,<br />나의 자동화 작업실</h1>
+          <p class="auth-lead">댓글에 맞춰 보낼 메시지를 미리 정해 두세요.</p>
+          <div class="auth-bubbles" aria-hidden="true">
+            <p class="auth-bubble incoming">자료 받고 싶어요!</p>
+            <p class="auth-bubble outgoing">요청하신 자료를 보내드려요.</p>
+          </div>
           <ol class="onboarding">
-            <li>
-              <span aria-hidden="true">↳</span>
-              <div>
-                <strong>Instagram 연결</strong>
-                <p>관리하는 전문 계정을 연결하세요. Meta 검수가 끝나기 전에는 검수에 참여하는 계정만 연결할 수 있습니다.</p>
-              </div>
-            </li>
-            <li>
-              <span aria-hidden="true">↳</span>
-              <div>
-                <strong>댓글 조건 설정</strong>
-                <p>키워드와 보낼 메시지를 정하세요.</p>
-              </div>
-            </li>
-            <li>
-              <span aria-hidden="true">↳</span>
-              <div>
-                <strong>확인 후 시작</strong>
-                <p>계정 발송과 규칙을 켜고, 서비스 전체 발송이 열려 있으면 시작됩니다.</p>
-              </div>
-            </li>
+            <li><span class="step-num" aria-hidden="true">01</span><strong>Instagram 연결</strong><span>관리할 전문 계정을 연결하세요.</span></li>
+            <li><span class="step-num" aria-hidden="true">02</span><strong>댓글 조건 설정</strong><span>키워드와 답장을 정하세요.</span></li>
+            <li><span class="step-num" aria-hidden="true">03</span><strong>확인 후 시작</strong><span>계정 발송과 규칙을 켜세요.</span></li>
           </ol>
+          <p class="auth-note">Meta 검수가 끝나기 전에는 검수에 참여하는 계정만 Instagram을 연결할 수 있고, 메시지는 서비스 전체 발송이 열려 있을 때 나갑니다. <a href="/">AUTO-CHATTER 소개 보기</a></p>
         </div>
-        <form id="login-form">
-          <label for="email">이메일</label><input id="email" name="email" type="email" autocomplete="username" required maxlength="254" placeholder="you@example.com" /> <label for="password">비밀번호</label
-          ><input id="password" name="password" type="password" autocomplete="current-password" required minlength="8" maxlength="256" aria-describedby="password-help" />
-          <p id="password-help" class="hint">8자 이상 입력하세요.</p>
-          <div class="auth-actions"><button type="submit" data-loading-label="로그인 중…">로그인</button><button type="button" id="signup" class="secondary" data-loading-label="가입 요청 중…">이메일로 가입</button></div>
-          <p class="hint">처음 가입하면 이메일 인증을 완료한 뒤 로그인하세요.</p>
-          <button type="button" id="resend-confirmation" class="secondary" data-loading-label="인증 메일 요청 중…">인증 메일 다시 받기</button>
-          <button type="button" id="forgot-password" class="secondary">비밀번호를 잊으셨나요?</button>
-        </form>
-        <form id="recovery-request-form" hidden>
-          <label for="recovery-email">가입한 이메일</label>
-          <input id="recovery-email" name="email" type="email" autocomplete="email" required maxlength="254" />
-          <p class="hint">가입한 이메일로 비밀번호 변경 링크를 보내드립니다.</p>
-          <div class="auth-actions">
-            <button type="submit" data-loading-label="링크 요청 중…">변경 링크 받기</button>
-            <button type="button" id="recovery-back" class="secondary">로그인으로 돌아가기</button>
-          </div>
-        </form>
-        <form id="password-reset-form" hidden>
-          <label for="new-password">새 비밀번호</label>
-          <input id="new-password" name="password" type="password" autocomplete="new-password" required minlength="8" maxlength="256" aria-describedby="new-password-help" />
-          <p id="new-password-help" class="hint">8자 이상 입력하세요.</p>
-          <div class="auth-actions">
-            <button type="submit" data-loading-label="변경 중…">비밀번호 변경</button>
-            <button type="button" id="reset-restart" class="secondary">새 링크 요청하기</button>
-          </div>
-        </form>
+        <div class="auth-forms">
+          <h2 id="auth-title">내 계정으로 로그인</h2>
+          <p class="hint">로그인하고 계정과 자동화 설정을 관리하세요.</p>
+          <form id="login-form">
+            <label for="email">이메일</label><input id="email" name="email" type="email" autocomplete="username" required maxlength="254" placeholder="you@example.com" /> <label for="password">비밀번호</label
+            ><span class="password-field"
+              ><input id="password" name="password" type="password" autocomplete="current-password" required minlength="8" maxlength="256" aria-describedby="password-help" placeholder="비밀번호 입력" /><button
+                type="button"
+                id="password-toggle"
+                class="password-toggle"
+                aria-label="비밀번호 보기"
+                aria-pressed="false"
+                aria-controls="password"
+              >
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6z" /></svg></button
+            ></span>
+            <p id="password-help" class="hint">8자 이상 입력하세요.</p>
+            <div class="auth-actions"><button type="submit" data-loading-label="로그인 중…">로그인</button><button type="button" id="signup" class="secondary" data-loading-label="가입 요청 중…">이메일로 가입</button></div>
+            <p class="hint auth-secondary-note">처음 가입했다면 이메일 인증을 완료해 주세요.</p>
+            <div class="auth-links">
+              <button type="button" id="resend-confirmation" class="link-button" data-loading-label="인증 메일 요청 중…">인증 메일 다시 받기</button>
+              <button type="button" id="forgot-password" class="link-button">비밀번호를 잊으셨나요?</button>
+            </div>
+          </form>
+          <form id="recovery-request-form" hidden>
+            <label for="recovery-email">가입한 이메일</label>
+            <input id="recovery-email" name="email" type="email" autocomplete="email" required maxlength="254" />
+            <p class="hint">가입한 이메일로 비밀번호 변경 링크를 보내드립니다.</p>
+            <div class="auth-actions">
+              <button type="submit" data-loading-label="링크 요청 중…">변경 링크 받기</button>
+              <button type="button" id="recovery-back" class="secondary">로그인으로 돌아가기</button>
+            </div>
+          </form>
+          <form id="password-reset-form" hidden>
+            <label for="new-password">새 비밀번호</label>
+            <input id="new-password" name="password" type="password" autocomplete="new-password" required minlength="8" maxlength="256" aria-describedby="new-password-help" />
+            <p id="new-password-help" class="hint">8자 이상 입력하세요.</p>
+            <div class="auth-actions">
+              <button type="submit" data-loading-label="변경 중…">비밀번호 변경</button>
+              <button type="button" id="reset-restart" class="secondary">새 링크 요청하기</button>
+            </div>
+          </form>
+        </div>
       </section>
       <div id="workspace" hidden>
         <nav class="workspace-nav" aria-label="메뉴">
-          <a href="#home">홈</a><a href="#accounts">계정</a><a href="#automation">자동화</a><a href="#inbox">인박스</a><a href="#contacts">연락처</a><a id="nav-campaigns" href="#campaigns" hidden>캠페인</a><a id="nav-reports" href="#reports" hidden>보고서</a
-          ><a href="#settings">설정</a>
+          <a href="#home"
+            ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10l9-7 9 7v11h-6v-7H9v7H3z" /></svg>홈</a
+          >
+          <a href="#accounts"
+            ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2 M14 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0z M17 7h5m-2.5-2.5v5" /></svg>계정</a
+          >
+          <a href="#automation"
+            ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h6v6H4z M14 15h6v6h-6z M7 9v6a3 3 0 0 0 3 3h4" /></svg>자동화</a
+          >
+          <a href="#inbox"
+            ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v14H3z M3 7l9 7 9-7" /></svg>인박스</a
+          >
+          <a href="#contacts"
+            ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h17v18H3z M6 8h4m-4 4h8" /></svg>연락처</a
+          >
+          <a id="nav-campaigns" href="#campaigns" hidden
+            ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10l16-6v16L3 14z M6 15l2 6h3l-2-5" /></svg>캠페인</a
+          >
+          <a id="nav-reports" href="#reports" hidden
+            ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 21h18 M6 17v-5m6 5V4m6 13V8" /></svg>보고서</a
+          >
+          <a href="#settings"
+            ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h18M3 17h18M7 4v6m9 4v6" /></svg>설정</a
+          >
         </nav>
         <div id="view-home" class="view" data-view="home" role="region" aria-label="홈" tabindex="-1" hidden>
           <div id="delivery-banner" class="delivery-banner" role="status" aria-live="polite">
+            <svg class="icon delivery-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18z M10 9v6 M14 9v6" /></svg>
             <strong id="delivery-title">발송 상태</strong>
             <p id="delivery-status"></p>
             <button type="button" id="send-settings-refresh" class="secondary">발송 설정 다시 확인</button>
@@ -157,16 +182,36 @@
           <section id="home-actions" class="card" aria-labelledby="home-actions-title" hidden>
             <h2 id="home-actions-title">작업 이어가기</h2>
             <p class="hint">계정과 규칙 설정을 확인하거나 인박스에서 대화를 이어가세요.</p>
-            <div class="section-heading"><a href="#accounts">계정·발송 설정</a><a href="#automation">댓글 규칙·플로 관리</a><a href="#inbox">인박스 열기</a></div>
+            <div class="shortcuts">
+              <a class="shortcut" href="#accounts"
+                ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2 M14 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0z M17 7h5m-2.5-2.5v5" /></svg><span><strong>계정·발송 설정</strong><small>연결 계정과 발송 권한 확인</small></span
+                ><span class="shortcut-arrow" aria-hidden="true">↗</span></a
+              >
+              <a class="shortcut" href="#automation"
+                ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h6v6H4z M14 15h6v6h-6z M7 9v6a3 3 0 0 0 3 3h4" /></svg><span><strong>댓글 규칙·플로 관리</strong><small>댓글 조건과 답장 설정</small></span
+                ><span class="shortcut-arrow" aria-hidden="true">↗</span></a
+              >
+              <a class="shortcut" href="#inbox"
+                ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v14H3z M3 7l9 7 9-7" /></svg><span><strong>인박스 열기</strong><small>응답을 기다리는 대화 확인</small></span
+                ><span class="shortcut-arrow" aria-hidden="true">↗</span></a
+              >
+            </div>
           </section>
           <section id="activity-section" class="card" aria-labelledby="activity-title">
             <div class="section-heading">
               <div>
-                <h2 id="activity-title">최근 처리 내역</h2>
+                <h2 id="activity-title">최근 처리 내역 <span id="activity-count" class="count-badge">0건</span></h2>
               </div>
               <button id="refresh-activity" class="secondary" data-loading-label="불러오는 중…">새로고침</button>
             </div>
-            <p class="hint">최근 50건입니다. 결과가 불명확한 메시지는 자동으로 다시 보내지 않습니다.</p>
+            <div class="activity-toolbar">
+              <p class="hint">최근 50건입니다. 결과가 불명확한 메시지는 자동으로 다시 보내지 않습니다.</p>
+              <label class="activity-filter-label"
+                >후속 DM 상태<select id="activity-filter">
+                  <option value="all">후속 DM 전체</option>
+                </select></label
+              >
+            </div>
             <div id="activity"></div>
           </section>
           <p id="home-reports-link" hidden><a href="#reports">상세 보고서 보기</a> · 기간별 수동 답장·플로·상담 전환·캠페인 결과를 확인합니다.</p>
