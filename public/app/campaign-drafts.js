@@ -616,10 +616,11 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     const list = byId("campaign-draft-list");
     list.replaceChildren();
     byId("campaign-draft-capacity").textContent = `보관된 초안 포함 ${drafts.length} / 100개`;
-    if (!drafts.length) list.append(node("p", "저장한 초안이 없습니다. 고정한 대상을 선택하고 메시지를 작성해 주세요.", "hint"));
+    if (!drafts.length) list.append(node("p", "저장한 초안이 없습니다. 아래에서 고정한 대상을 선택하고 메시지를 작성해 주세요.", "campaign-draft-empty"));
     for (const draft of drafts) {
       const card = node("article", "", "campaign-draft-card");
-      const label = node("h3", `${formatText(draft.name)}${draft.archived ? " · 보관됨" : ""}`);
+      const label = node("h3", formatText(draft.name));
+      if (draft.archived) label.append(" ", node("span", "보관됨", "badge"));
       const open = node("button", "초안 보기", "secondary");
       open.type = "button";
       open.setAttribute("aria-label", `${formatText(draft.name)} 초안 보기`);
