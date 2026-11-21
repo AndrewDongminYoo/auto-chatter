@@ -139,6 +139,8 @@ let pendingInvite = null;
 // Set when acceptPendingInvite reports an outcome, so the login notice does not overwrite it.
 let inviteNoticeShown = false;
 let activityRequest = 0;
+// The latest loaded activity rows, filtered on the client by follow-up status; the filter never requests the server again.
+let activityRows = [];
 let editingRuleId;
 let dirty = false;
 // The running rule archive request's token; while it is set, the rule editor and the rule cards stay locked like during
@@ -368,7 +370,7 @@ function resetSession({ broadcast = true } = {}) {
   form.elements.connection_id.replaceChildren();
   byId("connections").replaceChildren();
   byId("rules").replaceChildren();
-  byId("activity").replaceChildren();
+  resetActivity();
   byId("workspace").hidden = true;
   byId("auth").hidden = false;
   byId("logout").hidden = true;
@@ -2484,8 +2486,6 @@ function activityStatus(status) {
   if (!status) return node("span", "—", "activity-none");
   return badge(formatText(activityLabels[status] ?? status), activityTone(status));
 }
-// The latest loaded rows, filtered on the client by follow-up status; the filter never requests the server again.
-let activityRows = [];
 function renderActivity() {
   const filter = byId("activity-filter");
   const statuses = [...new Set(activityRows.map((row) => row.follow_reply_status ?? ""))];
@@ -2539,6 +2539,15 @@ function renderActivity() {
   const wrap = node("div", "", "table-scroll");
   wrap.append(table);
   byId("activity").append(wrap);
+}
+// Drops the loaded rows with the session, so a filter change cannot redraw another workspace's activity and a read
+// that started before the reset cannot write its result.
+function resetActivity() {
+  activityRequest++;
+  activityRows = [];
+  byId("activity").replaceChildren();
+  byId("activity-count").textContent = "0건";
+  byId("activity-filter").replaceChildren(new Option("후속 DM 전체", "all"));
 }
 byId("activity-filter").addEventListener("change", renderActivity);
 byId("refresh-activity").addEventListener("click", (event) => action(event.currentTarget, loadActivity));

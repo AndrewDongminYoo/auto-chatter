@@ -397,6 +397,7 @@ test("two documents clear a session change without rebroadcasting it", () => {
       "contactActivityControls",
       "contactConsentControls",
       "resetMedia",
+      "resetActivity",
       "formConditions",
       "ruleControls",
       "editorState",
@@ -569,4 +570,68 @@ test("a retired view retries after a failed refresh and preserves a newer load",
     }
     assert.equal(h.calls.filter((name) => name === "contacts").length, 1);
   }
+});
+
+test("a session reset drops the loaded activity so a filter change cannot redraw another workspace's rows", () => {
+  // A small element that keeps its children, text and options, enough for the activity renderer.
+  type Fake = { tag: string; textContent: string; className: string; value: string; children: Fake[]; options: Fake[]; dataset: Record<string, string>; scope?: string; colSpan?: number; replaceChildren: (...items: Fake[]) => void; append: (...items: Fake[]) => void };
+  const make = (tag: string): Fake => {
+    const element: Fake = {
+      tag,
+      textContent: "",
+      className: "",
+      value: "",
+      children: [],
+      options: [],
+      dataset: {},
+      replaceChildren: (...items) => {
+        element.children = items;
+        element.options = items;
+      },
+      append: (...items) => {
+        element.children.push(...items);
+        element.options.push(...items);
+      },
+    };
+    return element;
+  };
+  const text = (element: Fake): string => element.textContent + element.children.map(text).join("");
+  const nodes = new Map([
+    ["activity", make("div")],
+    ["activity-count", make("span")],
+    ["activity-filter", make("select")],
+  ]);
+  const context = vm.createContext({
+    activityRequest: 0,
+    activityRows: [],
+    byId: (id: string) => nodes.get(id),
+    connections: [{ id: "c1" }],
+    sendStatusLabels: { sent: "Meta 접수" },
+    formatText: (value: unknown) => String(value ?? "—"),
+    badge: (label: string) => Object.assign(make("span"), { textContent: label }),
+    emptyState: (title: string) => Object.assign(make("div"), { textContent: title }),
+    node: (tag: string, label: string, className = "") => Object.assign(make(tag), { textContent: label, className }),
+    Option: function (this: Fake, label: string, value: string) {
+      return Object.assign(make("option"), { textContent: label, value });
+    },
+  });
+  const begin = source.indexOf("const activityLabels = {");
+  const end = source.indexOf("\n}", source.indexOf("function resetActivity("));
+  assert.ok(begin >= 0 && end > begin, "the activity renderer and its reset are one block");
+  vm.runInContext(source.slice(begin, end + 2), context);
+  context.activityRows = [{ media_id: "previous-workspace-post", first_reply_status: "sent", follow_reply_status: "sent", follow_status: "following" }];
+  context.renderActivity();
+  assert.match(text(nodes.get("activity")!), /previous-workspace-post/);
+  const before = context.activityRequest;
+  context.resetActivity();
+  assert.ok(context.activityRequest > before, "a read started before the reset cannot write its result");
+  assert.equal(nodes.get("activity-count")!.textContent, "0건");
+  assert.deepEqual(
+    nodes.get("activity-filter")!.options.map((option) => option.value),
+    ["all"],
+  );
+  // The new session's read has not answered yet; a filter change must not bring the old rows back.
+  nodes.get("activity-filter")!.value = "sent";
+  context.renderActivity();
+  assert.doesNotMatch(text(nodes.get("activity")!), /previous-workspace-post/);
 });
