@@ -178,10 +178,28 @@ p {
   margin-bottom: var(--space-6);
 }
 body:has(#workspace:not([hidden])) .page-heading {
+  position: relative;
+  overflow: hidden;
   padding: var(--space-6) var(--space-8);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--muted);
+}
+/* As in the approved design, the illustration multiplies into the panel color and fades in from the left. */
+body:has(#workspace:not([hidden])) .page-heading::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 28%;
+  background: url("../landing/comment-to-dm.webp") center / cover no-repeat;
+  mix-blend-mode: multiply;
+  mask-image: linear-gradient(90deg, transparent, var(--foreground) 20%);
+  pointer-events: none;
+}
+body:has(#workspace:not([hidden])) .page-heading > * {
+  position: relative;
+  z-index: 1;
+  max-width: 68%;
 }
 .page-eyebrow {
   display: none;
@@ -409,7 +427,6 @@ body:has(#auth:not([hidden])) .page-heading {
 }
 /* One navigation rail; layers: skip link (2), normal document and sticky preview (auto). */
 body:has(#workspace:not([hidden])) {
-  background: var(--card);
   isolation: isolate;
 }
 body:has(#workspace:not([hidden])) main {
@@ -616,27 +633,153 @@ body:has(#workspace:not([hidden]))::before {
 #members-section .section-heading {
   margin-bottom: var(--space-3);
 }
-.account-list .item {
+/* One card per connected account: identity, message switches, connection state and data deletion. */
+.account-list {
+  display: grid;
+  gap: var(--space-4);
+}
+.account-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--card);
+}
+.account-head {
   display: flex;
   align-items: center;
-  gap: var(--space-2) var(--space-3);
-  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
+  background: var(--muted);
+  border-bottom: 1px solid var(--border);
 }
-.account-list .item > strong {
-  min-width: 150px;
-  font-size: var(--font-size-body);
+.account-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-weight: 700;
 }
-.account-list .item > .badges {
+.account-identity {
+  display: grid;
   flex: 1;
+  min-width: 0;
 }
-.account-list .item > .hint {
-  order: 1;
-  width: 100%;
+.account-identity small {
+  color: var(--muted-foreground);
+  font-size: var(--font-size-help);
+  line-height: var(--line-height-help);
+}
+.account-identity strong {
+  font-size: var(--font-size-h2);
+  line-height: var(--line-height-h2);
+  overflow-wrap: anywhere;
+}
+.account-identity .badges {
+  margin-top: var(--space-1);
+}
+.danger-link {
+  color: var(--destructive);
+}
+.account-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+}
+.account-settings,
+.account-status {
+  padding: var(--space-5) var(--space-6);
+}
+.account-status {
+  border-left: 1px solid var(--border);
+}
+.account-settings h3,
+.account-status h3 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-size-h3);
+  line-height: var(--line-height-h3);
+}
+.account-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+.account-setting .hint {
   margin: 0;
 }
-.account-list button {
-  font-size: var(--font-size-body);
-  padding: var(--space-2) var(--space-3);
+/* A switch: its text states the value, and the drawn track shows it at a glance. */
+button.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted-foreground);
+  font-size: var(--font-size-help);
+  line-height: var(--line-height-help);
+  font-weight: 600;
+}
+button.switch::after {
+  content: "";
+  width: 36px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: radial-gradient(circle at 10px 50%, var(--card) 7px, transparent 7.5px) var(--input);
+}
+button.switch[aria-checked="true"] {
+  color: var(--foreground);
+}
+button.switch[aria-checked="true"]::after {
+  background: radial-gradient(circle at 26px 50%, var(--card) 7px, transparent 7.5px) var(--primary);
+}
+button.switch:hover:not(:disabled) {
+  box-shadow: none;
+}
+.account-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-3);
+}
+.account-facts dt {
+  color: var(--muted-foreground);
+}
+.account-facts dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 700;
+}
+.account-status .hint {
+  margin: 0 0 var(--space-2);
+}
+.account-foot {
+  padding: 0 var(--space-6);
+  border-top: 1px solid var(--border);
+}
+@media (max-width: 767px) {
+  .account-body {
+    grid-template-columns: 1fr;
+  }
+  .account-status {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+  .account-head,
+  .account-settings,
+  .account-status {
+    padding: var(--space-4);
+  }
+  .account-foot {
+    padding: 0 var(--space-4);
+  }
 }
 .data-export {
   margin-top: var(--space-3);
@@ -677,13 +820,6 @@ body:has(#workspace:not([hidden]))::before {
   margin: var(--space-5) 0 var(--space-2);
   font-size: var(--font-size-body);
 }
-.account-list .item > select {
-  width: auto;
-}
-.account-list .item > .connection-data {
-  order: 2;
-  width: 100%;
-}
 .connection-data summary {
   min-height: 44px;
   padding: var(--space-2) 0;
@@ -716,10 +852,15 @@ body:has(#workspace:not([hidden]))::before {
 }
 .count {
   font-size: var(--font-size-caption);
-  color: var(--muted-foreground);
+  line-height: var(--line-height-caption);
+  color: var(--accent-foreground);
+  background: var(--muted);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-2);
   font-variant-numeric: tabular-nums;
-  margin-left: var(--space-1);
-  font-weight: 500;
+  margin-left: var(--space-2);
+  font-weight: 600;
+  vertical-align: middle;
 }
 .badges {
   display: flex;
@@ -1693,6 +1834,12 @@ section {
   }
   body:has(#workspace:not([hidden])) .page-heading {
     padding: var(--space-5);
+  }
+  body:has(#workspace:not([hidden])) .page-heading::after {
+    display: none;
+  }
+  body:has(#workspace:not([hidden])) .page-heading > * {
+    max-width: none;
   }
   .activity-table thead {
     display: none;
@@ -2746,25 +2893,31 @@ section {
 }
 /* Dark mode separates elements with surfaces, not lines: the page is the darkest layer, each section is a raised
    card, controls sit in a darker inset fill, and decorative borders recede. Light mode is unchanged. */
+/* The workspace sits on the page background and groups each section in a card, in both color schemes. */
+body:has(#workspace:not([hidden])) {
+  background: var(--background);
+}
+#workspace .card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  margin-bottom: var(--space-4);
+}
+#workspace .columns {
+  border-top: 0;
+  gap: var(--space-4);
+}
+#workspace .columns .card {
+  padding: var(--space-4);
+}
 @media (prefers-color-scheme: dark) {
-  body:has(#workspace:not([hidden])) {
-    background: var(--background);
-  }
   body:has(#workspace:not([hidden]))::before {
     border-right-color: transparent;
   }
-  #workspace .card {
-    background: var(--card);
-    border-radius: var(--radius-lg);
-    padding: var(--space-6);
-    margin-bottom: var(--space-4);
-  }
-  #workspace .columns {
-    border-top: 0;
-    gap: var(--space-4);
-  }
-  #workspace .columns .card {
-    padding: var(--space-4);
+  /* The light illustration would sit on the dark heading as a bright block, so dark mode keeps the plain panel. */
+  body:has(#workspace:not([hidden])) .page-heading::after {
+    display: none;
   }
   input,
   select,

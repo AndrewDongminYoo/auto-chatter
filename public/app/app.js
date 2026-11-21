@@ -1219,16 +1219,16 @@ function viewFromHash() {
   const view = byId(name)?.closest(".view")?.dataset.view ?? null;
   return view && viewAvailable(view) ? view : null;
 }
-// The small label above the page heading names the current view, as in the approved screen designs.
-const viewEyebrows = {
-  accounts: "ACCOUNTS",
-  automation: "AUTOMATION STUDIO",
-  campaigns: "CAMPAIGNS",
-  contacts: "CONTACTS",
-  home: "WORKSPACE HOME",
-  inbox: "INBOX",
-  reports: "REPORTS",
-  settings: "SETTINGS",
+// The page heading names the current view: a small label, the title and one line on what the view is for.
+const viewHeadings = {
+  accounts: ["ACCOUNTS", "계정 관리", "Instagram 계정을 연결하고 메시지 수신과 발송을 관리하세요."],
+  automation: ["AUTOMATION STUDIO", "자동화 작업실", "댓글 조건부터 마지막 답장까지, 한곳에서 설정하세요."],
+  campaigns: ["CAMPAIGNS", "캠페인", "동의한 대상을 고르고 보낼 메시지와 실행을 확인하세요."],
+  contacts: ["CONTACTS", "연락처", "댓글과 DM을 남긴 사람을 태그와 필터로 정리하세요."],
+  home: ["WORKSPACE HOME", "자동화 작업실", "발송 상태를 확인하고, 멈춘 작업을 이어가세요."],
+  inbox: ["INBOX", "인박스", "받은 DM을 확인하고 자동화로 다루기 어려운 대화를 직접 이어가세요."],
+  reports: ["REPORTS", "보고서", "기간별 수동 답장·플로·상담 전환·캠페인 결과를 확인하세요."],
+  settings: ["SETTINGS", "설정", "작업 공간, 운영 상태, 외부 전송, 답장 템플릿, 인박스 라벨과 멤버를 관리하세요."],
 };
 function showView(name, focus) {
   // A notice the new view's loader writes after this point still appears.
@@ -1237,7 +1237,10 @@ function showView(name, focus) {
     clearActionErrors();
   }
   currentView = name;
-  byId("page-eyebrow").textContent = viewEyebrows[name] ?? "WORKSPACE";
+  const [eyebrow, title, intro] = viewHeadings[name] ?? viewHeadings.home;
+  byId("page-eyebrow").textContent = eyebrow;
+  byId("page-title").textContent = title;
+  byId("page-intro").textContent = intro;
   void rereadGlobalSend();
   for (const view of document.querySelectorAll("#workspace .view")) view.hidden = view.dataset.view !== name;
   for (const link of document.querySelectorAll(".workspace-nav a")) {
@@ -1569,9 +1572,8 @@ async function loadWorkspace() {
   form.elements.connection_id.replaceChildren();
   if (!connections.length) byId("connections").append(connectAvailable ? emptyState("첫 Instagram 계정을 연결하세요", "관리하는 전문 계정을 연결하면 댓글 자동화를 만들 수 있습니다.") : emptyState("새 Instagram 계정을 연결할 수 없습니다", "위의 연결 제한 사유를 확인해 주세요."));
   for (const account of connections) {
-    const item = node("div", "");
-    item.className = "item";
-    item.append(node("strong", account.username ?? account.account_id));
+    const item = node("article", "", "account-card");
+    const name = account.username ?? account.account_id;
     const credentialStatus = ["missing", "expired", "valid"].includes(account.credential_status) ? account.credential_status : !account.token_registered ? "missing" : Date.parse(account.token_expires_at) > Date.now() ? "valid" : "expired";
     // Meta rejected the stored token (refresh, pre-send identity check or subscription check); the server records
     // it, display only.
@@ -1579,59 +1581,114 @@ async function loadWorkspace() {
       refresh_rejected: "Meta가 토큰 자동 갱신을 거부했습니다.",
       token_rejected: "발송 전 계정 확인이나 Meta 상태 확인에서 Meta가 토큰을 거부했습니다.",
     }[account.reauth_reason];
+    const head = node("div", "", "account-head");
+    const avatar = node("span", String(name).replace(/^@/, "").slice(0, 3), "account-avatar");
+    avatar.setAttribute("aria-hidden", "true");
+    const identity = node("div", "", "account-identity");
+    identity.append(node("small", "Instagram 전문 계정"), node("strong", `@${String(name).replace(/^@/, "")}`));
     const state = node("div", "", "badges");
     state.append(
-      badge(credentialStatus === "valid" ? "토큰 만료 전" : credentialStatus === "expired" ? "토큰 만료" : "토큰 없음", credentialStatus === "valid" ? "" : "warning"),
       ...(reauthReason ? [badge("재연결 필요", "warning")] : []),
       ...(account.subscription_missing_at ? [badge("웹후크 구독 유실", "warning")] : []),
       ...(account.deauthorized_at ? [badge("Instagram에서 권한 해제됨", "warning")] : []),
-      badge(account.active ? "수신 설정 켜짐" : "수신 설정 꺼짐", account.active && credentialStatus === "valid" ? "success" : ""),
       globalSendBadge((enabled) => globalSendAccountBadge(account.send_enabled, credentialStatus === "valid", enabled)),
     );
-    item.append(state, sendSettingsNotice(account));
-    const inboxToggle = node("button", account.inbox_enabled ? "DM 보관 끄기" : "DM 보관 켜기", "secondary");
-    inboxToggle.addEventListener("click", () => {
-      if (!account.inbox_enabled && !confirm("지금부터 받은 텍스트 DM과 확인 버튼 응답을 인박스에 보관할까요? 기존 수동 삭제 정책이 적용됩니다. 과거 메시지는 가져오지 않습니다.")) return;
-      const generation = segmentsGeneration,
-        workspaceSession = workspaceGeneration;
-      void action(inboxToggle, async () => {
-        const result = await api(`/api/connections/${account.id}/inbox`, "PUT", { enabled: !account.inbox_enabled });
-        if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
-        account.inbox_enabled = result.enabled;
-        notice(result.enabled ? "이 계정의 새 DM 보관을 켰습니다." : "새 DM 보관을 껐습니다. 기존 기록은 유지됩니다.");
-      }).then(() => {
-        if (generation === segmentsGeneration) inboxToggle.textContent = account.inbox_enabled ? "DM 보관 끄기" : "DM 보관 켜기";
-      });
-    });
-    item.append(inboxToggle);
+    identity.append(state);
+    const disconnect = node("button", "연결 해제", "link-button danger-link");
+    disconnect.type = "button";
+    disconnect.addEventListener("click", () =>
+      action(disconnect, async () => {
+        if (!confirm("이 계정의 수신·발송을 중지하고 저장한 토큰을 삭제할까요? 해제한 뒤에는 이 계정의 '데이터 삭제'에서 기존 기록을 삭제할 수 있습니다.")) return;
+        await api(`/api/connections/${account.id}`, "DELETE");
+        await loadWorkspace();
+      }),
+    );
+    head.append(avatar, identity, disconnect);
+
+    // One row per account switch: the title names the setting, the switch shows and changes its state.
+    const settingRow = (title, description, checked, disabled, onClick) => {
+      const row = node("div", "", "account-setting");
+      const text = node("div", "");
+      const label = node("strong", title);
+      label.id = `account-${account.id}-${title.replace(/\s+/g, "-")}`;
+      text.append(label, node("p", description, "hint"));
+      const toggle = node("button", checked ? "켜짐" : "꺼짐", "switch");
+      toggle.type = "button";
+      toggle.setAttribute("role", "switch");
+      toggle.setAttribute("aria-checked", String(checked));
+      toggle.setAttribute("aria-labelledby", label.id);
+      toggle.disabled = disabled;
+      toggle.addEventListener("click", () => onClick(toggle));
+      row.append(text, toggle);
+      return row;
+    };
+    const settings = node("section", "", "account-settings");
+    settings.append(node("h3", "메시지 설정"));
+    settings.append(
+      settingRow("메시지 수신", "댓글과 DM을 작업실에서 받습니다. 수신을 바꾸면 계정 발송은 꺼집니다.", account.active, credentialStatus !== "valid" && !account.active, (toggle) =>
+        action(toggle, async () => {
+          await api(`/api/connections/${account.id}`, "PATCH", { active: !account.active, send_enabled: false });
+          await loadWorkspace();
+        }),
+      ),
+      settingRow("자동 DM 발송", "댓글 규칙에 따라 답장을 보냅니다.", account.send_enabled, credentialStatus !== "valid", (toggle) =>
+        action(toggle, async () => {
+          await api(`/api/connections/${account.id}`, "PATCH", { active: true, send_enabled: !account.send_enabled });
+          await loadWorkspace();
+        }),
+      ),
+      settingRow("DM 보관", "받은 텍스트 DM과 확인 버튼 응답을 인박스에 보관합니다.", account.inbox_enabled, false, (toggle) => {
+        if (!account.inbox_enabled && !confirm("지금부터 받은 텍스트 DM과 확인 버튼 응답을 인박스에 보관할까요? 기존 수동 삭제 정책이 적용됩니다. 과거 메시지는 가져오지 않습니다.")) return;
+        const generation = segmentsGeneration,
+          workspaceSession = workspaceGeneration;
+        void action(toggle, async () => {
+          const result = await api(`/api/connections/${account.id}/inbox`, "PUT", { enabled: !account.inbox_enabled });
+          if (generation !== segmentsGeneration || workspaceSession !== workspaceGeneration) return;
+          account.inbox_enabled = result.enabled;
+          notice(result.enabled ? "이 계정의 새 DM 보관을 켰습니다." : "새 DM 보관을 껐습니다. 기존 기록은 유지됩니다.");
+        }).then(() => {
+          if (generation !== segmentsGeneration) return;
+          toggle.textContent = account.inbox_enabled ? "켜짐" : "꺼짐";
+          toggle.setAttribute("aria-checked", String(account.inbox_enabled));
+        });
+      }),
+    );
+    const sendNotice = node("details", "", "send-notice");
+    sendNotice.append(node("summary", "발송 조건 보기"), sendSettingsNotice(account));
+    settings.append(sendNotice);
+
+    const status = node("section", "", "account-status");
+    status.append(node("h3", "연결 상태"));
+    const facts = node("dl", "", "account-facts");
+    const fact = (term, value) => facts.append(node("dt", term), node("dd", value));
+    fact("연동 토큰", credentialStatus === "valid" ? "만료 전" : credentialStatus === "expired" ? "만료" : "없음");
+    fact("토큰 만료일", account.token_expires_at ? formatDate(account.token_expires_at) : "—");
+    fact("Meta 권한 · 웹훅 구독", account.deauthorized_at ? "권한 해제됨" : account.subscription_missing_at ? "구독 유실" : account.subscription_checked_at ? "필드 확인됨" : "확인 전");
+    status.append(facts);
     const reconnectHelp = connectAvailable ? "상단의 '계정 연결'에서 같은 Instagram 계정을 다시 선택해 주세요." : "연결 제한이 해제된 뒤 계정 관리자가 같은 Instagram 계정을 다시 연결할 수 있습니다.";
     const unconfirmed = account.subscription_checked_at ? "철회·권한 여부는 확인되지 않았습니다." : "철회·권한·구독 여부는 확인되지 않았습니다.";
-    item.append(
+    status.append(
       node(
         "p",
-        credentialStatus === "valid"
-          ? account.active
-            ? `토큰 만료일: ${formatDate(account.token_expires_at)} · 만료 30일 전부터 갱신을 시도합니다. ${unconfirmed}`
-            : `토큰 만료일: ${formatDate(account.token_expires_at)} · 수신 중지 중에는 갱신하지 않습니다. ${unconfirmed}`
-          : `${credentialStatus === "expired" ? "토큰이 만료됐습니다." : "연결 토큰이 없습니다."} ${reconnectHelp}`,
+        credentialStatus === "valid" ? (account.active ? `만료 30일 전부터 갱신을 시도합니다. ${unconfirmed}` : `수신 중지 중에는 갱신하지 않습니다. ${unconfirmed}`) : `${credentialStatus === "expired" ? "토큰이 만료됐습니다." : "연결 토큰이 없습니다."} ${reconnectHelp}`,
         "hint",
       ),
     );
-    if (reauthReason) item.append(node("p", `${formatDateTime(account.reauth_required_at)} · ${reauthReason} 다시 연결하기 전까지 대기 중인 답장이 발송 전 확인에서 차단될 수 있습니다. ${reconnectHelp}`, "hint"));
+    if (reauthReason) status.append(node("p", `${formatDateTime(account.reauth_required_at)} · ${reauthReason} 다시 연결하기 전까지 대기 중인 답장이 발송 전 확인에서 차단될 수 있습니다. ${reconnectHelp}`, "hint"));
     // The periodic or manual check found a required webhook subscription field missing for the stored token;
     // the server records it, display only.
     const subscriptionChecked = account.subscription_checked_at ? ` 마지막 확인: ${formatDateTime(account.subscription_checked_at)}.` : "";
     if (account.subscription_missing_at)
-      item.append(
+      status.append(
         node(
           "p",
           `${formatDateTime(account.subscription_missing_at)} 처음 기록 · Meta가 이 계정의 댓글·DM·확인 버튼 웹후크 구독 필드를 모두 반환하지 않았습니다. 새 댓글과 DM이 이 앱에 도착하지 않을 수 있습니다. ${reconnectHelp}${credentialStatus === "valid" ? " 'Meta 상태 확인'으로 구독 상태도 확인할 수 있습니다." : ""}${subscriptionChecked}`,
           "hint",
         ),
       );
-    else if (account.subscription_checked_at) item.append(node("p", `Meta가 필수 웹후크 구독 필드를 반환했습니다.${subscriptionChecked}`, "hint"));
+    else if (account.subscription_checked_at) status.append(node("p", `Meta가 필수 웹후크 구독 필드를 반환했습니다.${subscriptionChecked}`, "hint"));
     // Meta reported that the account owner removed the app in Instagram; the server disconnected the account.
-    if (account.deauthorized_at) item.append(node("p", `${formatDateTime(account.deauthorized_at)} · 계정 소유자가 Instagram에서 이 앱의 권한을 해제해 연결이 해제됐습니다. 수신과 발송, 이 계정의 댓글 규칙과 플로우가 꺼졌습니다. 다시 사용하려면 ${reconnectHelp}`, "hint"));
+    if (account.deauthorized_at) status.append(node("p", `${formatDateTime(account.deauthorized_at)} · 계정 소유자가 Instagram에서 이 앱의 권한을 해제해 연결이 해제됐습니다. 수신과 발송, 이 계정의 댓글 규칙과 플로우가 꺼졌습니다. 다시 사용하려면 ${reconnectHelp}`, "hint"));
     const healthStatus = node("p", healthResults.get(account.id) ?? "Meta 계정과 웹훅 구독 상태는 아직 확인하지 않았습니다.", "hint");
     healthResults.delete(account.id);
     healthStatus.setAttribute("role", "status");
@@ -1655,32 +1712,13 @@ async function loadWorkspace() {
         await loadWorkspace();
       }),
     );
-    item.append(healthButton, healthStatus);
-    for (const [label, active, send_enabled] of [
-      [account.send_enabled ? "발송 끄기" : "발송 켜기", true, !account.send_enabled],
-      [account.active ? "수신 중지" : "수신 재개", !account.active, false],
-    ]) {
-      const button = node("button", label);
-      button.className = "secondary";
-      button.disabled = credentialStatus !== "valid" && (active || send_enabled);
-      button.addEventListener("click", () =>
-        action(button, async () => {
-          await api(`/api/connections/${account.id}`, "PATCH", { active, send_enabled });
-          await loadWorkspace();
-        }),
-      );
-      item.append(button);
-    }
-    const disconnect = node("button", "연결 해제");
-    disconnect.className = "secondary danger";
-    disconnect.addEventListener("click", () =>
-      action(disconnect, async () => {
-        if (!confirm("이 계정의 수신·발송을 중지하고 저장한 토큰을 삭제할까요? 해제한 뒤에는 이 계정의 '데이터 삭제'에서 기존 기록을 삭제할 수 있습니다.")) return;
-        await api(`/api/connections/${account.id}`, "DELETE");
-        await loadWorkspace();
-      }),
-    );
-    item.append(disconnect, connectionData(account, generation));
+    status.append(healthButton, healthStatus);
+
+    const body = node("div", "", "account-body");
+    body.append(settings, status);
+    const footer = node("div", "", "account-foot");
+    footer.append(connectionData(account, generation));
+    item.append(head, body, footer);
     byId("connections").append(item);
     const option = node("option", account.username ?? account.account_id);
     option.value = account.id;
