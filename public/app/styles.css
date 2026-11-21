@@ -2974,9 +2974,10 @@ body:has(#workspace:not([hidden])) {
   body:has(#workspace:not([hidden]))::before {
     border-right-color: transparent;
   }
-  /* The light illustration would sit on the dark heading as a bright block, so dark mode keeps the plain panel. */
+  /* Multiplied as-is, the light illustration vanishes into the dark panel; inverted with its hue turned back, its white ground drops out under screen and the green and line work stay. */
   body:has(#workspace:not([hidden])) .page-heading::after {
-    display: none;
+    filter: invert(1) hue-rotate(180deg);
+    mix-blend-mode: screen;
   }
   input,
   select,
