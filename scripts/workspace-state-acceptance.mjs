@@ -157,7 +157,7 @@
   await until(() => !get("manual-report-download").disabled);
   rule.elements.private_reply_text.value = "아직 저장하지 않은 수정";
   rule.dispatchEvent(new Event("input", { bubbles: true }));
-  const toggle = [...get("connections").querySelectorAll("button")].find((button) => button.textContent === "발송 켜기");
+  const toggle = [...get("connections").querySelectorAll("button[role=switch]")].find((button) => get(button.getAttribute("aria-labelledby"))?.textContent === "자동 DM 발송" && button.getAttribute("aria-checked") === "false");
   check(Boolean(toggle), "Account toggle missing from fixture");
   toggle.click();
   await until(() => fixture.writes === 2 && !toggle.hasAttribute("aria-busy"));
