@@ -78,6 +78,24 @@ test("the dashboard CSP allows only same-origin scripts, with no inline or eval 
   for (const [name, sources] of policy) for (const source of sources) assert.ok(!["'unsafe-inline'", "'unsafe-eval'", "'unsafe-hashes'", "data:", "*"].includes(source), `${name} must not allow ${source}`);
 });
 
+test("the landing page CSP allows only same-origin files, with no inline, eval or connection escape", async () => {
+  const file = await readFile(new URL("_headers", publicDir), "utf8");
+  for (const path of ["/", "/landing/*"]) {
+    const headers = blockHeaders(file, path);
+    const csp = headers.filter((header) => /^content-security-policy\s*:/i.test(header));
+    assert.equal(csp.length, 1, `the ${path} block must set exactly one Content-Security-Policy`);
+    const policy = directives(csp[0]!.slice(csp[0]!.indexOf(":") + 1));
+    assert.deepEqual([...policy.keys()].sort(), ["base-uri", "default-src", "font-src", "form-action", "frame-ancestors", "img-src", "script-src", "style-src"]);
+    assert.deepEqual(policy.get("default-src"), ["'none'"]);
+    for (const name of ["font-src", "img-src", "script-src", "style-src"]) assert.deepEqual(policy.get(name), ["'self'"], `${path} ${name}`);
+    for (const name of ["base-uri", "form-action", "frame-ancestors"]) assert.deepEqual(policy.get(name), ["'none'"], `${path} ${name}`);
+    assert.deepEqual(
+      headers.filter((header) => /^cache-control\s*:/i.test(header)),
+      ["Cache-Control: no-cache"],
+    );
+  }
+});
+
 test("the dashboard files are revalidated on every load because their names are not versioned", async () => {
   // A max-age or immutable here would keep running the previous scripts after a deploy that changed the API they
   // call; no-store would download every unchanged file again on each visit (#199).
@@ -88,11 +106,21 @@ test("the dashboard files are revalidated on every load because their names are 
 
 // The dashboard scripts the sink scan reads; the page test refuses any script that is not one of them.
 const scannedScripts = async () => (await readdir(appDir)).filter((name) => name.endsWith(".js"));
+// The landing page scripts, read by the same sink scan and checked against the landing page the same way.
+const landingDir = new URL("landing/", publicDir);
+const scannedLandingScripts = async () => (await readdir(landingDir)).filter((name) => name.endsWith(".js"));
 
 test("public/ holds no file the sink scan does not read that a browser could run", async () => {
   // Wrangler serves all of public/ same-origin, so any other script there could be loaded through a script tag, a
   // static or dynamic import or a worker without being scanned. Every served file must match this allowlist.
-  const allowed = [/^_headers$/, /^app\/[a-z0-9-]+\.(?:js|html|css)$/, /^icons\/[a-z0-9-]+\.png$/];
+  const allowed = [
+    /^_headers$/,
+    /^app\/[a-z0-9-]+\.(?:js|html|css)$/,
+    /^fonts\/pretendard-1\.3\.9\/(?:LICENSE\.txt|pretendardvariable-dynamic-subset\.css|woff2-dynamic-subset\/PretendardVariable\.subset\.\d+\.woff2)$/,
+    /^icons\/[a-z0-9-]+\.png$/,
+    /^index\.html$/,
+    /^landing\/[a-z0-9-]+\.(?:js|css|webp)$/,
+  ];
   const entries = await readdir(publicDir, { recursive: true, withFileTypes: true });
   const files = entries.filter((entry) => entry.isFile());
   assert.ok(files.length > 0);
@@ -116,6 +144,32 @@ test("dashboard scripts write user data as text, never through an HTML or code s
   for (const name of files) {
     const source = await readFile(new URL(name, appDir), "utf8");
     assert.doesNotMatch(source, sinks, `${name} must not use an HTML or code sink`);
+  }
+  const landing = await scannedLandingScripts();
+  assert.ok(landing.length > 0);
+  for (const name of landing) {
+    const source = await readFile(new URL(name, landingDir), "utf8");
+    assert.doesNotMatch(source, sinks, `landing/${name} must not use an HTML or code sink`);
+  }
+});
+
+test("the landing page carries no inline script or inline event handler", async () => {
+  const html = await readFile(new URL("index.html", publicDir), "utf8");
+  const scanned = await scannedLandingScripts();
+  // Every script must be one of the landing files the sink scan reads, loaded by its root-relative path.
+  const tags = html.match(/<script\b[^>]*>/gi) ?? [];
+  assert.ok(tags.length > 0);
+  for (const tag of tags) {
+    const src = /\ssrc="\/landing\/([^"/]+)"/.exec(tag)?.[1];
+    assert.ok(src && scanned.includes(src), `only scanned landing script files are allowed: ${tag}`);
+  }
+  assert.doesNotMatch(html, /<style\b/i, "the landing page keeps its styles in landing.css");
+  const unquoted = html.replace(/"[^"]*"|'[^']*'/g, '""');
+  assert.doesNotMatch(unquoted, /<[^>]+\s(?:on[a-z]+|style)\s*=/i, "inline event handlers and style attributes are not allowed");
+  assert.doesNotMatch(html, /\bjavascript:/i);
+  // Every stylesheet, image and font comes from this origin, so the page sends no visitor request to a third party.
+  for (const match of html.matchAll(/\s(?:src|href)="([^"]+)"/g)) {
+    assert.match(match[1]!, /^(?:\/(?!\/)|#)/, `the landing page refers only to its own origin: ${match[1]}`);
   }
 });
 
