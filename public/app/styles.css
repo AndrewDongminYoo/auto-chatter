@@ -2755,6 +2755,7 @@ section {
   min-width: 0;
 }
 
+#campaign-report-form,
 #manual-report-form,
 #flow-report-form,
 #handoff-report-form {
@@ -2762,6 +2763,27 @@ section {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   align-items: end;
   gap: var(--space-4);
+}
+/* A label's own bottom margin would lift its input above the submit button that the grid aligns to the row end. */
+#campaign-report-form label,
+#manual-report-form label,
+#flow-report-form label,
+#handoff-report-form label {
+  margin-bottom: 0;
+}
+/* A result group's title shows only once the group has counts, so a report that has not been run lists no bare titles. */
+.view h3:has(+ .manual-report-counts:empty) {
+  display: none;
+}
+/* The page heading already names the view, so its intro and refresh button sit on one line above the report cards. */
+.reports-toolbar p {
+  margin: 0;
+}
+.reports-toolbar button {
+  flex: none;
+}
+.manual-report-counts:empty {
+  margin: 0;
 }
 .manual-report-counts {
   display: grid;
