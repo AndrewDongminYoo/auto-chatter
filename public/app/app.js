@@ -1387,6 +1387,7 @@ function renderSendSettings() {
   const element = byId("rule-send-settings");
   const text = globalSendDeliveryStatus(globalSendEnabled, instagramConnectAvailable, account, form.elements.enabled.checked);
   if (element.textContent !== text) element.textContent = text;
+  byId("rule-send-title").textContent = globalSendEnabled === null ? "전체 발송 설정 확인 필요" : globalSendEnabled ? "발송 조건" : "전체 발송 중지";
 }
 function sendSettingsNotice(account, ruleEnabled) {
   const element = node("p", "", "hint");
@@ -1684,13 +1685,17 @@ async function loadWorkspace() {
       globalSendBadge((enabled) => globalSendRuleBadge(rule.enabled, enabled)),
       badge(rule.follow_gate_enabled ? "팔로우 확인" : "바로 답장"),
     );
-    item.append(
+    item.append(state, node("p", rule.match_mode === "all" ? "모든 댓글" : `${rule.match_mode === "exact" ? "정확히 일치" : "키워드 포함"} · ${(rule.keywords.length ? rule.keywords : [rule.keyword]).join(", ")}`, "rule-summary"));
+    // The full send guidance stays one click away; the badges above already carry the state.
+    const notice = node("details", "", "send-notice");
+    notice.append(
+      node("summary", "발송 조건 보기"),
       sendSettingsNotice(
         connections.find((account) => account.id === rule.connection_id),
         rule.enabled,
       ),
     );
-    item.append(state, node("p", rule.match_mode === "all" ? "모든 댓글" : `${rule.match_mode === "exact" ? "정확히 일치" : "키워드 포함"} · ${(rule.keywords.length ? rule.keywords : [rule.keyword]).join(", ")}`, "rule-summary"));
+    item.append(notice);
     const button = node("button", "수정");
     button.className = "secondary";
     button.addEventListener("click", () => {

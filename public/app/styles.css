@@ -1,7 +1,8 @@
 :root {
   color-scheme: light;
   font:
-    var(--font-size-body) / var(--line-height-body) "Apple SD Gothic Neo",
+    var(--font-size-body) / var(--line-height-body) "Pretendard Variable",
+    "Apple SD Gothic Neo",
     "Malgun Gothic",
     sans-serif;
   color: var(--foreground);
@@ -322,10 +323,39 @@ body:has(#workspace:not([hidden])) main {
   font-weight: 700;
   border-radius: var(--radius);
 }
-.workspace-nav a:hover,
-.workspace-nav a[aria-current] {
+.workspace-nav a:hover {
   color: var(--primary);
   background: var(--muted);
+}
+.workspace-nav a[aria-current] {
+  color: var(--accent-foreground);
+  background: var(--accent);
+}
+/* The automation screen keeps the send guidance one click away: a short state line, the detail inside. */
+.send-summary {
+  margin: var(--space-4) 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--muted);
+}
+.send-summary p {
+  margin: var(--space-2) 0 0;
+}
+.send-notice {
+  margin: var(--space-2) 0;
+}
+.send-notice summary {
+  font-size: var(--font-size-help);
+  line-height: var(--line-height-help);
+  color: var(--muted-foreground);
+}
+.step-num {
+  margin-right: var(--space-2);
+  font-family: "Courier New", monospace;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--accent-foreground);
 }
 body:has(#workspace:not([hidden]))::before {
   content: "";
@@ -1389,6 +1419,20 @@ footer a {
 }
 section {
   scroll-margin-top: 24px;
+}
+/* On wide screens the header stays at the top beside the fixed navigation rail, so content clears its 76px height. */
+@media (min-width: 768px) {
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+  section {
+    scroll-margin-top: 100px;
+  }
+  .conversation-preview {
+    top: 100px;
+  }
 }
 .skip-link {
   position: fixed;
