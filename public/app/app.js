@@ -2608,8 +2608,12 @@ function contactCard(contact) {
   const item = node("article", "", "contact-row");
   item.dataset.connectionId = contact.connection_id;
   const summary = node("div", "", "contact-summary");
-  summary.append(node("h3", `참여자 ${formatText(contact.sender_id)}`), node("p", `연결 계정 ${contact.username ? `@${contact.username}` : "이름 확인 전"} · 댓글 ${formatCount(contact.comment_count, { useGrouping: false })}개`, "hint"));
-  const automation = node("div");
+  const identity = node("div", "", "contact-identity");
+  identity.append(
+    node("h3", `참여자 ${formatText(contact.sender_id)}`),
+    // `username` is the connected account's name, not the contact's; it only tells contacts apart when several accounts are connected.
+    node("p", `${connections.length > 1 ? `연결 계정 ${contact.username ? `@${contact.username}` : "이름 확인 전"} · ` : ""}댓글 ${formatCount(contact.comment_count, { useGrouping: false })}개 · 최근 댓글 ${formatDateTime(contact.last_comment_at)}`, "hint"),
+  );
   const automationStatus = badge("");
   const toggle = node("button", "", "secondary");
   toggle.type = "button";
@@ -2643,13 +2647,13 @@ function contactCard(contact) {
       if (generation === contactsGeneration) renderAutomation();
     });
   });
-  automation.append(automationStatus, node("p", "중지 중에는 새 확인 답장을 자동 처리하지 않습니다. 대기 발송은 보관됩니다.", "hint"), toggle);
-  summary.append(automation);
-  summary.append(node("p", `최근 댓글 · ${formatDateTime(contact.last_comment_at)}`, "hint"));
   const tags = node("div", "", "badges");
   for (const tag of contact.tags) tags.append(badge(tag));
   if (!contact.tags.length) tags.append(node("span", "태그 없음", "hint"));
-  summary.append(tags);
+  const badges = node("div", "", "badges");
+  badges.append(automationStatus, tags);
+  identity.append(badges);
+  summary.append(identity, toggle);
   const edit = document.createElement("details");
   edit.append(node("summary", "태그 편집"));
   const editor = document.createElement("form");
@@ -2704,18 +2708,18 @@ function contactCard(contact) {
     });
   });
   edit.append(editor);
-  const editors = node("div");
+  const editors = node("div", "", "contact-tools");
   editors.append(edit);
-  item.append(summary, editors);
   const fieldSummary = node("div", "", "contact-field-values");
   const fieldNames = new Map(contactFields.map((field) => [field.id, field]));
   for (const [id, value] of Object.entries(contact.fields || {})) {
     const field = fieldNames.get(id);
     if (field) fieldSummary.append(node("p", `${formatText(field.name)} · ${displayFieldValue(value)}`, "hint"));
   }
-  summary.append(fieldSummary);
+  identity.append(fieldSummary);
   if (contactFields.length) editors.append(contactFieldEditor(contact, fieldSummary));
-  item.append(contactDetail(contact));
+  editors.append(contactDetail(contact));
+  item.append(summary, editors);
   return item;
 }
 // Independent read-only disclosure: never re-render the tag/field editors or replace their drafts.
