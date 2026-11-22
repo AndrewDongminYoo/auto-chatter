@@ -1313,6 +1313,12 @@ select:disabled {
 #inbox-conversations .conversation-line {
   display: block;
 }
+#inbox-conversations .conversation-sender {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
 #inbox-conversations .conversation-snippet {
   overflow: hidden;
   text-overflow: ellipsis;

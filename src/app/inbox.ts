@@ -83,6 +83,14 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
        (SELECT left(last.text,80) FROM instagram_inbox_messages last
         WHERE last.workspace_id=m.workspace_id AND last.connection_id=m.connection_id AND last.recipient_id=m.recipient_id
         ORDER BY last.message_at DESC,last.id DESC LIMIT 1) AS last_message_preview,
+       -- The commenter's newest stored username, only through a confirmed identity link of the same workspace and
+       -- connection. It is a display hint: it does not merge comment and DM IDs or prove consent.
+       (SELECT e.sender_username FROM instagram_contact_identity_links link
+        JOIN instagram_comment_events e ON e.workspace_id=link.workspace_id AND e.connection_id=link.connection_id
+          AND e.sender_id=link.sender_id
+        WHERE link.workspace_id=m.workspace_id AND link.connection_id=m.connection_id AND link.recipient_id=m.recipient_id
+          AND link.state='confirmed' AND e.sender_username IS NOT NULL
+        ORDER BY e.created_at DESC,e.id DESC LIMIT 1) AS sender_username,
        m.last_read_message_id::text AS last_read_message_id,m.last_message_us::text AS last_message_us,${STATE_COLUMNS},
        jsonb_build_object('version',coalesce(sets.version,0),
          'labels',${labelsJson("m.workspace_id", "coalesce(sets.label_ids,'{}')")}) AS label_set,
