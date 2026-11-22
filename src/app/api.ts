@@ -222,8 +222,10 @@ export async function appApi(
         const result = await recordConsentEvent(pool, user, consentEvent[1]!, await readJson(request));
         return json(result, result.applied ? 201 : 200);
       }
+      // A check calls Meta and writes the subscription record, so it is a POST and passes the same-origin guard above;
+      // a GET would ride a cross-site navigation, which carries the SameSite=Lax session cookie.
       const health = /^\/api\/connections\/([a-f0-9-]+)\/health$/.exec(url.pathname);
-      if (health && request.method === "GET") {
+      if (health && request.method === "POST") {
         if (!env.AUTH_IP_LIMIT) throw new ApiError(503, "health_unavailable");
         const allowance = await env.AUTH_IP_LIMIT.limit({ key: `connection-health:${user.id}` });
         if (!allowance.success) throw new ApiError(429, "health_rate_limited");

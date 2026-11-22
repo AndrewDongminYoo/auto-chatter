@@ -413,9 +413,10 @@ test("another workspace's connection cannot trigger a Graph read", async () => {
   assert.deepEqual(await response.json(), { error: "connection_not_found" });
 });
 
-const healthRequest = () =>
+const healthRequest = (method = "POST", origin: string | null = "https://app.test") =>
   new Request(`https://app.test/api/connections/${connectionId}/health`, {
-    headers: { cookie: "__Host-ac-access=test-session" },
+    method,
+    headers: { cookie: "__Host-ac-access=test-session", ...(origin ? { origin } : {}) },
   });
 
 function healthFetch(me: Response, subscriptions?: Response) {
@@ -732,6 +733,17 @@ test("connection health distinguishes token expiry, account access and webhook s
     const response = await appApi(healthRequest(), env, () => pool, graph.fetchImpl);
     assert.equal((await response.json()).status, expected);
     assert.deepEqual(graph.paths, []);
+  }
+  // A check writes the subscription record, so a cross-site navigation (GET) or a cross-origin POST never runs one.
+  for (const [request, status] of [
+    [healthRequest("GET"), 404],
+    [healthRequest("POST", "https://evil.test"), 403],
+    [healthRequest("POST", null), 403],
+  ] as const) {
+    const graph = healthFetch(Response.json({ user_id: "123" }));
+    const response = await appApi(request, env, () => mediaPool(), graph.fetchImpl);
+    assert.equal(response.status, status);
+    assert.deepEqual(graph.paths, [], `${request.method} ${request.headers.get("origin")} must not call Meta`);
   }
 });
 
