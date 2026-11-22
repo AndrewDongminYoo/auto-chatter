@@ -1031,8 +1031,14 @@
             </details>
             <p id="contacts-status" class="hint" role="status" aria-live="polite"></p>
             <p class="hint">자동화를 중지한 사람의 새 확인 답장은 자동으로 처리하지 않으며, 대기 중인 발송은 보관됩니다.</p>
-            <div id="contacts-list" class="contacts-list"></div>
-            <button id="contacts-more" class="secondary" hidden>연락처 더 보기</button>
+            <div class="contacts-layout">
+              <section class="contacts-panel" aria-labelledby="contacts-list-title">
+                <h3 id="contacts-list-title" class="contacts-panel-head">연락처 목록</h3>
+                <div id="contacts-list" class="contacts-list"></div>
+                <button id="contacts-more" class="secondary" hidden>연락처 더 보기</button>
+              </section>
+              <article id="contacts-detail" class="contacts-panel contacts-detail" aria-label="선택한 연락처의 상세 보기" hidden></article>
+            </div>
             <details id="contacts-tools" class="contacts-tools">
               <summary>관리 도구</summary>
               <div id="segment-snapshots" hidden>

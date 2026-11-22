@@ -75,6 +75,10 @@ let contactsBusy = false;
 let contactsSaving = false;
 let contactsQuery = "";
 const contactsDirty = new Set();
+// The contact whose detail panel is open, and the counter that retires the panel's pending responses.
+let selectedContact = null;
+let contactSelection = 0;
+const contactRowSelect = new WeakMap();
 // Connections deleted since the current contact list generation began; later pages drop their contacts.
 const purgedContactConnections = new Set();
 let contactSegments = [];
@@ -345,6 +349,7 @@ function resetSession({ broadcast = true } = {}) {
   byId("segment-save").reset();
   byId("segments-status").textContent = "";
   segmentControls();
+  clearContactDetail();
   byId("contacts-list").replaceChildren();
   byId("contacts-filter").reset();
   contactTagControls();
@@ -776,6 +781,7 @@ function forgetDeletedConnection(connectionId) {
   invalidateContactExport("연락처 기록이 삭제되어 진행 중인 내보내기를 취소했습니다. 다시 요청하면 현재 저장된 정보로 만듭니다.");
   purgedContactConnections.add(connectionId);
   for (const key of contactsDirty) if (key.startsWith(`${connectionId}:`)) contactsDirty.delete(key);
+  if (selectedContact?.contact.connection_id === connectionId) clearContactDetail();
   for (const card of byId("contacts-list").querySelectorAll(".contact-row")) if (card.dataset.connectionId === connectionId) card.remove();
   inbox.forgetConnection(connectionId);
   if (!contactsDirty.size && !contactsSaving) void loadContacts();
@@ -2604,85 +2610,169 @@ function initializeContacts() {
 function canReloadContacts() {
   return !segmentBusy && !fieldBusy && !contactsSaving && (!contactsDirty.size || confirm("저장하지 않은 연락처 변경 사항을 버릴까요?"));
 }
-function contactCard(contact) {
-  const item = node("article", "", "contact-row");
-  item.dataset.connectionId = contact.connection_id;
-  const summary = node("div", "", "contact-summary");
-  const identity = node("div", "", "contact-identity");
-  identity.append(
+// The list shows one row per contact; the panel beside it shows the selected contact. Every select and every clear
+// advances contactSelection, so a late detail, identity-link or save response for an earlier contact is dropped.
+// `username` is the connected account's name, not the contact's; it only tells contacts apart when several accounts are connected.
+function contactAccountLabel(contact) {
+  return connections.length > 1 ? `연결 계정 ${contact.username ? `@${contact.username}` : "이름 확인 전"} · ` : "";
+}
+function contactRow(contact) {
+  const row = node("button", "", "contact-row");
+  row.type = "button";
+  row.dataset.connectionId = contact.connection_id;
+  row.setAttribute("aria-pressed", "false");
+  const status = node("span", "", "contact-row-status");
+  const facts = node("span", "", "contact-row-facts");
+  row.append(
     // `sender_username` is the commenter's own name when a comment carried one; the ID stays visible beside it.
-    node("h3", contact.sender_username ? `@${formatText(contact.sender_username)}` : `참여자 ${formatText(contact.sender_id)}`),
-    // `username` is the connected account's name, not the contact's; it only tells contacts apart when several accounts are connected.
-    node(
-      "p",
-      `${contact.sender_username ? `참여자 ${formatText(contact.sender_id)} · ` : ""}${connections.length > 1 ? `연결 계정 ${contact.username ? `@${contact.username}` : "이름 확인 전"} · ` : ""}댓글 ${formatCount(contact.comment_count, { useGrouping: false })}개 · 최근 댓글 ${formatDateTime(contact.last_comment_at)}`,
-      "hint",
-    ),
+    node("strong", contact.sender_username ? `@${formatText(contact.sender_username)}` : `참여자 ${formatText(contact.sender_id)}`, "contact-row-name"),
+    facts,
+    status,
   );
-  const automationStatus = badge("");
-  const toggle = node("button", "", "secondary");
-  toggle.type = "button";
-  toggle.dataset.automationToggle = "";
-  const renderAutomation = () => {
-    automationStatus.textContent = contact.automation_paused ? "자동화 중지 중" : "자동화 허용";
-    automationStatus.className = `badge${contact.automation_paused ? " warning" : ""}`;
-    toggle.textContent = contact.automation_paused ? "자동화 재개" : "자동화 중지";
-    toggle.setAttribute("aria-label", `${contact.sender_id} ${toggle.textContent}`);
+  // A detail refresh updates the comment count and time as well as tags and pause state, so the row redraws all of them.
+  const renderRow = () => {
+    facts.textContent = `${contact.sender_username ? `참여자 ${formatText(contact.sender_id)} · ` : ""}${contactAccountLabel(contact)}댓글 ${formatCount(contact.comment_count, { useGrouping: false })}개 · 최근 댓글 ${formatDateTime(contact.last_comment_at)}`;
+    status.replaceChildren(node("span", contact.automation_paused ? "자동화 중지됨" : "자동화 허용", `badge status${contact.automation_paused ? " off" : ""}`), node("span", contact.tags.length ? contact.tags.join(" · ") : "태그 없음", "contact-row-tags"));
   };
-  renderAutomation();
-  toggle.addEventListener("click", () => {
-    if (contactsSaving || contactsBusy || fieldBusy || segmentBusy) return;
-    const paused = !contact.automation_paused;
-    if (!paused && !confirm("자동화를 재개할까요? 응답 가능 시간이 남은 대기 메시지는 다음 워커 실행에서 발송될 수 있습니다.")) return;
-    const generation = contactsGeneration;
-    void action(toggle, async () => {
-      contactsSaving = true;
-      try {
-        const saved = await api(`/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}/automation`, "PUT", { paused });
-        if (generation !== contactsGeneration) return;
-        contact.automation_paused = saved.automation_paused;
-        renderAutomation();
-        notice(paused ? "자동화를 중지했습니다. 이미 전송 중인 메시지는 취소할 수 없습니다." : "자동화를 재개했습니다. 대기 메시지는 기존 발송 정책을 다시 확인합니다.");
-      } catch (error) {
-        if (generation === contactsGeneration) throw error;
-      } finally {
-        if (generation === contactsGeneration) contactsSaving = false;
-      }
-    }).finally(() => {
-      if (generation === contactsGeneration) renderAutomation();
-    });
-  });
-  const tags = node("div", "", "badges");
-  for (const tag of contact.tags) tags.append(badge(tag));
-  if (!contact.tags.length) tags.append(node("span", "태그 없음", "hint"));
-  const badges = node("div", "", "badges");
-  badges.append(automationStatus, tags);
-  identity.append(badges);
-  summary.append(identity, toggle);
-  const edit = document.createElement("details");
-  edit.append(node("summary", "태그 편집"));
-  const editor = document.createElement("form");
+  renderRow();
+  const select = (reveal = false) => selectContact(contact, row, renderRow, reveal);
+  contactRowSelect.set(row, select);
+  row.addEventListener("click", () => select(true));
+  return row;
+}
+// Selecting replaces the panel and its editors, so it waits for a save and asks before dropping an unsaved draft.
+// Only the selected contact has editors, so every key in contactsDirty is that contact's.
+// `reveal` is set only by an explicit row activation, so the automatic first selection after a load never scrolls the page.
+function selectContact(contact, row, renderRow, reveal = false) {
+  if (selectedContact?.row === row) {
+    if (reveal) revealContactDetail();
+    return;
+  }
+  if (contactsSaving) return;
+  if (contactsDirty.size && !confirm("저장하지 않은 연락처 변경 사항을 버릴까요?")) return;
+  contactsDirty.clear();
+  clearContactDetail();
+  selectedContact = { contact, row };
+  for (const item of byId("contacts-list").querySelectorAll(".contact-row")) item.setAttribute("aria-pressed", String(item === row));
+  const panel = byId("contacts-detail");
+  panel.replaceChildren(...contactDetail(contact, renderRow));
+  panel.hidden = false;
+  if (reveal) revealContactDetail();
+}
+// An explicit activation moves focus to the detail heading, so the next Tab reaches the detail controls, not the next row.
+// The detail panel is not sticky, so after scrolling down a long list its top can be off screen.
+function revealContactDetail() {
+  const panel = byId("contacts-detail");
+  panel.querySelector(".contact-detail-heading")?.focus({ preventScroll: true });
+  const { top } = panel.getBoundingClientRect();
+  if (top >= 0 && top < innerHeight) return;
+  panel.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+}
+function clearContactDetail() {
+  contactSelection++;
+  selectedContact = null;
+  for (const item of byId("contacts-list").querySelectorAll(".contact-row")) item.setAttribute("aria-pressed", "false");
+  byId("contacts-detail").replaceChildren();
+  byId("contacts-detail").hidden = true;
+}
+function contactSection(title, className = "") {
+  const part = node("section", "", `contact-detail-section ${className}`.trim());
+  part.append(node("h4", title));
+  return part;
+}
+const consentPurposeLabels = [
+  ["service_reply", "서비스 답장"],
+  ["marketing", "마케팅"],
+];
+const consentEvidenceLabels = { explicit: "직접 확인", comment: "댓글", inbound_dm: "받은 DM", import: "가져온 자료" };
+// One column per identity: the comment sender, then each DM recipient. A column reads only its own identity's records.
+// "DM 기준" names the only conversation, so a paged list (another page exists or this is not the first) names each recipient.
+function contactConsentTable(detail, paged) {
+  const columns = [["댓글 기준", detail.consent]];
+  const single = detail.conversations.length === 1 && !paged;
+  for (const conversation of detail.conversations) columns.push([single ? "DM 기준" : `DM 상대 ${formatText(conversation.recipient_id)}`, conversation.consent]);
+  const table = node("table", "", "contact-consent-table");
+  table.setAttribute("aria-label", "댓글과 DM 대화별 동의 기록");
+  const head = node("thead");
+  const headRow = node("tr");
+  headRow.append(node("th", "동의 항목"));
+  for (const [label] of columns) headRow.append(node("th", label));
+  head.append(headRow);
+  const body = node("tbody");
+  for (const [purpose, label] of consentPurposeLabels) {
+    const row = node("tr");
+    const name = node("th", label);
+    name.scope = "row";
+    row.append(name);
+    for (const [, records] of columns) {
+      const record = records.find((item) => item.purpose === purpose);
+      const cell = node("td");
+      if (record && record.decision !== "revoke") cell.append(node("span", "동의 기록", "badge success"));
+      else cell.append(node("span", record ? "철회 기록" : "기록 없음", "contact-consent-no"));
+      row.append(cell);
+    }
+    body.append(row);
+  }
+  table.append(head, body);
+  const wrapper = node("div", "", "contact-consent-scroll");
+  // Several DM columns can scroll sideways; a named, focusable region lets the keyboard reach them in every browser.
+  wrapper.tabIndex = 0;
+  wrapper.setAttribute("role", "region");
+  wrapper.setAttribute("aria-label", "동의 요약 표");
+  wrapper.append(table);
+  return wrapper;
+}
+function contactDetail(contact, renderRow) {
+  const selection = contactSelection;
+  const generation = contactsGeneration;
+  const selected = () => selection === contactSelection && generation === contactsGeneration;
+  const date = (value) => formatDateTime(value);
+  const top = node("div", "", "contact-detail-top");
+  const actions = node("div", "", "contact-detail-actions");
+  // The bar names the contact, so edits below it stay attributable after the list scrolls out of view.
+  const heading = node("div", "", "contact-detail-heading");
+  heading.tabIndex = -1;
+  heading.append(node("span", "상세 보기", "contact-detail-label"), node("strong", contact.sender_username ? `@${formatText(contact.sender_username)}` : `참여자 ${formatText(contact.sender_id)}`, "contact-detail-name"));
+  // With several accounts connected the same person can appear under each, so the bar names the account the edits apply to.
+  const account = contactAccountLabel(contact).replace(/ · $/, "");
+  const identity = [contact.sender_username ? `참여자 ${formatText(contact.sender_id)}` : "", account].filter(Boolean).join(" · ");
+  if (identity) heading.append(node("span", identity, "contact-detail-id"));
+  // A phone-width row cuts its tags to one line, so the bar lists them in full there (styles.css shows it only then).
+  const tagLine = node("div", "", "badges contact-detail-tags");
+  const renderTags = () => {
+    tagLine.replaceChildren(...contact.tags.map((tag) => node("span", formatText(tag), "badge")));
+    tagLine.hidden = !contact.tags.length;
+  };
+  renderTags();
+  heading.append(tagLine);
+  top.append(heading, actions);
+
+  const tagEditor = document.createElement("form");
+  tagEditor.id = "contact-tag-editor";
+  tagEditor.className = "contact-detail-editor";
+  tagEditor.hidden = true;
   const label = node("label", "태그");
   const input = document.createElement("textarea");
   input.rows = 3;
   input.maxLength = 1000;
   input.value = contact.tags.join("\n");
   label.append(input);
-  const hint = node("p", "한 줄에 하나씩, 최대 20개·각 40자. 대소문자는 구분하지 않습니다. 모두 지우고 저장하면 태그가 제거됩니다.", "hint");
-  const hintId = `contact-help-${contact.connection_id}-${contact.sender_id}`;
-  hint.id = hintId;
-  input.setAttribute("aria-describedby", hintId);
+  const hint = node("p", "한 줄에 하나씩, 최대 20개·각 40자까지 입력합니다. 대소문자는 구분하지 않습니다. 모두 지우고 저장하면 태그가 제거됩니다.", "hint");
+  hint.id = "contact-tag-help";
+  input.setAttribute("aria-describedby", hint.id);
   const save = node("button", "태그 저장");
   save.type = "submit";
   save.dataset.loadingLabel = "저장 중…";
-  editor.append(label, hint, save);
+  tagEditor.append(label, hint, save);
   const key = `${contact.connection_id}:${contact.sender_id}`;
+  // Counts the saves that finished in this detail, per kind; a detail read that a save overtook must not restore that kind's state from before it.
+  const saves = { automation: 0, fields: 0, tags: 0 };
   input.addEventListener("input", () => {
     if (input.value !== contact.tags.join("\n")) contactsDirty.add(key);
     else contactsDirty.delete(key);
     input.setCustomValidity("");
   });
-  editor.addEventListener("submit", (event) => {
+  tagEditor.addEventListener("submit", (event) => {
     event.preventDefault();
     if (contactsSaving || contactsBusy || fieldBusy) return;
     const values = list(input.value);
@@ -2691,7 +2781,6 @@ function contactCard(contact) {
       input.reportValidity();
       return;
     }
-    const generation = contactsGeneration;
     void action(save, async () => {
       contactsSaving = true;
       input.disabled = true;
@@ -2701,10 +2790,12 @@ function contactCard(contact) {
         });
         if (generation !== contactsGeneration) return;
         contact.tags = result.tags;
+        saves.tags++;
+        renderRow();
+        if (!selected()) return;
+        renderTags();
         input.value = result.tags.join("\n");
         contactsDirty.delete(key);
-        tags.replaceChildren(...result.tags.map((value) => badge(value)));
-        if (!result.tags.length) tags.append(node("span", "태그 없음", "hint"));
         notice("태그를 저장했습니다. 필터 결과를 갱신하려면 필터를 다시 적용해 주세요.");
       } finally {
         input.disabled = false;
@@ -2712,142 +2803,270 @@ function contactCard(contact) {
       }
     });
   });
-  edit.append(editor);
-  const editors = node("div", "", "contact-tools");
-  editors.append(edit);
-  const fieldSummary = node("div", "", "contact-field-values");
-  const fieldNames = new Map(contactFields.map((field) => [field.id, field]));
-  for (const [id, value] of Object.entries(contact.fields || {})) {
-    const field = fieldNames.get(id);
-    if (field) fieldSummary.append(node("p", `${formatText(field.name)} · ${displayFieldValue(value)}`, "hint"));
+
+  // Shown only when a stored value exists; the values come from the list row and change with each field save.
+  // A detail read names every active field, so a field created after the field list loaded still shows its stored value.
+  const fieldsSection = contactSection("추가 정보");
+  const fieldValues = node("dl", "", "contact-detail-values");
+  fieldsSection.append(fieldValues);
+  let detailFields = [];
+  const renderFields = () => {
+    fieldValues.replaceChildren();
+    const known = new Set(detailFields.map((field) => field.id));
+    for (const field of [...detailFields, ...contactFields.filter((item) => !known.has(item.id))]) {
+      if (!Object.hasOwn(contact.fields || {}, field.id)) continue;
+      const entry = node("div");
+      entry.append(node("dt", formatText(field.name)), node("dd", displayFieldValue(contact.fields[field.id])));
+      fieldValues.append(entry);
+    }
+    fieldsSection.hidden = !fieldValues.children.length;
+  };
+  renderFields();
+
+  const editorButton = (text, editor, focus) => {
+    const button = node("button", text, "secondary");
+    button.type = "button";
+    button.setAttribute("aria-controls", editor.id);
+    button.setAttribute("aria-expanded", "false");
+    button.addEventListener("click", () => {
+      editor.hidden = !editor.hidden;
+      button.setAttribute("aria-expanded", String(!editor.hidden));
+      if (!editor.hidden) focus().focus();
+    });
+    return button;
+  };
+  actions.append(editorButton("태그 편집", tagEditor, () => input));
+  const editors = [tagEditor];
+  const fieldEditor = contactFields.length
+    ? contactFieldEditor(contact, () => {
+        saves.fields++;
+        renderFields();
+      })
+    : null;
+  if (fieldEditor) {
+    const form = fieldEditor.form;
+    actions.append(editorButton("추가 정보 편집", form, () => form.querySelector("select")));
+    editors.push(form);
   }
-  identity.append(fieldSummary);
-  if (contactFields.length) editors.append(contactFieldEditor(contact, fieldSummary));
-  editors.append(contactDetail(contact));
-  item.append(summary, editors);
-  return item;
-}
-// Independent read-only disclosure: never re-render the tag/field editors or replace their drafts.
-function contactDetail(contact) {
-  const details = node("details", "", "contact-detail");
-  const summary = node("summary", "상세 보기");
+
+  // A pause reason is shown only when one applies; a manual toggle changes the manual one in place.
+  const reasons = { manual: false, handoff: false };
+  const reasonSection = contactSection("중지 사유");
+  const reasonText = node("p");
+  reasonSection.append(reasonText);
+  const renderReasons = () => {
+    const shown = [];
+    if (reasons.manual) shown.push("직접 중지");
+    if (reasons.handoff) shown.push("상담 전환으로 중지");
+    reasonText.textContent = shown.join(" · ");
+    reasonSection.hidden = !shown.length;
+  };
+  renderReasons();
+
+  const toggle = node("button", "", "secondary");
+  toggle.type = "button";
+  toggle.dataset.automationToggle = "";
+  const renderAutomation = () => {
+    toggle.textContent = contact.automation_paused ? "자동화 재개" : "자동화 중지";
+    toggle.setAttribute("aria-label", `${contact.sender_id} ${toggle.textContent}`);
+  };
+  renderAutomation();
+  toggle.addEventListener("click", () => {
+    if (contactsSaving || contactsBusy || fieldBusy || segmentBusy) return;
+    const paused = !contact.automation_paused;
+    if (!paused && !confirm("자동화를 재개할까요? 응답 가능 시간이 남은 대기 메시지는 다음 워커 실행에서 발송될 수 있습니다.")) return;
+    void action(toggle, async () => {
+      contactsSaving = true;
+      try {
+        const saved = await api(`/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}/automation`, "PUT", { paused });
+        if (generation !== contactsGeneration) return;
+        contact.automation_paused = saved.automation_paused;
+        saves.automation++;
+        renderRow();
+        if (!selected()) return;
+        reasons.manual = paused;
+        // The server accepts a resume only while no handoff pause applies, so a successful resume clears that reason too.
+        if (!saved.automation_paused) reasons.handoff = false;
+        renderReasons();
+        renderAutomation();
+        // The pause response does not say whether a handoff pause also applies, so read both reasons again.
+        if (paused) void load();
+        notice(paused ? "자동화를 중지했습니다. 이미 전송 중인 메시지는 취소할 수 없습니다." : "자동화를 재개했습니다. 대기 메시지는 기존 발송 정책을 다시 확인합니다.");
+      } catch (error) {
+        if (generation === contactsGeneration) throw error;
+      } finally {
+        if (generation === contactsGeneration) contactsSaving = false;
+      }
+    }).finally(() => {
+      if (selected()) renderAutomation();
+    });
+  });
+  actions.append(toggle);
+
+  const body = node("div", "", "contact-detail-body");
+  const content = node("div", "", "contact-detail-content");
   const status = node("p", "", "hint");
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
-  const content = node("div", "", "contact-detail-content");
-  const refresh = node("button", "상세 새로고침", "secondary");
+  // One refresh in the top bar re-reads the detail, and the rebuilt identity-link section re-reads the link state.
+  const refresh = node("button", "새로고침", "secondary");
+  refresh.setAttribute("aria-label", "상세 정보 새로고침");
   const more = node("button", "다음 대화 보기", "secondary");
   refresh.type = more.type = "button";
   more.hidden = true;
+  actions.append(refresh);
   const controls = node("div", "", "contact-detail-controls");
-  controls.append(refresh, more);
-  details.append(summary, status, controls, content);
-  const generation = contactsGeneration;
+  controls.append(more);
+  body.append(content, fieldsSection, reasonSection, status, controls);
+
+  // Evidence and the notes on what a record does not mean live here once, closed by default.
+  const record = node("details", "", "contact-detail-record");
+  const recordBody = node("div", "", "contact-detail-record-body");
+  const recordEvidence = node("dl", "", "contact-detail-values");
+  // The identity-link module owns this list and refills it on each of its loads.
+  const linkEvidence = node("dl", "", "contact-detail-values");
+  recordBody.append(
+    recordEvidence,
+    linkEvidence,
+    node("p", "댓글 참여나 연결 확인은 발송 동의가 아닙니다. DM 대화는 이 사람에게 보낸 답장으로 연결된 저장 대화만 표시하며, 발송 가능 여부를 뜻하지 않습니다.", "hint"),
+    node("p", "동의는 댓글과 각 DM 대화에서 따로 확인합니다. 한쪽의 기록을 다른 쪽에 적용하지 않습니다.", "hint"),
+    node("p", "연결을 확인하거나 해제하면 운영자의 확인 기록만 바뀝니다. 기존 대화, 답장 기록, 수신 거부는 그대로 남습니다.", "hint"),
+  );
+  record.append(node("summary", "기록 세부"), recordBody);
+
   let requestId = 0;
   let after = null;
-  const date = (value) => formatDateTime(value);
-  const section = (title) => {
-    const part = node("section");
-    part.append(node("h4", title));
-    return part;
-  };
-  function consentRecords(records) {
-    const list = node("ul", "", "contact-consent");
-    const evidence = { explicit: "명시적 확인", comment: "댓글", inbound_dm: "수신 DM", import: "가져온 자료" };
-    for (const [purpose, label] of [
-      ["service_reply", "서비스 답장"],
-      ["marketing", "마케팅"],
-    ]) {
-      const record = records.find((item) => item.purpose === purpose);
-      const entry = node("li");
-      entry.append(node("strong", `${label} · ${record ? (record.decision === "revoke" ? "철회 기록" : "동의 기록") : "기록 없음"}`));
-      if (record) entry.append(node("p", `근거 종류: ${evidence[record.evidence_kind] || "확인 전"} · 근거 발생: ${date(record.occurred_at)} · 서버 기록: ${date(record.recorded_at)}`, "hint"));
-      list.append(entry);
-    }
-    return list;
+  function evidence(term, value) {
+    const entry = node("div");
+    entry.append(node("dt", term), node("dd", value));
+    recordEvidence.append(entry);
   }
-  function render(detail) {
-    const facts = section("저장된 연락처 정보");
-    facts.append(node("p", `댓글 참여자 ${formatText(detail.sender_id)} · 댓글 ${formatCount(detail.comment_count, { useGrouping: false })}개`), node("p", `첫 댓글 ${date(detail.first_comment_at)} · 최근 댓글 ${date(detail.last_comment_at)}`, "hint"));
-    const tags = node("div", "", "badges");
-    for (const tag of detail.tags) tags.append(badge(tag));
-    if (!detail.tags.length) tags.append(node("span", "태그 없음", "hint"));
-    facts.append(tags);
-    const fields = section("추가 정보");
-    for (const field of detail.fields) fields.append(node("p", `${formatText(field.name)} · ${formatText(fieldTypeLabels[field.type])} · ${field.value === null ? "미설정" : displayFieldValue(field.value)}`));
-    if (!detail.fields.length) fields.append(node("p", "활성 필드가 없습니다.", "hint"));
-    const pause = section("자동화 중지 사유");
-    const reasons = [];
-    if (detail.automation.manual_paused) reasons.push("직접 중지");
-    if (detail.automation.handoff_paused) reasons.push("상담 전환으로 중지");
-    pause.append(node("p", reasons.length ? reasons.join(" · ") : "연락처 중지 설정 없음"));
-    const consent = section("댓글 참여자의 동의 기록");
-    consent.append(consentRecords(detail.consent), node("p", "같은 작업 공간·연결·식별자·목적의 현재 기록입니다. 기록 없음이나 다른 식별자의 동의를 발송 허가로 보지 않습니다.", "hint"));
-    const conversations = section("연결 근거가 확인된 DM 대화");
-    conversations.append(node("p", "현재 연결 근거가 확인된 저장 대화만 표시합니다. 전체 대화 이력이나 발송 가능 여부를 뜻하지 않습니다. 대화마다 동의 범위를 따로 표시합니다.", "hint"));
+  function consentEvidence(scope, records) {
+    for (const [purpose, label] of consentPurposeLabels) {
+      const item = records.find((value) => value.purpose === purpose);
+      if (!item) continue;
+      evidence(`${scope} ${label} ${item.decision === "revoke" ? "철회" : "동의"}`, `${consentEvidenceLabels[item.evidence_kind] || "확인 전"}에서 기록 · 발생 ${date(item.occurred_at)} · 서버 저장 ${date(item.recorded_at)}`);
+    }
+  }
+  // A refresh rereads the stored tags, field values and pause state; an editor with an unsaved draft keeps its draft.
+  // A read that was in flight when a save finished may predate that save, so the saved kind keeps its saved state.
+  function sync(detail, savesAtStart) {
+    contact.comment_count = detail.comment_count;
+    contact.last_comment_at = detail.last_comment_at;
+    if (saves.tags === savesAtStart.tags) {
+      contact.tags = detail.tags;
+      // A draft that now equals the stored tags is no longer a change, as the input listener would decide.
+      if (input.value === contact.tags.join("\n")) contactsDirty.delete(key);
+      if (!contactsDirty.has(key)) input.value = contact.tags.join("\n");
+    }
+    detailFields = detail.fields;
+    if (saves.fields === savesAtStart.fields) {
+      contact.fields = Object.fromEntries(detail.fields.filter((field) => field.value !== null).map((field) => [field.id, field.value]));
+      fieldEditor?.refresh();
+    }
+    if (saves.automation === savesAtStart.automation) {
+      contact.automation_paused = detail.automation.paused;
+      reasons.manual = detail.automation.manual_paused;
+      reasons.handoff = detail.automation.handoff_paused;
+    }
+    renderRow();
+    renderTags();
+    renderFields();
+    renderAutomation();
+    renderReasons();
+  }
+  function render(detail, paged, savesAtStart) {
+    sync(detail, savesAtStart);
+    const consent = contactSection("동의 요약");
+    consent.append(contactConsentTable(detail, paged));
+    const conversations = contactSection("", "contact-dm-section");
+    const count = formatCount(detail.conversations.length, { useGrouping: false });
+    conversations.querySelector("h4").append("연결된 DM 대화", node("span", paged ? `이 페이지 ${count}` : count, "count"));
+    const footers = new Map();
     for (const conversation of detail.conversations) {
-      const row = node("article", "", "contact-detail-conversation");
-      row.append(
-        node("h5", `DM 상대 ${formatText(conversation.recipient_id)}`),
-        node("p", `저장 메시지 ${formatCount(conversation.message_count, { useGrouping: false })}개 · ${conversation.state === "closed" ? "종료된 대화" : "열린 대화"} · ${conversation.handoff_active ? "상담 전환 중" : "상담 전환 없음"}`),
-        node("p", `첫 수신 ${date(conversation.first_message_at)} · 최근 수신 ${date(conversation.last_message_at)}`, "hint"),
-        node("p", `연결 근거 답장 기록 ${formatText(conversation.evidence_reply_id)}`, "hint"),
-        consentRecords(conversation.consent),
-      );
-      conversations.append(row);
+      const card = node("article", "", "contact-dm-card");
+      const metrics = node("dl", "", "contact-dm-metrics");
+      const metric = (term, value) => {
+        const entry = node("div");
+        entry.append(node("dt", term), node("dd", value));
+        metrics.append(entry);
+      };
+      metric("저장 메시지", `${formatCount(conversation.message_count, { useGrouping: false })}개`);
+      metric("최근 수신", date(conversation.last_message_at));
+      metric("대화", conversation.state === "closed" ? "종료" : "열림");
+      metric("상담 전환", conversation.handoff_active ? "진행 중" : "없음");
+      const footer = node("div", "", "contact-link-row");
+      footers.set(conversation.recipient_id, footer);
+      card.append(node("h5", `DM 상대 ${formatText(conversation.recipient_id)}`, "contact-dm-name"), metrics, footer);
+      conversations.append(card);
     }
     if (!detail.conversations.length) conversations.append(node("p", "현재 조회에서 표시할 대화가 없습니다.", "hint"));
     const identityRequest = requestId;
-    const identityLinks = createContactIdentityLinks({
-      api,
-      node,
-      contact,
-      isCurrent: () => identityRequest === requestId && generation === contactsGeneration && details.isConnected && details.open,
-    });
-    content.replaceChildren(facts, fields, pause, consent, conversations, identityLinks);
+    conversations.append(
+      createContactIdentityLinks({
+        api,
+        node,
+        contact,
+        footers,
+        record: linkEvidence,
+        conversationsPaged: paged,
+        isCurrent: () => identityRequest === requestId && selected(),
+        // A link write counts as a contact save, so the selection and the list stay on this contact until its reload ends.
+        canStart: () => !contactsSaving && !contactsBusy && !fieldBusy,
+        onBusy: (busy) => {
+          if (generation === contactsGeneration) contactsSaving = busy;
+        },
+      }),
+    );
+    content.replaceChildren(consent, conversations);
+    recordEvidence.replaceChildren();
+    evidence("댓글", `첫 댓글 ${date(detail.first_comment_at)} · 최근 댓글 ${date(detail.last_comment_at)}`);
+    for (const conversation of detail.conversations) {
+      evidence(`DM 상대 ${formatText(conversation.recipient_id)}`, `이 사람에게 보낸 답장 기록 ${formatText(conversation.evidence_reply_id)} · 첫 수신 ${date(conversation.first_message_at)}`);
+    }
+    consentEvidence("댓글 기준", detail.consent);
+    for (const conversation of detail.conversations) consentEvidence(`DM 상대 ${formatText(conversation.recipient_id)}`, conversation.consent);
   }
   async function load(next = false) {
     const id = ++requestId;
-    const current = () => id === requestId && generation === contactsGeneration && details.isConnected && details.open;
+    const current = () => id === requestId && selected();
     const cursor = next ? after : null;
+    const savesAtStart = { ...saves };
     after = null;
     content.replaceChildren();
+    recordEvidence.replaceChildren();
+    linkEvidence.replaceChildren();
     more.hidden = true;
     refresh.disabled = true;
-    details.setAttribute("aria-busy", "true");
+    body.setAttribute("aria-busy", "true");
     status.textContent = "상세 정보를 불러오고 있습니다…";
     try {
       const detail = await api(`/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}${cursor ? `?after=${encodeURIComponent(cursor)}` : ""}`);
       if (!current()) return;
-      render(detail);
+      render(detail, Boolean(cursor || detail.after), savesAtStart);
       after = detail.after;
       more.hidden = !after;
-      status.textContent = `${next ? "다음 대화 페이지" : "현재 저장된 정보"} · 대화 ${detail.conversations.length}개. 편집 중인 내용은 저장 후 상세 새로고침으로 확인해 주세요.`;
+      // The cards show what was read, so the line speaks only when this is a later page of conversations.
+      status.textContent = next ? `다음 페이지의 DM 대화 ${detail.conversations.length}개를 표시합니다.` : "";
     } catch (error) {
-      if (current()) status.textContent = `${errorMessage(error)} 상세 새로고침으로 다시 시도할 수 있습니다.`;
+      if (current()) status.textContent = `${errorMessage(error)} 새로고침으로 다시 시도할 수 있습니다.`;
     } finally {
       if (current()) {
         refresh.disabled = false;
-        details.removeAttribute("aria-busy");
+        body.removeAttribute("aria-busy");
       }
     }
   }
-  details.addEventListener("toggle", () => {
-    if (details.open) void load();
-    else {
-      requestId++;
-      content.replaceChildren();
-      status.textContent = "";
-      details.removeAttribute("aria-busy");
-    }
-  });
+  // A save (including a link write and its reload) owns the panel until it ends; a reload now would replace the link
+  // rows under the write, which then skips its own reload and leaves the state read before the write.
   refresh.addEventListener("click", () => {
-    void load();
+    if (!contactsSaving) void load();
   });
   more.addEventListener("click", () => {
-    if (after) void load(true);
+    if (after && !contactsSaving) void load(true);
   });
-  return details;
+  void load();
+  return [top, ...editors, body, record];
 }
 function clearContactResults() {
   contactsGeneration++;
@@ -2856,6 +3075,7 @@ function clearContactResults() {
   contactsDirty.clear();
   purgedContactConnections.clear();
   contactsBusy = false;
+  clearContactDetail();
   byId("contacts-list").replaceChildren();
   byId("contacts-more").hidden = true;
 }
@@ -3017,6 +3237,7 @@ async function loadContacts(more = false) {
     purgedContactConnections.clear();
     contactsAfter = null;
     contactsQuery = query.toString();
+    clearContactDetail();
     byId("contacts-list").replaceChildren();
     byId("contacts-more").hidden = true;
   }
@@ -3034,7 +3255,10 @@ async function loadContacts(more = false) {
     const calendar = query.get("last_comment_period") || segment?.last_comment_period;
     const dmDays = query.get("last_dm_days") || segment?.last_dm_days;
     const period = relativeActivitySummary(page.activity_window, days) + calendarActivitySummary(page.activity_window, calendar) + relativeActivitySummary(page.dm_activity_window, dmDays, "DM ");
-    for (const contact of page.contacts) if (!purgedContactConnections.has(contact.connection_id)) byId("contacts-list").append(contactCard(contact));
+    for (const contact of page.contacts) if (!purgedContactConnections.has(contact.connection_id)) byId("contacts-list").append(contactRow(contact));
+    // A full load opens the first contact without moving focus; another page keeps the current selection.
+    const first = byId("contacts-list").querySelector(".contact-row");
+    if (!more && !selectedContact && first) contactRowSelect.get(first)?.();
     contactsAfter = page.after;
     byId("contacts-more").hidden = !contactsAfter;
     byId("contacts-status").textContent = `연락처 ${byId("contacts-list").children.length}명을 표시합니다. 같은 계정의 반복 댓글은 한 명으로 묶습니다.` + period;
@@ -4049,11 +4273,13 @@ function archiveField(field, button) {
     }
   }).finally(fieldControls);
 }
-function contactFieldEditor(contact, summary) {
-  const details = document.createElement("details");
-  details.className = "contact-field-editor";
-  details.append(node("summary", "추가 정보 편집"));
+// Opened from the detail panel's "추가 정보 편집" button; onSaved redraws the panel's stored values, and refresh
+// reloads the editor from contact.fields unless it holds an unsaved draft.
+function contactFieldEditor(contact, onSaved) {
   const editor = document.createElement("form");
+  editor.id = "contact-field-editor";
+  editor.className = "contact-detail-editor contact-field-editor";
+  editor.hidden = true;
   const select = document.createElement("select");
   for (const field of contactFields) select.add(new Option(`${formatText(field.name)} · ${formatText(fieldTypeLabels[field.type])}`, field.id));
   const label = node("label", "필드");
@@ -4071,11 +4297,13 @@ function contactFieldEditor(contact, summary) {
   const clear = node("button", "값 제거", "secondary");
   clear.type = "button";
   editor.append(label, valueLabel, status, save, clear);
-  details.append(editor);
   const key = `${contact.connection_id}:${contact.sender_id}:field`;
   let selectedId = select.value;
   let original = "";
   const activeInput = () => (booleanInput.hidden ? input : booleanInput);
+  const renderStored = (value) => {
+    status.textContent = value === undefined ? "미입력. 값을 저장하면 입력된 상태가 됩니다." : `저장된 값: ${displayFieldValue(value)}`;
+  };
   function populate() {
     const field = contactFields.find((item) => item.id === select.value);
     const value = contact.fields?.[select.value];
@@ -4085,7 +4313,7 @@ function contactFieldEditor(contact, summary) {
     input.value = value === undefined ? "" : String(value);
     booleanInput.value = value === false ? "false" : "true";
     original = activeInput().value;
-    status.textContent = value === undefined ? "미입력. 값을 저장하면 입력된 상태가 됩니다." : `저장된 값: ${displayFieldValue(value)}`;
+    renderStored(value);
     contactsDirty.delete(key);
   }
   populate();
@@ -4115,8 +4343,7 @@ function contactFieldEditor(contact, summary) {
         contact.fields ||= {};
         if (saved.value === null) delete contact.fields[id];
         else contact.fields[id] = saved.value;
-        summary.replaceChildren();
-        for (const field of contactFields) if (Object.hasOwn(contact.fields, field.id)) summary.append(node("p", `${formatText(field.name)} · ${displayFieldValue(contact.fields[field.id])}`, "hint"));
+        onSaved();
         populate();
         notice(value === null ? "값을 제거했습니다." : "값을 저장했습니다. 검색 결과는 필터를 다시 적용하면 갱신됩니다.");
       } finally {
@@ -4138,7 +4365,22 @@ function contactFieldEditor(contact, summary) {
   clear.addEventListener("click", () => {
     void persist(null, clear);
   });
-  return details;
+  return {
+    form: editor,
+    // A draft survives a refresh, but it is compared with the value stored now, so reverting it to the older value stays dirty.
+    refresh: () => {
+      if (contactsDirty.has(key)) {
+        const value = contact.fields?.[select.value];
+        // An unset value compares as "", not as the boolean control's default "true", so a "true" draft stays unsaved.
+        original = value === undefined ? "" : activeInput() === booleanInput ? (value === false ? "false" : "true") : String(value);
+        if (activeInput().value !== original) {
+          renderStored(value);
+          return;
+        }
+      }
+      populate();
+    },
+  };
 }
 
 const inbox = createInbox({

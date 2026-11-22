@@ -389,6 +389,7 @@ test("two documents clear a session change without rebroadcasting it", () => {
       "hideWebhookSecret",
       "renderConditionTree",
       "leaveSegmentEdit",
+      "clearContactDetail",
       "fieldControls",
       "segmentControls",
       "contactTagControls",
@@ -669,6 +670,10 @@ test("a connection data deletion drops the loaded activity before its reload, so
     contactsDirty: new Set(),
     purgedContactConnections: new Set(),
     contactCsvPreview: { invalidate: noop },
+    selectedContact: { contact: { connection_id: "c1" } },
+    clearContactDetail: () => {
+      context.selectedContact = null;
+    },
     inbox: { forgetConnection: noop },
     invalidateSegmentPreview: noop,
     invalidateContactExport: noop,
@@ -697,10 +702,418 @@ test("a connection data deletion drops the loaded activity before its reload, so
   ];
   context.renderActivity();
   context.forgetDeletedConnection("c1");
+  assert.equal(context.selectedContact, null, "the deleted connection's open contact detail closes");
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(text(nodes.get("activity")!), /처리 내역을 불러오지 못했습니다/);
   nodes.get("activity-filter")!.value = "sent";
   context.renderActivity();
   assert.doesNotMatch(text(nodes.get("activity")!), /deleted-connection-post/);
   assert.match(text(nodes.get("activity")!), /other-connection-post/, "another connection's rows stay");
+});
+
+test("a contact detail read that a save overtook keeps the saved tags and pause state", async () => {
+  type Fake = {
+    textContent: string;
+    value: string;
+    hidden: boolean;
+    disabled: boolean;
+    children: Fake[];
+    dataset: Record<string, string>;
+    listeners: Map<string, (event?: unknown) => void>;
+    append: (...items: unknown[]) => void;
+    replaceChildren: (...items: unknown[]) => void;
+    setAttribute: () => void;
+    removeAttribute: () => void;
+    setCustomValidity: () => void;
+    querySelector: () => Fake;
+    addEventListener: (type: string, listener: (event?: unknown) => void) => void;
+  };
+  const make = (): Fake => {
+    const element: Fake = {
+      textContent: "",
+      value: "",
+      hidden: false,
+      disabled: false,
+      children: [],
+      dataset: {},
+      listeners: new Map(),
+      append: (...items) => element.children.push(...items.filter((item): item is Fake => typeof item === "object")),
+      replaceChildren: (...items) => {
+        element.children = items as Fake[];
+      },
+      setAttribute: () => {},
+      removeAttribute: () => {},
+      setCustomValidity: () => {},
+      querySelector: () => make(),
+      addEventListener: (type, listener) => {
+        element.listeners.set(type, listener);
+      },
+    };
+    return element;
+  };
+  const deferred = () => {
+    let resolve!: (value: unknown) => void;
+    const promise = new Promise((done) => {
+      resolve = done;
+    });
+    return { promise, resolve };
+  };
+  const reads: ReturnType<typeof deferred>[] = [];
+  const writes: { path: string; body: unknown }[] = [];
+  const context = vm.createContext({
+    contactSelection: 1,
+    contactsGeneration: 1,
+    contactsDirty: new Set(),
+    contactsSaving: false,
+    contactsBusy: false,
+    fieldBusy: false,
+    segmentBusy: false,
+    contactFields: [],
+    errors: {},
+    node: (_tag: string, label = "") => Object.assign(make(), { textContent: label }),
+    document: { createElement: () => make() },
+    formatDateTime: String,
+    formatText: String,
+    formatCount: String,
+    displayFieldValue: String,
+    list: (value: string) => value.split("\n").filter(Boolean),
+    action: async (_button: unknown, task: () => Promise<void>) => task(),
+    notice: () => {},
+    confirm: () => true,
+    errorMessage: String,
+    contactSection: () => make(),
+    contactConsentTable: () => make(),
+    createContactIdentityLinks: () => make(),
+    consentPurposeLabels: [],
+    consentEvidenceLabels: {},
+    contactAccountLabel: () => "",
+    api: (path: string, method?: string, body?: unknown) => {
+      if (!method) {
+        const read = deferred();
+        reads.push(read);
+        return read.promise;
+      }
+      writes.push({ path, body });
+      if (path.endsWith("/automation")) return Promise.resolve({ automation_paused: (body as { paused: boolean }).paused });
+      return Promise.resolve({ tags: (body as { tags: string[] }).tags });
+    },
+  });
+  const begin = source.indexOf("function contactDetail(");
+  vm.runInContext(source.slice(begin, source.indexOf("\n}", begin) + 2), context);
+  const contact = { connection_id: "c1", sender_id: "s1", tags: ["old"], fields: {}, automation_paused: false };
+  const [top, tagEditor, body] = context.contactDetail(contact, () => {}) as Fake[];
+  const toggle = top.children[1].children.find((child) => "automationToggle" in child.dataset)!;
+  const tagInput = tagEditor.children[0].children[0];
+  const stale = {
+    tags: ["old"],
+    fields: [],
+    automation: { paused: false, manual_paused: false, handoff_paused: true },
+    comment_count: "1",
+    last_comment_at: "t1",
+    conversations: [],
+    consent: [],
+    after: null,
+  };
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+  // The first read is still in flight when both saves finish.
+  toggle.listeners.get("click")!();
+  await settle();
+  tagInput.value = "new";
+  tagEditor.listeners.get("submit")!({ preventDefault: () => {} });
+  await settle();
+  assert.equal(writes.length, 2);
+  assert.equal(contact.automation_paused, true);
+  reads[0].resolve(stale);
+  await settle();
+  assert.equal(contact.automation_paused, true, "the read from before the pause does not undo it");
+  assert.equal(toggle.textContent, "자동화 재개", "the next click resumes instead of pausing again");
+  assert.deepEqual(contact.tags, ["new"]);
+  assert.equal(tagInput.value, "new");
+
+  const reasonText = body.children[2].children[0];
+  assert.equal(reasonText.textContent, "직접 중지", "a read from before the pause supplies no pause reason");
+
+  // The pause itself starts a read, because its response cannot tell whether a handoff pause also applies.
+  assert.equal(reads.length, 2, "a saved pause reads the pause reasons again");
+  reads[1].resolve({ ...stale, tags: ["new"], automation: { paused: true, manual_paused: true, handoff_paused: true } });
+  await settle();
+  assert.equal(reasonText.textContent, "직접 중지 · 상담 전환으로 중지", "a handoff pause started by someone else is shown after the pause");
+
+  // A read started after the saves is applied in full.
+  const refresh = top.children[1].children.at(-1)!;
+  refresh.listeners.get("click")!();
+  reads[2].resolve({ ...stale, tags: ["server"], comment_count: "2", last_comment_at: "t2", automation: { paused: false, manual_paused: false, handoff_paused: false } });
+  await settle();
+  assert.equal((contact as Record<string, unknown>).comment_count, "2", "the list row takes the comment count from the refreshed detail");
+  assert.equal((contact as Record<string, unknown>).last_comment_at, "t2", "the list row takes the latest comment time from the refreshed detail");
+  assert.equal(contact.automation_paused, false);
+  assert.equal(toggle.textContent, "자동화 중지");
+  assert.deepEqual(contact.tags, ["server"]);
+  assert.equal(reasonText.textContent, "");
+
+  // A handoff pause read after the saves is shown; a resume the server accepted clears it, and an older read cannot restore it.
+  refresh.listeners.get("click")!();
+  reads[3].resolve({ ...stale, tags: ["server"], automation: { paused: true, manual_paused: false, handoff_paused: true } });
+  await settle();
+  assert.equal(reasonText.textContent, "상담 전환으로 중지");
+  refresh.listeners.get("click")!();
+  toggle.listeners.get("click")!();
+  await settle();
+  assert.equal(contact.automation_paused, false);
+  assert.equal(reasonText.textContent, "", "the resume clears the handoff reason");
+  reads[4].resolve({ ...stale, tags: ["server"], automation: { paused: true, manual_paused: false, handoff_paused: true } });
+  await settle();
+  assert.equal(reasonText.textContent, "", "a read from before the resume does not restore the handoff reason");
+  assert.equal(contact.automation_paused, false);
+});
+
+test("a field draft kept through a refresh is compared with the value stored now", () => {
+  type Control = { value: string; hidden: boolean; listeners: Map<string, (event: { target: unknown }) => void> };
+  const make = (): Control & Record<string, unknown> => {
+    const element = {
+      value: "",
+      hidden: false,
+      textContent: "",
+      listeners: new Map(),
+      append: () => {},
+      setAttribute: () => {},
+      add: (option: { value: string }) => {
+        if (!element.value) element.value = option.value;
+      },
+      addEventListener: (type: string, listener: (event: { target: unknown }) => void) => {
+        element.listeners.set(type, listener);
+      },
+    };
+    return element;
+  };
+  const created: Control[] = [];
+  const nodes: Record<string, unknown>[] = [];
+  const contactsDirty = new Set<string>();
+  const context = vm.createContext({
+    contactFields: [{ id: "f1", name: "등급", type: "text" }],
+    contactsDirty,
+    fieldTypeLabels: {},
+    formatText: String,
+    displayFieldValue: String,
+    configureFieldInput: () => {},
+    Option: function (text: string, value: string) {
+      return { text, value };
+    },
+    node: (_tag: string, label = "") => {
+      const element = Object.assign(make(), { textContent: label });
+      nodes.push(element);
+      return element;
+    },
+    document: {
+      createElement: () => {
+        const element = make();
+        created.push(element);
+        return element;
+      },
+    },
+  });
+  const begin = source.indexOf("function contactFieldEditor(");
+  vm.runInContext(source.slice(begin, source.indexOf("\n}", begin) + 2), context);
+  const contact = { connection_id: "c1", sender_id: "s1", fields: { f1: "gold" } as Record<string, unknown> };
+  const editor = context.contactFieldEditor(contact, () => {}) as { refresh: () => void };
+  const [form, , input] = created;
+  const status = nodes[2];
+  const key = "c1:s1:field";
+  const type = (value: string) => {
+    input.value = value;
+    form.listeners.get("input")!({ target: input });
+  };
+
+  type("silver");
+  assert.ok(contactsDirty.has(key));
+  contact.fields = { f1: "bronze" };
+  editor.refresh();
+  assert.equal(input.value, "silver", "the refresh keeps the draft");
+  assert.equal(status.textContent, "저장된 값: bronze", "the status shows the value stored now beside the draft");
+  type("gold");
+  assert.ok(contactsDirty.has(key), "the older value differs from the value stored now");
+  type("bronze");
+  assert.ok(!contactsDirty.has(key), "the value stored now is not a change");
+
+  type("platinum");
+  contact.fields = { f1: "platinum" };
+  editor.refresh();
+  assert.ok(!contactsDirty.has(key), "a draft that matches the new stored value is no longer a draft");
+
+  // A boolean field: a "true" draft over a stored false stays unsaved when another user clears the value.
+  created.length = 0;
+  context.contactFields = [{ id: "f2", name: "동의", type: "boolean" }];
+  const flag = { connection_id: "c1", sender_id: "s2", fields: { f2: false } as Record<string, unknown> };
+  const flagEditor = context.contactFieldEditor(flag, () => {}) as { refresh: () => void };
+  const [flagForm, , , booleanInput] = created;
+  assert.equal(booleanInput.value, "false");
+  booleanInput.value = "true";
+  flagForm.listeners.get("input")!({ target: booleanInput });
+  assert.ok(contactsDirty.has("c1:s2:field"));
+  flag.fields = {};
+  flagEditor.refresh();
+  assert.ok(contactsDirty.has("c1:s2:field"), "an unset value is not the control's default true");
+  assert.equal(booleanInput.value, "true", "the refresh keeps the draft");
+});
+
+test("an explicit contact choice brings an off-screen detail into view, while the first selection after a load does not", () => {
+  const scrolls: unknown[] = [];
+  const focuses: unknown[] = [];
+  let top = -800;
+  const panel = {
+    hidden: true,
+    replaceChildren: () => {},
+    querySelector: (selector: string) => (selector === ".contact-detail-heading" ? { focus: (options: unknown) => focuses.push(options) } : null),
+    getBoundingClientRect: () => ({ top }),
+    scrollIntoView: (options: unknown) => scrolls.push(options),
+  };
+  const rows = [{ setAttribute: () => {} }, { setAttribute: () => {} }];
+  const nodes = new Map<string, unknown>([
+    ["contacts-detail", panel],
+    ["contacts-list", { querySelectorAll: () => rows }],
+  ]);
+  const context = vm.createContext({
+    byId: (id: string) => nodes.get(id),
+    contactsDirty: new Set(),
+    contactsSaving: false,
+    selectedContact: null,
+    contactSelection: 0,
+    innerHeight: 600,
+    matchMedia: () => ({ matches: true }),
+    confirm: () => true,
+    contactDetail: () => [],
+  });
+  for (const name of ["selectContact", "revealContactDetail", "clearContactDetail"]) {
+    const begin = source.indexOf(`function ${name}(`);
+    vm.runInContext(source.slice(begin, source.indexOf("\n}", begin) + 2), context);
+  }
+  const contact = { connection_id: "c1", sender_id: "s1" };
+  context.selectContact(contact, rows[0], () => {});
+  assert.deepEqual(scrolls, [], "the automatic first selection keeps the page where it is");
+  assert.deepEqual(focuses, [], "the automatic first selection leaves focus where it is");
+  context.selectContact({ ...contact, sender_id: "s2" }, rows[1], () => {}, true);
+  assert.equal(JSON.stringify(scrolls), JSON.stringify([{ behavior: "auto", block: "start" }]), "a chosen row scrolls its detail into view");
+  assert.equal(JSON.stringify(focuses), JSON.stringify([{ preventScroll: true }]), "a chosen row moves focus to the detail heading");
+  context.selectContact({ ...contact, sender_id: "s2" }, rows[1], () => {}, true);
+  assert.equal(scrolls.length, 2, "choosing the open row again brings its detail back into view");
+  top = 120;
+  context.selectContact(contact, rows[0], () => {}, true);
+  assert.equal(scrolls.length, 2, "a detail already on screen is not scrolled");
+  assert.equal(focuses.length, 3, "every explicit choice moves focus to the detail, on screen or not");
+});
+
+test("a contact detail refresh shows fields named only by the detail, settles matching tag drafts and holds the selection during a link write", async () => {
+  type Fake = {
+    textContent: string;
+    value: string;
+    hidden: boolean;
+    children: Fake[];
+    dataset: Record<string, string>;
+    listeners: Map<string, (event?: unknown) => void>;
+    append: (...items: unknown[]) => void;
+    replaceChildren: (...items: unknown[]) => void;
+    setAttribute: () => void;
+    removeAttribute: () => void;
+    setCustomValidity: () => void;
+    querySelector: () => Fake;
+    addEventListener: (type: string, listener: (event?: unknown) => void) => void;
+  };
+  const make = (): Fake => {
+    const element: Fake = {
+      textContent: "",
+      value: "",
+      hidden: false,
+      children: [],
+      dataset: {},
+      listeners: new Map(),
+      append: (...items) => element.children.push(...items.filter((item): item is Fake => typeof item === "object")),
+      replaceChildren: (...items) => {
+        element.children = items as Fake[];
+      },
+      setAttribute: () => {},
+      removeAttribute: () => {},
+      setCustomValidity: () => {},
+      querySelector: () => make(),
+      addEventListener: (type, listener) => {
+        element.listeners.set(type, listener);
+      },
+    };
+    return element;
+  };
+  const reads: ((value: unknown) => void)[] = [];
+  const links: { canStart: () => boolean; onBusy: (busy: boolean) => void }[] = [];
+  const context = vm.createContext({
+    contactSelection: 1,
+    contactsGeneration: 1,
+    contactsDirty: new Set<string>(),
+    contactsSaving: false,
+    contactsBusy: false,
+    fieldBusy: false,
+    segmentBusy: false,
+    contactFields: [],
+    errors: {},
+    node: (_tag: string, label = "") => Object.assign(make(), { textContent: label }),
+    document: { createElement: () => make() },
+    formatDateTime: String,
+    formatText: String,
+    formatCount: String,
+    displayFieldValue: String,
+    list: (value: string) => value.split("\n").filter(Boolean),
+    action: async (_button: unknown, task: () => Promise<void>) => task(),
+    notice: () => {},
+    confirm: () => true,
+    errorMessage: String,
+    contactSection: () => make(),
+    contactConsentTable: () => make(),
+    createContactIdentityLinks: (options: (typeof links)[number]) => {
+      links.push(options);
+      return make();
+    },
+    consentPurposeLabels: [],
+    consentEvidenceLabels: {},
+    contactAccountLabel: () => "",
+    api: () => new Promise((resolve) => reads.push(resolve)),
+  });
+  const begin = source.indexOf("function contactDetail(");
+  vm.runInContext(source.slice(begin, source.indexOf("\n}", begin) + 2), context);
+  const contact = { connection_id: "c1", sender_id: "s1", tags: ["old"], fields: {}, automation_paused: false };
+  const [top, tagEditor, body] = context.contactDetail(contact, () => {}) as Fake[];
+  const tagInput = tagEditor.children[0].children[0];
+  const fieldValues = body.children[1].children[0];
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+  tagInput.value = "server";
+  tagInput.listeners.get("input")!();
+  assert.ok(context.contactsDirty.has("c1:s1"));
+  reads[0]({
+    tags: ["server"],
+    fields: [{ id: "f-new", name: "등급", type: "text", value: "gold" }],
+    automation: { paused: false, manual_paused: false, handoff_paused: false },
+    comment_count: "1",
+    last_comment_at: "t1",
+    conversations: [],
+    consent: [],
+    after: null,
+  });
+  await settle();
+  assert.ok(!context.contactsDirty.has("c1:s1"), "a draft equal to the freshly read tags no longer asks before switching contacts");
+  assert.equal(fieldValues.children.map((entry) => entry.children.map((item) => item.textContent).join("=")).join(), "등급=gold", "a field created after the field list loaded shows its stored value");
+
+  const [link] = links;
+  assert.ok(link.canStart());
+  link.onBusy(true);
+  assert.equal(context.contactsSaving, true, "a link write holds the selection like any other contact save");
+  link.onBusy(false);
+  assert.equal(context.contactsSaving, false);
+  context.contactsSaving = true;
+  assert.ok(!link.canStart(), "a link write waits for another contact save");
+
+  const refresh = top.children[1].children.at(-1)!;
+  const readsBefore = reads.length;
+  refresh.listeners.get("click")!();
+  assert.equal(reads.length, readsBefore, "a detail refresh waits for a running save, so it cannot replace the link rows under a link write");
+  context.contactsSaving = false;
+  refresh.listeners.get("click")!();
+  assert.equal(reads.length, readsBefore + 1);
 });
