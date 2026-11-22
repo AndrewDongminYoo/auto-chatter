@@ -2978,6 +2978,10 @@ section {
 .contacts-filter-more {
   flex: 1 1 100%;
 }
+/* "필터 더 보기" ends the filter, so "현재 조건을 필터로 저장" follows it directly, at the rhythm of the tools list. */
+#contacts-filter > .contacts-filter:has(> .contacts-filter-more:last-child) {
+  margin-bottom: 0;
+}
 /* The tools that change or export data sit under the list, apart from finding contacts. */
 .contacts-tools {
   margin-top: var(--space-6);
