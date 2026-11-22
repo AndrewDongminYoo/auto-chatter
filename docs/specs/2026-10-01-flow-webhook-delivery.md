@@ -227,6 +227,47 @@ Workers의 `fetch`는 호스트 이름을 스스로 다시 조회합니다.
 검사에 쓴 조회 서버와 `fetch`가 쓰는 조회 경로가 다른 답을 줄 수도 있습니다.
 이 PR은 이 간격을 닫지 않으며, 리다이렉트 거부·응답 미저장·고정 헤더로 요청이 닿았을 때의 영향을 줄일 뿐입니다.
 
+### 2026-11-22 Workers `fetch`의 사설 주소 확인 (#399)
+
+운영과 분리한 일회용 Worker를 개인 계정의 workers.dev에 배포해 한 번 호출하고 바로 삭제했습니다.
+배포 도구는 wrangler 4.116.0, 이 Worker의 `compatibility_date`는 `2026-11-01`이고 호환성 플래그는 없습니다(운영 Worker는 `2026-07-30`과 `nodejs_compat`).
+각 대상에 `fetch(url, { method: "POST", redirect: "manual" })`를 보냈으며, 호스트 이름은 주소를 이름에 담아 답하는 공개 DNS 서비스 sslip.io의 이름을 썼습니다.
+사설 대상 이름은 모두 같은 날 로컬 `dig`로 의도한 주소가 답하는 것을 확인했습니다.
+
+| 대상                                | 해석되는 주소      | 결과                    |
+| ----------------------------------- | ------------------ | ----------------------- |
+| `https://example.com/`              | 공개 주소          | 405, 대상 서버의 응답   |
+| `https://8-8-8-8.sslip.io/`         | `8.8.8.8`          | 526, `error code: 526`  |
+| `https://10-0-0-1.sslip.io/`        | `10.0.0.1`         | 530, `error code: 1016` |
+| `https://127-0-0-1.sslip.io/`       | `127.0.0.1`        | 530, `error code: 1016` |
+| `https://172-16-0-1.sslip.io/`      | `172.16.0.1`       | 530, `error code: 1016` |
+| `https://192-168-0-1.sslip.io/`     | `192.168.0.1`      | 530, `error code: 1016` |
+| `https://169-254-169-254.sslip.io/` | `169.254.169.254`  | 530, `error code: 1016` |
+| `https://0-0-0-0.sslip.io/`         | `0.0.0.0`          | 530, `error code: 1016` |
+| `https://100-64-0-1.sslip.io/`      | `100.64.0.1`       | 403, `error code: 1002` |
+| `https://0--1.sslip.io/`            | `::1`              | 530, `error code: 1016` |
+| `https://--ffff-a00-1.sslip.io/`    | `::ffff:10.0.0.1`  | 530, `error code: 1016` |
+| `https://--ffff-7f00-1.sslip.io/`   | `::ffff:127.0.0.1` | 530, `error code: 1016` |
+| `https://64-ff9b--a00-1.sslip.io/`  | `64:ff9b::a00:1`   | 403, `error code: 1002` |
+| `https://fd00--1.sslip.io/`         | `fd00::1`          | 530, `error code: 1016` |
+| `https://fe80--1.sslip.io/`         | `fe80::1`          | 530, `error code: 1016` |
+| `https://10.0.0.1/`                 | IP 리터럴          | 403, `error code: 1003` |
+
+`10-0-0-1`, `127-0-0-1`, `169-254-169-254`는 `http://`로도 보냈고 결과는 같았습니다.
+`http://8-8-8-8.sslip.io/`는 8초 제한 시간을 넘겼지만, 외부 전송은 https만 허용하므로 판단에 쓰지 않습니다.
+
+같은 조회 서비스에서 공개 주소를 답하는 이름은 연결과 TLS 검증 단계까지 갔고(526), 사설·예약 주소를 답하는 이름은 연결하기 전에 Cloudflare 오류(1016 또는 1002)로 끝났습니다.
+따라서 Workers의 `fetch`가 요청 시점에 스스로 조회한 주소가 위 대역이면 연결하지 않는다고 관찰했습니다.
+DNS rebinding은 `fetch`의 조회가 사설 주소를 답하게 만드는 공격이므로, 위 대역에 대해서는 이 동작이 DoH 검사와 요청 사이의 간격을 막습니다.
+526은 Workers가 요청한 호스트 이름으로 origin 인증서를 검증한다는 관찰이기도 합니다.
+
+[Cloudflare 오류 코드 문서](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/)(2026-11-22 확인)는 1016을 "Cloudflare cannot resolve the origin web server's IP address"로, 1002를 "the domain resolves to a restricted or disallowed IP address"로, 1003을 "direct access to a Cloudflare IP address is not allowed"로 설명합니다.
+1016 문서는 사설 주소를 언급하지 않으므로, 사설 주소 거부는 문서로 보장된 동작이 아니라 이날 관찰한 동작입니다.
+Cloudflare가 이 동작을 바꾸면 이 근거는 사라집니다.
+
+이 결과에 따라 주소 고정 전송 경로, 전용 egress proxy, 허용 호스트 목록은 구현하지 않고, DoH 검사는 두 번째 방어선으로 유지합니다.
+시험하지 않은 대역은 `BLOCKED_IPV4`의 나머지(`192.0.0.0/24`, `192.0.2.0/24`, `192.88.99.0/24`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `224.0.0.0/4`, `240.0.0.0/4`)와 IPv6의 multicast·문서용·Teredo·6to4 대역입니다.
+
 ## 검증
 
 로컬 테스트가 확인하는 범위입니다.
