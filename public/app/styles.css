@@ -1464,6 +1464,10 @@ select:disabled {
   justify-content: flex-end;
   gap: var(--space-2);
 }
+/* The title keeps its width at phone size, so the three buttons beside it wrap instead of breaking it per letter. */
+#contacts-section > .section-heading > h2 {
+  flex: none;
+}
 .reminder-count {
   display: inline-block;
   min-width: 24px;
@@ -1906,7 +1910,8 @@ section {
     top: 0;
     z-index: 1;
   }
-  section {
+  section,
+  .contacts-detail {
     scroll-margin-top: 100px;
   }
   .conversation-preview {
@@ -2235,95 +2240,339 @@ section {
   padding: var(--space-2) 0;
   color: var(--primary);
 }
-/* One card per contact: identity, status and tags on top, the pause switch at the right, editors in the footer. */
-.contacts-list {
+/* Contacts: the list of people on the left and the selected person's detail on the right. */
+.contacts-layout {
   display: grid;
-  gap: var(--space-3);
+  grid-template-columns: minmax(205px, 0.38fr) minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
   margin-top: var(--space-4);
 }
-.contact-row {
+.contacts-panel {
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   overflow: hidden;
   background: var(--card);
 }
-.contact-summary {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-5);
-}
-.contact-identity {
-  display: grid;
-  gap: var(--space-1);
-  min-width: 0;
-}
-.contact-identity p {
+.contacts-panel-head {
   margin: 0;
+  padding: var(--space-4);
+  font-size: var(--font-size-help);
+  line-height: var(--line-height-help);
+  background: var(--background);
+  border-bottom: 1px solid var(--border);
 }
-.contact-identity > .badges {
-  margin-top: var(--space-1);
+.contacts-list .empty-state {
+  padding: var(--space-5) var(--space-4);
 }
-.contact-summary > button {
-  flex: none;
+.contacts-panel > #contacts-more {
+  width: calc(100% - var(--space-8));
+  margin: var(--space-3) var(--space-4) var(--space-4);
 }
-.contact-tools {
+.contact-row {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  padding: var(--space-4);
+  text-align: left;
+  font-weight: 400;
+  color: var(--foreground);
+  background: var(--card);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+.contact-row:last-child {
+  border-bottom: 0;
+}
+.contact-row:hover:not(:disabled) {
+  box-shadow: none;
+  background: var(--muted);
+}
+.contact-row[aria-pressed="true"],
+.contact-row[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--muted);
+  box-shadow: inset 3px 0 var(--accent-foreground);
+}
+.contact-row-name {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.contact-row-facts {
+  display: block;
+  margin: var(--space-1) 0 var(--space-2);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+.contact-row-status {
   display: flex;
   flex-wrap: wrap;
-  column-gap: var(--space-5);
-  padding: 0 var(--space-5);
-  background: var(--muted);
-  border-top: 1px solid var(--border);
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
 }
-.contact-tools > details[open] {
-  flex-basis: 100%;
-  padding-bottom: var(--space-4);
-}
-.contact-detail {
-  min-width: 0;
+.contact-row-tags {
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--muted-foreground);
   overflow-wrap: anywhere;
+}
+/* A status pill: a dot before the text, green while allowed and amber while stopped. */
+.badge.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-radius: var(--radius-full);
+  font-weight: 600;
+  background: var(--success-background);
+  color: var(--success);
+}
+.badge.status::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+.badge.status.off {
+  background: var(--warning-background);
+  color: var(--warning);
+}
+.contact-detail-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  background: var(--background);
+  border-bottom: 1px solid var(--border);
+}
+.contact-detail-heading {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.contact-detail-label,
+.contact-detail-id {
+  color: var(--muted-foreground);
+  font-size: var(--font-size-caption);
+}
+/* The list row shows the tags in full at desktop width; the bar repeats them only where the row cuts them. */
+.contact-detail-tags {
+  display: none;
+  margin-top: var(--space-1);
+}
+.contact-detail-name {
+  overflow-wrap: anywhere;
+}
+.contact-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.contact-detail-editor {
+  padding: var(--space-3) var(--space-5) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.contact-detail-editor textarea {
+  width: 100%;
+}
+.contact-detail-editor button {
+  margin: var(--space-2) var(--space-2) 0 0;
+}
+.contact-detail-body {
+  padding: var(--space-5) var(--space-5) var(--space-4);
+  overflow-wrap: anywhere;
+}
+.contact-detail-section + .contact-detail-section,
+.contact-detail-content + .contact-detail-section {
+  margin-top: var(--space-6);
+}
+.contact-detail-section h4 {
+  display: flex;
+  align-items: center;
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+.contact-detail-section > p {
+  margin: 0;
 }
 .contact-detail-controls {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+  margin-top: var(--space-2);
 }
-.contact-detail-content h4,
-.contact-detail-content h5 {
-  font-size: var(--font-size-body);
-  margin: var(--space-5) 0 var(--space-2);
+.contact-consent-scroll {
+  overflow-x: auto;
 }
-.contact-detail-content p {
-  margin: var(--space-2) 0;
+.contact-consent-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: var(--font-size-help);
+  line-height: var(--line-height-help);
+  text-align: left;
 }
-.contact-detail-conversation {
-  border-top: 1px solid var(--border);
-  margin-top: var(--space-4);
+.contact-consent-table th,
+.contact-consent-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
 }
-.contact-consent {
-  padding-left: var(--space-5);
+.contact-consent-table thead th {
+  font-size: var(--font-size-caption);
+  font-weight: 600;
+  color: var(--muted-foreground);
+  background: var(--background);
 }
-.contact-consent li {
-  margin: var(--space-3) 0;
+.contact-consent-table tbody th {
+  font-weight: 600;
 }
-.contact-summary h3 {
+.contact-consent-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+.contact-consent-no {
+  color: var(--muted-foreground);
+}
+.contact-dm-cards {
+  display: grid;
+  gap: var(--space-3);
+}
+.contact-dm-section > .contact-dm-card,
+.contact-dm-section .contact-dm-cards:not(:empty) {
+  margin-bottom: var(--space-3);
+}
+.contact-dm-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.contact-dm-name {
   margin: 0;
-  overflow-wrap: anywhere;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-size-help);
+  line-height: var(--line-height-help);
 }
-.contact-row summary {
+.contact-dm-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-6);
+  margin: 0;
+  padding: 0 var(--space-4) var(--space-3);
+}
+.contact-dm-metrics dt,
+.contact-detail-values dt {
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--muted-foreground);
+}
+.contact-dm-metrics dd {
+  margin: 0;
+  font-weight: 600;
+}
+.contact-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--muted);
+  border-top: 1px solid var(--border);
+}
+.contact-link-row button.secondary {
+  background: var(--card);
+}
+.contact-link-row .hint {
+  flex-basis: 100%;
+  margin: 0;
+}
+.contact-link-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-help);
+}
+.contact-detail-values {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+.contact-detail-values dd {
+  margin: 0;
+}
+.contact-detail-record {
+  border-top: 1px solid var(--border);
+  background: var(--background);
+  font-size: var(--font-size-help);
+  line-height: var(--line-height-help);
+}
+.contact-detail-record > summary {
   min-height: 44px;
-  padding: var(--space-2) 0;
-  color: var(--primary);
+  padding: var(--space-3) var(--space-5);
+  font-weight: 600;
 }
-.contact-row .badge {
+.contact-detail-record-body {
+  padding: 0 var(--space-5) var(--space-4);
   overflow-wrap: anywhere;
+}
+@media (max-width: 740px) {
+  .contacts-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .contacts-panel-head {
+    display: none;
+  }
+  .contacts-list {
+    display: flex;
+    overflow-x: auto;
+  }
+  .contact-row {
+    flex: 1 0 145px;
+    padding: var(--space-3);
+    border-bottom: 0;
+    border-right: 1px solid var(--border);
+  }
+  .contact-row:last-child {
+    border-right: 0;
+  }
+  .contact-row-facts {
+    margin: var(--space-1) 0;
+  }
+  /* The narrow strip keeps the tags on one line so every row stays the same height. */
+  .contact-row-tags {
+    flex: 1 1 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .contact-detail-tags:not([hidden]) {
+    display: flex;
+  }
+  .contacts-list .empty-state {
+    flex: 1 1 auto;
+  }
+  .contact-detail-top,
+  .contact-detail-editor,
+  .contact-detail-body,
+  .contact-detail-record > summary,
+  .contact-detail-record-body {
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
+  }
+  .contact-dm-metrics {
+    gap: var(--space-2) var(--space-4);
+  }
 }
 @media (max-width: 600px) {
-  .contact-summary {
-    flex-direction: column;
-    gap: var(--space-3);
-  }
   .contacts-filter button {
     width: 100%;
   }
@@ -2350,12 +2599,6 @@ section {
 .contact-field-editor input,
 .contact-field-editor select {
   width: 100%;
-}
-.contact-field-editor button {
-  margin: var(--space-2) var(--space-2) 0 0;
-}
-.contact-field-values p {
-  overflow-wrap: anywhere;
 }
 
 /* Flows (#30): list, step outline, read-only graph and test run. */
@@ -2669,11 +2912,16 @@ section {
 }
 
 #contacts-export-format summary,
+#contacts-import > summary,
 .contacts-filter-more > summary,
 .contacts-tools > summary {
   min-height: 44px;
   padding: var(--space-2) 0;
   color: var(--primary);
+}
+/* The field tools reuse .segment-save; inside the tools list the three disclosures sit at one even rhythm. */
+.contacts-tools .segment-save {
+  margin-bottom: 0;
 }
 
 /* Long help text sits behind an info button; its popover opens under the button (app.js places it). */

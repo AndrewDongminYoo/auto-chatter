@@ -28,7 +28,7 @@ class Element {
   }
 }
 const file = new URL("../../public/app/contact-identity-links.js", import.meta.url);
-function harness(api: (path: string, method?: string, body?: unknown) => Promise<unknown>, edit = true) {
+function harness(api: (path: string, method?: string, body?: unknown) => Promise<unknown>, edit = true, footers = new Map<string, Element>(), record: Element | null = null, extra: Record<string, unknown> = {}) {
   const context = vm.createContext({ crypto: { randomUUID: () => "request-1" }, confirm: () => true });
   // Mocked api errors come from this realm, and errorMessage passes through only plain Errors of the script's realm.
   context.Error = Error;
@@ -43,7 +43,10 @@ function harness(api: (path: string, method?: string, body?: unknown) => Promise
     },
     node: (_tag: string, text = "") => new Element(text),
     contact: { connection_id: "c1", sender_id: "123" },
+    footers,
+    record,
     isCurrent: () => current,
+    ...extra,
   });
   const all = (node: Element): Element[] => [node, ...node.children.flatMap(all)];
   const button = (text: string) => {
@@ -93,11 +96,17 @@ test("identity UI confirms exact displayed version and refreshes, while agents c
     expected_version: 0,
     evidence_reply_id: "91",
   });
-  assert.ok(h.all().some((x) => x.textContent.includes("운영자 확인됨")));
+  assert.ok(h.all().some((x) => x.textContent === "확인됨"));
   h.button("확인 해제");
   const agent = harness(api, false);
   await settle();
   assert.ok(!agent.all().some((x) => x.textContent === "확인 해제"));
+});
+test("identity UI shows a confirmation with invalid evidence only as a past confirmation", async () => {
+  const h = harness(async () => ({ links: [{ ...candidate, state: "confirmed", version: 1, evidence_valid: false }], after: null }));
+  await settle();
+  assert.ok(h.all().some((x) => x.textContent === "이전 확인"));
+  assert.ok(!h.all().some((x) => x.textContent === "확인됨"), "a stale confirmation does not look like a current link");
 });
 test("identity UI drops late responses after its contact or session becomes stale", async () => {
   let resolve!: (value: unknown) => void;
@@ -208,4 +217,98 @@ test("identity UI uses the freshly read server permission after a different acco
   const h = harness(async () => ({ links: [candidate], after: null, can_edit: false }));
   await settle();
   assert.ok(!h.all().some((x) => x.textContent === "연결 확인"));
+});
+
+test("identity UI puts each link in its conversation card footer and gives other recipients their own card", async () => {
+  let confirmed = false;
+  const footer = new Element();
+  const api = async (_path: string, method?: string) => {
+    if (method === "POST") {
+      confirmed = true;
+      return {};
+    }
+    return {
+      links: [
+        { ...candidate, state: confirmed ? "confirmed" : null, version: confirmed ? 1 : 0, evidence_valid: confirmed },
+        { ...candidate, recipient_id: "300", state: "detached", version: 2, current_evidence_reply_id: null },
+      ],
+      after: null,
+    };
+  };
+  const h = harness(api, true, new Map([["200", footer]]));
+  await settle();
+  const texts = (node: Element): string[] => [node.textContent, ...node.children.flatMap(texts)];
+  assert.ok(texts(footer).includes("확인 없음"), "the card footer shows the recipient's state");
+  assert.ok(texts(footer).includes("연결 확인"), "the card footer holds the action");
+  assert.ok(!texts(footer).includes("DM 상대 300"));
+  assert.ok(
+    h.all().some((x) => x.textContent === "DM 상대 300"),
+    "a recipient without a conversation card gets its own card",
+  );
+  assert.ok(h.all().some((x) => x.textContent === "확인 해제됨"));
+  const confirmButton = all(footer).find((x) => x.textContent === "연결 확인");
+  await confirmButton!.click();
+  assert.equal(texts(footer).filter((x) => x === "확인됨").length, 1, "a reload replaces the footer instead of adding a second row");
+  assert.ok(!texts(footer).includes("연결 확인"));
+  assert.equal(h.all().filter((x) => x.textContent === "DM 상대 300").length, 1);
+});
+const all = (node: Element): Element[] => [node, ...node.children.flatMap(all)];
+
+test("identity UI lists each link's reply evidence in the record and never leaves a card waiting after a load", async () => {
+  const footer = new Element();
+  const other = new Element();
+  const record = new Element();
+  let page: "first" | "second" | "empty" = "first";
+  const api = async (path: string) => {
+    if (page === "empty") return { links: [], after: null };
+    if (page === "second" || path.includes("after=")) return { links: [{ ...candidate, recipient_id: "400", current_evidence_reply_id: null }], after: null };
+    return { links: [candidate], after: "next" };
+  };
+  const h = harness(
+    api,
+    false,
+    new Map([
+      ["200", footer],
+      ["300", other],
+    ]),
+    record,
+  );
+  await settle();
+  const texts = (node: Element): string[] => [node.textContent, ...node.children.flatMap(texts)];
+  assert.ok(texts(record).includes("이 사람에게 보낸 답장 기록 91"), "the current reply evidence ID stays visible in the record");
+  assert.ok(texts(other).includes("이 연결 페이지에는 없습니다."), "a card absent from a paged link list says so");
+  await h.button("다음 연결 보기").click();
+  assert.ok(texts(footer).includes("이 연결 페이지에는 없습니다."), "the first page's card is not left at the pre-load state");
+  assert.ok(texts(record).includes("지금 확인된 답장 기록 없음"));
+  assert.ok(!texts(record).includes("이 사람에게 보낸 답장 기록 91"), "a reload replaces the record entries");
+  assert.ok(!h.all().some((x) => x.textContent === "연결 상태 확인 전"));
+  page = "empty";
+  await (h.section as unknown as { reload: () => Promise<void> }).reload();
+  assert.ok(texts(footer).includes("연결 기록 없음"));
+  assert.ok(!h.all().some((x) => x.textContent === "연결 상태 새로고침"), "the detail panel owns the only refresh");
+});
+
+test("identity UI reports a write as busy until its reload ends and refuses one while another save runs", async () => {
+  const events: string[] = [];
+  let blocked = true;
+  let posts = 0;
+  const api = async (_path: string, method?: string) => {
+    if (method === "POST") {
+      posts++;
+      return {};
+    }
+    events.push("read");
+    return { links: [candidate], after: null };
+  };
+  const h = harness(api, true, new Map(), null, {
+    canStart: () => !blocked,
+    onBusy: (busy: boolean) => events.push(busy ? "busy" : "idle"),
+  });
+  await settle();
+  await h.button("연결 확인").click();
+  assert.equal(posts, 0, "a write waits for the other contact save");
+  blocked = false;
+  await h.button("연결 확인").click();
+  assert.equal(posts, 1);
+  assert.deepEqual(events, ["read", "busy", "read", "idle"], "the page stays busy through the reload after the write");
 });
