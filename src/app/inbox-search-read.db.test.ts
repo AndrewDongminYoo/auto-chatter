@@ -549,3 +549,62 @@ test("migration 032 replays (with later deletion migrations), every deletion fun
     ["instagram_connections"],
   );
 });
+
+// Stores a confirmed or detached identity link between a DM recipient and a commenter of one connection.
+async function link(recipient: string, sender: string, state: "confirmed" | "detached", connection = connectionId) {
+  const workspace = connection === foreignConnectionId ? otherWorkspaceId : workspaceId;
+  const confirmed = state === "confirmed";
+  const event = (
+    await pool.query(
+      `INSERT INTO instagram_contact_identity_link_events(workspace_id,connection_id,recipient_id,sender_id,action,version,evidence_reply_id,request_key,actor_id)
+       VALUES($1,$2,$3,$4,$5,1,$6,gen_random_uuid(),$7) RETURNING id`,
+      [workspace, connection, recipient, sender, confirmed ? "confirm" : "detach", confirmed ? 1 : null, owner.id],
+    )
+  ).rows[0].id;
+  await pool.query(
+    `INSERT INTO instagram_contact_identity_links(workspace_id,connection_id,recipient_id,sender_id,state,version,evidence_reply_id,last_event_id)
+     VALUES($1,$2,$3,$4,$5,1,$6,$7)`,
+    [workspace, connection, recipient, sender, state, confirmed ? 1 : null, event],
+  );
+}
+
+async function comment(sender: string, username: string | null, at: string, connection = connectionId) {
+  const workspace = connection === foreignConnectionId ? otherWorkspaceId : workspaceId;
+  await pool.query(
+    `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,sender_username,comment_text,created_at)
+     VALUES($1,$2,gen_random_uuid()::text,'media',$3,$4,'hi',$5::timestamptz)`,
+    [workspace, connection, sender, username, at],
+  );
+}
+
+test("the inbox list shows a commenter username only through a confirmed link of the same workspace and connection", async () => {
+  for (const recipient of ["501", "502", "503", "504", "505", "506"]) await seed(recipient, `dm ${recipient}`, "2026-09-25T10:00:00Z");
+  // 501: confirmed link; the newest non-null username wins over an older one and a newer comment without one.
+  await link("501", "701", "confirmed");
+  await comment("701", "old_name", "2026-09-20T10:00:00Z");
+  await comment("701", "new.name", "2026-09-21T10:00:00Z");
+  await comment("701", null, "2026-09-22T10:00:00Z");
+  // 502: no link, although the commenter with the same numeric ID has a username.
+  await comment("502", "unlinked", "2026-09-21T10:00:00Z");
+  // 503: a detached link.
+  await link("503", "703", "detached");
+  await comment("703", "detached_name", "2026-09-21T10:00:00Z");
+  // 504: a confirmed link whose commenter never sent a username.
+  await link("504", "704", "confirmed");
+  await comment("704", null, "2026-09-21T10:00:00Z");
+  // 505: the linked commenter's username exists only on another connection of the workspace and in another workspace.
+  await link("505", "705", "confirmed");
+  await comment("705", "other_connection", "2026-09-21T10:00:00Z", secondConnectionId);
+  await comment("705", "other_workspace", "2026-09-21T10:00:00Z", foreignConnectionId);
+  // 506: the link and the username live on another connection, so this connection's conversation shows none.
+  await link("506", "706", "confirmed", secondConnectionId);
+  await comment("706", "elsewhere", "2026-09-21T10:00:00Z", secondConnectionId);
+
+  const rows = (await page(agent)).conversations as (Row & { sender_username: string | null })[];
+  const names = Object.fromEntries(rows.map((row) => [row.recipient_id, row.sender_username]));
+  assert.deepEqual(names, { "501": "new.name", "502": null, "503": null, "504": null, "505": null, "506": null });
+  // Detaching the link hides the username from the next list read.
+  await pool.query("UPDATE instagram_contact_identity_links SET state='detached',evidence_reply_id=NULL WHERE recipient_id='501'");
+  const detached = (await page(agent)).conversations as (Row & { sender_username: string | null })[];
+  assert.equal(detached.find((row) => row.recipient_id === "501")?.sender_username, null);
+});

@@ -144,8 +144,10 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     head.append(node("span", `@${row.username || "연결 계정"}`));
     if (row.unread_count > 0) head.append(node("span", `안 읽음 ${formatCount(row.unread_count, { useGrouping: false })}`, "unread-badge"));
     // The newest DM leads so the list says what to answer first; the numeric DM user ID stays as a secondary line.
+    // sender_username comes only from a confirmed identity link; it is a display hint, not consent evidence.
     button.replaceChildren(
       head,
+      ...(row.sender_username ? [node("span", `@${row.sender_username}`, "conversation-line conversation-sender")] : []),
       node("span", row.last_message_preview ?? "", "conversation-line conversation-snippet"),
       node("span", `DM 사용자 ${formatText(row.recipient_id)}`, "conversation-line conversation-id"),
       node("span", `${formatCount(row.message_count, { useGrouping: false })}개 · ${date(row.last_message_at)}`, "conversation-line"),
@@ -1386,6 +1388,12 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     return `${state.row.connection_id}:${state.row.recipient_id}`;
   }
 
+  // The sender username comes only from the list, and an identity link can be confirmed or detached between list
+  // loads, so choosing a conversation and every list load that returns the open conversation rewrite the title.
+  function conversationTitle(row) {
+    byId("inbox-conversation-title").textContent = `@${row.username || "연결 계정"} · ${row.sender_username ? `@${row.sender_username} · ` : ""}DM 사용자 ${formatText(row.recipient_id)}`;
+  }
+
   function choose(row) {
     clearTimeout(expiryTimer);
     const key = `${row.connection_id}:${row.recipient_id}`;
@@ -1439,7 +1447,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
       });
     replyTemplates.conversationChanged();
     selected = states.get(key);
-    byId("inbox-conversation-title").textContent = `@${row.username || "연결 계정"} · DM 사용자 ${formatText(row.recipient_id)}`;
+    conversationTitle(row);
     byId("inbox-thread-refresh").hidden = false;
     byId("inbox-back-to-list").hidden = false;
     for (const button of byId("inbox-conversations").children) button.setAttribute("aria-pressed", String(button.dataset.key === key));
@@ -1492,12 +1500,15 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         // counted after the mark is kept.
         const known = states.get(`${row.connection_id}:${row.recipient_id}`);
         if (known?.readSeq > reads && known.readMark) reconcile(row, { last_read_message_id: known.readMark, unread_count: known.readUnread });
+        const open = selected?.row.connection_id === row.connection_id && selected?.row.recipient_id === row.recipient_id;
+        // The open conversation's title follows the newest list row even when the unread filter hides that row.
+        if (open) conversationTitle(row);
         if (unreadOnly && row.unread_count === 0) continue;
         const button = node("button", "", "secondary");
         rowContent(button, row);
         button.dataset.key = `${row.connection_id}:${row.recipient_id}`;
         listed.set(button.dataset.key, { row, button });
-        button.setAttribute("aria-pressed", String(selected?.row.connection_id === row.connection_id && selected?.row.recipient_id === row.recipient_id));
+        button.setAttribute("aria-pressed", String(open));
         button.addEventListener("click", () => {
           choose(row);
           focusConversation();

@@ -156,6 +156,7 @@ Migration 062 includes both tables in access controls, exports and all three del
 ### Received inbox
 
 **Received inbox** ([spec](../specs/2026-09-27-instagram-inbox.md)): each connection defaults to `inbox_enabled=false`, and its activation timestamp gates storage of new text DMs and confirmation postbacks. Disabling it keeps stored history under the manual deletion policy. `instagram_inbox_messages` deduplicates by connection and provider message ID in the confirmation transaction. DM recipient IDs stay separate from comment participant IDs.
+The list's `sender_username` is the newest non-null comment `sender_username` of the commenter that a `confirmed` identity link of the same workspace and connection names for that DM recipient; otherwise it is `null`. It is computed only for the listed page through the link primary key and `instagram_comment_events_contact_lookup_idx`. It is a display hint: it does not merge comment and DM IDs, and it is not evidence of messaging consent or delivery eligibility. Without it, the list and the conversation title stay unchanged. Only the list response carries it: the screen rewrites the open conversation's title when a conversation is chosen and when a list response contains the open conversation (also when the unread filter hides its row), and the existing newest-request check orders list responses. An open conversation that is absent from the latest list response keeps its title until a list that contains it returns or it is chosen again.
 
 ### Handoff
 
