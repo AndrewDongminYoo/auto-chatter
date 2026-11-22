@@ -797,9 +797,11 @@ button.switch:hover:not(:disabled) {
   gap: var(--space-2) var(--space-3);
   margin-top: var(--space-4);
 }
+/* No bottom margin, so each input shares a bottom edge with the button the row aligns to its end. */
 .invite-form label {
   display: grid;
   gap: var(--space-1);
+  margin-bottom: 0;
 }
 .invite-form input {
   min-width: min(260px, 100%);
@@ -1272,6 +1274,17 @@ select:disabled {
   gap: var(--space-6);
   margin-top: var(--space-6);
 }
+/* With no conversation listed or open, the two panes would show an empty list beside "대화를 선택하세요"; the status line stands alone as the empty state instead. */
+.inbox-layout:has(#inbox-conversations:empty):has(#inbox-conversation-controls[hidden]) {
+  display: none;
+}
+#inbox-status:not(:empty):has(+ .inbox-layout #inbox-conversations:empty) {
+  margin-top: var(--space-6);
+  padding: var(--space-6) var(--space-5);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
 .inbox-filters {
   display: flex;
   flex-wrap: wrap;
@@ -1392,6 +1405,13 @@ select:disabled {
 }
 .composer-actions {
   justify-content: flex-end;
+}
+/* The assignee select carries its label above it, so the row aligns to the bottom edge it shares with the claim and close buttons. */
+#inbox-conversation-controls .composer-actions {
+  align-items: flex-end;
+}
+#inbox-assign-label {
+  margin-bottom: 0;
 }
 #inbox-reply-count {
   font-variant-numeric: tabular-nums;
