@@ -83,6 +83,39 @@ test("comment events normalize both supported webhook shapes without changing te
   ]);
 });
 
+test("a comment keeps a valid commenter username and drops an invalid one without rejecting the event", () => {
+  const value = (id: string, username: unknown) => ({ id, text: "자료", from: { id: `sender-${id}`, username }, media: { id: "post-1" } });
+  const payload = {
+    object: "instagram",
+    entry: [
+      {
+        id: "account-1",
+        changes: [
+          { field: "comments", value: value("1", "shop.fan_01") },
+          { field: "comments", value: value("2", "a".repeat(31)) },
+          { field: "comments", value: value("3", "has space") },
+          { field: "comments", value: value("4", "@handle") },
+          { field: "comments", value: value("5", 12345) },
+          { field: "comments", value: value("6", "") },
+        ],
+      },
+    ],
+  };
+  const comments = parseCommentEvents(Buffer.from(JSON.stringify(payload)));
+  assert.deepEqual(
+    comments.map((comment) => [comment.commentId, comment.senderUsername]),
+    [
+      ["1", "shop.fan_01"],
+      ["2", undefined],
+      ["3", undefined],
+      ["4", undefined],
+      ["5", undefined],
+      ["6", undefined],
+    ],
+  );
+  assert.equal("senderUsername" in comments[1]!, false);
+});
+
 test("a recognized comment missing its post identifier is rejected", () => {
   const payload = {
     object: "instagram",

@@ -84,11 +84,11 @@ export async function ingestComments(pool: Pool, comments: readonly InstagramCom
 
       const events = await client.query<EventRow>(
         `INSERT INTO instagram_comment_events
-          (workspace_id, connection_id, comment_id, media_id, sender_id, comment_text)
-         VALUES ($1, $2, $3, $4, $5, $6)
+          (workspace_id, connection_id, comment_id, media_id, sender_id, comment_text, sender_username)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (connection_id, comment_id) DO NOTHING
          RETURNING id`,
-        [connection.workspace_id, connection.id, comment.commentId, comment.postId, comment.senderId, comment.text],
+        [connection.workspace_id, connection.id, comment.commentId, comment.postId, comment.senderId, comment.text, comment.senderUsername ?? null],
       );
       const event = events.rows[0];
       if (!event) continue;

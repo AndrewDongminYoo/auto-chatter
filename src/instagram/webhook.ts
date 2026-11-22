@@ -5,9 +5,14 @@ export interface InstagramComment {
   commentId: string;
   postId: string;
   senderId: string;
+  // The commenter's username (from.username) when Meta sent a valid one; never required to accept the event.
+  senderUsername?: string;
   text: string;
   parentId?: string;
 }
+
+// Instagram usernames: 1 to 30 letters, digits, periods and underscores. The database CHECK holds the same rule.
+const INSTAGRAM_USERNAME = /^[A-Za-z0-9._]{1,30}$/;
 
 function singleParameter(query: URLSearchParams, name: string): string | null {
   const values = query.getAll(name);
@@ -58,6 +63,7 @@ function parseComment(value: unknown, accountId: string): InstagramComment {
     commentId: value.id,
     postId: value.media.id,
     senderId: value.from.id,
+    ...(typeof value.from.username === "string" && INSTAGRAM_USERNAME.test(value.from.username) ? { senderUsername: value.from.username } : {}),
     text: value.text,
     ...(value.parent_id === undefined ? {} : { parentId: value.parent_id }),
   };

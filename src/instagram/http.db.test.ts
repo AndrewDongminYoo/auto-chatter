@@ -170,6 +170,27 @@ test("a nonmatching keyword stores the comment without a private reply request",
   assert.equal(await rowCount("private_reply_outbox"), 0);
 });
 
+test("a signed comment stores a valid commenter username and NULL for an invalid one (#388)", async () => {
+  const withUsername = (commentId: string, username: unknown) => {
+    const payload = JSON.parse(commentBody({ commentId, senderId: `sender-${commentId}`, text: "안녕하세요" }));
+    payload.entry[0].value.from.username = username;
+    return JSON.stringify(payload);
+  };
+  assert.equal((await signedPost(withUsername("comment-1", "shop.fan_01"))).status, 200);
+  assert.equal((await signedPost(withUsername("comment-2", "not valid!"))).status, 200);
+  assert.equal((await signedPost(commentBody({ commentId: "comment-3", senderId: "sender-comment-3", text: "안녕하세요" }))).status, 200);
+  const rows = await pool.query<{ comment_id: string; sender_username: string | null }>("SELECT comment_id,sender_username FROM instagram_comment_events ORDER BY comment_id");
+  assert.deepEqual(
+    rows.rows.map((row) => [row.comment_id, row.sender_username]),
+    [
+      ["comment-1", "shop.fan_01"],
+      ["comment-2", null],
+      ["comment-3", null],
+    ],
+  );
+  await assert.rejects(pool.query("UPDATE instagram_comment_events SET sender_username='bad name' WHERE comment_id='comment-1'"), /instagram_comment_events_sender_username_format/);
+});
+
 test("an entry changes comment follows the same ingestion path", async () => {
   const payload = JSON.parse(commentBody());
   payload.entry[0] = { id: "account-1", changes: [{ field: "comments", value: payload.entry[0].value }] };

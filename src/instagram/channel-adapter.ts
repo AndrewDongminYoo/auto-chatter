@@ -49,6 +49,7 @@ export const instagramAdapter: ChannelAdapter = {
         text: comment.text,
         occurredAt: null,
         ...(comment.parentId === undefined ? {} : { parentId: comment.parentId }),
+        ...(comment.senderUsername === undefined ? {} : { actorName: comment.senderUsername }),
       })),
       ...messages.map((message): ChannelEvent => ({
         account: { channel: "instagram", accountId: message.accountId },
@@ -93,6 +94,7 @@ export function partitionInstagramEvents(events: readonly ChannelEvent[]): {
         commentId: event.receipt.providerId,
         postId: event.mediaId,
         senderId: event.actor.value,
+        ...(event.actorName === undefined ? {} : { senderUsername: event.actorName }),
         text: event.text,
         ...(event.parentId === undefined ? {} : { parentId: event.parentId }),
       });
