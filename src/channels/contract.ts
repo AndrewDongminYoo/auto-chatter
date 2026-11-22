@@ -23,7 +23,7 @@ interface EventBase {
   actor: { kind: string; value: string };
 }
 export type ChannelEvent =
-  | (EventBase & { kind: "comment"; mediaId: string; parentId?: string; text: string; occurredAt: null })
+  | (EventBase & { kind: "comment"; mediaId: string; parentId?: string; actorName?: string; text: string; occurredAt: null })
   | (EventBase & { kind: "text_message"; text: string; occurredAt: Date })
   | (EventBase & { kind: "confirmation_postback"; title: string; replyBinding: string; occurredAt: Date });
 

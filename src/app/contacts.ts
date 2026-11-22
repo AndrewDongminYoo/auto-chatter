@@ -8,6 +8,7 @@ type Contact = {
   connection_id: string;
   sender_id: string;
   username: string | null;
+  sender_username: string | null;
   first_comment_at: Date;
   last_comment_at: Date;
   comment_count: string;
@@ -640,7 +641,9 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
   for (const condition of contactConditionFields({ fieldCondition, conditionTree })) await validateFieldCondition(pool, workspaceId, condition);
   const conditionSql = segmentConditionSql(workspaceId, { connectionId, tagCondition, fieldCondition, activity, consent, dmConsent, dmActivity, operator, conditionTree }, "statement_timestamp()", after);
   const { evaluation, activityWindow, dmActivityWindow, activityMatches, contactScope, matches, values } = conditionSql;
-  const contactQuery = `SELECT e.connection_id,e.sender_id,c.username,min(e.created_at) AS first_comment_at,
+  // sender_username is the commenter's own name from the newest comment that carried one; c.username is the connected account's.
+  const contactQuery = `SELECT e.connection_id,e.sender_id,c.username,
+ (array_agg(e.sender_username ORDER BY e.created_at DESC,e.id DESC) FILTER (WHERE e.sender_username IS NOT NULL))[1] AS sender_username,min(e.created_at) AS first_comment_at,
  max(e.created_at) AS last_comment_at,count(*)::text AS comment_count,coalesce((automation.paused OR automation.handoff_paused),false) AS automation_paused,coalesce(t.tags,'{}'::text[]) AS tags,
  coalesce((SELECT jsonb_object_agg(v.field_id::text,v.value) FROM instagram_contact_field_values v
  JOIN instagram_contact_fields f ON f.id=v.field_id AND f.workspace_id=v.workspace_id AND NOT f.archived

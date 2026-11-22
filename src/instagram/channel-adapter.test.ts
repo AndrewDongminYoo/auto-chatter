@@ -15,7 +15,7 @@ const message = {
 };
 const comment = {
   field: "comments",
-  value: { id: "c1", from: { id: "456" }, media: { id: "789" }, text: "comment", parent_id: "parent" },
+  value: { id: "c1", from: { id: "456", username: "commenter.one" }, media: { id: "789" }, text: "comment", parent_id: "parent" },
 };
 
 test("Instagram channel event seam preserves parser content ordering and postback distinctions", () => {
@@ -46,6 +46,7 @@ test("Instagram channel event seam preserves parser content ordering and postbac
     ["comment", "text_message", "confirmation_postback"],
   );
   assert.equal(events[0]!.occurredAt, null);
+  assert.equal(events[0]!.kind === "comment" ? events[0]!.actorName : null, "commenter.one");
   assert.deepEqual(partitionInstagramEvents(events), {
     comments: parseCommentEvents(body),
     messages: parseMessageEvents(body),

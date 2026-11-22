@@ -2610,9 +2610,14 @@ function contactCard(contact) {
   const summary = node("div", "", "contact-summary");
   const identity = node("div", "", "contact-identity");
   identity.append(
-    node("h3", `참여자 ${formatText(contact.sender_id)}`),
+    // `sender_username` is the commenter's own name when a comment carried one; the ID stays visible beside it.
+    node("h3", contact.sender_username ? `@${formatText(contact.sender_username)}` : `참여자 ${formatText(contact.sender_id)}`),
     // `username` is the connected account's name, not the contact's; it only tells contacts apart when several accounts are connected.
-    node("p", `${connections.length > 1 ? `연결 계정 ${contact.username ? `@${contact.username}` : "이름 확인 전"} · ` : ""}댓글 ${formatCount(contact.comment_count, { useGrouping: false })}개 · 최근 댓글 ${formatDateTime(contact.last_comment_at)}`, "hint"),
+    node(
+      "p",
+      `${contact.sender_username ? `참여자 ${formatText(contact.sender_id)} · ` : ""}${connections.length > 1 ? `연결 계정 ${contact.username ? `@${contact.username}` : "이름 확인 전"} · ` : ""}댓글 ${formatCount(contact.comment_count, { useGrouping: false })}개 · 최근 댓글 ${formatDateTime(contact.last_comment_at)}`,
+      "hint",
+    ),
   );
   const automationStatus = badge("");
   const toggle = node("button", "", "secondary");
