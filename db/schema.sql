@@ -1394,7 +1394,8 @@ DO $$ BEGIN
 END $$;
 -- One row per inbound text DM that started a published DM trigger flow. It holds identifiers, the DM time and
 -- the matched flow and version, never the DM text. sender_id is the messaging sender ID (a DM recipient); it is
--- not linked to a comment sender. A DM that a precedence rule blocks writes no row.
+-- not linked to a comment sender. A DM that a precedence rule blocks writes no row. A DM over a start limit (#400)
+-- writes its row with skip_code and starts no run; the limits count only rows with a NULL skip_code.
 CREATE TABLE IF NOT EXISTS instagram_dm_start_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL,
@@ -1414,6 +1415,21 @@ CREATE TABLE IF NOT EXISTS instagram_dm_start_events (
 );
 CREATE INDEX IF NOT EXISTS instagram_dm_start_events_sender_idx
   ON instagram_dm_start_events(workspace_id,connection_id,sender_id);
+-- Start limits (#400, migration 075): the sender cooldown and the connection hourly limit count started rows
+-- (dmStartSkipCodeSql in src/instagram/send-quota.ts), and operations health counts skipped rows by code.
+ALTER TABLE instagram_dm_start_events ADD COLUMN IF NOT EXISTS skip_code text;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='instagram_dm_start_events'::regclass AND conname='instagram_dm_start_events_skip_code_check') THEN
+    ALTER TABLE instagram_dm_start_events ADD CONSTRAINT instagram_dm_start_events_skip_code_check
+      CHECK(skip_code IN ('sender_cooldown','connection_hourly_limit'));
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS instagram_dm_start_events_started_sender_idx
+  ON instagram_dm_start_events(connection_id,sender_id,created_at) WHERE skip_code IS NULL;
+CREATE INDEX IF NOT EXISTS instagram_dm_start_events_started_idx
+  ON instagram_dm_start_events(connection_id,created_at) WHERE skip_code IS NULL;
+CREATE INDEX IF NOT EXISTS instagram_dm_start_events_skipped_idx
+  ON instagram_dm_start_events(connection_id,created_at) WHERE skip_code IS NOT NULL;
 -- A run starts from exactly one source: a comment event or a DM start event, with one run per flow and source.
 ALTER TABLE flow_runs ALTER COLUMN event_id DROP NOT NULL;
 ALTER TABLE flow_runs ADD COLUMN IF NOT EXISTS dm_start_event_id uuid;

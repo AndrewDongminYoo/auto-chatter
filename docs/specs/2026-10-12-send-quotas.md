@@ -69,6 +69,23 @@ migration 042가 열 두 개와 인덱스 하나를 더하며, 운영 DB 적용�
 - 범위 있는 깨우기: 웹훅이 받은 계정 ID와 Queue 메시지 뒤 한 연결의 깨우기는 지금처럼 ID 순서이고 `send_woken_at`을 기록하지 않습니다.
 - 비용: 범위 없는 깨우기는 고르는 문장과, Queue에 넣은 연결이 있을 때만 기록하는 문장 하나를 씁니다. 발송할 일이 있는 연결이 있는 Cron 실행에서만 쿼리가 하나 늘고, 범위 있는 깨우기의 쿼리 수는 그대로입니다.
 
+## DM 시작 한도
+
+[이슈 #400](https://github.com/AndrewDongminYoo/auto-chatter/issues/400)에서 더했습니다.
+DM으로 시작한 플로의 첫 메시지는 위 예산을 쓰지 않으므로, 메시지 하나짜리 플로는 DM마다 새 실행을 만들 수 있었습니다.
+그래서 발송이 아니라 실행의 시작을 막습니다.
+
+- 값: 한 연결에서 같은 메시징 ID(DM 보낸 사람)는 10분에 실행 하나까지(`DM_START_SENDER_COOLDOWN_MINUTES`), 한 연결은 최근 60분 동안 700개까지(`DM_START_HOURLY_LIMIT`, 비공개 답장 예산과 같은 이동 창) 시작합니다. 두 값은 `src/instagram/send-quota.ts`에 있습니다. Meta는 Send API의 시간당 한도를 문서로 정하지 않았으므로(위 [Meta의 공식 한도](#meta의-공식-한도)) 두 값은 Meta 한도가 아니라 서비스 정책입니다.
+- 확인 위치: `startDmTriggerFlow`(`src/instagram/dm-start-trigger.ts`)가 플로를 고르고 기존 우선 규칙(`startBlocked`: 재개할 실행, 대기 중인 팔로우 응답, 15분 안의 보관 DM, 수신 거부, 활성 핸드오프)을 통과한 뒤, 실행을 만들기 전에 확인합니다. 우선 규칙에 막힌 DM은 지금처럼 행을 쓰지 않습니다. 조건은 `dmStartSkipCodeSql` 한 곳에 있습니다. 둘 다 걸리면 `sender_cooldown`이 이깁니다.
+- 건너뛴 행: 한도를 넘은 DM은 `instagram_dm_start_events` 행을 `skip_code`(`sender_cooldown` 또는 `connection_hourly_limit`)와 함께 쓰고, `flow_runs`, `flow_dm_deliveries`, `flow_step_runs` 행은 만들지 않습니다. 두 한도는 `skip_code IS NULL`인 행만, 데이터베이스 시각(`created_at`과 `clock_timestamp()`)으로 셉니다. `created_at`을 쓰는 시계와 같은 시계를 쓰며, 트랜잭션 시작에 고정되는 `now()`를 쓰면 잠금을 기다렸거나 배치 안에서 뒤에 온 DM이 더 이른 창으로 판정됩니다. 판정마다 `clock_timestamp()`를 한 번 읽어(`decided_at` 부분 질의) 두 조건에 넘기므로, 인덱스가 `created_at` 범위로 좁혀 읽습니다. 조건 안에 `clock_timestamp()`를 직접 쓰면 volatile 함수라서 인덱스 범위 조건이 되지 못하고 연결의 시작 기록 전체를 읽습니다. 정확히 10분 전의 시작은 막지 않습니다. 같은 메시지 ID의 재전달은 지금처럼 `ON CONFLICT(connection_id,message_id) DO NOTHING`으로 아무것도 쓰지 않습니다. 건너뛴 행의 메시지 ID도 시작한 행과 같이 재전달 때 응답 대기, 팔로우 응답, 보관 DM이 가져가지 않으며, DM 플로의 24시간 창은 건너뛴 행도 받은 DM으로 봅니다.
+- 동시성: 수신 트랜잭션은 메시지 잠금(`lockMessageIds`) 바로 뒤에, 배치의 보낸 사람마다 트랜잭션 advisory 잠금(`'dm-start-sender:'` 키, 계정 ID와 보낸 사람 ID, `lockDmStartSenders`)을 키 순서로 한 문장에서 잡습니다. 그래서 같은 보낸 사람의 동시 DM 두 개는 차례로 확인되고 하나만 시작합니다. 기다리는 트랜잭션은 메시지 잠금과 그보다 앞선 보낸 사람 잠금만 가지고 있고 다른 곳은 이 키를 잡지 않으므로 교착을 만들지 않습니다. 받은 편지함의 대화 잠금(`lockConversation`)은 받은 편지함이 켜진 연결에서만 잡히므로 쓰지 않았습니다.
+- 시간당 한도의 오차: 연결 전체를 잠그지 않습니다. 한 배치는 커밋된 시작과 자기 시작만 세므로, 같은 연결을 동시에 처리하는 다른 보낸 사람의 배치들이 있으면 그 배치들의 시작 수만큼 700을 넘을 수 있습니다.
+- 운영 상태: `GET /api/workspace/health`의 연결별 `dm_start_cooldown_24h`와 `dm_start_hourly_limit_24h`가 최근 24시간에 건너뛴 시작을 코드별로 셉니다([운영 상태 문서](2026-10-01-operations-health.md#지표와-api)). 운영 상태 화면이 두 수를 보여 줍니다.
+- Claim과 깨우기: 한도를 넘은 DM은 실행도 발송 행도 만들지 않으므로 claim 문장과 `wakeDueReplies`는 바꾸지 않았습니다.
+- 연결 사이의 혼잡: Queue 메시지를 합치는 장치는 더하지 않았습니다. 이 한도가 한 연결의 DM 시작 부하를 시간당 실행 700개로 묶고, Cron은 이미 `send_woken_at` 순서로 연결을 돌아가며 깨웁니다([Cron 깨우기의 공평성](#cron-깨우기의-공평성)).
+- 저장: `instagram_dm_start_events.skip_code text`(두 값만 허용하는 CHECK)와 세 부분 인덱스(`skip_code IS NULL`인 `(connection_id, sender_id, created_at)`과 `(connection_id, created_at)`, `skip_code IS NOT NULL`인 `(connection_id, created_at)`)를 migration 075가 더합니다. 기존 행은 시작한 행이므로 `NULL`로 둡니다. 삭제 함수와 작업 공간 내보내기는 이미 이 테이블을 다루므로 건너뛴 행과 새 열도 함께 지우고 내보냅니다.
+- 배포 순서: migration 075(`deploy/migrate-multi-user.sql`로 적용)를 코드보다 먼저 적용합니다. 지금 코드는 이 열을 읽지 않고 `NULL`만 쓰므로 그 사이에 바뀌는 것은 내보내기에 `skip_code: null`이 생기는 것뿐입니다. 코드를 먼저 배포하면 DM 시작 플로와 맞는 DM의 수신 트랜잭션과 운영 지표 문장이 `42703`(열 없음)으로 실패합니다.
+
 ## 저장
 
 - `private_reply_outbox.provider_called_at timestamptz`: 위의 호출 시각입니다. `(connection_id, provider_called_at)`에 `provider_called_at IS NOT NULL`인 부분 인덱스가 있습니다.
@@ -104,4 +121,5 @@ migration을 먼저 적용하면 그때부터 삭제 함수가 이월을 기록�
 
 - `src/instagram/send-quota.test.ts`: 예산 값과 SQL 조건.
 - `src/instagram/send-quota.db.test.ts`: 699회와 700회의 경계, 1시간 창이 비는 것, 다른 연결은 그대로 보냄, 재시도를 쓰지 않음, 동시 claim이 같은 행을 두 번 보내지 않음, POST 전에 멈춘 시도도 셈, migration 재적용. 이월(#189): 연결 데이터 삭제와 재연결 뒤에도 예산에 막힘과 이월이 끝나면 풀림, 사람 데이터 삭제도 셈, 두 번의 삭제가 더해지고 끝난 이월은 바뀜, 1시간이 지났거나 호출하지 않은 행은 이월하지 않음, 작업 공간 삭제가 그대로 성공함, migration 044 재적용.
+- `src/instagram/dm-start-trigger.db.test.ts`(#400): 9분 59초와 10분의 보낸 사람 간격 경계, 700번째와 701번째 시작, 60분보다 오래된 행과 건너뛴 행은 세지 않음, 다른 보낸 사람과 다른 연결은 막히지 않음, 두 한도가 겹치면 `sender_cooldown`, 같은 보낸 사람의 동시 DM 두 개는 실행 하나, 기존 우선 규칙이 먼저 막고 건너뛴 행을 쓰지 않음, 운영 지표의 코드별 수, 삭제 함수와 내보내기, migration 075 재적용.
 - `src/cloudflare/worker.db.test.ts`: 예산에 막힌 연결을 Queue와 Cron이 다시 넣지 않음, 지운 행의 이월에 막힌 연결도 이월이 끝날 때까지 다시 넣지 않음, 같은 연결의 수동 답장과 팔로우 응답은 보냄, 100개가 넘는 연결을 Cron이 돌아가며 깨움, 발행에 실패한 연결은 기록하지 않음, Cron과 Queue를 거쳐 한 연결에 쌓인 답장 200개가 다른 연결의 첫 답장을 늦추지 않음.

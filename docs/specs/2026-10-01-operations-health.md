@@ -101,6 +101,7 @@ Cron 단계 `kept_reply_cleanup`, `oauth_state_cleanup`, `token_refresh`, `subsc
   복구 시각은 네 발송 테이블에서 다음 열입니다: 비공개 답장과 팔로우 응답은 migration 067이 추가한 `recovered_at`, 수동 답장은 복구 문장이 함께 쓰는 `unknown` 이벤트(`instagram_manual_reply_events`, `failure_code='worker_interrupted'`)의 `created_at`, 캠페인 발송 행은 복구가 쓰고 이후 바뀌지 않는 `updated_at`입니다. 다른 결과는 지금처럼 위 시각을 씁니다.
   067 이전에 복구된 비공개 답장과 팔로우 응답은 `recovered_at`이 없으므로 이전처럼 claim 시각을 씁니다. 값을 채우지 않습니다.
   [캠페인 정리](2026-10-27-campaign-runs.md#도달할-수-없는-행의-정리)가 claim 없이 `blocked`로 끝낸 캠페인 행은 claim 시각이 없으므로 생성 시각으로 셉니다. 그래서 24시간보다 오래된 실행에서 정리된 행은 `blocked_24h`에 나타나지 않습니다. 이 지표의 시각 기준은 바꾸지 않았습니다.
+- `dm_start_cooldown_24h`, `dm_start_hourly_limit_24h`: 최근 24시간(`created_at` 기준)에 [DM 시작 한도](2026-10-12-send-quotas.md#dm-시작-한도)가 건너뛴 DM 플로 시작 수입니다. 각각 같은 보낸 사람의 간격 제한(`sender_cooldown`)과 연결의 시간당 한도(`connection_hourly_limit`)입니다. 경보는 만들지 않으며, 운영 상태 화면이 연결마다 두 수를 보여 줍니다.
 - `token_expires_in_days`: 토큰 만료까지 남은 일수(내림, 만료되면 음수, 토큰이 없으면 `null`)입니다.
 - `send_paused_until`: Meta 발송 제한으로 연결이 일시 중지돼 있으면 그 끝 시각입니다.
 

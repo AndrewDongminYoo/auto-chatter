@@ -566,9 +566,12 @@ test("a DM of one conversation waits for an uncommitted earlier DM, so a read ma
 });
 
 test("two DM batches with their senders in opposite orders both complete", async () => {
-  // Batch A stops after its first conversation lock, before its second.
+  // Batch A stops after its first conversation lock, before its second. The DMs are postbacks: a typed DM also takes
+  // the sender-ordered DM start lock (lockDmStartSenders) before the conversation locks, and batch B would then wait
+  // on that lock and never reach the conversation locks this test is about.
+  const postback = (recipient: string, messageId: string): InstagramMessage => ({ ...message(recipient, messageId), confirmationReplyId: "1" });
   let locks = 0;
-  const first = ingestHeld([message("456", "batch-a-1"), message("789", "batch-a-2")], (text) => text.includes("'inbox-conversation:'") && ++locks === 2);
+  const first = ingestHeld([postback("456", "batch-a-1"), postback("789", "batch-a-2")], (text) => text.includes("'inbox-conversation:'") && ++locks === 2);
   const settle = (promise: Promise<void>) =>
     promise.then(
       () => null,
@@ -577,7 +580,7 @@ test("two DM batches with their senders in opposite orders both complete", async
   let second: Promise<string | null> | undefined;
   try {
     await Promise.race([first.atPause, first.done]);
-    second = settle(ingestMessages(pool, [message("789", "batch-b-1"), message("456", "batch-b-2")]));
+    second = settle(ingestMessages(pool, [postback("789", "batch-b-1"), postback("456", "batch-b-2")]));
     await waitForLockWaiters(1);
   } finally {
     first.release();

@@ -1069,6 +1069,7 @@ async function loadOperations() {
               badges,
               node("p", `가장 오래 기다린 발송: ${operationDuration(connection.oldest_due_pending_seconds)} · 가장 오래 처리 중인 발송: ${operationDuration(connection.longest_sending_seconds)}`, "hint"),
               node("p", `최근 24시간: 결과 확인 필요 ${formatCount(connection.unknown_24h, { useGrouping: false })}건 · 실패 ${formatCount(connection.failed_24h, { useGrouping: false })}건 · 차단 ${formatCount(connection.blocked_24h, { useGrouping: false })}건`, "hint"),
+              node("p", `최근 24시간 시작하지 않은 DM 플로: 같은 보낸 사람 간격 제한 ${formatCount(connection.dm_start_cooldown_24h, { useGrouping: false })}건 · 계정 시간당 한도 ${formatCount(connection.dm_start_hourly_limit_24h, { useGrouping: false })}건`, "hint"),
               node(
                 "p",
                 [

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { appApi } from "./api.ts";
-import { ingestComments, resumeDueFlowRuns } from "../instagram/store.ts";
+import { ingestComments, resumeDueFlowRuns, resumeRepliedFlowRun } from "../instagram/store.ts";
 import { ingestMessages, reconcileUnmatchedReplies } from "../instagram/follow-flow.ts";
 import { processNextPrivateReply, type PrivateReplyTransport } from "../instagram/reply-worker.ts";
 import { lockContact } from "./contact-fields.ts";
@@ -601,8 +601,9 @@ async function twoRunsWaitingOnOnePerson() {
 }
 
 // The first message claims the newest run and waits on the contact lock a manual edit holds; a second message
-// with another ID picks the same run and waits on its row lock until the first one commits, and a second delivery
-// of the same message ID waits on the message lock ingestion takes first (#291).
+// with another ID from the same sender waits on the DM start sender lock (#400) that ingestion takes right after the
+// message locks, so it reads the runs only after the first one commits, and a second delivery of the same message
+// ID waits on the message lock ingestion takes first (#291).
 async function deliverConcurrently(firstId: string, secondId: string) {
   const holder = await pool.connect();
   try {
@@ -611,7 +612,7 @@ async function deliverConcurrently(firstId: string, secondId: string) {
     const firstMessage = dm("9001", "XL", { id: firstId });
     await waitForLock("%pg_advisory_xact_lock%");
     const secondMessage = dm("9001", "M", { id: secondId });
-    await waitForLock(firstId === secondId ? "%instagram-message:%" : RUN_CLAIM);
+    await waitForLock(firstId === secondId ? "%instagram-message:%" : "%dm-start-sender:%");
     await holder.query("COMMIT");
     await Promise.all([firstMessage, secondMessage]);
   } finally {
@@ -623,8 +624,40 @@ test("two different messages arriving together advance two runs waiting on the s
   const { first, second } = await twoRunsWaitingOnOnePerson();
   await deliverConcurrently("in-1", "in-2");
   assert.equal((await runs(second))[0]!.status, "ended");
-  // The message that lost the newest run moves on to the older one, as it would have one after the other.
+  // The second message reads the runs after the first one committed, so it takes the older one.
   assert.equal((await runs(first))[0]!.status, "ended");
+  assert.equal(await sizeOf("sender-1"), "M");
+});
+
+// The DM start sender lock (#400) keeps two ingestion transactions of one sender apart, but the kept-DM reconcile and the
+// timeout claim runs without it. Here another transaction advances the newest run as the reconcile would, and holds
+// it while a new message reads the runs: the message waits on the run claim, loses it and takes the older run.
+test("a message that loses its claim on the newest run to another transaction moves on to the older run", async () => {
+  const { first, second } = await twoRunsWaitingOnOnePerson();
+  const holder = await pool.connect();
+  let message: ReturnType<typeof dm> | undefined;
+  let committed = false;
+  try {
+    await holder.query("BEGIN");
+    assert.equal(await resumeRepliedFlowRun(holder, { accountId: "owned-account", senderId: "9001", messageId: "kept-1", text: "XL", timestamp: new Date(Date.now() + 1000) }), true);
+    message = dm("9001", "M", { id: "in-2" });
+    await waitForLock(RUN_CLAIM);
+    await holder.query("COMMIT");
+    committed = true;
+    await message;
+  } finally {
+    // On a failure path, release the run lock before the connection goes back to the pool, and let the waiting
+    // message finish so it cannot block the next test.
+    if (!committed) {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      await message?.catch(() => undefined);
+    }
+    holder.release();
+  }
+  const [newest] = (await pool.query("SELECT status,reply_message_id FROM flow_runs WHERE flow_id=$1", [second])).rows;
+  assert.deepEqual(newest, { status: "ended", reply_message_id: "kept-1" });
+  const [older] = (await pool.query("SELECT status,reply_message_id FROM flow_runs WHERE flow_id=$1", [first])).rows;
+  assert.deepEqual(older, { status: "ended", reply_message_id: "in-2" });
   assert.equal(await sizeOf("sender-1"), "M");
 });
 

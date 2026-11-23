@@ -74,5 +74,6 @@ BEGIN;
 \ir ../db/migrations/072_instagram_dm_last_inbound.sql
 \ir ../db/migrations/073_comment_rule_archive.sql
 \ir ../db/migrations/074_comment_sender_username.sql
+\ir ../db/migrations/075_dm_start_limits.sql
 \ir supabase-access.sql
 COMMIT;
