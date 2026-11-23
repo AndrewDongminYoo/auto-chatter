@@ -915,8 +915,9 @@ DB 상태와 고정 오류 로그를 확인하고 `unknown`을 일괄 pending으
 4. `openssl rand -base64 32`로 새 키를 만들어 안전하게 백업한 뒤 `TOKEN_ENCRYPTION_KEY`로 등록합니다. 2단계보다 먼저 하면 그 사이에 이전 토큰을 열 수 없는 구간이 생깁니다.
 5. 다음 cron 실행 뒤 `scheduled_steps`의 `token_key_rewrap` 행을 읽습니다. `failure_code`는 성공한 뒤에도 남으므로, 상태는 `last_success_at`과 `last_failure_at` 중 늦은 쪽으로 판단합니다. 실패가 늦고 `failure_code`가 `not_configured`이면 `TOKEN_ENCRYPTION_KEY_PREVIOUS` 값이 32바이트 canonical base64가 아닌 것이며, 이때는 토큰 갱신, 구독 확인, 발송도 같은 이유로 실패하므로 바로 고칩니다.
 6. 실패가 늦고 `failure_code`가 `token_key_rewrap_failed`이면 두 키 모두로 열 수 없는 행이 있는 것입니다. 해당 계정은 다시 연결하고 웹훅 서명 키는 교체해서, 그 행이 새 키로 바뀌거나 폐기되게 합니다. 이 단계가 실패하는 동안 cron 실행 전체가 실패로 기록되어 `cron_stale` 경보가 켜져 있으므로, 그동안 다른 cron 장애를 경보만으로 알아챌 수 없습니다.
-7. 이전 키를 지워도 되는 조건은 세 가지를 모두 만족할 때입니다: `token_key_rewrap`의 `last_success_at`이 4단계에서 10분 이상 지난 뒤이고 `last_failure_at`보다 늦음, 아래 조회에 v1 행이 없음, 남은 `kid`가 하나이고 3단계에서 기록한 `kid`가 아님. 10분을 기다리는 이유는 4단계 전에 시작한 OAuth 콜백이 그 뒤에 이전 키로 봉인한 토큰을 저장할 수 있기 때문입니다. 콜백의 공급자 호출과 DB 쿼리는 각각 10초 상한이 있으므로, 10분 뒤에 성공한 실행은 그런 행까지 다시 봉인한 상태입니다. 한 번 실행에 표마다 최대 500행을 다시 봉인하므로, 행이 많으면 여러 번의 실행을 기다립니다.
-8. 7단계 조건을 확인한 뒤 `wrangler secret delete TOKEN_ENCRYPTION_KEY_PREVIOUS`로 이전 키를 지웁니다. 이전 키의 백업은 이 단계가 끝날 때까지 지우지 않습니다.
+7. 이전 키를 지워도 되는 조건은 세 가지를 모두 만족할 때입니다: `token_key_rewrap`의 `last_success_at`이 4단계에서 10분 이상 지난 뒤이고 `last_failure_at`보다 늦음, 아래 조회에 v1 행이 없음, 남은 `kid`가 하나이고 3단계에서 기록한 `kid`가 아님. 10분을 기다리는 이유는 4단계 전에 시작한 OAuth 콜백이 그 뒤에 이전 키로 봉인한 토큰을 저장할 수 있기 때문입니다. 콜백의 공급자 호출은 10초, DB 쿼리는 클라이언트 쪽에서 10초 상한이 있지만, 서버에서 이미 실행 중인 문장의 완료 시각에는 확인된 상한이 없으므로 이 대기는 가능성을 줄일 뿐 보장하지 않습니다. 그래서 9단계의 사후 확인을 둡니다. 한 번 실행에 표마다 최대 500행을 다시 봉인하므로, 행이 많으면 여러 번의 실행을 기다립니다.
+8. 7단계 조건을 확인한 뒤 `wrangler secret delete TOKEN_ENCRYPTION_KEY_PREVIOUS`로 이전 키를 지웁니다.
+9. 1시간 뒤와 다음 날에 아래 조회를 다시 실행합니다. v1 행이나 새 키가 아닌 `kid`가 보이면 늦게 저장된 이전 키의 행이므로, 백업한 이전 키를 `TOKEN_ENCRYPTION_KEY_PREVIOUS`로 다시 등록하고 5단계부터 반복합니다. 이전 키의 백업은 이 확인이 끝날 때까지 지우지 않습니다.
 
 ```sql
 SELECT 'token' AS kind,split_part(access_token_encrypted,'.',1) AS version,
