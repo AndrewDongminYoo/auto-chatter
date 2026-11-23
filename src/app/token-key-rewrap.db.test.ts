@@ -142,29 +142,26 @@ test("a write made after the read wins over the rewrap", async () => {
   assert.deepEqual((await pool.query("SELECT secret_encrypted,retired_at IS NOT NULL AS retired FROM webhook_signing_keys")).rows, [{ secret_encrypted: null, retired: true }]);
 });
 
-test("a token refresh that read the token before a rewrap does not store over it, and the next refresh uses the rewrapped token", async () => {
+test("a token refresh that loses its save to a rewrap is due again at once and refreshes the rewrapped token", async () => {
   await addConnection(1, (context) => sealSecret("token-1", previousKey, context));
   await pool.query("UPDATE instagram_connections SET token_expires_at=now()+interval '20 days',reauth_required_at=NULL,reauth_reason=NULL,reauth_token_obtained_at=NULL");
   const sent: string[] = [];
-  let rewrapDuringRefresh = true;
   const fetchImpl = (async (input: URL | RequestInfo) => {
     const target = new URL(String(input));
     if (target.pathname === "/refresh_access_token") {
       sent.push(target.searchParams.get("access_token")!);
-      if (rewrapDuringRefresh) assert.deepEqual(await rewrapSealedSecrets(pool, keys), { rewrapped: 1, failed: 0 });
+      // The first refresh read the previous key's ciphertext, so its conditional save loses to this rewrap.
+      if (sent.length === 1) assert.deepEqual(await rewrapSealedSecrets(pool, keys), { rewrapped: 1, failed: 0 });
       return Response.json({ access_token: `renewed-${sent.length}`, expires_in: 5_184_000 });
     }
     return Response.json({ user_id: "101" });
   }) as typeof fetch;
-  // The refresh read the previous key's ciphertext, so its conditional write loses to the rewrap.
-  assert.deepEqual(await refreshDueInstagramTokensWithFailures(pool, keys, fetchImpl), { refreshed: 0, failed: 0 });
-  const stored = (await connections())[0]!.access_token_encrypted as string;
-  assert.equal(stored.startsWith(currentKeyPrefix(currentKey)), true);
-  assert.equal(openSecret(stored, currentKey, `${workspace}:101`), "token-1");
-  // The next attempt opens the rewrapped token with the current key alone and stores the renewal under it.
-  rewrapDuringRefresh = false;
-  await pool.query("UPDATE instagram_connections SET token_refresh_attempted_at=NULL");
-  assert.deepEqual(await refreshDueInstagramTokensWithFailures(pool, currentKey, fetchImpl), { refreshed: 1, failed: 0 });
+  // The lost save releases its attempt, so the same run claims the connection again, opens the rewrapped token
+  // with the current key and stores the renewal under it.
+  assert.deepEqual(await refreshDueInstagramTokensWithFailures(pool, keys, fetchImpl), { refreshed: 1, failed: 0 });
   assert.deepEqual(sent, ["token-1", "token-1"]);
-  assert.equal(openSecret((await connections())[0]!.access_token_encrypted as string, currentKey, `${workspace}:101`), "renewed-2");
+  const row = (await pool.query("SELECT access_token_encrypted,token_refresh_attempted_at FROM instagram_connections")).rows[0];
+  assert.equal(row.access_token_encrypted.startsWith(currentKeyPrefix(currentKey)), true);
+  assert.equal(openSecret(row.access_token_encrypted, currentKey, `${workspace}:101`), "renewed-2");
+  assert.equal(row.token_refresh_attempted_at, null);
 });

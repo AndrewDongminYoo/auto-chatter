@@ -112,6 +112,16 @@ export async function refreshDueInstagramTokensWithFailures(pool: Pool, key: Sec
       [connection.id, connection.access_token_encrypted, now, encrypted, new Date(now.getTime() + value.expires_in * 1000)],
     );
     if (saved.rowCount === 1) refreshed++;
+    // A save that lost because the stored ciphertext changed meanwhile, for example to a key rotation rewrap (#61),
+    // releases this attempt, so the connection is due again instead of waiting a day it may not have before
+    // expiry. A newer refresh wrote its own attempt time, which this condition leaves alone; after a reconnect the
+    // release is harmless, because a token younger than a day is not due.
+    else
+      await pool.query(
+        `UPDATE instagram_connections SET token_refresh_attempted_at=NULL
+         WHERE id=$1 AND token_refresh_attempted_at=$3 AND access_token_encrypted IS DISTINCT FROM $2`,
+        [connection.id, connection.access_token_encrypted, now],
+      );
   }
   return { refreshed, failed };
 }
