@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 import type { InstagramMessage } from "./message-events.ts";
 import { messagingRecipientOptedOut } from "./channel-consent.ts";
 import { REPLY_DEADLINE } from "./store.ts";
+import { dmStartSkipCodeSql, type DmStartSkipCode } from "./send-quota.ts";
 import { DM_TRIGGER_TYPES, parseFlowDocument, type FlowDocument } from "../app/flow-schema.ts";
 import { matchesFlowTrigger, planFlowRun, type FlowPlan } from "../app/flow-runtime.ts";
 
@@ -10,6 +11,25 @@ const SENDER = /^[0-9]{1,40}$/;
 
 type Connection = { id: string; workspace_id: string };
 type Candidate = { flow_id: string; version_id: string; trigger_type: string; definition: unknown };
+
+// Serializes the DM trigger starts of one messaging sender (#400) for the rest of the ingestion transaction, so the
+// sender cooldown of a second DM sees the start event of the first. ingestMessages takes these locks right after the
+// message locks (lockMessageIds), before every other lock, in one statement and in key order: a transaction waiting
+// for one holds only message locks and sender locks that sort before it, and nothing else takes this key, so the
+// locks cannot close a cycle. The key is the account and the sender ID, because the connection is not read yet; it is
+// taken for every typed DM with a storable sender ID, whether or not the DM later starts a flow. The connection-wide
+// hourly limit takes no lock: a batch counts the committed starts and its own, not those of a batch ingesting at the
+// same time, so a connection can exceed the limit by at most the starts of the batches that overlapped it.
+export async function lockDmStartSenders(client: PoolClient, messages: readonly InstagramMessage[]): Promise<void> {
+  const batch = messages.filter((message) => message.confirmationReplyId === undefined && SENDER.test(message.senderId));
+  if (!batch.length) return;
+  await client.query(
+    `SELECT pg_advisory_xact_lock(hashtextextended('dm-start-sender:' || m.account_id || ':' || m.sender_id, 0))
+     FROM (SELECT DISTINCT account_id,sender_id FROM unnest($1::text[],$2::text[]) AS input(account_id,sender_id)
+           ORDER BY account_id,sender_id) m`,
+    [batch.map((message) => message.accountId), batch.map((message) => message.senderId)],
+  );
+}
 
 // Starts at most one published DM trigger flow for a typed DM (#33), in the message ingestion transaction, after the
 // reply wait and the follow confirmation have had their turn and did not take it. A keyword trigger beats the
@@ -47,13 +67,18 @@ export async function startDmTriggerFlow(client: PoolClient, message: InstagramM
     }
   }
   if (!chosen || (await startBlocked(client, connection, message))) return false;
-  const started = await client.query<{ id: string }>(
-    `INSERT INTO instagram_dm_start_events(workspace_id,connection_id,message_id,sender_id,flow_id,flow_version_id,trigger_type,message_at)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(connection_id,message_id) DO NOTHING RETURNING id::text`,
+  // The start limits (#400) come after every precedence rule: a blocked DM writes no row, while a DM over a limit
+  // writes its start event with the skip code and nothing else, so the limits count started events only.
+  // lockDmStartSenders serializes the DMs of this sender, so two of them cannot both pass the cooldown.
+  const started = await client.query<{ id: string; skip_code: DmStartSkipCode | null }>(
+    `INSERT INTO instagram_dm_start_events(workspace_id,connection_id,message_id,sender_id,flow_id,flow_version_id,trigger_type,message_at,skip_code)
+     SELECT $1,$2,$3,$4,$5,$6,$7,$8,${dmStartSkipCodeSql("$2::uuid", "$4::text", "decision.decided_at")}
+     FROM (SELECT clock_timestamp() AS decided_at) decision
+     ON CONFLICT(connection_id,message_id) DO NOTHING RETURNING id::text,skip_code`,
     [connection.workspace_id, connection.id, message.messageId, message.senderId, chosen.flow_id, chosen.version_id, chosen.trigger_type, message.timestamp],
   );
   const startEvent = started.rows[0];
-  if (!startEvent) return false;
+  if (!startEvent || startEvent.skip_code !== null) return false;
   const plan = dmPlan(chosen.document);
   const status = plan.status === "message" ? "delivering" : plan.status;
   const runs = await client.query<{ id: string }>(

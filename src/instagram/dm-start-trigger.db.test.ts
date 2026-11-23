@@ -12,6 +12,9 @@ import { recordChannelConsentEvent } from "./channel-consent.ts";
 import type { InstagramMessage } from "./message-events.ts";
 import { instagramAdapter, partitionInstagramEvents } from "./channel-adapter.ts";
 import { ingestMessageReads, parseMessageReadEvents } from "./message-reads.ts";
+import { connectionMetrics } from "../app/operations-health.ts";
+import { exportWorkspace } from "../app/workspace-export.ts";
+import { DM_START_HOURLY_LIMIT, DM_START_SENDER_COOLDOWN_MINUTES, dmStartSkipCodeSql } from "./send-quota.ts";
 
 // DM start triggers, PR 1 (#33): a typed DM starts a published DM keyword or default-reply flow, records a start
 // event, the run and its first message in flow_dm_deliveries, and sends nothing.
@@ -863,4 +866,318 @@ test("migration 068 replays over stored rows, keeps the canonical deletion funct
   await assert.rejects(pool.query("UPDATE flow_runs SET dm_start_event_id=NULL"), { code: "23514" });
   const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
   assert.ok(runner.indexOf("068_dm_start_triggers.sql") > runner.indexOf("067_campaign_sweep_recovered_at.sql") && runner.indexOf("068_dm_start_triggers.sql") < runner.indexOf("supabase-access.sql"));
+});
+
+// DM start limits (#400): every start event with its skip code, and the run rows that exist.
+async function startEvents() {
+  return (
+    await pool.query(
+      `SELECT start.sender_id,start.message_id,start.skip_code,run.id IS NOT NULL AS has_run
+       FROM instagram_dm_start_events start LEFT JOIN flow_runs run ON run.dm_start_event_id=start.id
+       ORDER BY start.created_at,start.message_id`,
+    )
+  ).rows;
+}
+
+async function runRowCounts() {
+  const count = async (table: string) => Number((await pool.query(`SELECT count(*) FROM ${table}`)).rows[0].count);
+  return { runs: await count("flow_runs"), deliveries: await count("flow_dm_deliveries"), steps: await count("flow_step_runs") };
+}
+
+// Writes `count` start events of the flow on the connection, one per sender `prefix`N, created `age` ago (an SQL
+// interval), with the given skip code. The limits count only these rows, so no run is needed.
+async function seedStartEvents(flow: string, count: number, prefix: string, age: string, skipCode: string | null = null, connection = connectionId) {
+  await pool.query(
+    `INSERT INTO instagram_dm_start_events(workspace_id,connection_id,message_id,sender_id,flow_id,flow_version_id,trigger_type,message_at,created_at,skip_code)
+     SELECT $1,$2,'seed-'||$4||n,$4||n,f.id,f.published_version_id,'instagram_dm_default',now(),now()-$5::interval,$6
+     FROM flows f CROSS JOIN generate_series(1,$3::int) n WHERE f.id=$7`,
+    [workspaceId, connection, count, prefix, age, skipCode, flow],
+  );
+}
+
+test("a sender starts at most one DM flow per 10 minutes, and a skipped DM writes only its start event", async () => {
+  assert.equal(DM_START_SENDER_COOLDOWN_MINUTES, 10);
+  await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  await dm("9900", "hello", { id: "first" });
+  // Another sender is not held by this sender's start.
+  await dm("9910", "hello", { id: "other" });
+  // The exact boundary is pinned in one transaction by the next test; here the margins leave room for the time
+  // between the UPDATE and the ingestion transaction.
+  await pool.query("UPDATE instagram_dm_start_events SET created_at=now()-interval '9 minutes 30 seconds' WHERE message_id='first'");
+  await dm("9900", "again", { id: "inside" });
+  assert.deepEqual(await runRowCounts(), { runs: 2, deliveries: 2, steps: 4 });
+  // The skipped DM does not count: 10 minutes or more after the start the next DM starts although the skip is new.
+  await pool.query("UPDATE instagram_dm_start_events SET created_at=now()-interval '10 minutes' WHERE message_id='first'");
+  await dm("9900", "later", { id: "boundary" });
+  assert.deepEqual(
+    (await startEvents()).map((row) => [row.message_id, row.skip_code, row.has_run]),
+    [
+      ["first", null, true],
+      ["other", null, true],
+      ["inside", "sender_cooldown", false],
+      ["boundary", null, true],
+    ],
+  );
+  assert.deepEqual(await runRowCounts(), { runs: 3, deliveries: 3, steps: 6 });
+  // A redelivery of the skipped DM writes nothing more.
+  await dm("9900", "again", { id: "inside" });
+  assert.equal((await startEvents()).length, 4);
+});
+
+// The decision reads clock_timestamp(), the clock that writes created_at, not now(), which is fixed at transaction
+// start: inside an open transaction a start written 10 minutes before clock_timestamp() no longer counts although now()
+// would still count it. The boundaries are then checked against one pinned decision time, so a slow runner cannot move
+// a start across them: a start 10 or 60 minutes before it no longer counts, and one second short of either still counts.
+test("the limits count a start until 10 and 60 minutes have passed on the clock that wrote it", async () => {
+  const flow = await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  const client = await pool.connect();
+  const skipCodeNow = async (sender: string) => (await client.query(`SELECT ${dmStartSkipCodeSql("$1::uuid", "$2::text", "decision.decided_at")} AS code FROM (SELECT clock_timestamp() AS decided_at) decision`, [connectionId, sender])).rows[0].code;
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `INSERT INTO instagram_dm_start_events(workspace_id,connection_id,message_id,sender_id,flow_id,flow_version_id,trigger_type,message_at,created_at)
+       SELECT $1,$2,'pinned-9989','9989',f.id,f.published_version_id,'instagram_dm_default',now(),clock_timestamp()-interval '10 minutes' FROM flows f WHERE f.id=$3`,
+      [workspaceId, connectionId, flow],
+    );
+    assert.equal(await skipCodeNow("9989"), null);
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+  const decidedAt = (await pool.query<{ at: string }>("SELECT clock_timestamp()::text AS at")).rows[0].at;
+  const skipCode = async (sender: string) => (await pool.query(`SELECT ${dmStartSkipCodeSql("$1::uuid", "$2::text", "$3::timestamptz")} AS code`, [connectionId, sender, decidedAt])).rows[0].code;
+  const seed = (sender: string, age: string) =>
+    pool.query(
+      `INSERT INTO instagram_dm_start_events(workspace_id,connection_id,message_id,sender_id,flow_id,flow_version_id,trigger_type,message_at,created_at)
+       SELECT $1,$2,'pinned-'||$3,$3,f.id,f.published_version_id,'instagram_dm_default',now(),$4::timestamptz-$5::interval FROM flows f WHERE f.id=$6`,
+      [workspaceId, connectionId, sender, decidedAt, age, flow],
+    );
+  const age = (sender: string, interval: string) => pool.query("UPDATE instagram_dm_start_events SET created_at=$1::timestamptz-$2::interval WHERE sender_id=$3", [decidedAt, interval, sender]);
+  await seed("9990", "10 minutes");
+  assert.equal(await skipCode("9990"), null);
+  await age("9990", "9 minutes 59 seconds");
+  assert.equal(await skipCode("9990"), "sender_cooldown");
+  await pool.query("DELETE FROM instagram_dm_start_events");
+  await pool.query(
+    `INSERT INTO instagram_dm_start_events(workspace_id,connection_id,message_id,sender_id,flow_id,flow_version_id,trigger_type,message_at,created_at)
+     SELECT $1,$2,'pinned-79'||n,'79'||n,f.id,f.published_version_id,'instagram_dm_default',now(),$3::timestamptz-interval '59 minutes'
+     FROM flows f CROSS JOIN generate_series(1,$4::int) n WHERE f.id=$5`,
+    [workspaceId, connectionId, decidedAt, DM_START_HOURLY_LIMIT - 1, flow],
+  );
+  await seed("9991", "60 minutes");
+  assert.equal(await skipCode("9992"), null);
+  await age("9991", "59 minutes 59 seconds");
+  assert.equal(await skipCode("9992"), "connection_hourly_limit");
+});
+
+test("a connection starts at most 700 DM flows in the last 60 minutes; older and skipped starts do not count", async () => {
+  assert.equal(DM_START_HOURLY_LIMIT, 700);
+  const flow = await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  await seedStartEvents(flow, 699, "71", "59 minutes");
+  await seedStartEvents(flow, 50, "72", "61 minutes");
+  await seedStartEvents(flow, 50, "73", "1 minute", "connection_hourly_limit");
+  await seedStartEvents(flow, 50, "74", "1 minute", "sender_cooldown");
+  await dm("9920", "hello", { id: "700th" });
+  await dm("9921", "hello", { id: "701st" });
+  // Another connection keeps its own limit.
+  const otherConnection = "66666666-6666-4666-8666-666666666666";
+  await pool.query(
+    `INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,access_token_encrypted)
+     VALUES($1,$2,'other-account',true,true,'token')`,
+    [otherConnection, workspaceId],
+  );
+  const document = dmDocument({ type: "instagram_dm_default" }, "Other");
+  (document.nodes[0]!.config as { connection_id: string }).connection_id = otherConnection;
+  await enabledFlow(document);
+  await ingestMessages(pool, [{ accountId: "other-account", senderId: "9921", messageId: "other-connection", text: "hello", timestamp: new Date() }]);
+  // A start that leaves the 60-minute window makes room for one more.
+  await pool.query("UPDATE instagram_dm_start_events SET created_at=now()-interval '60 minutes' WHERE message_id='seed-711'");
+  await dm("9922", "hello", { id: "after-room" });
+  await dm("9923", "hello", { id: "full-again" });
+  const events = new Map((await startEvents()).map((row) => [row.message_id, [row.skip_code, row.has_run]]));
+  assert.deepEqual(
+    ["700th", "701st", "other-connection", "after-room", "full-again"].map((id) => events.get(id)),
+    [
+      [null, true],
+      ["connection_hourly_limit", false],
+      [null, true],
+      [null, true],
+      ["connection_hourly_limit", false],
+    ],
+  );
+  assert.equal((await runRowCounts()).runs, 3);
+});
+
+test("a sender's cooldown wins over the connection limit when both apply", async () => {
+  const flow = await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  await dm("9930", "hello", { id: "first" });
+  await seedStartEvents(flow, 699, "75", "1 minute");
+  await dm("9930", "hello", { id: "second" });
+  assert.equal((await startEvents()).find((row) => row.message_id === "second")?.skip_code, "sender_cooldown");
+});
+
+// The two deliveries hold different message IDs, so only the sender lock orders them: the second one waits for the
+// first one's commit and then sees its start event.
+test("two concurrent DMs of one sender start exactly one run", async () => {
+  await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  const at = new Date();
+  const first = deliveryHeldBeforeCommit({ accountId: "owned-account", senderId: "9940", messageId: "concurrent-1", text: "hi", timestamp: at });
+  let second: Promise<void> | undefined;
+  try {
+    await Promise.race([first.atCommit, first.done.then(() => assert.fail("the first delivery did not reach COMMIT"))]);
+    second = ingestMessages(pool, [{ accountId: "owned-account", senderId: "9940", messageId: "concurrent-2", text: "hi", timestamp: at }]);
+    await waitForSenderLock();
+  } finally {
+    first.release();
+  }
+  await first.done;
+  await second;
+  assert.deepEqual(
+    (await startEvents()).map((row) => [row.message_id, row.skip_code, row.has_run]),
+    [
+      ["concurrent-1", null, true],
+      ["concurrent-2", "sender_cooldown", false],
+    ],
+  );
+  assert.deepEqual(await runRowCounts(), { runs: 1, deliveries: 1, steps: 2 });
+});
+
+async function waitForSenderLock() {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const waiting = await pool.query("SELECT 1 FROM pg_stat_activity WHERE wait_event='advisory' AND query LIKE '%dm-start-sender:%'");
+    if (waiting.rowCount) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.fail("the second delivery did not wait for the sender lock");
+}
+
+test("a resumable run, an opt-out, a handoff and a kept DM still block first and write no skip row", async () => {
+  await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  await dm("9950", "hello", { id: "opt-start" });
+  await dm("9951", "hello", { id: "handoff-start" });
+  await dm("9952", "hello", { id: "kept-start" });
+  await dm("9953", "hello", { id: "waiting-start" });
+  await pool.query("UPDATE flow_runs SET status='waiting',resume_at=now()+interval '1 hour',resume_node_id='reply' FROM instagram_dm_start_events start WHERE start.id=flow_runs.dm_start_event_id AND start.sender_id='9953'");
+  await revoke("dm_recipient", "9950");
+  const reply = await sentReply("9951");
+  await pool.query("INSERT INTO instagram_contact_automation(workspace_id,connection_id,sender_id) VALUES($1,$2,'123')", [workspaceId, connectionId]);
+  await pool.query(
+    `INSERT INTO instagram_inbox_handoffs(workspace_id,connection_id,recipient_id,sender_id,evidence_reply_id,active,version,updated_by)
+     VALUES($1,$2,'9951','123',$3,true,1,$4)`,
+    [workspaceId, connectionId, reply, userId],
+  );
+  await pool.query(
+    `INSERT INTO instagram_unmatched_replies(workspace_id,connection_id,sender_id,message_id,message_text,message_at)
+     VALUES($1,$2,'9952','kept-9952','kept text',now())`,
+    [workspaceId, connectionId],
+  );
+  await dm("9950", "hello", { id: "opt-blocked" });
+  await dm("9951", "hello", { id: "handoff-blocked" });
+  await dm("9952", "hello", { id: "kept-blocked" });
+  await dm("9953", "hello", { id: "waiting-blocked" });
+  assert.deepEqual(
+    (await startEvents()).map((row) => row.message_id),
+    ["opt-start", "handoff-start", "kept-start", "waiting-start"],
+  );
+});
+
+test("a DM that the reply wait takes writes no skip row while both limits apply to its sender", async () => {
+  const dmFlow = await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  await dm("9954", "hello", { id: "wait-start" });
+  await seedStartEvents(dmFlow, DM_START_HOURLY_LIMIT - 1, "79", "1 minute");
+  const flow = await createFlow({
+    schema_version: 1,
+    nodes: [
+      {
+        id: "start",
+        type: "instagram_comment",
+        config: { connection_id: connectionId, media_id: "1789", keywords: ["size"], match_mode: "contains", excluded_keywords: [] },
+      },
+      { id: "ask", type: "instagram_message", config: { text: "Which size?" } },
+      { id: "wait", type: "wait_for_reply", config: { timeout_minutes: 60 } },
+    ],
+    edges: [
+      { from: "start", port: "next", to: "ask" },
+      { from: "ask", port: "next", to: "wait" },
+    ],
+  });
+  assert.equal((await request("POST", `/api/flows/${flow}/publish`, { expected_revision: 0 })).status, 201);
+  assert.equal((await request("POST", `/api/flows/${flow}/enable`)).status, 200);
+  await ingestComments(pool, [{ accountId: "owned-account", commentId: "c-limits", postId: "1789", senderId: "124", text: "size" }]);
+  const transport: PrivateReplyTransport = {
+    verify: async () => ({ commentCreatedAt: new Date(), authorizationVerified: true, mediaOwned: true }),
+    send: async () => ({ messageId: "mid-limits", recipientId: "9954" }),
+  };
+  assert.equal(await processNextPrivateReply(pool, transport, () => new Date(), connectionId), true);
+  // Both limits apply to 9954 now: its own start is inside the cooldown and the connection holds 700 starts.
+  await dm("9954", "XL", { id: "answer" });
+  const waited = (await pool.query("SELECT status,reply_message_id FROM flow_runs WHERE flow_id=$1", [flow])).rows;
+  assert.deepEqual(waited, [{ status: "ended", reply_message_id: "answer" }]);
+  assert.equal((await pool.query("SELECT 1 FROM instagram_dm_start_events WHERE message_id='answer'")).rowCount, 0);
+  // With nothing waiting any more, the next DM of 9954 reaches the limits and is skipped.
+  await dm("9954", "thanks", { id: "after-wait" });
+  assert.equal((await startEvents()).find((row) => row.message_id === "after-wait")?.skip_code, "sender_cooldown");
+});
+
+test("operations health counts the skipped DM starts of the last 24 hours by code", async () => {
+  const flow = await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  await dm("9960", "hello");
+  await dm("9960", "hello");
+  await seedStartEvents(flow, 3, "76", "23 hours", "connection_hourly_limit");
+  await seedStartEvents(flow, 2, "77", "25 hours", "connection_hourly_limit");
+  await seedStartEvents(flow, 2, "78", "25 hours", "sender_cooldown");
+  const [metrics] = await connectionMetrics(pool, workspaceId);
+  assert.deepEqual([metrics!.dm_start_cooldown_24h, metrics!.dm_start_hourly_limit_24h], [1, 3]);
+  const health = (await (await request("GET", "/api/workspace/health")).json()) as { connections: Record<string, unknown>[] };
+  assert.deepEqual([health.connections[0]!.dm_start_cooldown_24h, health.connections[0]!.dm_start_hourly_limit_24h], [1, 3]);
+});
+
+test("deletion removes skipped DM starts, and the export carries their skip code", async () => {
+  await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  await dm("9970", "hello", { id: "kept-run" });
+  await dm("9970", "hello", { id: "skipped" });
+  await dm("9971", "hello", { id: "other-run" });
+  await dm("9971", "hello", { id: "other-skipped" });
+  const exported = JSON.parse((await exportWorkspace(pool, { id: userId, email: "a@example.test" })).body) as { tables: { instagram_dm_start_events: { message_id: string; skip_code: string | null }[] } };
+  assert.deepEqual(exported.tables.instagram_dm_start_events.map((row) => [row.message_id, row.skip_code]).sort(), [
+    ["kept-run", null],
+    ["other-run", null],
+    ["other-skipped", "sender_cooldown"],
+    ["skipped", "sender_cooldown"],
+  ]);
+  const person = (await pool.query("SELECT public.delete_person_data($1,$2,$3,'dm_recipient','9970') AS result", [workspaceId, connectionId, userId])).rows[0].result;
+  assert.equal(person.deleted_counts.instagram_dm_start_events, 2);
+  assert.deepEqual(
+    (await startEvents()).map((row) => row.message_id),
+    ["other-run", "other-skipped"],
+  );
+  await pool.query("UPDATE flows SET enabled=false");
+  await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL");
+  const connection = (await pool.query("SELECT public.delete_connection_data($1,$2,$3,'owned-account') AS result", [workspaceId, connectionId, userId])).rows[0].result;
+  assert.equal(connection.deleted_counts.instagram_dm_start_events, 2);
+  assert.equal((await startEvents()).length, 0);
+});
+
+test("migration 075 replays over stored rows, keeps the deletion functions and runs in the runner", async () => {
+  await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  await dm("9980", "hello", { id: "a" });
+  await dm("9980", "hello", { id: "b" });
+  const definitions = async () => (await pool.query("SELECT proname,pg_get_functiondef(oid) AS definition FROM pg_proc WHERE proname IN ('delete_person_data','delete_connection_data','delete_workspace_data') ORDER BY proname")).rows;
+  const canonical = await definitions();
+  const sql = await readFile(new URL("../../db/migrations/075_dm_start_limits.sql", import.meta.url), "utf8");
+  await pool.query(sql);
+  await pool.query(sql);
+  assert.deepEqual(await definitions(), canonical);
+  assert.deepEqual(
+    (await startEvents()).map((row) => row.skip_code),
+    [null, "sender_cooldown"],
+  );
+  await assert.rejects(pool.query("UPDATE instagram_dm_start_events SET skip_code='other'"), { code: "23514" });
+  const indexes = (await pool.query("SELECT indexname FROM pg_indexes WHERE tablename='instagram_dm_start_events' AND (indexname LIKE '%started%' OR indexname LIKE '%skipped%') ORDER BY indexname")).rows;
+  assert.deepEqual(
+    indexes.map((row) => row.indexname),
+    ["instagram_dm_start_events_skipped_idx", "instagram_dm_start_events_started_idx", "instagram_dm_start_events_started_sender_idx"],
+  );
+  const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
+  assert.ok(runner.indexOf("075_dm_start_limits.sql") > runner.indexOf("074_comment_sender_username.sql") && runner.indexOf("075_dm_start_limits.sql") < runner.indexOf("supabase-access.sql"));
 });

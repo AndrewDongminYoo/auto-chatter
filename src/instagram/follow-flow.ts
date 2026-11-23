@@ -6,7 +6,7 @@ import { lockInboxConversations, storeInboxMessage } from "./inbox.ts";
 import { deliveryRecipientOptedOut } from "./channel-consent.ts";
 import { PreSendVerificationError, ProviderRateLimitedError, ProviderRejectedError } from "./reply-worker.ts";
 import { resumeRepliedFlowRun } from "./store.ts";
-import { startDmTriggerFlow } from "./dm-start-trigger.ts";
+import { lockDmStartSenders, startDmTriggerFlow } from "./dm-start-trigger.ts";
 
 const normalized = (text: string) => text.normalize("NFC").trim().toLowerCase();
 export async function ingestMessages(pool: Pool, messages: readonly InstagramMessage[], now = new Date()): Promise<void> {
@@ -15,6 +15,7 @@ export async function ingestMessages(pool: Pool, messages: readonly InstagramMes
   try {
     await client.query("BEGIN");
     await lockMessageIds(client, messages);
+    await lockDmStartSenders(client, messages);
     await lockInboxConversations(client, messages, now);
     for (const message of messages) {
       await storeInboxMessage(client, message, now);

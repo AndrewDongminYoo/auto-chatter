@@ -2,7 +2,7 @@ import type { Pool } from "pg";
 import type { User } from "./auth.ts";
 import { logOperation, type OperationStep } from "./operations-log.ts";
 import { workspaceFor } from "./settings.ts";
-import { campaignBudgetOpenSql, campaignBudgetReopenedAtSql, privateReplyBudgetOpenSql } from "../instagram/send-quota.ts";
+import { campaignBudgetOpenSql, campaignBudgetReopenedAtSql, DM_START_SKIP_CODES, privateReplyBudgetOpenSql } from "../instagram/send-quota.ts";
 import { campaignDeliveryDueSql } from "../instagram/campaign-delivery-worker.ts";
 import { dmFlowDeliveryDueSql } from "../instagram/dm-flow-delivery-worker.ts";
 
@@ -30,6 +30,9 @@ export interface ConnectionMetrics {
   unknown_24h: number;
   failed_24h: number;
   blocked_24h: number;
+  // DMs whose DM trigger flow start a start limit skipped (#400) in the last 24 hours, by skip code.
+  dm_start_cooldown_24h: number;
+  dm_start_hourly_limit_24h: number;
   token_expires_in_seconds: number | null;
 }
 
@@ -86,8 +89,15 @@ WITH metrics AS (
        UNION ALL SELECT attempt_started_at FROM flow_dm_deliveries
          WHERE workspace_id=c.workspace_id AND connection_id=c.id AND status='sending'
      ) sending) AS oldest_sending_at,
-    outcomes.unknown_24h,outcomes.failed_24h,outcomes.blocked_24h
+    outcomes.unknown_24h,outcomes.failed_24h,outcomes.blocked_24h,
+    skipped.dm_start_cooldown_24h,skipped.dm_start_hourly_limit_24h
   FROM instagram_connections c
+  CROSS JOIN LATERAL (
+    SELECT count(*) FILTER (WHERE start.skip_code='${DM_START_SKIP_CODES[0]}')::int AS dm_start_cooldown_24h,
+      count(*) FILTER (WHERE start.skip_code='${DM_START_SKIP_CODES[1]}')::int AS dm_start_hourly_limit_24h
+    FROM instagram_dm_start_events start
+    WHERE start.connection_id=c.id AND start.skip_code IS NOT NULL AND start.created_at>now()-interval '24 hours'
+  ) skipped
   CROSS JOIN LATERAL (
     SELECT count(*) FILTER (WHERE outcome.status='unknown')::int AS unknown_24h,
       count(*) FILTER (WHERE outcome.status='failed')::int AS failed_24h,
@@ -116,7 +126,8 @@ SELECT id,username,active,send_enabled,
   CASE WHEN send_paused_until>now() THEN send_paused_until END AS send_paused_until,
   floor(extract(epoch FROM now()-oldest_due_at))::int AS oldest_due_pending_seconds,
   floor(extract(epoch FROM now()-oldest_sending_at))::int AS longest_sending_seconds,
-  unknown_24h,failed_24h,blocked_24h,token_expires_in_seconds
+  unknown_24h,failed_24h,blocked_24h,dm_start_cooldown_24h,dm_start_hourly_limit_24h,
+  token_expires_in_seconds
 FROM metrics ORDER BY username NULLS LAST,id`;
 
 export async function connectionMetrics(pool: Pool, workspaceId: string | null): Promise<ConnectionMetrics[]> {

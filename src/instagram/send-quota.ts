@@ -39,3 +39,35 @@ export function campaignBudgetReopenedAtSql(connectionId: string): string {
     WHERE reopened.connection_id=${connectionId} AND reopened.provider_called_at IS NOT NULL
     ORDER BY reopened.provider_called_at DESC OFFSET ${CAMPAIGN_HOURLY_BUDGET - 1} LIMIT 1)`;
 }
+
+// DM-triggered flow starts (#400) are bounded by service policy, not by a Meta limit: Meta documents 100 Send API
+// calls per second for text messages per Instagram professional account and no hourly messaging limit
+// (docs/specs/2026-10-12-send-quotas.md). One messaging sender starts at most one run per connection in any
+// DM_START_SENDER_COOLDOWN_MINUTES, and one connection starts at most DM_START_HOURLY_LIMIT runs per rolling hour.
+export const DM_START_SENDER_COOLDOWN_MINUTES = 10;
+export const DM_START_HOURLY_LIMIT = 700;
+
+// The skip codes a DM start event stores when a limit, not a precedence rule, stopped the start. The order is the
+// order of the checks: the sender cooldown wins when both apply.
+export const DM_START_SKIP_CODES = ["sender_cooldown", "connection_hourly_limit"] as const;
+export type DmStartSkipCode = (typeof DM_START_SKIP_CODES)[number];
+
+// An SQL expression: the skip code a new DM start of this connection and sender gets at decidedAt, or NULL when it
+// may start. Only started events (skip_code IS NULL) count, from created_at. The caller reads clock_timestamp(), the
+// same clock that writes created_at, once per decision and passes it as decidedAt (a column of a subquery or a bind
+// parameter): now() is fixed at transaction start, so a DM that waited on a lock or followed earlier DMs in a batch
+// would be judged against an older window, and clock_timestamp() written into the conditions is volatile, so the
+// planner could not use it to bound the created_at index scans. A sender's start in the
+// DM_START_SENDER_COOLDOWN_MINUTES before decidedAt gives sender_cooldown, and DM_START_HOURLY_LIMIT or more starts
+// of the connection in the hour before decidedAt give connection_hourly_limit. connectionId, senderId and decidedAt
+// are SQL expressions written by the caller (columns or bind parameters), never request input.
+export function dmStartSkipCodeSql(connectionId: string, senderId: string, decidedAt: string): string {
+  return `CASE WHEN EXISTS(SELECT 1 FROM instagram_dm_start_events recent WHERE recent.connection_id=${connectionId}
+      AND recent.sender_id=${senderId} AND recent.skip_code IS NULL
+      AND recent.created_at>${decidedAt}-make_interval(mins=>${DM_START_SENDER_COOLDOWN_MINUTES}))
+    THEN '${DM_START_SKIP_CODES[0]}'
+    WHEN (SELECT count(*) FROM (SELECT 1 FROM instagram_dm_start_events recent WHERE recent.connection_id=${connectionId}
+      AND recent.skip_code IS NULL AND recent.created_at>${decidedAt}-interval '1 hour' LIMIT ${DM_START_HOURLY_LIMIT}) hour)
+      >=${DM_START_HOURLY_LIMIT}
+    THEN '${DM_START_SKIP_CODES[1]}' END`;
+}
