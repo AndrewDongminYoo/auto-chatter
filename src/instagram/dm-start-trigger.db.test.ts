@@ -860,6 +860,7 @@ test("migration 068 replays over stored rows, keeps the canonical deletion funct
   await pool.query(await readFile(new URL("../../db/migrations/070_instagram_message_reads.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/072_instagram_dm_last_inbound.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/076_instagram_dm_profiles.sql", import.meta.url), "utf8"));
   assert.deepEqual(await definitions(), canonical);
   assert.equal((await started()).length, 1);
   // The source CHECK holds: a run has exactly one of a comment event and a DM start event.

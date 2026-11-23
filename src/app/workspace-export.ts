@@ -32,6 +32,8 @@ export const EXPORTED_TABLES: Record<string, { scope: "self" | "workspace" | "co
   instagram_message_reads: { scope: "workspace" },
   // The latest inbound text DM time of a messaging sender ID (#300): identifiers and a time, no DM text.
   instagram_dm_last_inbound: { scope: "workspace" },
+  // The Instagram profile username of a messaging sender ID (#395): identifiers, a display username and fetch times.
+  instagram_dm_profiles: { scope: "workspace" },
   instagram_contact_identity_links: { scope: "workspace" },
   instagram_contact_identity_link_events: { scope: "workspace" },
   instagram_contact_tags: { scope: "workspace" },

@@ -5,6 +5,8 @@ import { workspaceFor } from "./settings.ts";
 import { INBOX_STATE_JOINS, STATE_COLUMNS, conversationState, readConversationState } from "./inbox-conversations.ts";
 import { labelsJson, readConversationLabels } from "./inbox-labels.ts";
 import { dueLocalSql, readCallerReminder } from "./inbox-reminders.ts";
+import { refreshDmProfiles } from "./inbox-profiles.ts";
+import type { InstagramOAuthEnv } from "./instagram-oauth.ts";
 
 export async function setInbox(pool: Pool, user: User, id: string, input: unknown) {
   if (!isUuid(id) || !isRecord(input) || Object.keys(input).length !== 1 || typeof input.enabled !== "boolean") throw new ApiError(400, "invalid_inbox_setting");
@@ -25,7 +27,7 @@ const INBOX_QUERY_KEYS = ["connection_id", "after", "status", "assignee", "unrea
 // Conversations newest first (#23). The keyset is (last message time DESC, connection, recipient); the time
 // travels in the cursor as integer microseconds, the precision PostgreSQL stores, so rows that tie on the
 // millisecond a JavaScript Date keeps are neither skipped nor repeated at a page boundary.
-export async function listInbox(pool: Pool, user: User, query: URLSearchParams) {
+export async function listInbox(pool: Pool, user: User, query: URLSearchParams, env: InstagramOAuthEnv = {}, fetchImpl: typeof fetch = fetch) {
   const workspace = await workspaceFor(pool, user, "agent");
   if ([...query.keys()].some((key) => !INBOX_QUERY_KEYS.includes(key) || query.getAll(key).length !== 1)) throw new ApiError(400, "invalid_inbox_query");
   const connection = query.get("connection_id"),
@@ -83,6 +85,8 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
        (SELECT left(last.text,80) FROM instagram_inbox_messages last
         WHERE last.workspace_id=m.workspace_id AND last.connection_id=m.connection_id AND last.recipient_id=m.recipient_id
         ORDER BY last.message_at DESC,last.id DESC LIMIT 1) AS last_message_preview,
+       -- The sender's username from the Instagram User Profile API (#395 stage 2), and whether it is due for a fetch.
+       p.username AS profile_username,(p.connection_id IS NULL OR p.next_fetch_at<=now()) AS profile_due,
        -- The commenter's newest stored username, only through a confirmed identity link of the same workspace and
        -- connection. It is a display hint: it does not merge comment and DM IDs or prove consent.
        (SELECT e.sender_username FROM instagram_contact_identity_links link
@@ -90,7 +94,7 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
           AND e.sender_id=link.sender_id
         WHERE link.workspace_id=m.workspace_id AND link.connection_id=m.connection_id AND link.recipient_id=m.recipient_id
           AND link.state='confirmed' AND e.sender_username IS NOT NULL
-        ORDER BY e.created_at DESC,e.id DESC LIMIT 1) AS sender_username,
+        ORDER BY e.created_at DESC,e.id DESC LIMIT 1) AS link_username,
        m.last_read_message_id::text AS last_read_message_id,m.last_message_us::text AS last_message_us,${STATE_COLUMNS},
        jsonb_build_object('version',coalesce(sets.version,0),
          'labels',${labelsJson("m.workspace_id", "coalesce(sets.label_ids,'{}')")}) AS label_set,
@@ -102,6 +106,8 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
      ${INBOX_STATE_JOINS}
      LEFT JOIN instagram_inbox_conversation_labels sets ON sets.workspace_id=m.workspace_id
        AND sets.connection_id=m.connection_id AND sets.recipient_id=m.recipient_id
+     LEFT JOIN instagram_dm_profiles p ON p.connection_id=m.connection_id AND p.recipient_id=m.recipient_id
+       AND p.workspace_id=m.workspace_id
      -- The partial unique index on pending reminders keeps this join at one row per conversation.
      LEFT JOIN instagram_inbox_reminders rem ON rem.workspace_id=m.workspace_id AND rem.connection_id=m.connection_id
        AND rem.recipient_id=m.recipient_id AND rem.creator_id=$7::uuid AND rem.status='pending'
@@ -124,7 +130,11 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
      WHERE workspace_id=$1 AND creator_id=$2 AND status='pending' AND due_at<=now()`,
     [workspace, user.id],
   );
-  const conversations = result.rows.slice(0, 50).map((row) => {
+  // Profiles fetched in this request replace the stored ones. The displayed sender_username is the profile username,
+  // then the confirmed-link username, then null; it is a display hint, not evidence of consent or eligibility.
+  const listed = result.rows.slice(0, 50);
+  const fetched = new Map((await refreshDmProfiles(pool, workspace, listed, env, fetchImpl)).map((profile) => [`${profile.connection_id}:${profile.recipient_id}`, profile.username]));
+  const conversations = listed.map((row) => {
       const {
         status: _status,
         assignee_user_id: _assignee,
@@ -140,10 +150,15 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams) 
         reminder_note,
         reminder_due_local,
         reminder_due,
+        profile_username,
+        profile_due: _due,
+        link_username,
         ...conversation
       } = row;
+      const key = `${row.connection_id}:${row.recipient_id}`;
       return {
         ...conversation,
+        sender_username: (fetched.has(key) ? fetched.get(key) : profile_username) ?? link_username ?? null,
         state: conversationState(row),
         reminder: reminder_id
           ? {

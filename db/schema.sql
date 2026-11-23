@@ -1551,6 +1551,28 @@ CREATE TABLE IF NOT EXISTS instagram_dm_last_inbound (
   PRIMARY KEY(connection_id,recipient_id),
   FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id)
 );
+-- One row per (connection, messaging sender ID): the username that the Instagram User Profile API returned for the
+-- sender (#395 stage 2). The inbox list claims a due row by moving next_fetch_at a few minutes ahead and writing a new
+-- claim_id, calls the API, and then stores the answer only on the row that still carries that claim_id, so a late
+-- answer cannot overwrite a row that a deletion removed and a later claim created again. A success stores the username, fetched_at and next_fetch_at 7 days ahead, and clears
+-- failure_code. A failure stores a fixed failure_code and next_fetch_at 1 day ahead; it keeps the username and
+-- fetched_at of an earlier success, so a failed refresh does not hide a known username. The username is a display hint
+-- only: it does not merge comment and DM IDs and is not evidence of messaging consent or delivery eligibility. The
+-- name and the profile picture are not stored. Server roles never delete rows; the deletion functions do (person
+-- deletion by the dm_recipient identity).
+CREATE TABLE IF NOT EXISTS instagram_dm_profiles (
+  workspace_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  recipient_id text NOT NULL CHECK(recipient_id ~ '^[0-9]{1,40}$'),
+  username text CHECK(username IS NULL OR username ~ '^[A-Za-z0-9._]{1,30}$'),
+  fetched_at timestamptz,
+  failure_code text CHECK(failure_code IN ('graph_error','invalid_profile','profile_unavailable','token_rejected')),
+  next_fetch_at timestamptz NOT NULL,
+  claim_id uuid,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(connection_id,recipient_id),
+  FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id)
+);
 -- Every read event looks its read.mid up among one connection's sent messages in each send table.
 CREATE INDEX IF NOT EXISTS private_reply_outbox_provider_message_idx
   ON private_reply_outbox(connection_id,provider_message_id) WHERE provider_message_id IS NOT NULL;
@@ -1815,6 +1837,9 @@ BEGIN
   DELETE FROM public.instagram_dm_last_inbound WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_dm_last_inbound', affected);
+  DELETE FROM public.instagram_dm_profiles WHERE workspace_id=p_workspace AND connection_id=p_connection;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_dm_profiles', affected);
   DELETE FROM public.instagram_contact_tags WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_tags', affected);
@@ -2147,6 +2172,11 @@ BEGIN
   WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients);
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_dm_last_inbound', affected);
+  -- The person's Instagram profile username, keyed by the messaging sender ID like the inbox.
+  DELETE FROM public.instagram_dm_profiles
+  WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients);
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_dm_profiles', affected);
   DELETE FROM public.instagram_contact_tags
   WHERE workspace_id=p_workspace AND connection_id=p_connection AND sender_id=ANY(senders);
   GET DIAGNOSTICS affected = ROW_COUNT;
@@ -2403,6 +2433,9 @@ BEGIN
   DELETE FROM public.instagram_dm_last_inbound WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_dm_last_inbound', affected);
+  DELETE FROM public.instagram_dm_profiles WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('instagram_dm_profiles', affected);
   DELETE FROM public.instagram_contact_tags WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_contact_tags', affected);
