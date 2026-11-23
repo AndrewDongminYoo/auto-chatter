@@ -1,6 +1,7 @@
 import { ingestMessages } from "../instagram/follow-flow.ts";
 import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
-import { openSecret, sealSecret } from "../app/secrets.ts";
+import { currentKeyPrefix, openSecret, sealSecret } from "../app/secrets.ts";
+import { rewrapSealedSecrets } from "../app/token-key-rewrap.ts";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { after, afterEach, before, beforeEach, mock, test } from "node:test";
@@ -1568,6 +1569,79 @@ test("Cloudflare private final POST guard retries after an Instagram token rotat
   await pool.query("UPDATE private_reply_outbox SET next_attempt_at=now()");
   await consume();
   assert.equal(sends, 1);
+});
+
+// #16 completion condition 3 and #61: a key rotation that seals the stored token again while a reply is in flight
+// makes the reply retry before its POST, and the retry sends the same token, opened with the new key alone.
+test("a token encryption key rotation during a send retries the reply and sends the same token under the new key", async () => {
+  const previousKey = env.TOKEN_ENCRYPTION_KEY!;
+  const nextKey = Buffer.alloc(32, 2).toString("base64");
+  let mediaReads = 0;
+  const bearers: (string | null)[] = [];
+  const providerFetch = globalThis.fetch;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method === "POST") bearers.push(new Headers(init.headers).get("authorization"));
+    if (init?.method !== "POST" && new URL(String(input)).pathname.endsWith("/media-1") && ++mediaReads === 2) {
+      env.TOKEN_ENCRYPTION_KEY = nextKey;
+      env.TOKEN_ENCRYPTION_KEY_PREVIOUS = previousKey;
+      assert.deepEqual(await rewrapSealedSecrets(pool, { current: nextKey, previous: previousKey }), { rewrapped: 1, failed: 0 });
+    }
+    return providerFetch(input, init);
+  });
+  await worker.fetch(request(), env);
+  await consume();
+  assert.equal(sends, 0);
+  assert.deepEqual((await rows())[0], { status: "pending", failure_code: "token_rotated", rate_limit_retries: 0 });
+  // The previous key is removed once every stored secret carries the new one.
+  delete env.TOKEN_ENCRYPTION_KEY_PREVIOUS;
+  const stored = (await pool.query("SELECT access_token_encrypted FROM instagram_connections WHERE id=$1", [connectionId])).rows[0].access_token_encrypted;
+  assert.equal(stored.startsWith(currentKeyPrefix(nextKey)), true);
+  assert.throws(() => openSecret(stored, previousKey, "11111111-1111-4111-8111-111111111111:123"));
+  await pool.query("UPDATE private_reply_outbox SET next_attempt_at=now()");
+  await consume();
+  assert.equal(sends, 1);
+  assert.deepEqual(bearers, ["Bearer synthetic"]);
+  assert.equal((await rows())[0].status, "sent");
+});
+
+test("the cron seals stored secrets again only while a previous token encryption key is set", async () => {
+  env.SEND_ENABLED = "false";
+  const previousKey = env.TOKEN_ENCRYPTION_KEY!;
+  const nextKey = Buffer.alloc(32, 2).toString("base64");
+  const webhook = await queuedWebhook();
+  const sealed = async () => (await pool.query("SELECT (SELECT access_token_encrypted FROM instagram_connections WHERE id=$1) AS token,(SELECT secret_encrypted FROM webhook_signing_keys WHERE id=$2) AS secret", [connectionId, webhook.keyId])).rows[0];
+  const rewrapStep = async () => (await pool.query("SELECT failure_code,last_success_at IS NOT NULL AS succeeded FROM scheduled_steps WHERE name='token_key_rewrap'")).rows;
+  const before = await sealed();
+
+  // Without a previous key, and with the current key registered as the previous key, the step does not run.
+  await worker.scheduled({}, env);
+  assert.deepEqual(await sealed(), before);
+  assert.deepEqual(await rewrapStep(), []);
+  env.TOKEN_ENCRYPTION_KEY_PREVIOUS = previousKey;
+  await worker.scheduled({}, env);
+  assert.deepEqual(await sealed(), before);
+  assert.deepEqual(await rewrapStep(), []);
+
+  // An invalid previous key fails the step as not configured and changes nothing.
+  env.TOKEN_ENCRYPTION_KEY = nextKey;
+  env.TOKEN_ENCRYPTION_KEY_PREVIOUS = "short";
+  await assert.rejects(worker.scheduled({}, env), /^Error: Cloudflare scheduled recovery failed$/);
+  assert.deepEqual(await rewrapStep(), [{ failure_code: "not_configured", succeeded: false }]);
+  assert.deepEqual(await sealed(), before);
+
+  env.TOKEN_ENCRYPTION_KEY_PREVIOUS = previousKey;
+  await worker.scheduled({}, env);
+  assert.deepEqual(await rewrapStep(), [{ failure_code: "not_configured", succeeded: true }]);
+  const after = await sealed();
+  const workspace = "11111111-1111-4111-8111-111111111111";
+  for (const value of [after.token, after.secret]) assert.equal(value.startsWith(currentKeyPrefix(nextKey)), true);
+  assert.equal(openSecret(after.token, nextKey, `${workspace}:123`), "synthetic");
+  assert.equal(openSecret(after.secret, nextKey, signingKeyContext(workspace, "cccccccc-cccc-4ccc-8ccc-cccccccccccc", webhook.keyId)), webhook.secret);
+  assert.equal(sends, 0);
+
+  // A later run finds nothing left to seal and leaves the rows as they are.
+  await worker.scheduled({}, env);
+  assert.deepEqual(await sealed(), after);
 });
 
 test("Cloudflare verification retries when a rotated old token is rejected by Meta", async () => {

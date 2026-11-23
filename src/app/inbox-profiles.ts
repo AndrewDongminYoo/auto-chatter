@@ -2,7 +2,7 @@ import type { Pool } from "pg";
 import { isRecord } from "./auth.ts";
 import type { InstagramOAuthEnv } from "./instagram-oauth.ts";
 import { logOperation } from "./operations-log.ts";
-import { openSecret } from "./secrets.ts";
+import { openSecret, tokenKeys, type SecretKey } from "./secrets.ts";
 import { classifyMetaGraphFailure, metaTokenRejected } from "../instagram/meta-graph-error.ts";
 
 // DM sender usernames from the Instagram User Profile API (#395 stage 2). The inbox list fetches them for its own
@@ -25,7 +25,7 @@ export async function refreshDmProfiles(pool: Pool, workspaceId: string, listed:
   const due = listed.filter((row) => row.profile_due);
   if (!due.length || !env.TOKEN_ENCRYPTION_KEY || !env.META_GRAPH_VERSION || !/^v\d+\.\d+$/.test(env.META_GRAPH_VERSION)) return [];
   try {
-    const claim = await claimDueProfiles(pool, workspaceId, due, env.TOKEN_ENCRYPTION_KEY);
+    const claim = await claimDueProfiles(pool, workspaceId, due, tokenKeys(env)!);
     if (!claim.rows.length) return [];
     const results = await Promise.all(claim.rows.map(async (row) => ({ ...row, ...(await fetchProfile(row.recipient_id, claim.tokens.get(row.connection_id)!, env.META_GRAPH_VERSION!, fetchImpl)) })));
     for (const result of results) if (result.failure_code) logOperation({ event: "inbox_profile_fetch", code: result.failure_code, connection_id: result.connection_id }, "warn");
@@ -57,7 +57,7 @@ export async function refreshDmProfiles(pool: Pool, workspaceId: string, listed:
 // messages is not claimed. Only active connections with a stored, unexpired token qualify: an environment-managed
 // Node connection has none, and an OAuth reconnect keeps the new token on an inactive row until its webhook
 // subscription succeeds.
-async function claimDueProfiles(pool: Pool, workspaceId: string, due: readonly Listed[], key: string): Promise<{ rows: Claimed[]; tokens: Map<string, string> }> {
+async function claimDueProfiles(pool: Pool, workspaceId: string, due: readonly Listed[], key: SecretKey): Promise<{ rows: Claimed[]; tokens: Map<string, string> }> {
   const tokens = new Map<string, string>();
   const client = await pool.connect();
   try {

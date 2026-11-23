@@ -4,7 +4,7 @@
 // Each entry is written as one JSON string line, so line-based collectors (the Node worker's stdout under Compose)
 // can parse it; a plain object would be printed by Node as a multi-line inspected block.
 
-export const OPERATION_STEPS = ["kept_reply_cleanup", "oauth_state_cleanup", "token_refresh", "subscription_check", "early_reply_reconcile", "flow_resume", "stale_recovery", "wake", "webhook_delivery", "campaign_start", "alerts"] as const;
+export const OPERATION_STEPS = ["kept_reply_cleanup", "oauth_state_cleanup", "token_refresh", "subscription_check", "token_key_rewrap", "early_reply_reconcile", "flow_resume", "stale_recovery", "wake", "webhook_delivery", "campaign_start", "alerts"] as const;
 export type OperationStep = (typeof OPERATION_STEPS)[number];
 
 // The parts of the campaign_start step (#280), named on a cron_step_part_failed line.
@@ -76,6 +76,14 @@ export class SubscriptionCheckFailedError extends Error {
   }
 }
 
+// At least one stored secret could not be opened with the token encryption keys during a key rotation (#61).
+export class TokenKeyRewrapFailedError extends Error {
+  constructor() {
+    super("Token key rewrap failed");
+    this.name = "TokenKeyRewrapFailedError";
+  }
+}
+
 // At least one due campaign approval could not start its run (#36); each failure was logged with its own code.
 export class CampaignStartFailedError extends Error {
   constructor() {
@@ -99,6 +107,7 @@ export function failureCode(error: unknown): string {
   if (error instanceof ConfigurationError) return "not_configured";
   if (error instanceof TokenRefreshFailedError) return "token_refresh_failed";
   if (error instanceof SubscriptionCheckFailedError) return "subscription_check_failed";
+  if (error instanceof TokenKeyRewrapFailedError) return "token_key_rewrap_failed";
   if (error instanceof CampaignStartFailedError) return "campaign_start_failed";
   const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
   if (typeof code === "string" && /^[0-9A-Z]{5}$/.test(code))

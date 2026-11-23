@@ -222,7 +222,7 @@ export default {
             await processNextManualReply(pool, connectionId, null, connection.access_token_encrypted);
           } else if (connection) {
             if (!env.TOKEN_ENCRYPTION_KEY) throw new ConfigurationError("Token encryption not configured");
-            const accessToken = openSecret(connection.access_token_encrypted, env.TOKEN_ENCRYPTION_KEY, `${connection.workspace_id}:${connection.account_id}`);
+            const accessToken = openSecret(connection.access_token_encrypted, tokenKeys(env)!, `${connection.workspace_id}:${connection.account_id}`);
             const rawGraphFetch: typeof fetch = async (input, init) => {
               const response = await fetch(input, { ...init, redirect: "manual" });
               if (response.status >= 300 && response.status < 400) {
@@ -533,15 +533,30 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
     await step("token_refresh", async () => {
       if (!env.TOKEN_ENCRYPTION_KEY) throw new ConfigurationError("Token encryption not configured");
       // A connection is attempted at most once a day, so a failure fails only the run that attempted it.
-      const { failed: refreshFailures } = await refreshDueInstagramTokensWithFailures(pool, env.TOKEN_ENCRYPTION_KEY, countedFetch, new Date(), env.META_GRAPH_VERSION, correlationId);
+      const { failed: refreshFailures } = await refreshDueInstagramTokensWithFailures(pool, tokenKeys(env)!, countedFetch, new Date(), env.META_GRAPH_VERSION, correlationId);
       if (refreshFailures > 0) throw new TokenRefreshFailedError();
     });
     // The webhook subscription check (#179) runs while sending is off too, because receiving still depends on
     // it. A connection is attempted at most once per interval, so a failure fails only the run that attempted it.
     await step("subscription_check", async () => {
-      const { failed: checkFailures } = await checkDueInstagramSubscriptions(pool, env.TOKEN_ENCRYPTION_KEY, countedFetch, new Date(), env.META_GRAPH_VERSION, correlationId);
+      const { failed: checkFailures } = await checkDueInstagramSubscriptions(pool, tokenKeys(env), countedFetch, new Date(), env.META_GRAPH_VERSION, correlationId);
       if (checkFailures > 0) throw new SubscriptionCheckFailedError();
     });
+    // During a key rotation (#61) the stored secrets are sealed again with the current key, while sending is off
+    // too. Without a previous key, or while it still equals the current key (the first step of the runbook), the
+    // step does not run, so it records no row, runs no query and changes no ciphertext.
+    if (env.TOKEN_ENCRYPTION_KEY_PREVIOUS && env.TOKEN_ENCRYPTION_KEY_PREVIOUS !== env.TOKEN_ENCRYPTION_KEY)
+      await step("token_key_rewrap", async () => {
+        const keys = tokenKeys(env);
+        try {
+          if (!keys) throw new Error("missing");
+          sealSecret("key-check", keys, "config-check");
+        } catch {
+          throw new ConfigurationError("Token encryption not configured");
+        }
+        const { failed: rewrapFailures } = await rewrapSealedSecrets(pool, keys);
+        if (rewrapFailures > 0) throw new TokenKeyRewrapFailedError();
+      });
     // Linking a kept DM to its now-sent reply and resuming a delayed flow run only change state or
     // queue a reply, so they run while sending is off too. The link runs first: a DM that answered a reply
     // wait in time must reach the run before the resume times that wait out, and the resume holds a wait
@@ -563,7 +578,7 @@ async function runScheduledSteps(env: Env, correlationId: string): Promise<boole
       // cannot stop or delay a reply. They share the global send switch: with sending off nothing leaves.
       await step("webhook_delivery", async () => {
         if (!env.TOKEN_ENCRYPTION_KEY) throw new ConfigurationError("Token encryption not configured");
-        await deliverDueWebhooks(pool, env.TOKEN_ENCRYPTION_KEY, {
+        await deliverDueWebhooks(pool, tokenKeys(env)!, {
           fetchImpl: countedFetch,
           correlationId,
           subrequestsLeft: () => CRON_SUBREQUEST_BUDGET - subrequests,
@@ -626,10 +641,11 @@ import type { AuthEnv } from "../app/auth.ts";
 import { deleteExpiredOAuthStates, type InstagramOAuthEnv } from "../app/instagram-oauth.ts";
 import { DEAUTHORIZE_BODY_LIMIT, deauthorizeInstagramUser, parseDeauthorizeBody } from "../app/instagram-deauthorization.ts";
 
-import { openSecret } from "../app/secrets.ts";
+import { openSecret, sealSecret, tokenKeys } from "../app/secrets.ts";
+import { rewrapSealedSecrets } from "../app/token-key-rewrap.ts";
 import { isRecord, isUuid } from "../app/auth.ts";
 import { InstagramFollowTransport } from "../instagram/follow-transport.ts";
-import { ConfigurationError, failureCode, logOperation, SubscriptionCheckFailedError, TokenRefreshFailedError, type OperationPart, type OperationStep } from "../app/operations-log.ts";
+import { ConfigurationError, failureCode, logOperation, SubscriptionCheckFailedError, TokenKeyRewrapFailedError, TokenRefreshFailedError, type OperationPart, type OperationStep } from "../app/operations-log.ts";
 import { evaluateAlerts, recordStep, recordSteps, type StepOutcome } from "../app/operations-health.ts";
 import { CRON_SUBREQUEST_BUDGET, deliverDueWebhooks } from "../app/webhook-delivery.ts";
 import { startDueCampaignRuns } from "../app/campaign-runs.ts";

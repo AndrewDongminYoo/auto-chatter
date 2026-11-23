@@ -1,5 +1,5 @@
 import type { Pool } from "pg";
-import { openSecret, sealSecret } from "./secrets.ts";
+import { openSecret, sealSecret, type SecretKey } from "./secrets.ts";
 import { metaTokenRejected } from "../instagram/meta-graph-error.ts";
 import { markReauthRequired } from "./instagram-reauth.ts";
 import { failureCode, logOperation } from "./operations-log.ts";
@@ -26,7 +26,7 @@ async function providerJson(fetchImpl: typeof fetch, url: URL | string, init: Re
   }
 }
 
-export async function refreshDueInstagramTokens(pool: Pool, key: string, fetchImpl: typeof fetch = fetch, now: Date = new Date(), graphVersion = "v26.0"): Promise<number> {
+export async function refreshDueInstagramTokens(pool: Pool, key: SecretKey, fetchImpl: typeof fetch = fetch, now: Date = new Date(), graphVersion = "v26.0"): Promise<number> {
   return (await refreshDueInstagramTokensWithFailures(pool, key, fetchImpl, now, graphVersion)).refreshed;
 }
 
@@ -35,7 +35,7 @@ export async function refreshDueInstagramTokens(pool: Pool, key: string, fetchIm
 // refresh that loses to a newer token or a stopped connection is not a failure. A refresh call that Meta
 // rejects also records the reconnect marker (refresh_rejected), and a stored refresh clears it.
 // correlationId is the caller's run ID, written on the log line of a failed marker write.
-export async function refreshDueInstagramTokensWithFailures(pool: Pool, key: string, fetchImpl: typeof fetch = fetch, now: Date = new Date(), graphVersion = "v26.0", correlationId?: string): Promise<{ refreshed: number; failed: number }> {
+export async function refreshDueInstagramTokensWithFailures(pool: Pool, key: SecretKey, fetchImpl: typeof fetch = fetch, now: Date = new Date(), graphVersion = "v26.0", correlationId?: string): Promise<{ refreshed: number; failed: number }> {
   if (!Number.isFinite(now.getTime())) throw new Error("Invalid refresh time");
   if (!/^v\d+\.\d+$/.test(graphVersion)) throw new Error("Invalid Graph API version");
   sealSecret("key-check", key, "config-check");

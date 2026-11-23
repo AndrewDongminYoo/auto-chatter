@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer, type Socket } from "node:net";
 import { mock, test } from "node:test";
 import { Client } from "pg";
-import { ConfigurationError, failureCode, logOperation, operationLogEntry, SubscriptionCheckFailedError, TokenRefreshFailedError } from "./operations-log.ts";
+import { ConfigurationError, failureCode, logOperation, operationLogEntry, SubscriptionCheckFailedError, TokenKeyRewrapFailedError, TokenRefreshFailedError } from "./operations-log.ts";
 
 test("operation logs drop disallowed keys and allowed keys whose value has the wrong shape", () => {
   const lines: unknown[][] = [];
@@ -80,6 +80,7 @@ test("failure codes come from the error class and code, never from the message",
   assert.equal(failureCode(new ConfigurationError("Token encryption not configured")), "not_configured");
   assert.equal(failureCode(new TokenRefreshFailedError()), "token_refresh_failed");
   assert.equal(failureCode(new SubscriptionCheckFailedError()), "subscription_check_failed");
+  assert.equal(failureCode(new TokenKeyRewrapFailedError()), "token_key_rewrap_failed");
   assert.equal(failureCode(Object.assign(new Error("terminating connection"), { code: "57P01" })), "database_unavailable");
   assert.equal(failureCode(Object.assign(new Error("connection failure"), { code: "08006" })), "database_unavailable");
   assert.equal(failureCode(Object.assign(new Error("duplicate key (secret text)"), { code: "23505" })), "database_error");
