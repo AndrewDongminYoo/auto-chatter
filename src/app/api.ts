@@ -234,7 +234,7 @@ export async function appApi(
       if (url.pathname === "/api/inbox" && request.method === "GET") {
         // Every list request scans all of the workspace's DMs.
         await spendApiLimit(env.INBOX_LIST_LIMIT, user.id);
-        return json(await listInbox(pool, user, url.searchParams));
+        return json(await listInbox(pool, user, url.searchParams, env, fetchImpl));
       }
       if (url.pathname === "/api/inbox/assignees" && request.method === "GET") return json({ assignees: await listAssignees(pool, user) });
       const conversationState = /^\/api\/inbox\/conversations\/([a-f0-9-]+)\/(\d+)\/state$/.exec(url.pathname);
