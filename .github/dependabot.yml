@@ -4,7 +4,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
-      day: monday
+      day: thursday
       timezone: Asia/Seoul
     open-pull-requests-limit: 3
     groups:
@@ -57,7 +57,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
-      day: monday
+      day: wednesday
       timezone: Asia/Seoul
     open-pull-requests-limit: 2
     groups:
@@ -75,7 +75,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
-      day: monday
+      day: wednesday
       timezone: Asia/Seoul
     open-pull-requests-limit: 2
     groups:
