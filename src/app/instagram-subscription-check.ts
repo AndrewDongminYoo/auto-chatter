@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import { isRecord } from "./auth.ts";
-import { openSecret, sealSecret } from "./secrets.ts";
+import { openSecret, sealSecret, type SecretKey } from "./secrets.ts";
 import { clearReauthRequired, markReauthRequired } from "./instagram-reauth.ts";
 import { ConfigurationError, failureCode, logOperation } from "./operations-log.ts";
 import { isMetaTokenRejection, readMetaGraphErrorCode } from "../instagram/meta-graph-error.ts";
@@ -53,7 +53,7 @@ export function validGraphVersion(graphVersion: string | undefined): graphVersio
 
 // Decrypts the stored token and reads me?fields=user_id, then the account's subscribed_apps. The second call is
 // made only after Meta accepted the token for the stored account.
-export async function checkInstagramSubscription(connection: { workspaceId: string; accountId: string; encryptedToken: string }, key: string, graphVersion: string, fetchImpl: typeof fetch): Promise<SubscriptionCheck> {
+export async function checkInstagramSubscription(connection: { workspaceId: string; accountId: string; encryptedToken: string }, key: SecretKey, graphVersion: string, fetchImpl: typeof fetch): Promise<SubscriptionCheck> {
   let token: string;
   try {
     token = openSecret(connection.encryptedToken, key, `${connection.workspaceId}:${connection.accountId}`);
@@ -193,7 +193,7 @@ interface DueConnection {
 // failure is retried after the interval, not every run. A token that does not decrypt or a failed record write
 // counts as a failure and fails the step after every claimed connection was checked, as in token_refresh;
 // transient Meta results, a rejection and an account mismatch do not.
-export async function checkDueInstagramSubscriptions(pool: Pool, key: string | undefined, fetchImpl: typeof fetch, now: Date, graphVersion: string | undefined, correlationId?: string): Promise<{ checked: number; failed: number }> {
+export async function checkDueInstagramSubscriptions(pool: Pool, key: SecretKey | undefined, fetchImpl: typeof fetch, now: Date, graphVersion: string | undefined, correlationId?: string): Promise<{ checked: number; failed: number }> {
   if (!key) throw new ConfigurationError("Token encryption not configured");
   if (!validGraphVersion(graphVersion)) throw new ConfigurationError("Graph API version not configured");
   try {

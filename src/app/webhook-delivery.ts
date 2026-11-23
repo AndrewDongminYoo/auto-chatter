@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import type { Pool } from "pg";
 import { isRecord } from "./auth.ts";
 import { logOperation } from "./operations-log.ts";
-import { openSecret } from "./secrets.ts";
+import { openSecret, type SecretKey } from "./secrets.ts";
 
 // Outbound webhook delivery (#47, docs/specs/2026-10-01-flow-webhook-delivery.md). Only the Cloudflare cron
 // calls deliverDueWebhooks; the Node worker never delivers webhooks. Every limit below is service policy.
@@ -234,7 +234,7 @@ export async function recoverStaleWebhookDeliveries(pool: Pool): Promise<number>
   return recovered.rowCount ?? 0;
 }
 
-async function attempt(pool: Pool, claimed: Claimed, encryptionKey: string, fetchImpl: typeof fetch, resolve: WebhookResolver, now: () => number, timeoutMs: number): Promise<Attempt | "endpoint_inactive"> {
+async function attempt(pool: Pool, claimed: Claimed, encryptionKey: SecretKey, fetchImpl: typeof fetch, resolve: WebhookResolver, now: () => number, timeoutMs: number): Promise<Attempt | "endpoint_inactive"> {
   // The endpoint and its valid keys are read after the claim, immediately before the checks and the request.
   const destination = (
     await pool.query<Destination>(
@@ -281,7 +281,7 @@ async function attempt(pool: Pool, claimed: Claimed, encryptionKey: string, fetc
 // Delivers due webhook deliveries one at a time. A row is claimed with FOR UPDATE SKIP LOCKED and a fresh
 // attempt ID, and every later change requires status 'sending' and that attempt ID, so overlapping runs
 // never finish each other's attempts. Delivery is at-least-once.
-export async function deliverDueWebhooks(pool: Pool, encryptionKey: string, options: WebhookDeliveryOptions = {}): Promise<{ attempted: number; sent: number }> {
+export async function deliverDueWebhooks(pool: Pool, encryptionKey: SecretKey, options: WebhookDeliveryOptions = {}): Promise<{ attempted: number; sent: number }> {
   // Called as plain functions: workerd rejects its native fetch when it is invoked with an object as receiver.
   const injectedFetch = options.fetchImpl ?? fetch;
   const fetchImpl: typeof fetch = (input, init) => injectedFetch(input, init);

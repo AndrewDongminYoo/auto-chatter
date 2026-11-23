@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { workspaceFor } from "./settings.ts";
-import { openSecret } from "./secrets.ts";
+import { openSecret, tokenKeys } from "./secrets.ts";
 import { readErrorBody, type InstagramOAuthEnv } from "./instagram-oauth.ts";
 
 const fields = "id,owner,caption,media_type,media_product_type,media_url,thumbnail_url,permalink,timestamp";
@@ -54,7 +54,7 @@ export async function connectionMedia(pool: Pool, user: User, connectionId: stri
   if (!env.TOKEN_ENCRYPTION_KEY || !env.META_GRAPH_VERSION || !/^v\d+\.\d+$/.test(env.META_GRAPH_VERSION) || !/^\d{1,40}$/.test(connection.account_id)) throw new ApiError(503, "instagram_not_configured");
   let token: string;
   try {
-    token = openSecret(connection.access_token_encrypted, env.TOKEN_ENCRYPTION_KEY, `${workspaceId}:${connection.account_id}`);
+    token = openSecret(connection.access_token_encrypted, tokenKeys(env)!, `${workspaceId}:${connection.account_id}`);
   } catch {
     throw new ApiError(409, "media_reconnect_required");
   }

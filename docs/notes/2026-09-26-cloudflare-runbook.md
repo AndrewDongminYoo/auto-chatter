@@ -765,6 +765,7 @@ corepack pnpm exec wrangler secret put INSTAGRAM_INTERNAL_EMAILS --env-file /dev
 | `INSTAGRAM_OAUTH_APP_SECRET`       | Worker secret            | Instagram OAuth 앱 secret                                                  |
 | `INSTAGRAM_INTERNAL_EMAILS`        | Worker secret            | 검수용으로 허용할 확인된 이메일의 쉼표 구분 목록                           |
 | `TOKEN_ENCRYPTION_KEY`             | Worker secret            | 32바이트 무작위 키의 canonical base64                                      |
+| `TOKEN_ENCRYPTION_KEY_PREVIOUS`    | Worker secret            | 키 교체 중에만 두는 이전 키, 평소에는 등록하지 않음                        |
 | `INSTAGRAM_APP_SECRET`             | Worker secret            | 웹훅 서명 검증                                                             |
 | `INSTAGRAM_VERIFY_TOKEN`           | Worker secret            | 웹훅 URL 구독 확인                                                         |
 
@@ -776,7 +777,8 @@ corepack pnpm exec wrangler secret put INSTAGRAM_INTERNAL_EMAILS --env-file /dev
 일반 사용자 공개 스위치는 [연결 공개 조건](../specs/2026-09-29-instagram-public-access.md)의 실계정·승인 확인 전에는 바꾸지 않습니다.
 
 `TOKEN_ENCRYPTION_KEY`는 `openssl rand -base64 32`로 생성하고 안전하게 백업합니다.
-키를 잃거나 교체하면 기존 계정 토큰을 복호화할 수 없어 재연결 또는 별도 키 이전이 필요합니다.
+키를 잃으면 기존 계정 토큰과 웹훅 서명 키를 복호화할 수 없어 재연결과 서명 키 교체가 필요합니다.
+키를 바꿀 때는 [토큰 암호화 키 교체](#토큰-암호화-키-교체) 절차를 따릅니다.
 Instagram 계정 토큰은 OAuth 연결을 통해 암호화하여 DB에 저장합니다.
 Cloudflare는 `META_INSTAGRAM_ACCESS_TOKEN`, `META_INSTAGRAM_ACCOUNT_ID`, `META_INSTAGRAM_CONNECTION_ID`, `META_LOGIN_MODE`를 런타임 설정으로 사용하지 않습니다.
 DB 연결은 `HYPERDRIVE`, 작업 알림은 `REPLY_QUEUE` 바인딩을 사용하므로 `DATABASE_URL`도 Worker secret으로 등록하지 않습니다.
@@ -900,6 +902,38 @@ Queue 동시 실행 수는 1이며 이미 발송에 들어간 요청은 설정 �
 DB 상태와 고정 오류 로그를 확인하고 `unknown`을 일괄 pending으로 되돌리지 않습니다.
 롤백 때도 같은 DB를 유지하며 Cloudflare와 Node 발송 워커를 동시에 켜지 않습니다.
 백업·복구 옵션과 요금은 선택한 Supabase 프로젝트 플랜에서 별도 확인합니다.
+
+### 토큰 암호화 키 교체
+
+`TOKEN_ENCRYPTION_KEY`를 바꿀 때는 이전 키를 `TOKEN_ENCRYPTION_KEY_PREVIOUS`에 함께 두고, cron 단계 `token_key_rewrap`이 저장된 비밀값을 모두 새 키로 다시 봉인한 뒤에 이전 키를 지웁니다.
+형식과 동시성 규칙은 [토큰 암호화 키 교체 spec](../specs/2026-11-24-token-key-rotation.md)에 있습니다.
+운영 키를 바꾸는 일이므로 실행 전에 별도 승인을 받습니다.
+
+1. 활성 버전이 #61 키링 코드를 포함하는지 확인합니다. `wrangler deployments status`로 활성 버전 ID를 읽고 `wrangler versions view <ID> --json`의 `workers/tag` 커밋이 #61 병합 커밋을 포함하는지 `git merge-base --is-ancestor`로 봅니다. 포함하지 않은 버전은 `TOKEN_ENCRYPTION_KEY_PREVIOUS`를 읽지 않으므로, 아래 4단계 뒤에 이전 토큰을 모두 열지 못합니다.
+2. 지금 쓰는 키 값을 `TOKEN_ENCRYPTION_KEY_PREVIOUS`로 등록합니다. 두 이름이 같은 키를 가리키는 동안 `token_key_rewrap`은 돌지 않으므로 암호문도 동작도 바뀌지 않습니다.
+3. 아래 조회를 실행해 지금 보이는 `kid`를 모두 기록하고 시각을 적어 둡니다. 이 `kid`는 이전 키의 식별자입니다. v1 행만 있으면 기록할 `kid`가 없습니다.
+4. `openssl rand -base64 32`로 새 키를 만들어 안전하게 백업한 뒤 `TOKEN_ENCRYPTION_KEY`로 등록합니다. 2단계보다 먼저 하면 그 사이에 이전 토큰을 열 수 없는 구간이 생깁니다.
+5. 다음 cron 실행 뒤 `scheduled_steps`의 `token_key_rewrap` 행을 읽습니다. `failure_code`는 성공한 뒤에도 남으므로, 상태는 `last_success_at`과 `last_failure_at` 중 늦은 쪽으로 판단합니다. 실패가 늦고 `failure_code`가 `not_configured`이면 `TOKEN_ENCRYPTION_KEY_PREVIOUS` 값이 32바이트 canonical base64가 아닌 것이며, 이때는 토큰 갱신, 구독 확인, 발송도 같은 이유로 실패하므로 바로 고칩니다.
+6. 실패가 늦고 `failure_code`가 `token_key_rewrap_failed`이면 두 키 모두로 열 수 없는 행이 있는 것입니다. 해당 계정은 다시 연결하고 웹훅 서명 키는 교체해서, 그 행이 새 키로 바뀌거나 폐기되게 합니다. 이 단계가 실패하는 동안 cron 실행 전체가 실패로 기록되어 `cron_stale` 경보가 켜져 있으므로, 그동안 다른 cron 장애를 경보만으로 알아챌 수 없습니다.
+7. 이전 키를 지워도 되는 조건은 네 가지를 모두 만족할 때입니다: 4단계에서 10분 이상 지난 뒤 관리자 연결에서 실행한 `SELECT count(*) FROM pg_stat_activity WHERE usename='auto_chatter_server' AND xact_start < '<4단계 시각 + 10분>'`이 0, `token_key_rewrap`의 `last_success_at`이 그 확인 뒤이고 `last_failure_at`보다 늦음, 아래 조회에 v1 행이 없음, 남은 `kid`가 하나이고 3단계에서 기록한 `kid`가 아님. 첫 조건은 4단계 전에 시작한 OAuth 콜백이 이전 키로 봉인한 토큰을 그 뒤에 저장하는 경우를 막습니다. 콜백의 공급자 호출과 DB 쿼리는 Worker 쪽에서 각각 10초 상한이 있으므로 10분 뒤에는 Worker 쪽 콜백이 끝나 있습니다. 그 콜백의 트랜잭션은 키 교체 뒤에 시작했더라도 모두 4단계 시각 + 10분 이전에 시작했으므로, 서버에서 아직 끝나지 않았다면 이 조회에 남습니다. 9단계의 사후 확인은 그래도 놓친 행을 위한 복구 경로입니다. 한 번 실행에 표마다 최대 500행을 다시 봉인하므로, 행이 많으면 여러 번의 실행을 기다립니다.
+8. 7단계 조건을 확인한 뒤 `wrangler secret delete TOKEN_ENCRYPTION_KEY_PREVIOUS`로 이전 키를 지웁니다.
+9. 1시간 뒤와 다음 날에 아래 조회를 다시 실행합니다. v1 행이나 새 키가 아닌 `kid`가 보이면 늦게 저장된 이전 키의 행이므로, 백업한 이전 키를 `TOKEN_ENCRYPTION_KEY_PREVIOUS`로 다시 등록하고 5단계부터 반복합니다. 이전 키의 백업은 이 확인이 끝날 때까지 지우지 않습니다.
+
+```sql
+SELECT 'token' AS kind,split_part(access_token_encrypted,'.',1) AS version,
+  CASE WHEN access_token_encrypted LIKE 'v2.%' THEN split_part(access_token_encrypted,'.',2) END AS kid,count(*)
+FROM instagram_connections WHERE access_token_encrypted IS NOT NULL GROUP BY 1,2,3
+UNION ALL
+SELECT 'signing_key',split_part(secret_encrypted,'.',1),
+  CASE WHEN secret_encrypted LIKE 'v2.%' THEN split_part(secret_encrypted,'.',2) END,count(*)
+FROM webhook_signing_keys WHERE retired_at IS NULL AND secret_encrypted IS NOT NULL GROUP BY 1,2,3
+ORDER BY 1,2,3;
+```
+
+`kid`는 키에서 계산한 식별자이므로 키 값을 셸에 꺼내지 않아도 됩니다.
+각 `wrangler secret put`과 `delete`는 커밋 태그가 없는 Worker 버전을 만들므로, 다음 자동 배포는 [마이그레이션 정지](#github-actions-자동-배포)에서 멈춥니다. 적용할 migration이 없는지 확인한 뒤 `migrations_applied`를 켜고 수동 실행합니다.
+#61 이전 Worker 버전은 v2 봉투를 읽지 못합니다. 이 코드가 배포된 뒤 새로 연결하거나 갱신한 토큰과 새로 만든 서명 키는 v2이므로, 그 이전 버전으로 `wrangler rollback`하면 해당 계정의 발송과 웹훅 서명이 실패합니다. 저장된 값은 그대로이므로 #61 이후 버전으로 다시 배포하면 복구됩니다.
+4단계 이전에 만든 Worker 버전으로는 `wrangler rollback`하지 않습니다. 되돌린 버전이 그 버전에 묶인 이전 secret 값을 쓰는지는 2026-11-24 Cloudflare 문서에서 확인하지 못했고, 그렇다면 새 키로 봉인한 행을 모두 열 수 없습니다. 코드를 되돌려야 하면 되돌릴 커밋을 지금 secret 그대로 다시 배포합니다.
 
 ## 6. 운영 로그와 경보
 

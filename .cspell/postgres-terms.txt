@@ -67,5 +67,6 @@ strpos
 tgisinternal
 tgname
 tgrelid
+usename
 userbyid
 xact

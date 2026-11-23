@@ -45,7 +45,7 @@
   - 공급자·실계정: 실계정 확인(2026-10-06)
   - 운영 완료: 배포·운영 확인, 인증 메일 SMTP 적용(#151)
 - [#16](https://github.com/AndrewDongminYoo/auto-chatter/issues/16) Instagram 토큰 갱신·연결 상태·재인증 안내
-  - 현재 코드: 토큰 갱신(`57d58d6`), 토큰 거부 기록과 표시(#177, migration 039), 앱 권한 해제 시 연결 해제(#180, migration 040), webhook 구독 주기 확인과 유실 표시(#183, migration 041), 발송 전 계정 확인 뒤 거부 표시 유지(#187) 구현; 토큰 암호화 키 교체 중 이전 토큰을 쓰지 않는지 보는 테스트 없음(#61과 함께)
+  - 현재 코드: 토큰 갱신(`57d58d6`), 토큰 거부 기록과 표시(#177, migration 039), 앱 권한 해제 시 연결 해제(#180, migration 040), webhook 구독 주기 확인과 유실 표시(#183, migration 041), 발송 전 계정 확인 뒤 거부 표시 유지(#187) 구현; 토큰 암호화 키 교체 중 발송이 POST 전에 `token_rotated`로 다시 시도하고 같은 토큰을 새 키로 열어 보내는지 보는 테스트(#406, `src/cloudflare/worker.db.test.ts`)
   - 로컬 증거: [토큰 갱신 계약](../specs/2026-09-28-instagram-token-refresh.md) 단위·DB·workerd 로컬 테스트, 갱신 경합·단일 claim은 `src/app/instagram-oauth.db.test.ts`
   - 공급자·실계정: 미검증
   - 운영 완료: 039~041 운영 적용·배포, 실동작 미검증, 완료하지 않음
@@ -283,8 +283,8 @@
   - 공급자·실계정: 미검증
   - 운영 완료: 완료하지 않음
 - [#61](https://github.com/AndrewDongminYoo/auto-chatter/issues/61) 운영 백업·복구 훈련·암호화 키 회전·배포 복구
-  - 현재 코드: 부분 기반
-  - 로컬 증거: 기존 증거 있음, 추가 검증 필요
+  - 현재 코드: 토큰 암호화 키 교체(v2 봉투, 키링, cron 단계 `token_key_rewrap`, #406, [spec](../specs/2026-11-24-token-key-rotation.md)); 백업 범위·RPO/RTO·키 보관 담당자·분리 환경 복구 훈련은 없음
+  - 로컬 증거: 키 교체의 단위·DB·workerd 로컬 테스트, 그 밖의 범위는 추가 검증 필요
   - 공급자·실계정: 미검증
   - 운영 완료: 완료하지 않음
 - [#62](https://github.com/AndrewDongminYoo/auto-chatter/issues/62) 공개 다중 사용자 서비스 보안 회귀와 남용 방지

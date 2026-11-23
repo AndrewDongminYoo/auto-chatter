@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import { ApiError, cookie, isRecord, json, type User } from "./auth.ts";
 import { lockWorkspaceForMember, workspaceFor } from "./settings.ts";
 import { normalizedUserId } from "./instagram-deauthorization.ts";
-import { sealSecret } from "./secrets.ts";
+import { sealSecret, tokenKeys } from "./secrets.ts";
 import { requireConnectionSlot } from "./plans.ts";
 import { logOperation } from "./operations-log.ts";
 
@@ -12,6 +12,7 @@ export interface InstagramOAuthEnv {
   INSTAGRAM_OAUTH_APP_ID?: string;
   INSTAGRAM_OAUTH_APP_SECRET?: string;
   TOKEN_ENCRYPTION_KEY?: string;
+  TOKEN_ENCRYPTION_KEY_PREVIOUS?: string;
   META_GRAPH_VERSION?: string;
   INSTAGRAM_PUBLIC_CONNECT_ENABLED?: string;
   INSTAGRAM_INTERNAL_EMAILS?: string;
@@ -25,13 +26,14 @@ function config(env: InstagramOAuthEnv) {
     throw new ApiError(503, "instagram_not_configured");
   const origin = new URL(env.APP_ORIGIN);
   if (origin.protocol !== "https:" || origin.origin !== env.APP_ORIGIN) throw new ApiError(503, "instagram_not_configured");
-  // Validate key material before creating an authorization flow.
-  sealSecret("key-check", env.TOKEN_ENCRYPTION_KEY, "config-check");
+  // Validate key material, the previous key included, before creating an authorization flow.
+  const keys = tokenKeys(env)!;
+  sealSecret("key-check", keys, "config-check");
   return {
     origin: origin.origin,
     appId: env.INSTAGRAM_OAUTH_APP_ID,
     secret: env.INSTAGRAM_OAUTH_APP_SECRET,
-    key: env.TOKEN_ENCRYPTION_KEY,
+    key: keys,
     version: env.META_GRAPH_VERSION,
     redirect: origin.origin + "/api/instagram/callback",
   };
