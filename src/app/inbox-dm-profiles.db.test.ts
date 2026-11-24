@@ -438,6 +438,7 @@ test("migration 076 replays over stored rows, keeps the canonical deletion funct
   const sql = await readFile(new URL("../../db/migrations/076_instagram_dm_profiles.sql", import.meta.url), "utf8");
   await pool.query(sql);
   await pool.query(sql);
+  await pool.query(await readFile(new URL("../../db/migrations/077_active_contacts.sql", import.meta.url), "utf8"));
   assert.deepEqual(await definitions(), canonical);
   assert.deepEqual(await profiles(), stored);
   await assert.rejects(pool.query("UPDATE instagram_dm_profiles SET username='bad name'"), { code: "23514" });

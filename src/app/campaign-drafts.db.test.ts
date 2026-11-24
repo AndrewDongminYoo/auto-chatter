@@ -202,6 +202,7 @@ test("migration 063 replays and preserves drafts while matching the canonical wo
   await pool.query(await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/072_instagram_dm_last_inbound.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/076_instagram_dm_profiles.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/077_active_contacts.sql", import.meta.url), "utf8"));
   assert.equal(await definition(), canonical);
   assert.equal((await expect(await request("GET", `/api/campaign-drafts/${input.id}`))).version, 1);
 });

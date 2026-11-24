@@ -4,7 +4,7 @@ import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { appApi } from "./api.ts";
 import { ApiError } from "./auth.ts";
-import { EXCLUDED_ITEMS, EXCLUDED_TABLES, EXPORTED_TABLES, WORKSPACE_EXPORT_LIMITS, exportWorkspace } from "./workspace-export.ts";
+import { EXCLUDED_ITEMS, EXCLUDED_TABLES, EXPORTED_AGGREGATES, EXPORTED_TABLES, WORKSPACE_EXPORT_LIMITS, exportWorkspace } from "./workspace-export.ts";
 import { seedWorkspace } from "./workspace-fixture.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -65,7 +65,7 @@ test("exports every table of the caller's workspace and nothing from another wor
   assert.equal(body.workspace_id, workspaceId);
   assert.deepEqual(body.excluded, EXCLUDED_ITEMS);
   assert.ok(body.excluded.includes("instagram_connections.access_token_encrypted"));
-  assert.deepEqual(Object.keys(body.tables).sort(), Object.keys(EXPORTED_TABLES).sort());
+  assert.deepEqual(Object.keys(body.tables).sort(), [...Object.keys(EXPORTED_TABLES), ...Object.keys(EXPORTED_AGGREGATES)].sort());
   for (const [table, rows] of Object.entries(body.tables as Record<string, Record<string, unknown>[]>)) {
     assert.ok(rows.length > 0, `${table} was seeded but exported no rows`);
     for (const row of rows) {
@@ -117,12 +117,43 @@ test("every public table is exported or explicitly excluded, and secret-like col
     [],
     "a new table must be added to EXPORTED_TABLES or EXCLUDED_TABLES",
   );
+  // An aggregate section stands in for the rows of a table that is left out.
+  for (const { source } of Object.values(EXPORTED_AGGREGATES)) assert.ok(EXCLUDED_TABLES.includes(source) && !(source in EXPORTED_TABLES), source);
   const columns = (await pool.query<{ table_name: string; column_name: string }>("SELECT table_name,column_name FROM information_schema.columns WHERE table_schema='public'")).rows;
   for (const { table_name: table, column_name: column } of columns) {
     const config = EXPORTED_TABLES[table];
     if (!config || benignSecretLikeColumns.has(column) || !/token|secret|encrypt|password|hash/i.test(column)) continue;
     assert.ok(config.omit?.includes(column), `${table}.${column} looks secret and must be omitted from the export`);
   }
+});
+
+test("the export carries active contact counts per month and connection, never ledger rows or person keys (#51)", async () => {
+  await pool.query("TRUNCATE active_contacts");
+  const ledger = (month: string, connection: string, workspace: string, key: string | null) =>
+    pool.query(
+      `INSERT INTO active_contacts(workspace_id,billing_month,connection_id,person_key_kind,person_key,first_activity_at,activity_kind,time_zone)
+       VALUES($1,$2,$3,'comment_sender',$4,'2026-10-05T01:02:03.456789Z','comment','Asia/Seoul')`,
+      [workspace, month, connection, key],
+    );
+  await ledger("2026-10-01", connectionId, workspaceId, "ledger-key-1");
+  await ledger("2026-10-01", connectionId, workspaceId, "ledger-key-2");
+  await ledger("2026-10-01", connectionId, workspaceId, null);
+  await ledger("2026-11-01", connectionId, workspaceId, "ledger-key-1");
+  await ledger("2026-10-01", foreignConnectionId, otherWorkspaceId, "ledger-key-foreign");
+  const body = await (await request()).json();
+  assert.ok(body.excluded.includes("active_contacts"));
+  assert.equal(body.tables.active_contacts, undefined);
+  assert.deepEqual(body.tables.active_contact_months, [
+    { active_contacts: 3, billing_month: "2026-10-01", connection_id: connectionId },
+    { active_contacts: 1, billing_month: "2026-11-01", connection_id: connectionId },
+  ]);
+  const text = JSON.stringify(body);
+  assert.doesNotMatch(text, /ledger-key|person_key|first_activity_at|01:02:03/);
+  // The aggregate rows count toward the row limit.
+  const full = await exportWorkspace(pool, owner);
+  const rows = Object.values(JSON.parse(full.body).tables as Record<string, unknown[]>).reduce((total, table) => total + table.length, 0);
+  await exportWorkspace(pool, owner, { maxRows: rows });
+  await assert.rejects(exportWorkspace(pool, owner, { maxRows: rows - 1 }), tooLarge);
 });
 
 test("bigint identifiers above 2^53 are exported exactly", async () => {

@@ -4,6 +4,7 @@ import { matchesCommentRule, type CommentRuleMatch } from "./comment-rule.ts";
 import { fieldWriteTargets, parseFlowDocument, webhookFieldIds, type FlowDocument } from "../app/flow-schema.ts";
 import { flowWebhookPayload, matchesFlowTrigger, planFlowRun, type FlowChanges, type FlowPlan, type ResumeEntry } from "../app/flow-runtime.ts";
 import { lockContact, replySavedFields } from "../app/contact-fields.ts";
+import { recordActiveContacts } from "./active-contacts.ts";
 
 const ACTION_TYPES = new Set(["add_tag", "remove_tag", "set_field"]);
 // When a reply wait ends: the time its private reply was sent plus the timeout of the wait node in
@@ -77,6 +78,7 @@ export async function ingestComments(pool: Pool, comments: readonly InstagramCom
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const stored: string[] = [];
     for (const comment of comments) {
       const connections = await client.query<ConnectionRow>("SELECT id, workspace_id FROM instagram_connections WHERE account_id = $1 AND active = true", [comment.accountId]);
       const connection = connections.rows[0];
@@ -92,6 +94,7 @@ export async function ingestComments(pool: Pool, comments: readonly InstagramCom
       );
       const event = events.rows[0];
       if (!event) continue;
+      stored.push(event.id);
 
       const rules = await client.query<RuleRow>(
         `SELECT id, keyword, keywords, match_mode, excluded_keywords, private_reply_text, follow_gate_enabled, confirmation_keyword, confirmation_button_title, follower_reply_text, non_follower_reply_text FROM instagram_comment_rules
@@ -131,6 +134,7 @@ export async function ingestComments(pool: Pool, comments: readonly InstagramCom
         ],
       );
     }
+    await recordActiveContactComments(client, stored);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -138,6 +142,28 @@ export async function ingestComments(pool: Pool, comments: readonly InstagramCom
   } finally {
     client.release();
   }
+}
+
+// Records the comments this batch stored in the billing-month active contact ledger (#51), each at its stored
+// created_at, read here because a JavaScript Date would drop its microseconds; a redelivered comment stored nothing
+// and records nothing. It is the last statement before COMMIT
+// (recordActiveContacts): written earlier, an uncommitted ledger key would be held while the private reply insert waits
+// on a send finalize of the same person's reply, whose ledger write waits on that key. The comment inserts already hold
+// the connections' key-share locks, as they do for the comments themselves.
+// The connected account's own comments are stored but are not a contact: a comment whose sender is the connection's
+// stored account ID or OAuth user ID is not recorded. The profile ID that the private reply check reads from Graph is
+// not stored, so an own comment under only that ID is still recorded.
+async function recordActiveContactComments(client: PoolClient, eventIds: readonly string[]): Promise<void> {
+  if (!eventIds.length) return;
+  await recordActiveContacts(
+    client,
+    "comment_record_failed",
+    `SELECT public.record_active_contacts(array_agg(e.workspace_id),array_agg(e.connection_id),array_agg('comment_sender'::text),
+       array_agg(e.sender_id),array_agg(e.created_at),array_agg('comment'::text))
+     FROM instagram_comment_events e JOIN instagram_connections c ON c.id=e.connection_id AND c.workspace_id=e.workspace_id
+     WHERE e.id=ANY($1::bigint[]) AND e.sender_id<>c.account_id AND e.sender_id IS DISTINCT FROM c.instagram_user_id`,
+    [eventIds],
+  );
 }
 
 // Starts the enabled flow published for this media, inside the comment's ingestion transaction.

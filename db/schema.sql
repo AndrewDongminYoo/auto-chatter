@@ -1670,6 +1670,203 @@ CREATE TABLE IF NOT EXISTS webhook_redelivery_events (
 );
 CREATE INDEX IF NOT EXISTS webhook_redelivery_events_delivery_idx
   ON webhook_redelivery_events(delivery_event_id,created_at);
+-- The billing-month active contact ledger (#51, docs/specs/2026-11-24-active-contact-ledger-design.md). One row per
+-- workspace, billing month, connection and person key: the first recorded message exchanged with that person in that
+-- month. billing_month is the first day of the calendar month of the activity time in the workspace time zone that was
+-- in force when the row was written (time_zone); a later time zone change moves no row. The person key is the comment
+-- sender ID, or the DM recipient ID, or for a DM recipient with a currently valid confirmed identity link at write time
+-- the linked comment sender ID; it is fixed at write time. first_activity_at and activity_kind belong to the activity
+-- that created the row (ON CONFLICT DO NOTHING), not always the earliest one. There are no foreign keys: the deletion
+-- functions set person_key to NULL and keep the row, so the month count stays and no Instagram ID remains, and the
+-- default NULLS DISTINCT keeps a NULL key from colliding with a later row. Server roles may only SELECT and INSERT.
+CREATE TABLE IF NOT EXISTS active_contacts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL,
+  billing_month date NOT NULL CHECK(billing_month=date_trunc('month',billing_month)::date),
+  connection_id uuid NOT NULL,
+  person_key_kind text NOT NULL CHECK(person_key_kind IN ('comment_sender','dm_recipient')),
+  person_key text CHECK(person_key IS NULL OR length(btrim(person_key))>0),
+  first_activity_at timestamptz NOT NULL,
+  activity_kind text NOT NULL CHECK(activity_kind IN
+    ('comment','dm_received','private_reply','follow_message','manual_reply','campaign','flow_dm')),
+  time_zone text NOT NULL CHECK(length(time_zone) BETWEEN 1 AND 255),
+  recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  CONSTRAINT active_contacts_person UNIQUE(workspace_id,billing_month,connection_id,person_key_kind,person_key)
+);
+-- The deletion functions find one person's or one connection's rows in every month.
+CREATE INDEX IF NOT EXISTS active_contacts_person_idx
+  ON active_contacts(workspace_id,connection_id,person_key_kind,person_key) WHERE person_key IS NOT NULL;
+
+-- The comment sender that a currently valid confirmed identity link names for a DM recipient, or NULL. "Currently
+-- valid" is the inbox rule (verifiedDmRecipientsSql in src/app/inbox-identity.ts; keep the two in step): the link is
+-- confirmed, its recipient has a stored inbox message, every provider-acknowledged reply to the recipient names one
+-- comment sender (the linked one), at least one of them was sent after the inbox was enabled, and the newest such fresh
+-- reply is the link's evidence. The link primary key is probed first, so a recipient without a link reads nothing else.
+CREATE OR REPLACE FUNCTION public.active_contact_linked_sender(p_workspace uuid, p_connection uuid, p_recipient text)
+RETURNS text
+LANGUAGE sql
+STABLE
+SET search_path = public, pg_temp
+AS $$
+  SELECT link.sender_id
+  FROM public.instagram_contact_identity_links link
+  JOIN public.instagram_connections owned ON owned.id=link.connection_id AND owned.workspace_id=link.workspace_id
+  WHERE link.workspace_id=p_workspace AND link.connection_id=p_connection AND link.recipient_id=p_recipient
+    AND link.state='confirmed'
+    AND EXISTS(SELECT 1 FROM public.instagram_inbox_messages message WHERE message.workspace_id=link.workspace_id
+      AND message.connection_id=link.connection_id AND message.recipient_id=link.recipient_id)
+    AND coalesce((
+      SELECT count(DISTINCT reply.sender_id)=1 AND min(reply.sender_id)=link.sender_id
+        AND bool_or(reply.sent_at>=owned.inbox_enabled_at)
+        AND (array_agg(reply.id::text ORDER BY reply.sent_at DESC,reply.id DESC)
+          FILTER (WHERE reply.sent_at>=owned.inbox_enabled_at))[1]=link.evidence_reply_id::text
+      FROM public.private_reply_outbox reply
+      JOIN public.instagram_comment_events event ON event.id=reply.event_id AND event.connection_id=reply.connection_id
+        AND event.workspace_id=reply.workspace_id AND event.sender_id=reply.sender_id
+      WHERE reply.workspace_id=link.workspace_id AND reply.connection_id=link.connection_id
+        AND reply.recipient_id=link.recipient_id AND reply.status='sent'
+        AND length(btrim(reply.provider_message_id))>0 AND reply.sent_at<=now()
+    ),false)
+$$;
+
+-- Whether AT TIME ZONE accepts the zone. The API stores only pg_timezone_names names, but that list can change, and
+-- reading pg_timezone_names costs tens of milliseconds, too much for every send; an unknown zone raises 22023, which
+-- this catches. The exception block writes nothing, so it is assigned no transaction ID.
+CREATE OR REPLACE FUNCTION public.active_contact_time_zone_valid(p_time_zone text)
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  PERFORM now() AT TIME ZONE p_time_zone;
+  RETURN true;
+EXCEPTION WHEN invalid_parameter_value THEN
+  RETURN false;
+END $$;
+
+-- Records activities in the ledger: the arrays hold one activity each (workspace, connection, identity kind, identity,
+-- activity time, activity kind). It resolves the person key, takes the billing month from the workspace's current
+-- time zone, skips the activities of a workspace whose zone AT TIME ZONE rejects (so one such workspace does not drop
+-- the other workspaces' rows of the same call), keeps the earliest activity of each key in this call and writes the rows in key order with
+-- ON CONFLICT DO NOTHING, so a repeated, redelivered or older activity changes no stored row. The send triggers below,
+-- the comment ingestion in src/instagram/store.ts and the inbound DM path in src/instagram/follow-flow.ts call it; each
+-- catches its errors, so the ledger never fails the source write.
+CREATE OR REPLACE FUNCTION public.record_active_contacts(
+  p_workspaces uuid[],
+  p_connections uuid[],
+  p_identity_kinds text[],
+  p_identities text[],
+  p_activity_times timestamptz[],
+  p_activity_kinds text[]
+)
+RETURNS void
+LANGUAGE sql
+SET search_path = public, pg_temp
+AS $$
+  INSERT INTO public.active_contacts(workspace_id,billing_month,connection_id,person_key_kind,person_key,
+    first_activity_at,activity_kind,time_zone)
+  SELECT DISTINCT ON (keyed.workspace_id,keyed.billing_month,keyed.connection_id,keyed.person_key_kind,keyed.person_key)
+    keyed.workspace_id,keyed.billing_month,keyed.connection_id,keyed.person_key_kind,keyed.person_key,
+    keyed.activity_at,keyed.activity_kind,keyed.time_zone
+  FROM (
+    SELECT activity.workspace_id,activity.connection_id,activity.activity_at,activity.activity_kind,workspace.time_zone,
+      CASE WHEN public.active_contact_time_zone_valid(workspace.time_zone)
+        THEN date_trunc('month',activity.activity_at AT TIME ZONE workspace.time_zone)::date END AS billing_month,
+      CASE WHEN linked.sender_id IS NULL THEN activity.identity_kind ELSE 'comment_sender' END AS person_key_kind,
+      coalesce(linked.sender_id,activity.identity) AS person_key
+    FROM unnest(p_workspaces,p_connections,p_identity_kinds,p_identities,p_activity_times,p_activity_kinds)
+      AS activity(workspace_id,connection_id,identity_kind,identity,activity_at,activity_kind)
+    JOIN public.workspaces workspace ON workspace.id=activity.workspace_id
+    LEFT JOIN LATERAL (
+      SELECT public.active_contact_linked_sender(activity.workspace_id,activity.connection_id,activity.identity) AS sender_id
+      WHERE activity.identity_kind='dm_recipient'
+    ) linked ON true
+  ) keyed
+  WHERE keyed.billing_month IS NOT NULL
+  ORDER BY keyed.workspace_id,keyed.billing_month,keyed.connection_id,keyed.person_key_kind,keyed.person_key,
+    keyed.activity_at
+  ON CONFLICT ON CONSTRAINT active_contacts_person DO NOTHING
+$$;
+
+-- Only the server roles execute the three ledger functions (deploy/supabase-access.sql); the API roles never do.
+REVOKE ALL ON FUNCTION public.active_contact_linked_sender(uuid,uuid,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.active_contact_time_zone_valid(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.record_active_contacts(uuid[],uuid[],text[],text[],timestamptz[],text[]) FROM PUBLIC;
+-- One trigger function for every send trigger below. The ledger write runs in its own exception block: any error
+-- (an invalid time zone, a lock or privilege error) is rolled back to that block and leaves a WARNING with the SQLSTATE
+-- only, never the message or detail, which can hold Instagram IDs; the source write continues. A follow message's person
+-- is the comment sender of the private reply that started the follow conversation. Each send finalizer runs its
+-- trigger in its last lock-taking statement (see the design spec), so an uncommitted ledger key is never held while the
+-- finalizer waits on another lock. Comments are not recorded here but as the last statement of their ingestion: a
+-- comment trigger would hold the sender's ledger key while the same transaction's private reply insert waits on a send
+-- finalize of that sender's earlier reply, whose ledger write waits on that key. lock_timeout bounds the wait for
+-- another transaction's uncommitted key of the same person and month on the server (a client query timeout does not
+-- cancel the statement); the 55P03 lands in the exception block and the send still commits without the row.
+CREATE OR REPLACE FUNCTION public.record_active_contact_activity()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+SET lock_timeout = '2s'
+AS $$
+DECLARE
+  reply record;
+BEGIN
+  BEGIN
+    IF TG_TABLE_NAME='private_reply_outbox' THEN
+      PERFORM public.record_active_contacts(ARRAY[NEW.workspace_id],ARRAY[NEW.connection_id],ARRAY['comment_sender'],
+        ARRAY[NEW.sender_id],ARRAY[NEW.sent_at],ARRAY['private_reply']);
+    ELSIF TG_TABLE_NAME='instagram_follow_messages' THEN
+      SELECT outbox.workspace_id,outbox.connection_id,outbox.sender_id INTO reply
+      FROM public.instagram_follow_conversations flow
+      JOIN public.private_reply_outbox outbox ON outbox.id=flow.reply_id
+      WHERE flow.reply_id=NEW.reply_id;
+      IF FOUND THEN
+        PERFORM public.record_active_contacts(ARRAY[reply.workspace_id],ARRAY[reply.connection_id],ARRAY['comment_sender'],
+          ARRAY[reply.sender_id],ARRAY[NEW.sent_at],ARRAY['follow_message']);
+      END IF;
+    ELSIF TG_TABLE_NAME='instagram_manual_replies' THEN
+      PERFORM public.record_active_contacts(ARRAY[NEW.workspace_id],ARRAY[NEW.connection_id],ARRAY['dm_recipient'],
+        ARRAY[NEW.recipient_id],ARRAY[NEW.sent_at],ARRAY['manual_reply']);
+    ELSIF TG_TABLE_NAME='campaign_deliveries' THEN
+      PERFORM public.record_active_contacts(ARRAY[NEW.workspace_id],ARRAY[NEW.connection_id],ARRAY['dm_recipient'],
+        ARRAY[NEW.recipient_id],ARRAY[NEW.sent_at],ARRAY['campaign']);
+    ELSIF TG_TABLE_NAME='flow_dm_deliveries' THEN
+      PERFORM public.record_active_contacts(ARRAY[NEW.workspace_id],ARRAY[NEW.connection_id],ARRAY['dm_recipient'],
+        ARRAY[NEW.recipient_id],ARRAY[NEW.sent_at],ARRAY['flow_dm']);
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING 'active contact ledger write skipped (SQLSTATE %)', SQLSTATE;
+  END;
+  RETURN NULL;
+END $$;
+-- A send counts only when its row becomes sent; failed, blocked, unknown and cancelled rows never fire.
+DROP TRIGGER IF EXISTS record_active_contact ON public.private_reply_outbox;
+CREATE TRIGGER record_active_contact
+AFTER UPDATE ON public.private_reply_outbox
+FOR EACH ROW WHEN (NEW.status='sent' AND OLD.status IS DISTINCT FROM 'sent')
+EXECUTE FUNCTION public.record_active_contact_activity();
+DROP TRIGGER IF EXISTS record_active_contact ON public.instagram_manual_replies;
+CREATE TRIGGER record_active_contact
+AFTER UPDATE ON public.instagram_manual_replies
+FOR EACH ROW WHEN (NEW.status='sent' AND OLD.status IS DISTINCT FROM 'sent')
+EXECUTE FUNCTION public.record_active_contact_activity();
+DROP TRIGGER IF EXISTS record_active_contact ON public.campaign_deliveries;
+CREATE TRIGGER record_active_contact
+AFTER UPDATE ON public.campaign_deliveries
+FOR EACH ROW WHEN (NEW.status='sent' AND OLD.status IS DISTINCT FROM 'sent')
+EXECUTE FUNCTION public.record_active_contact_activity();
+DROP TRIGGER IF EXISTS record_active_contact ON public.flow_dm_deliveries;
+CREATE TRIGGER record_active_contact
+AFTER UPDATE ON public.flow_dm_deliveries
+FOR EACH ROW WHEN (NEW.status='sent' AND OLD.status IS DISTINCT FROM 'sent')
+EXECUTE FUNCTION public.record_active_contact_activity();
+-- The follow worker inserts a row only for a follow reply that was sent.
+DROP TRIGGER IF EXISTS record_active_contact ON public.instagram_follow_messages;
+CREATE TRIGGER record_active_contact
+AFTER INSERT ON public.instagram_follow_messages
+FOR EACH ROW WHEN (NEW.sent_at IS NOT NULL)
+EXECUTE FUNCTION public.record_active_contact_activity();
 CREATE TABLE IF NOT EXISTS data_deletion_records (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL,
@@ -1901,6 +2098,10 @@ BEGIN
     AND NOT EXISTS(SELECT 1 FROM public.channel_consent_state state WHERE state.last_event_id=event.id);
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('channel_consent_events', affected);
+
+  -- The connection's active contact rows stay for their months; only the person key is removed.
+  UPDATE public.active_contacts SET person_key=NULL
+  WHERE workspace_id=p_workspace AND connection_id=p_connection AND person_key IS NOT NULL;
 
   retained := jsonb_build_object(
     'carried_comment_sender_revokes', carried,
@@ -2270,6 +2471,13 @@ BEGIN
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('channel_consent_events', affected);
 
+  -- The person's active contact rows stay for their months; only the person key is removed. A row keyed by a linked
+  -- comment sender is the comment sender's row and is cleared when that sender is in the person's identity set.
+  UPDATE public.active_contacts SET person_key=NULL
+  WHERE workspace_id=p_workspace AND connection_id=p_connection
+    AND ((person_key_kind='comment_sender' AND person_key=ANY(senders))
+      OR (person_key_kind='dm_recipient' AND person_key=ANY(recipients)));
+
   retained := jsonb_build_object(
     'carried_comment_sender_revokes', carried,
     'channel_consent_events',
@@ -2546,6 +2754,8 @@ BEGIN
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('workspace_members', affected);
   DELETE FROM public.workspaces WHERE id=p_workspace;
+  -- The workspace's active contact rows have no foreign key and stay for their months without a person key.
+  UPDATE public.active_contacts SET person_key=NULL WHERE workspace_id=p_workspace AND person_key IS NOT NULL;
 
   INSERT INTO public.workspace_deletion_records(workspace_id,requested_by,deleted_counts)
   VALUES(p_workspace,p_actor,deleted)

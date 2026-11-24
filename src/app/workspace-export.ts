@@ -76,8 +76,20 @@ export const EXPORTED_TABLES: Record<string, { scope: "self" | "workspace" | "co
 
 // OAuth states hold short-lived login secrets; workspace deletion evidence belongs to workspaces that no longer exist;
 // scheduled_steps is service-wide operations state with no workspace data; reminders and their audit are private to
-// the member who created them, so an admin's export does not carry other members' reminders.
-export const EXCLUDED_TABLES = ["instagram_oauth_states", "workspace_deletion_records", "scheduled_steps", "instagram_inbox_reminders", "instagram_inbox_reminder_events"];
+// the member who created them, so an admin's export does not carry other members' reminders. The active contact
+// ledger's rows are not exported; EXPORTED_AGGREGATES carries its per-month counts instead.
+export const EXCLUDED_TABLES = ["instagram_oauth_states", "workspace_deletion_records", "scheduled_steps", "instagram_inbox_reminders", "instagram_inbox_reminder_events", "active_contacts"];
+
+// Sections built from an excluded table instead of its rows, exported beside the tables. Each query takes the
+// workspace ID as $1 and returns rows with no Instagram ID and no per-row time; they count toward the export limits.
+export const EXPORTED_AGGREGATES: Record<string, { source: string; sql: string }> = {
+  // The active contact ledger (#51) per billing month and connection: its number of rows, with or without a person key.
+  active_contact_months: {
+    source: "active_contacts",
+    sql: `SELECT t.billing_month,t.connection_id,count(*)::int AS active_contacts FROM active_contacts t
+      WHERE t.workspace_id=$1 GROUP BY t.billing_month,t.connection_id`,
+  },
+};
 // What the export leaves out, derived from the table settings so the file cannot understate it.
 export const EXCLUDED_ITEMS = [...Object.entries(EXPORTED_TABLES).flatMap(([table, { omit = [] }]) => omit.map((column) => `${table}.${column}`)), ...EXCLUDED_TABLES];
 
@@ -112,8 +124,12 @@ export async function exportWorkspace(pool: Pool, user: User, options: Partial<W
         `SELECT count(*) AS row_count, coalesce(sum(octet_length((to_jsonb(t) - $${index + 2}::text[])::text)),0) AS byte_count
          FROM ${table} t WHERE ${scopeFilter(scope)}`,
     );
+    const tableCount = sizes.length;
+    for (const { sql } of Object.values(EXPORTED_AGGREGATES)) {
+      sizes.push(`SELECT count(*) AS row_count, coalesce(sum(octet_length(to_jsonb(a)::text)),0) AS byte_count FROM (${sql}) a`);
+    }
     const size = await client.query<{ too_large: boolean }>(
-      `SELECT sum(row_count)>$${sizes.length + 2} OR sum(byte_count)>$${sizes.length + 3} AS too_large
+      `SELECT sum(row_count)>$${tableCount + 2} OR sum(byte_count)>$${tableCount + 3} AS too_large
        FROM (${sizes.join(" UNION ALL ")}) sizes`,
       [workspace, ...Object.values(EXPORTED_TABLES).map(({ omit = [] }) => omit), limits.maxRows, limits.maxBytes],
     );
@@ -128,6 +144,10 @@ export async function exportWorkspace(pool: Pool, user: User, options: Partial<W
         [workspace, omit],
       );
       tables.push(`${JSON.stringify(table)}:${result.rows[0]!.rows}`);
+    }
+    for (const [section, { sql }] of Object.entries(EXPORTED_AGGREGATES)) {
+      const result = await client.query<{ rows: string }>(`SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY to_jsonb(a)::text), '[]'::jsonb)::text AS rows FROM (${sql}) a`, [workspace]);
+      tables.push(`${JSON.stringify(section)}:${result.rows[0]!.rows}`);
     }
     const exportedAt = (await client.query<{ now: Date }>("SELECT now()")).rows[0]!.now;
     await client.query("COMMIT");

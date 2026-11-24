@@ -326,6 +326,7 @@ test("deletion migration replays and the function stays owned outside server rol
   await pool.query(await readFile(new URL("../../db/migrations/071_instagram_follow_messages.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/072_instagram_dm_last_inbound.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/076_instagram_dm_profiles.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/077_active_contacts.sql", import.meta.url), "utf8"));
   const body = await pool.query("SELECT pg_get_functiondef('public.delete_connection_data(uuid,uuid,uuid,text)'::regprocedure) AS body");
   assert.match(body.rows[0].body, /ORDER BY id FOR UPDATE/);
   assert.match(body.rows[0].body, /flow_step_runs/);

@@ -132,6 +132,7 @@ Request limits, the static client and the browser session/auth rules are in [fea
   - every public table: `EXPORTED_TABLES` or `EXCLUDED_TABLES` in `src/app/workspace-export.ts` ([Workspace export](docs/agents/feature-invariants.md#workspace-export));
   - workspace rows that do not require an `instagram_connections` row: both workspace move checks ([Workspace roles](docs/agents/feature-invariants.md#workspace-roles));
   - a server-written `workspaces` column: the grants in `deploy/supabase-access.sql` and `deploy/init-app-user.sh` ([Plan entitlements](docs/agents/feature-invariants.md#plan-entitlements)).
+  - an outbound send table or an inbound message path: a write of the active contact ledger ([Active contact ledger](docs/agents/feature-invariants.md#active-contact-ledger)).
 
 ## Feature invariants
 
@@ -148,6 +149,7 @@ Write new or changed per-feature invariants there, not here: this file keeps onl
 - [Consent and flows](docs/agents/feature-invariants.md#consent-and-flows): `src/app/channel-consent.ts`, `src/app/flow*.ts`, `src/app/webhook*.ts`, flow runs in `src/instagram/store.ts`
 - [DM start triggers](docs/agents/feature-invariants.md#dm-start-triggers): `src/instagram/dm-start-trigger.ts`
 - [Deletion, workspace and operations](docs/agents/feature-invariants.md#deletion-workspace-and-operations): `src/app/data-deletion.ts`, `src/app/workspace-*.ts`, `src/app/plans.ts`, `src/app/operations-*.ts`, the deletion functions in `db/schema.sql` and `db/migrations/`, `deploy/*.sql`
+- [Active contact ledger](docs/agents/feature-invariants.md#active-contact-ledger): `active_contacts` and its functions and triggers in `db/schema.sql`, `src/instagram/active-contacts.ts`, `recordActiveContactComments` in `src/instagram/store.ts`, `recordActiveContactDms` in `src/instagram/follow-flow.ts`, the `sent` updates of the send workers
 - [Reports](docs/agents/feature-invariants.md#reports): `src/app/*-reports.ts`, `public/app/*-reports.js`
 
 ## Deployment
