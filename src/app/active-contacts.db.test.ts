@@ -50,7 +50,8 @@ async function recordComments(where = "TRUE") {
   await pool.query(
     `SELECT public.record_active_contacts(array_agg(e.workspace_id),array_agg(e.connection_id),array_agg('comment_sender'::text),
        array_agg(e.sender_id),array_agg(e.created_at),array_agg('comment'::text))
-     FROM instagram_comment_events e WHERE ${where}`,
+     FROM instagram_comment_events e JOIN instagram_connections c ON c.id=e.connection_id AND c.workspace_id=e.workspace_id
+     WHERE (${where}) AND e.sender_id<>c.account_id AND e.sender_id IS DISTINCT FROM c.instagram_user_id`,
   );
 }
 
@@ -125,7 +126,9 @@ async function monthCounts(): Promise<Record<string, number>> {
 // them. Inbound DMs come only from the stored inbox messages and DM start events; an inbound DM that nothing stored
 // has no source. A DM recipient's activity may be stored under a comment sender that a confirm event linked to it.
 const SOURCE_ACTIVITY_SQL = `
-  SELECT workspace_id,connection_id,'comment_sender' AS identity_kind,sender_id AS identity,created_at AS activity_at FROM instagram_comment_events
+  SELECT e.workspace_id,e.connection_id,'comment_sender' AS identity_kind,e.sender_id AS identity,e.created_at AS activity_at
+  FROM instagram_comment_events e JOIN instagram_connections own ON own.id=e.connection_id AND own.workspace_id=e.workspace_id
+  WHERE e.sender_id<>own.account_id AND e.sender_id IS DISTINCT FROM own.instagram_user_id
   UNION ALL SELECT workspace_id,connection_id,'comment_sender',sender_id,sent_at FROM private_reply_outbox WHERE status='sent'
   UNION ALL SELECT reply.workspace_id,reply.connection_id,'comment_sender',reply.sender_id,message.sent_at
     FROM instagram_follow_messages message JOIN instagram_follow_conversations flow ON flow.reply_id=message.reply_id
@@ -190,6 +193,18 @@ async function assertRecomputes(unstoredDms = 0) {
   assert.deepEqual(result.badFirst, [], "first_activity_at is the time of a recorded activity");
   assert.equal(result.unexplained.length, unstoredDms);
 }
+
+test("the connected account's own comments are stored but not counted, also by the backfill", async () => {
+  await pool.query("UPDATE instagram_connections SET instagram_user_id='555' WHERE id=$1", [seoulConnection]);
+  const delivery = { accountId: "100", commentId: "own-1", postId: "1789", senderId: "100", text: "thanks" };
+  await ingestComments(pool, [delivery, { ...delivery, commentId: "own-2", senderId: "555" }, { ...delivery, commentId: "c-1", senderId: "7001" }]);
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM instagram_comment_events")).rows[0].n, 3);
+  assert.deepEqual(keys(await ledger()), [`${await currentMonth("Asia/Seoul")} comment_sender:7001`]);
+  await pool.query("TRUNCATE active_contacts");
+  await runBackfill();
+  assert.deepEqual(keys(await ledger()), [`${await currentMonth("Asia/Seoul")} comment_sender:7001`]);
+  await assertRecomputes();
+});
 
 test("a comment counts once per sender and month; a redelivered comment adds nothing", async () => {
   const delivery = { accountId: "100", commentId: "c-1", postId: "1789", senderId: "7001", text: "hello" };
@@ -658,6 +673,27 @@ test("the one-off backfill does not count again a person that a live write recor
   assert.ok(keys(stored).some((key) => key.endsWith("dm_recipient:8001")));
 
   // The backfill resolves the same DM to comment_sender:7001, but the month already has 8001's row.
+  await runBackfill();
+  assert.deepEqual(await ledger(), stored);
+});
+
+test("the one-off backfill does not count again a person that a live write recorded before the link was detached", async () => {
+  // While 8001 → 7001 is valid, a live DM of 8001 this month is recorded under 7001; the link is detached afterwards.
+  const event = await comment(seoul, seoulConnection, "c-1", "7001", "2026-09-10T00:00:00Z");
+  const reply = await queueReply(seoul, seoulConnection, event, "7001", "c-1");
+  await sendReply(reply, "8001", "2026-09-10T01:00:00Z");
+  await storeInbox("8001", "m-0");
+  await confirmLink("8001", "7001", reply);
+  assert.equal(await linkedSender("8001"), "7001");
+  await ingestMessages(pool, [dm("8001", "m-1", new Date(Date.now() - 60_000))]);
+  await confirmLink("8001", "7001", reply, "detached");
+  assert.equal(await linkedSender("8001"), null);
+  const stored = await ledger();
+  assert.ok(keys(stored).some((key) => key.endsWith("comment_sender:7001")));
+  const month = await currentMonth("Asia/Seoul");
+  assert.ok(!keys(stored).some((key) => key.startsWith(`${month} dm_recipient:8001`)));
+
+  // The backfill resolves the same DM to dm_recipient:8001 now, but a confirm event links it to 7001's row.
   await runBackfill();
   assert.deepEqual(await ledger(), stored);
 });
