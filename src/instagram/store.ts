@@ -150,6 +150,9 @@ export async function ingestComments(pool: Pool, comments: readonly InstagramCom
 // (recordActiveContacts): written earlier, an uncommitted ledger key would be held while the private reply insert waits
 // on a send finalize of the same person's reply, whose ledger write waits on that key. The comment inserts already hold
 // the connections' key-share locks, as they do for the comments themselves.
+// The connected account's own comments are stored but are not a contact: a comment whose sender is the connection's
+// stored account ID or OAuth user ID is not recorded. The profile ID that the private reply check reads from Graph is
+// not stored, so an own comment under only that ID is still recorded.
 async function recordActiveContactComments(client: PoolClient, eventIds: readonly string[]): Promise<void> {
   if (!eventIds.length) return;
   await recordActiveContacts(
@@ -157,7 +160,8 @@ async function recordActiveContactComments(client: PoolClient, eventIds: readonl
     "comment_record_failed",
     `SELECT public.record_active_contacts(array_agg(e.workspace_id),array_agg(e.connection_id),array_agg('comment_sender'::text),
        array_agg(e.sender_id),array_agg(e.created_at),array_agg('comment'::text))
-     FROM instagram_comment_events e WHERE e.id=ANY($1::bigint[])`,
+     FROM instagram_comment_events e JOIN instagram_connections c ON c.id=e.connection_id AND c.workspace_id=e.workspace_id
+     WHERE e.id=ANY($1::bigint[]) AND e.sender_id<>c.account_id AND e.sender_id IS DISTINCT FROM c.instagram_user_id`,
     [eventIds],
   );
 }
