@@ -536,13 +536,63 @@ test("saving a changed time zone retires the reports view load", async () => {
     handoffReports: { configure: noop },
     campaignReports: { configure: noop },
     notice: noop,
+    errorMessage: String,
+    refreshPlan: async () => {
+      planRefreshes++;
+    },
   });
+  let planRefreshes = 0;
   vm.runInContext(source.slice(begin, end), context);
   submit({ preventDefault: noop, currentTarget: { elements: { time_zone: { value: "UTC" } }, querySelector: () => ({}) } });
   await saving;
   assert.equal(loads.has("reports"), false);
   assert.equal(loads.has("inbox"), true);
   assert.equal(context.workspaceTimeZone, "UTC");
+  // The plan card's active contact months follow the saved zone (#51).
+  assert.equal(planRefreshes, 1);
+  // Saving the same zone again changes nothing and re-reads nothing.
+  submit({ preventDefault: noop, currentTarget: { elements: { time_zone: { value: "UTC" } }, querySelector: () => ({}) } });
+  await saving;
+  assert.equal(planRefreshes, 1);
+});
+
+test("a plan refresh redraws only for the latest request of the same session and workspace", async () => {
+  const begin = source.indexOf("let planRefreshRequest = 0;");
+  const end = source.indexOf("function planControls() {", begin);
+  assert.ok(begin >= 0 && end > begin);
+  const releases: ((value: object) => void)[] = [];
+  let draws = 0;
+  const context = vm.createContext({
+    api: () => new Promise<object>((resolve) => releases.push(resolve)),
+    workspaceGeneration: 1,
+    currentWorkspaceId: "workspace-a",
+    workspacePlan: undefined,
+    planControls: () => {
+      draws++;
+    },
+  });
+  vm.runInContext(source.slice(begin, end), context);
+  const refresh = () => vm.runInContext("refreshPlan()", context) as Promise<void>;
+  const usage = (count: number) => ({ workspace_id: "workspace-a", plan: "pro", limits: {}, usage: { active_contacts: { count } } });
+  // An older response that arrives after a newer one does not overwrite it.
+  const first = refresh();
+  const second = refresh();
+  releases[1]!(usage(2));
+  await second;
+  releases[0]!(usage(1));
+  await first;
+  assert.equal(draws, 1);
+  assert.equal(context.workspacePlan.usage.active_contacts.count, 2);
+  // A response from another session or workspace is dropped.
+  const retired = refresh();
+  context.workspaceGeneration = 2;
+  releases[2]!(usage(3));
+  await retired;
+  const moved = refresh();
+  releases[3]!({ ...usage(4), workspace_id: "workspace-b" });
+  await moved;
+  assert.equal(draws, 1);
+  assert.equal(context.workspacePlan.usage.active_contacts.count, 2);
 });
 
 test("a retired view retries after a failed refresh and preserves a newer load", async () => {

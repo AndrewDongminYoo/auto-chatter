@@ -1002,6 +1002,17 @@ function inviteControls() {
 // The plan line in the settings and the limit help beside the invite and connect actions. Both actions stay
 // enabled at the limit, because a new link for an invited email and re-authorizing a connected account are
 // allowed; the server refuses a new email or a new account.
+// Re-reads the plan, limits and usage after a time zone save, so the plan card's months follow the new zone (#51).
+// Only the latest request in the same session and workspace may redraw the card.
+let planRefreshRequest = 0;
+async function refreshPlan() {
+  const request = ++planRefreshRequest;
+  const session = workspaceGeneration;
+  const membership = await api("/api/workspace", "POST");
+  if (request !== planRefreshRequest || session !== workspaceGeneration || membership.workspace_id !== currentWorkspaceId) return;
+  workspacePlan = { plan: membership.plan, limits: membership.limits, usage: membership.usage };
+  planControls();
+}
 function planControls() {
   byId("plan-summary").textContent = planSummary(workspacePlan);
   byId("active-contact-summary").textContent = planActiveContacts(workspacePlan);
@@ -2214,6 +2225,8 @@ byId("time-zone-form").addEventListener("submit", (event) => {
       void flowReports.configure(currentRole, workspaceTimeZone, connections, currentView === "reports");
       handoffReports.configure(currentRole, workspaceTimeZone, connections);
       void campaignReports.configure(currentRole, workspaceTimeZone, currentView === "reports");
+      // The plan card's months (active contacts, campaign allowance) follow the saved zone.
+      void refreshPlan().catch((error) => notice(errorMessage(error), true));
     }
     notice(`시간대를 저장했습니다(${formatText(saved.time_zone)}). 지금부터 정한 시각까지 기다리기 시작하는 실행에 적용됩니다.`);
   });
