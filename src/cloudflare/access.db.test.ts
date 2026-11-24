@@ -330,6 +330,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
     const deletion = await client.query("SELECT public.delete_connection_data('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','33333333-3333-4333-8333-333333333333','access-account') AS result");
     assert.equal(deletion.rows[0].result.deleted_counts.channel_consent_events, 1);
     assert.deepEqual(deletion.rows[0].result.retained_counts, {
+      active_contacts: 2,
       carried_comment_sender_revokes: 0,
       channel_consent_events: 1,
       channel_consent_state: 1,

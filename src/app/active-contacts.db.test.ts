@@ -7,6 +7,7 @@ import { ingestComments } from "../instagram/store.ts";
 import { ingestMessages } from "../instagram/follow-flow.ts";
 import type { InstagramMessage } from "../instagram/message-events.ts";
 import { verifiedDmRecipientsSql } from "./inbox-identity.ts";
+import { activeContactUsage, workspaceEntitlements } from "./plans.ts";
 import { seedWorkspace } from "./workspace-fixture.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -235,6 +236,48 @@ test("the billing month is the calendar month in the workspace time zone at writ
   assert.equal(late.billing_month, "2026-10-01");
   assert.equal(late.time_zone, "UTC");
   await assertRecomputes();
+});
+
+test("the usage counts this and last billing month by the stored month label in the workspace's current time zone", async () => {
+  // Seoul (UTC+9): two October rows and two November rows. Los Angeles (UTC-7): one row each in September, October
+  // and November. The same sender twice in one month is one row.
+  await comment(seoul, seoulConnection, "s-1", "801", "2026-10-15T00:00:00Z");
+  await comment(seoul, seoulConnection, "s-2", "802", "2026-10-31T14:59:59.999Z");
+  await comment(seoul, seoulConnection, "s-3", "803", "2026-10-31T15:00:00Z");
+  await comment(seoul, seoulConnection, "s-4", "801", "2026-11-02T00:00:00Z");
+  await comment(seoul, seoulConnection, "s-5", "801", "2026-11-03T00:00:00Z");
+  await comment(angeles, angelesConnection, "a-1", "901", "2026-09-30T12:00:00Z");
+  await comment(angeles, angelesConnection, "a-2", "902", "2026-10-31T15:00:00Z");
+  await comment(angeles, angelesConnection, "a-3", "903", "2026-11-01T07:00:00Z");
+  const at = (ws: string, reference: string) => activeContactUsage(pool, ws, reference);
+
+  // The same instant is November in Seoul and October in Los Angeles.
+  assert.deepEqual(await at(seoul, "2026-10-31T15:00:00Z"), { time_zone: "Asia/Seoul", month: "2026-11", count: 2, previous_month: "2026-10", previous_count: 2 });
+  assert.deepEqual(await at(angeles, "2026-10-31T15:00:00Z"), { time_zone: "America/Los_Angeles", month: "2026-10", count: 1, previous_month: "2026-09", previous_count: 1 });
+  // One millisecond earlier the Seoul month changes back; Los Angeles changes at its own midnight.
+  assert.deepEqual(await at(seoul, "2026-10-31T14:59:59.999Z"), { time_zone: "Asia/Seoul", month: "2026-10", count: 2, previous_month: "2026-09", previous_count: 0 });
+  assert.equal((await at(angeles, "2026-11-01T06:59:59.999Z")).month, "2026-10");
+  assert.deepEqual(await at(angeles, "2026-11-01T07:00:00Z"), { time_zone: "America/Los_Angeles", month: "2026-11", count: 1, previous_month: "2026-10", previous_count: 1 });
+  // The previous month of January is December of the year before.
+  assert.deepEqual(await at(seoul, "2027-01-05T00:00:00Z"), { time_zone: "Asia/Seoul", month: "2027-01", count: 0, previous_month: "2026-12", previous_count: 0 });
+
+  // A cleared person key still counts.
+  await pool.query("UPDATE active_contacts SET person_key=NULL WHERE workspace_id=$1 AND person_key='803'", [seoul]);
+  assert.equal((await at(seoul, "2026-10-31T15:00:00Z")).count, 2);
+
+  // A time zone change picks the months by the new zone but moves no stored row: at 2026-11-01T00:00Z Seoul is in
+  // November, and after the change to Los Angeles the same instant is October, which reads the two October rows.
+  assert.equal((await at(seoul, "2026-11-01T00:00:00Z")).month, "2026-11");
+  await pool.query("UPDATE workspaces SET time_zone='America/Los_Angeles' WHERE id=$1", [seoul]);
+  assert.deepEqual(await at(seoul, "2026-11-01T00:00:00Z"), { time_zone: "America/Los_Angeles", month: "2026-10", count: 2, previous_month: "2026-09", previous_count: 0 });
+
+  // The dashboard reads the current month of the statement clock.
+  await pool.query("UPDATE workspaces SET time_zone='Asia/Seoul' WHERE id=$1", [seoul]);
+  await comment(seoul, seoulConnection, "s-now", "804");
+  const current = (await workspaceEntitlements(pool, seoul)).usage.active_contacts;
+  assert.equal(current.month, (await currentMonth("Asia/Seoul")).slice(0, 7));
+  assert.ok(current.count >= 1);
+  await assert.rejects(activeContactUsage(pool, "99999999-9999-4999-8999-999999999999"), { message: "workspace_required", status: 403 });
 });
 
 test("redelivered and reverse-order DMs count once; the row keeps the activity that created it", async () => {
@@ -567,6 +610,10 @@ async function seedActivity() {
   await ingestMessages(pool, [dm("8888", "m-other", new Date(Date.now() - 60_000)), dm("900", "m-900", new Date(Date.now() - 60_000))]);
 }
 
+async function keyedRows(where: string): Promise<number> {
+  return (await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM active_contacts WHERE person_key IS NOT NULL AND ${where}`)).rows[0]!.n;
+}
+
 async function assertNoInstagramId(where: string) {
   const left = (await pool.query(`SELECT person_key FROM active_contacts WHERE person_key IS NOT NULL AND ${where}`)).rows;
   assert.deepEqual(left, []);
@@ -577,7 +624,12 @@ test("person deletion keeps the month count and clears the person's keys", async
   const counts = await monthCounts();
   const people = keys(await ledger());
   assert.ok(people.some((key) => key.endsWith("comment_sender:123")) && people.some((key) => key.endsWith("dm_recipient:900")));
-  await pool.query("SELECT public.delete_person_data($1,$2,$3,'comment_sender','123')", [seoul, seoulConnection, owner]);
+  const keyed = await keyedRows(`connection_id='${seoulConnection}' AND person_key IN ('123','900')`);
+  assert.ok(keyed > 1);
+  const record = (await pool.query("SELECT public.delete_person_data($1,$2,$3,'comment_sender','123') AS result", [seoul, seoulConnection, owner])).rows[0].result;
+  // The deletion record counts the ledger rows whose key it cleared.
+  assert.equal(record.retained_counts.active_contacts, keyed);
+  assert.equal(record.deleted_counts.active_contacts, undefined, "no ledger row is deleted");
   assert.deepEqual(await monthCounts(), counts);
   // The reply bridge ties 123 to 900, so both keys are cleared; the others stay.
   await assertNoInstagramId("person_key IN ('123','900')");
@@ -599,7 +651,13 @@ test("connection deletion keeps the month count and leaves no Instagram ID of th
   await comment(angeles, angelesConnection, "a-1", "123");
   const counts = await monthCounts();
   await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE id=$1", [seoulConnection]);
-  await pool.query("SELECT public.delete_connection_data($1,$2,$3,'100')", [seoul, seoulConnection, owner]);
+  // A key that an earlier person deletion cleared is not counted again.
+  await pool.query("UPDATE active_contacts SET person_key=NULL WHERE connection_id=$1 AND person_key='124'", [seoulConnection]);
+  const keyed = await keyedRows(`connection_id='${seoulConnection}'`);
+  assert.ok(keyed > 1);
+  const record = (await pool.query("SELECT public.delete_connection_data($1,$2,$3,'100') AS result", [seoul, seoulConnection, owner])).rows[0].result;
+  assert.equal(record.retained_counts.active_contacts, keyed);
+  assert.equal(record.deleted_counts.active_contacts, undefined, "no ledger row is deleted");
   assert.deepEqual(await monthCounts(), counts);
   await assertNoInstagramId(`connection_id='${seoulConnection}'`);
   assert.equal((await ledger()).filter((row) => row.person_key).length, 1, "the other workspace keeps its key");
@@ -610,7 +668,9 @@ test("workspace deletion keeps the month count and leaves no Instagram ID of the
   await comment(angeles, angelesConnection, "a-1", "123");
   const counts = await monthCounts();
   await pool.query("UPDATE instagram_connections SET active=false,send_enabled=false,access_token_encrypted=NULL WHERE workspace_id=$1", [seoul]);
-  await pool.query("SELECT public.delete_workspace_data($1,$2)", [seoul, owner]);
+  const record = (await pool.query("SELECT public.delete_workspace_data($1,$2) AS result", [seoul, owner])).rows[0].result;
+  // The workspace deletion record holds only deleted counts, and the ledger rows are not deleted.
+  assert.equal(record.deleted_counts.active_contacts, undefined);
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM workspaces WHERE id=$1", [seoul])).rows[0].n, 0);
   assert.deepEqual(await monthCounts(), counts);
   await assertNoInstagramId(`workspace_id='${seoul}'`);
@@ -662,14 +722,19 @@ test("re-running migration 077 writes no ledger row, even after an identity link
   assert.equal(await linkedSender("8001"), "7001");
   const stored = await ledger();
 
-  // The runner replays 077 on every rollout; a backfill in it would now record this month's DM under 7001 too.
+  // The runner replays 077 on every rollout; a backfill in it would now record this month's DM under 7001 too. 078
+  // redefines the connection and person deletion functions after it, as the runner does.
   const migration = await readFile(new URL("../../db/migrations/077_active_contacts.sql", import.meta.url), "utf8");
-  await pool.query(migration);
-  await pool.query(migration);
+  const counts = await readFile(new URL("../../db/migrations/078_active_contact_deletion_counts.sql", import.meta.url), "utf8");
+  for (let run = 0; run < 2; run++) {
+    await pool.query(migration);
+    await pool.query(counts);
+  }
   assert.deepEqual(await ledger(), stored);
   assert.deepEqual(await definitions(), canonical);
   assert.deepEqual(await triggers(), canonicalTriggers);
   const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
   assert.ok(runner.indexOf("077_active_contacts.sql") > runner.indexOf("076_instagram_dm_profiles.sql") && runner.indexOf("077_active_contacts.sql") < runner.indexOf("supabase-access.sql"));
+  assert.ok(runner.indexOf("078_active_contact_deletion_counts.sql") > runner.indexOf("077_active_contacts.sql") && runner.indexOf("078_active_contact_deletion_counts.sql") < runner.indexOf("supabase-access.sql"));
   assert.ok(!runner.includes("backfill-active-contacts"), "the one-off backfill is not part of the runner");
 });

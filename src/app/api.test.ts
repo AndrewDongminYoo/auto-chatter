@@ -2435,9 +2435,11 @@ const ownerPool = () => {
   const usage = { plan: "free", members: 1, open_invites: 0, connections: 0 };
   // The monthly campaign send count (#52).
   const campaign = { plan: "free", month: "2026-11", used: "0", reserved: "0" };
+  // The billing-month active contact counts (#51).
+  const activeContacts = { time_zone: "Asia/Seoul", month: "2026-11", count: 3, previous_month: "2026-10", previous_count: 5 };
   return {
     query: async (sql: string) => ({
-      rows: [sql.includes("open_invites") ? usage : sql.includes("campaign_deliveries") ? campaign : row],
+      rows: [sql.includes("open_invites") ? usage : sql.includes("campaign_deliveries") ? campaign : sql.includes("active_contacts") ? activeContacts : row],
       rowCount: 1,
     }),
     connect: async () => ({
@@ -2498,7 +2500,7 @@ test("the dashboard bootstrap spends no write limit for a member and only the us
     time_zone: "Asia/Seoul",
     plan: "free",
     limits: { seats: 1, connections: 1, campaign_sends_per_month: 0 },
-    usage: { seats: 1, connections: 0, campaign_sends: 0 },
+    usage: { seats: 1, connections: 0, campaign_sends: 0, active_contacts: { time_zone: "Asia/Seoul", month: "2026-11", count: 3, previous_month: "2026-10", previous_count: 5 } },
   });
   assert.deepEqual([user.keys, workspace.keys], [[], []]);
   // Without a membership the request creates a workspace, so it spends the user limit after the membership read.

@@ -7,7 +7,7 @@ import { isPlanKey, PLANS, planLimits, type PlanKey } from "./plans.ts";
 interface Entitlements {
   plan: string;
   limits: { seats: number; connections: number; campaign_sends_per_month: number };
-  usage: { seats: number; connections: number; campaign_sends: number };
+  usage: { seats: number; connections: number; campaign_sends: number; active_contacts?: { time_zone: string; month: string; count: number; previous_month: string; previous_count: number } };
 }
 interface PlanLabels {
   planName(plan: string): string;
@@ -18,6 +18,8 @@ interface PlanLabels {
   planSeatHelp(entitlements: Entitlements | undefined): string;
   planConnectionHelp(entitlements: Entitlements | undefined): string;
   planAcceptSeatRefusal(): string;
+  planActiveContacts(entitlements: Entitlements | undefined): string;
+  planActiveContactsHelp(entitlements: Entitlements | undefined): string;
 }
 
 // public/app/plan-labels.js is a classic browser script; its top-level functions become context globals.
@@ -54,6 +56,23 @@ test("every plan has a Korean name, and the summary shows usage against the limi
   assert.equal(labels.planCampaignUsage(entitlements("free", 1, 1, 1500)), "캠페인 발송 불가(이번 달 1,500건 발송)");
   assert.equal(labels.planCampaignUsage(entitlements("essential", 1, 1, 1001)), "이번 달 캠페인 발송 1,001/1,000건", "a downgrade can leave the month over its limit");
   assert.equal(labels.planSummary(undefined), "");
+});
+
+test("the active contact line shows this and last month's counts without an allowance or price", () => {
+  const counted: Entitlements = {
+    ...entitlements("pro", 1, 1),
+    usage: { seats: 1, connections: 1, campaign_sends: 0, active_contacts: { time_zone: "America/Los_Angeles", month: "2026-11", count: 1234, previous_month: "2026-10", previous_count: 0 } },
+  };
+  assert.equal(labels.planActiveContacts(counted), "이번 달 활성 연락처 1,234명 · 지난 달 0명");
+  assert.equal(labels.planActiveContactsHelp(counted), "메시지를 주고받은 사람을 달마다 한 번씩 셉니다. 달은 America/Los_Angeles 기준입니다.");
+  // The plan line itself is unchanged, and a response without the counts shows no line.
+  assert.equal(labels.planSummary(counted), "요금제: 프로 · 멤버 1/3명(대기 중인 초대 포함) · Instagram 계정 1/3개 · 이번 달 캠페인 발송 0/5,000건");
+  assert.equal(labels.planActiveContacts(entitlements("pro", 1, 1)), "");
+  assert.equal(labels.planActiveContactsHelp(entitlements("pro", 1, 1)), "");
+  assert.equal(labels.planActiveContacts(undefined), "");
+  const app = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
+  assert.match(app, /byId\("active-contact-summary"\)\.hidden = !planActiveContacts\(workspacePlan\);/);
+  assert.match(app, /byId\("active-contact-help"\)\.hidden = !planActiveContactsHelp\(workspacePlan\);/);
 });
 
 test("the limit help appears only when a limit is reached, including after a downgrade", () => {

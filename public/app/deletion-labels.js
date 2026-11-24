@@ -43,6 +43,7 @@ const deletedLabels = {
   channel_consent_events: "동의 허용 기록",
 };
 const retainedLabels = {
+  active_contacts: "식별자를 지운 활성 연락처 기록",
   channel_consent_state: "수신 거부 상태",
   channel_consent_events: "수신 거부 기록",
   carried_comment_sender_revokes: "댓글 작성자 ID로 옮긴 수신 거부",

@@ -118,7 +118,7 @@ const dashboardGlobals = [
   // notice-placement.js
   { readers: ["app"], names: ["actionErrorPlacement", "noticeCloseFocusTarget", "viewChangeClearsMessages"] },
   // plan-labels.js
-  { readers: ["app"], names: ["planAcceptSeatRefusal", "planConnectionHelp", "planConnectionsFull", "planSeatHelp", "planSeatsFull", "planSummary"] },
+  { readers: ["app"], names: ["planAcceptSeatRefusal", "planActiveContacts", "planActiveContactsHelp", "planConnectionHelp", "planConnectionsFull", "planSeatHelp", "planSeatsFull", "planSummary"] },
   // reply-templates.js
   { readers: ["inbox"], names: ["createReplyTemplates"] },
   // segment-snapshots.js

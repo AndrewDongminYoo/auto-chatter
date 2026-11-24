@@ -1004,6 +1004,10 @@ function inviteControls() {
 // allowed; the server refuses a new email or a new account.
 function planControls() {
   byId("plan-summary").textContent = planSummary(workspacePlan);
+  byId("active-contact-summary").textContent = planActiveContacts(workspacePlan);
+  byId("active-contact-summary").hidden = !planActiveContacts(workspacePlan);
+  byId("active-contact-help").textContent = planActiveContactsHelp(workspacePlan);
+  byId("active-contact-help").hidden = !planActiveContactsHelp(workspacePlan);
   byId("seat-limit-help").textContent = planSeatHelp(workspacePlan);
   byId("seat-limit-help").hidden = !planSeatsFull(workspacePlan);
   byId("connection-limit-help").textContent = planConnectionHelp(workspacePlan);

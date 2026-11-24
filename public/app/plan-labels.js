@@ -37,6 +37,21 @@ function planSummary(entitlements) {
   return [`요금제: ${planName(entitlements.plan)}`, `멤버 ${usage.seats}/${limits.seats}명(대기 중인 초대 포함)`, `Instagram 계정 ${usage.connections}/${limits.connections}개`, planCampaignUsage(entitlements)].join(" · ");
 }
 
+// The billing-month active contact counts (#51): people the workspace exchanged a message with, once per month and
+// connection. The months follow the workspace time zone the server used. No allowance or price is shown, because the
+// count is not billed yet. An older server without the counts shows nothing.
+function planActiveContacts(entitlements) {
+  const counts = entitlements?.usage.active_contacts;
+  if (!counts) return "";
+  return `이번 달 활성 연락처 ${formatCount(Number(counts.count))}명 · 지난 달 ${formatCount(Number(counts.previous_count))}명`;
+}
+
+function planActiveContactsHelp(entitlements) {
+  const counts = entitlements?.usage.active_contacts;
+  if (!counts) return "";
+  return `메시지를 주고받은 사람을 달마다 한 번씩 셉니다. 달은 ${counts.time_zone} 기준입니다.`;
+}
+
 function planSeatHelp(entitlements) {
   if (!planSeatsFull(entitlements)) return "";
   return `요금제의 멤버 자리 ${entitlements.limits.seats}개를 모두 쓰고 있어 새 이메일은 초대할 수 없습니다. 이미 초대한 이메일로는 새 링크를 만들 수 있습니다. 대기 중인 초대를 취소하거나 멤버를 제거하면 자리가 생깁니다.`;

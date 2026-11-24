@@ -61,8 +61,36 @@ export async function workspaceEntitlements(db: Db, workspace: string) {
       seats: current.members + current.open_invites,
       connections: current.connections,
       campaign_sends: campaign.used,
+      active_contacts: await activeContactUsage(db, workspace),
     },
   };
+}
+
+// The active contact counts of this and the previous billing month (#51), summed over the workspace's connections.
+// The months are the calendar months of the reference time in the workspace's current time zone, and each count reads
+// the rows stored with that billing_month label, cleared person keys included. A row keeps the month it was written
+// with, so a later time zone change moves no row between months; only the reference month can change.
+const ACTIVE_CONTACT_USAGE_SQL = `WITH month AS MATERIALIZED (
+   SELECT w.time_zone,date_trunc('month',coalesce($2::timestamptz,statement_timestamp()) AT TIME ZONE w.time_zone)::date AS start
+   FROM workspaces w WHERE w.id=$1)
+ SELECT m.time_zone,to_char(m.start,'YYYY-MM') AS month,to_char(m.start-interval '1 month','YYYY-MM') AS previous_month,
+   (SELECT count(*) FROM active_contacts a WHERE a.workspace_id=$1 AND a.billing_month=m.start)::int AS count,
+   (SELECT count(*) FROM active_contacts a WHERE a.workspace_id=$1 AND a.billing_month=(m.start-interval '1 month')::date)::int AS previous_count
+ FROM month m`;
+
+export interface ActiveContactUsage {
+  time_zone: string;
+  month: string;
+  count: number;
+  previous_month: string;
+  previous_count: number;
+}
+
+// `reference` pins the clock for tests; the dashboard reads the statement's own start.
+export async function activeContactUsage(db: Db, workspace: string, reference: string | null = null): Promise<ActiveContactUsage> {
+  const row = (await db.query<ActiveContactUsage>(ACTIVE_CONTACT_USAGE_SQL, [workspace, reference])).rows[0];
+  if (!row) throw new ApiError(403, "workspace_required");
+  return row;
 }
 
 // The calendar month that holds an approval's due time, in the workspace's current time zone. A due time is never

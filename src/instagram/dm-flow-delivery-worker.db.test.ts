@@ -674,6 +674,7 @@ test("migration 069 replays over stored rows, keeps the canonical deletion funct
   await pool.query(await readFile(new URL("../../db/migrations/072_instagram_dm_last_inbound.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/076_instagram_dm_profiles.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/077_active_contacts.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/078_active_contact_deletion_counts.sql", import.meta.url), "utf8"));
   assert.deepEqual(await definitions(), canonical);
   const stored = (await pool.query("SELECT id,status FROM flow_dm_deliveries WHERE id=ANY($1) ORDER BY status", [[first, second]])).rows;
   assert.deepEqual(
@@ -829,6 +830,7 @@ test("migration 072 replays over stored rows, keeps the canonical deletion funct
   // Migration 076 (#395) redefines the deletion functions after 072 in the runner.
   await pool.query(await readFile(new URL("../../db/migrations/076_instagram_dm_profiles.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/077_active_contacts.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/078_active_contact_deletion_counts.sql", import.meta.url), "utf8"));
   assert.deepEqual(await definitions(), canonical);
   assert.deepEqual(await lastInbound(), stored);
   const runner = await readFile(new URL("../../deploy/migrate-multi-user.sql", import.meta.url), "utf8");
