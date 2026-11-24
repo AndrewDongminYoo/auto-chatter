@@ -2099,11 +2099,14 @@ BEGIN
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('channel_consent_events', affected);
 
-  -- The connection's active contact rows stay for their months; only the person key is removed.
+  -- The connection's active contact rows stay for their months; only the person key is removed. The record counts the
+  -- rows this run cleared.
   UPDATE public.active_contacts SET person_key=NULL
   WHERE workspace_id=p_workspace AND connection_id=p_connection AND person_key IS NOT NULL;
+  GET DIAGNOSTICS affected = ROW_COUNT;
 
   retained := jsonb_build_object(
+    'active_contacts', affected,
     'carried_comment_sender_revokes', carried,
     'channel_consent_events',
     (SELECT count(*) FROM public.channel_consent_events WHERE workspace_id=p_workspace AND connection_id=p_connection),
@@ -2472,13 +2475,16 @@ BEGIN
   deleted := deleted || jsonb_build_object('channel_consent_events', affected);
 
   -- The person's active contact rows stay for their months; only the person key is removed. A row keyed by a linked
-  -- comment sender is the comment sender's row and is cleared when that sender is in the person's identity set.
+  -- comment sender is the comment sender's row and is cleared when that sender is in the person's identity set. The
+  -- record counts the rows this run cleared.
   UPDATE public.active_contacts SET person_key=NULL
   WHERE workspace_id=p_workspace AND connection_id=p_connection
     AND ((person_key_kind='comment_sender' AND person_key=ANY(senders))
       OR (person_key_kind='dm_recipient' AND person_key=ANY(recipients)));
+  GET DIAGNOSTICS affected = ROW_COUNT;
 
   retained := jsonb_build_object(
+    'active_contacts', affected,
     'carried_comment_sender_revokes', carried,
     'channel_consent_events',
     (SELECT count(*) FROM public.channel_consent_events

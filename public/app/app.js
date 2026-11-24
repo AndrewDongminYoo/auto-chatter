@@ -976,11 +976,13 @@ function inviteItem(invite) {
 
 async function loadMembers() {
   const generation = segmentsGeneration;
+  const zoneWrite = timeZoneWriteRevision;
   try {
     const [members, invites] = await Promise.all([api("/api/workspace/members"), api("/api/workspace/invites")]);
     if (generation !== segmentsGeneration) return;
     byId("member-count").textContent = members.members.length;
-    workspacePlan = { plan: members.plan, limits: members.limits, usage: members.usage };
+    // As in loadWorkspace: a time zone save after this read started leaves the plan to refreshPlan.
+    if (zoneWrite === timeZoneWriteRevision) workspacePlan = { plan: members.plan, limits: members.limits, usage: members.usage };
     planControls();
     byId("members").replaceChildren(...members.members.map(memberItem));
     byId("invites").replaceChildren(...(invites.invites.length ? invites.invites.map(inviteItem) : [node("p", "대기 중인 초대가 없습니다.", "hint")]));
@@ -1002,8 +1004,23 @@ function inviteControls() {
 // The plan line in the settings and the limit help beside the invite and connect actions. Both actions stay
 // enabled at the limit, because a new link for an invited email and re-authorizing a connected account are
 // allowed; the server refuses a new email or a new account.
+// Re-reads the plan, limits and usage after a time zone save, so the plan card's months follow the new zone (#51).
+// Only the latest request in the same session and workspace may redraw the card.
+let planRefreshRequest = 0;
+async function refreshPlan() {
+  const request = ++planRefreshRequest;
+  const session = workspaceGeneration;
+  const membership = await api("/api/workspace", "POST");
+  if (request !== planRefreshRequest || session !== workspaceGeneration || membership.workspace_id !== currentWorkspaceId) return;
+  workspacePlan = { plan: membership.plan, limits: membership.limits, usage: membership.usage };
+  planControls();
+}
 function planControls() {
   byId("plan-summary").textContent = planSummary(workspacePlan);
+  byId("active-contact-summary").textContent = planActiveContacts(workspacePlan);
+  byId("active-contact-summary").hidden = !planActiveContacts(workspacePlan);
+  byId("active-contact-help").textContent = planActiveContactsHelp(workspacePlan);
+  byId("active-contact-help").hidden = !planActiveContactsHelp(workspacePlan);
   byId("seat-limit-help").textContent = planSeatHelp(workspacePlan);
   byId("seat-limit-help").hidden = !planSeatsFull(workspacePlan);
   byId("connection-limit-help").textContent = planConnectionHelp(workspacePlan);
@@ -1529,7 +1546,8 @@ async function loadWorkspace() {
   const zoneInput = byId("time-zone-form").elements.time_zone;
   if (firstContext || zoneInput.value === (workspaceTimeZone ?? "")) zoneInput.value = timeZone ?? "";
   workspaceTimeZone = timeZone ?? undefined;
-  workspacePlan = { plan: membership.plan, limits: membership.limits, usage: membership.usage };
+  // A time zone save after this read started re-reads the plan itself (refreshPlan); the older usage is not kept.
+  if (zoneWrite === timeZoneWriteRevision) workspacePlan = { plan: membership.plan, limits: membership.limits, usage: membership.usage };
   planControls();
   timeZoneControls();
   const operationsVisible = currentRole === "owner" || currentRole === "admin";
@@ -2210,6 +2228,8 @@ byId("time-zone-form").addEventListener("submit", (event) => {
       void flowReports.configure(currentRole, workspaceTimeZone, connections, currentView === "reports");
       handoffReports.configure(currentRole, workspaceTimeZone, connections);
       void campaignReports.configure(currentRole, workspaceTimeZone, currentView === "reports");
+      // The plan card's months (active contacts, campaign allowance) follow the saved zone.
+      void refreshPlan().catch((error) => notice(errorMessage(error), true));
     }
     notice(`시간대를 저장했습니다(${formatText(saved.time_zone)}). 지금부터 정한 시각까지 기다리기 시작하는 실행에 적용됩니다.`);
   });

@@ -293,11 +293,60 @@ test("a time zone saved during a refresh survives its older membership snapshot"
   h.context.timeZoneWriteRevision++;
   h.context.workspaceTimeZone = "UTC";
   h.byId("time-zone-form").elements.time_zone.value = "UTC";
+  // The plan that refreshPlan read for the new zone is not replaced by this older snapshot's usage (#51).
+  const refreshed = { plan: "pro", limits: {}, usage: { active_contacts: { time_zone: "UTC" } } };
+  h.context.workspacePlan = refreshed;
   release();
   await pending;
   assert.equal(h.byId("time-zone-form").elements.time_zone.value, "UTC");
   assert.equal(h.context.workspaceTimeZone, "UTC");
   assert.equal(h.report.zone, "UTC");
+  assert.equal(h.context.workspacePlan, refreshed);
+});
+
+test("a member list read that started before a time zone save keeps the refreshed plan", async () => {
+  const begin = source.indexOf("async function loadMembers() {");
+  const end = source.indexOf("\n}\n", begin) + 3;
+  assert.ok(begin >= 0 && end > begin);
+  let release!: (value: object) => void;
+  let draws = 0;
+  const element = () => ({ textContent: "", replaceChildren() {} });
+  const context = vm.createContext({
+    segmentsGeneration: 1,
+    timeZoneWriteRevision: 0,
+    workspacePlan: undefined,
+    api: (url: string) =>
+      url === "/api/workspace/members"
+        ? new Promise<object>((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve({ invites: [] }),
+    byId: element,
+    node: () => ({}),
+    memberItem: () => ({}),
+    inviteItem: () => ({}),
+    notice: () => {},
+    errorMessage: String,
+    planControls: () => {
+      draws++;
+    },
+  });
+  vm.runInContext(source.slice(begin, end), context);
+  const pending = vm.runInContext("loadMembers()", context) as Promise<void>;
+  await new Promise<void>((done) => setImmediate(done));
+  const refreshed = { plan: "pro", limits: {}, usage: { active_contacts: { time_zone: "UTC" } } };
+  context.timeZoneWriteRevision++;
+  context.workspacePlan = refreshed;
+  release({ members: [], plan: "pro", limits: {}, usage: { active_contacts: { time_zone: "Asia/Seoul" } } });
+  await pending;
+  assert.equal(context.workspacePlan, refreshed);
+  assert.equal(draws, 1);
+  // Without a save in between, the member list's plan is used.
+  const next = vm.runInContext("loadMembers()", context) as Promise<void>;
+  await new Promise<void>((done) => setImmediate(done));
+  release({ members: [], plan: "pro", limits: {}, usage: { active_contacts: { time_zone: "UTC", count: 3 } } });
+  await next;
+  assert.equal(vm.runInContext("workspacePlan.usage.active_contacts.count", context), 3);
 });
 
 test("an unrelated action cannot unlock a rule save already in progress", async () => {
@@ -536,13 +585,63 @@ test("saving a changed time zone retires the reports view load", async () => {
     handoffReports: { configure: noop },
     campaignReports: { configure: noop },
     notice: noop,
+    errorMessage: String,
+    refreshPlan: async () => {
+      planRefreshes++;
+    },
   });
+  let planRefreshes = 0;
   vm.runInContext(source.slice(begin, end), context);
   submit({ preventDefault: noop, currentTarget: { elements: { time_zone: { value: "UTC" } }, querySelector: () => ({}) } });
   await saving;
   assert.equal(loads.has("reports"), false);
   assert.equal(loads.has("inbox"), true);
   assert.equal(context.workspaceTimeZone, "UTC");
+  // The plan card's active contact months follow the saved zone (#51).
+  assert.equal(planRefreshes, 1);
+  // Saving the same zone again changes nothing and re-reads nothing.
+  submit({ preventDefault: noop, currentTarget: { elements: { time_zone: { value: "UTC" } }, querySelector: () => ({}) } });
+  await saving;
+  assert.equal(planRefreshes, 1);
+});
+
+test("a plan refresh redraws only for the latest request of the same session and workspace", async () => {
+  const begin = source.indexOf("let planRefreshRequest = 0;");
+  const end = source.indexOf("function planControls() {", begin);
+  assert.ok(begin >= 0 && end > begin);
+  const releases: ((value: object) => void)[] = [];
+  let draws = 0;
+  const context = vm.createContext({
+    api: () => new Promise<object>((resolve) => releases.push(resolve)),
+    workspaceGeneration: 1,
+    currentWorkspaceId: "workspace-a",
+    workspacePlan: undefined,
+    planControls: () => {
+      draws++;
+    },
+  });
+  vm.runInContext(source.slice(begin, end), context);
+  const refresh = () => vm.runInContext("refreshPlan()", context) as Promise<void>;
+  const usage = (count: number) => ({ workspace_id: "workspace-a", plan: "pro", limits: {}, usage: { active_contacts: { count } } });
+  // An older response that arrives after a newer one does not overwrite it.
+  const first = refresh();
+  const second = refresh();
+  releases[1]!(usage(2));
+  await second;
+  releases[0]!(usage(1));
+  await first;
+  assert.equal(draws, 1);
+  assert.equal(context.workspacePlan.usage.active_contacts.count, 2);
+  // A response from another session or workspace is dropped.
+  const retired = refresh();
+  context.workspaceGeneration = 2;
+  releases[2]!(usage(3));
+  await retired;
+  const moved = refresh();
+  releases[3]!({ ...usage(4), workspace_id: "workspace-b" });
+  await moved;
+  assert.equal(draws, 1);
+  assert.equal(context.workspacePlan.usage.active_contacts.count, 2);
 });
 
 test("a retired view retries after a failed refresh and preserves a newer load", async () => {

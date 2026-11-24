@@ -192,6 +192,9 @@ async function seedConnection(connection: string, workspace: string, account: st
 
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
+  // The active contact ledger has no foreign keys, so the cascade above leaves it alone; the deletion record counts
+  // the connection's keyed rows.
+  await pool.query("TRUNCATE active_contacts");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspaceId, otherWorkspaceId]);
   await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2),($3,$4)", [workspaceId, userId, otherWorkspaceId, otherUserId]);
   await pool.query("INSERT INTO instagram_contact_fields(id,workspace_id,name,type) VALUES($1,$2,'city','text'),($3,$4,'city','text')", [fieldId, workspaceId, otherFieldId, otherWorkspaceId]);
@@ -237,7 +240,9 @@ test("connection deletion removes personal data, keeps revokes and records evide
   assert.equal(body.deleted_counts.instagram_manual_replies, 2);
   assert.equal(body.deleted_counts.channel_consent_events, 2);
   assert.equal(body.deleted_counts.instagram_follow_messages, 2);
+  // The seeded follow messages recorded one ledger row (comment_sender 123), whose key the deletion cleared.
   assert.deepEqual(body.retained_counts, {
+    active_contacts: 1,
     carried_comment_sender_revokes: 0,
     channel_consent_events: 1,
     channel_consent_state: 1,
@@ -327,6 +332,7 @@ test("deletion migration replays and the function stays owned outside server rol
   await pool.query(await readFile(new URL("../../db/migrations/072_instagram_dm_last_inbound.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/076_instagram_dm_profiles.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/077_active_contacts.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/078_active_contact_deletion_counts.sql", import.meta.url), "utf8"));
   const body = await pool.query("SELECT pg_get_functiondef('public.delete_connection_data(uuid,uuid,uuid,text)'::regprocedure) AS body");
   assert.match(body.rows[0].body, /ORDER BY id FOR UPDATE/);
   assert.match(body.rows[0].body, /flow_step_runs/);

@@ -361,6 +361,7 @@ test("latest migration reproduces canonical deletion functions and can replay", 
   await pool.query(await readFile(new URL("../../db/migrations/072_instagram_dm_last_inbound.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/076_instagram_dm_profiles.sql", import.meta.url), "utf8"));
   await pool.query(await readFile(new URL("../../db/migrations/077_active_contacts.sql", import.meta.url), "utf8"));
+  await pool.query(await readFile(new URL("../../db/migrations/078_active_contact_deletion_counts.sql", import.meta.url), "utf8"));
   assert.deepEqual(await definitions(), canonical);
   await ok(confirm());
   const result = (await pool.query("SELECT delete_connection_data($1,$2,$3,'100') AS result", [workspace, connection, owner])).rows[0].result;

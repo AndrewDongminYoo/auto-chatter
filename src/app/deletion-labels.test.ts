@@ -62,7 +62,7 @@ test("every deleted_counts key of a shown deletion record has a label", () => {
 test("every retained_counts key of a shown deletion record has a label", () => {
   for (const name of shownFunctions) {
     const keys = retainedKeys(name);
-    assert.deepEqual([...keys].sort(), ["carried_comment_sender_revokes", "channel_consent_events", "channel_consent_state"]);
+    assert.deepEqual([...keys].sort(), ["active_contacts", "carried_comment_sender_revokes", "channel_consent_events", "channel_consent_state"]);
     const missing = keys.filter((key) => !Object.hasOwn(labels.retainedLabels, key));
     assert.deepEqual(missing, [], `${name} retained_counts keys without a label`);
   }
@@ -78,6 +78,7 @@ test("the summary of a full deletion record shows labels, never a raw table key"
     assert.doesNotMatch(labels.countSummary(retained, labels.retainedLabels), /[a-z_]{3,}/);
   }
   assert.equal(labels.countSummary({ instagram_dm_start_events: 3 }, labels.deletedLabels), "DM 플로 시작 기록 3건");
+  assert.equal(labels.countSummary({ active_contacts: 4 }, labels.retainedLabels), "식별자를 지운 활성 연락처 기록 4건");
 });
 
 test("the summary skips zero counts, totals every count and keeps an unknown key visible", () => {

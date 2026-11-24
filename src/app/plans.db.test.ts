@@ -42,11 +42,27 @@ before(async () => {
 
 beforeEach(async () => {
   await pool.query("TRUNCATE workspaces CASCADE");
+  // The active contact ledger has no foreign keys, so the cascade above leaves it alone.
+  await pool.query("TRUNCATE active_contacts");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspaceId, otherWorkspaceId]);
   await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role,email) VALUES($1,$2,'owner',$3),($4,$5,'owner',$6)", [workspaceId, owner.id, owner.email, otherWorkspaceId, outsider.id, outsider.email]);
 });
 
 after(async () => pool.end());
+
+// One ledger row per key in the workspace's billing month `months` months before the current one (Asia/Seoul).
+async function ledgerRows(id: string, months: number, keys: string[]) {
+  for (const key of keys)
+    await pool.query(
+      `INSERT INTO active_contacts(workspace_id,billing_month,connection_id,person_key_kind,person_key,first_activity_at,activity_kind,time_zone)
+       VALUES($1,(date_trunc('month',now() AT TIME ZONE 'Asia/Seoul')-make_interval(months=>$2))::date,gen_random_uuid(),'comment_sender',$3,now(),'comment','Asia/Seoul')`,
+      [id, months, key],
+    );
+}
+
+async function monthLabel(months: number): Promise<string> {
+  return (await pool.query<{ month: string }>("SELECT to_char(date_trunc('month',now() AT TIME ZONE 'Asia/Seoul')-make_interval(months=>$1),'YYYY-MM') AS month", [months])).rows[0]!.month;
+}
 
 async function setPlan(plan: string, id = workspaceId) {
   await pool.query("UPDATE workspaces SET plan=$2 WHERE id=$1", [id, plan]);
@@ -374,10 +390,21 @@ test("every role reads the plan, its limits and the usage; the owner's member li
   await connect("1002");
   const id = (await pool.query("SELECT id FROM instagram_connections WHERE account_id='1002'")).rows[0].id;
   await disconnectConnection(pool, owner, id);
+  // This month's two rows (one with a cleared key) and last month's row count; the other workspace's row does not.
+  await ledgerRows(workspaceId, 0, ["7001", "7002"]);
+  await pool.query("UPDATE active_contacts SET person_key=NULL WHERE person_key='7002'");
+  await ledgerRows(workspaceId, 1, ["7001"]);
+  await ledgerRows(workspaceId, 2, ["7001"]);
+  await ledgerRows(otherWorkspaceId, 0, ["7001"]);
   const expected = {
     plan: "business",
     limits: { seats: 5, connections: 5, campaign_sends_per_month: 20000 },
-    usage: { seats: 3, connections: 1, campaign_sends: 0 },
+    usage: {
+      seats: 3,
+      connections: 1,
+      campaign_sends: 0,
+      active_contacts: { time_zone: "Asia/Seoul", month: await monthLabel(0), count: 2, previous_month: await monthLabel(1), previous_count: 1 },
+    },
   };
   const agent = await apiRequest(first, "POST", "/api/workspace");
   assert.equal(agent.status, 200);
@@ -387,6 +414,10 @@ test("every role reads the plan, its limits and the usage; the owner's member li
   const members = (await (await apiRequest(owner, "GET", "/api/workspace/members")).json()) as Record<string, unknown>;
   assert.equal((members.members as unknown[]).length, 2);
   assert.deepEqual({ plan: members.plan, limits: members.limits, usage: members.usage }, expected);
+  // The member list stays owner-only, and another workspace reads only its own ledger rows.
+  assert.equal((await apiRequest(first, "GET", "/api/workspace/members")).status, 403);
+  const outside = (await (await apiRequest(outsider, "POST", "/api/workspace")).json()) as { usage: { active_contacts: { count: number; previous_count: number } } };
+  assert.deepEqual([outside.usage.active_contacts.count, outside.usage.active_contacts.previous_count], [1, 0]);
 });
 
 test("the callback sends a refused connection back to the dashboard with the limit code", async () => {
@@ -410,7 +441,7 @@ test("the campaign usage counts this month's delivery rows except those cancelle
   await seedCampaignSends(pool, workspaceId, connection, owner.id, 6, "now()-interval '40 days'");
   const entitlements = await workspaceEntitlements(pool, workspaceId);
   assert.deepEqual(entitlements.limits, { seats: 2, connections: 2, campaign_sends_per_month: 1000 });
-  assert.deepEqual(entitlements.usage, { seats: 1, connections: 0, campaign_sends: 5 });
+  assert.deepEqual({ ...entitlements.usage, active_contacts: undefined }, { seats: 1, connections: 0, campaign_sends: 5, active_contacts: undefined });
   // Another workspace's rows never count.
   assert.equal((await workspaceEntitlements(pool, otherWorkspaceId)).usage.campaign_sends, 0);
   // A plan change changes the limit, never the count.
