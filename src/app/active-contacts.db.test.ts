@@ -290,8 +290,11 @@ test("the usage counts this and last billing month by the stored month label in 
   await pool.query("UPDATE workspaces SET time_zone='Asia/Seoul' WHERE id=$1", [seoul]);
   await comment(seoul, seoulConnection, "s-now", "804");
   const current = (await workspaceEntitlements(pool, seoul)).usage.active_contacts;
-  assert.equal(current.month, (await currentMonth("Asia/Seoul")).slice(0, 7));
-  assert.ok(current.count >= 1);
+  // Compared with the stored rows of the month the response itself reports, so a midnight between the comment, the
+  // entitlement read and this check cannot make it fail.
+  const stored = (await pool.query("SELECT count(*)::int AS n FROM active_contacts WHERE workspace_id=$1 AND billing_month=($2||'-01')::date", [seoul, current.month])).rows[0].n;
+  assert.equal(current.time_zone, "Asia/Seoul");
+  assert.equal(current.count, stored);
   await assert.rejects(activeContactUsage(pool, "99999999-9999-4999-8999-999999999999"), { message: "workspace_required", status: 403 });
 });
 
