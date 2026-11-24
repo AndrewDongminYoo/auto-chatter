@@ -10,10 +10,16 @@
 -- from the stored inbox messages, the DM start events and the latest inbound DM time of each sender (the only trace of
 -- a DM on an inbox-disabled account; it is the latest time, not the first). Earlier months stay empty, and a workspace
 -- whose time_zone AT TIME ZONE rejects is skipped. Rows that live traffic already wrote conflict and stay unchanged.
+-- An activity is skipped when its month already has a row for the same person under either key: its own identity,
+-- or the other side of an identity link valid now (a DM recipient's linked comment sender, or a stored DM recipient
+-- linked to this comment sender). A live trigger may have recorded a send under the DM recipient before the link was
+-- confirmed; without this check the backfill would record the same person again under the linked comment sender.
+-- ON_ERROR_STOP makes psql exit non-zero when the statement fails, for example on the lock timeout.
 -- It runs while traffic flows: it takes no table lock beyond what its INSERT needs, and lock_timeout stops it instead
 -- of letting it wait long on a live transaction's uncommitted ledger key; a stopped run commits nothing and can be
 -- started again. Do not run it while a deletion function runs: it does not lock the connections, so a row it writes
 -- for a person being deleted could keep that person's ID.
+\set ON_ERROR_STOP on
 BEGIN;
 SET LOCAL lock_timeout = '2s';
 SELECT public.record_active_contacts(array_agg(activity.workspace_id),array_agg(activity.connection_id),
@@ -56,5 +62,15 @@ JOIN workspaces workspace ON workspace.id=activity.workspace_id
 WHERE CASE WHEN public.active_contact_time_zone_valid(workspace.time_zone)
     THEN activity.activity_at>=(date_trunc('month',now() AT TIME ZONE workspace.time_zone) AT TIME ZONE workspace.time_zone)
     ELSE false END
-  AND activity.activity_at<=now();
+  AND activity.activity_at<=now()
+  AND NOT EXISTS(
+    SELECT 1 FROM active_contacts stored
+    WHERE stored.workspace_id=activity.workspace_id AND stored.connection_id=activity.connection_id
+      AND stored.billing_month=CASE WHEN public.active_contact_time_zone_valid(workspace.time_zone)
+        THEN date_trunc('month',activity.activity_at AT TIME ZONE workspace.time_zone)::date END
+      AND ((stored.person_key_kind=activity.identity_kind AND stored.person_key=activity.identity)
+        OR (activity.identity_kind='dm_recipient' AND stored.person_key_kind='comment_sender'
+          AND stored.person_key=public.active_contact_linked_sender(activity.workspace_id,activity.connection_id,activity.identity))
+        OR (activity.identity_kind='comment_sender' AND stored.person_key_kind='dm_recipient'
+          AND public.active_contact_linked_sender(stored.workspace_id,stored.connection_id,stored.person_key)=activity.identity)));
 COMMIT;

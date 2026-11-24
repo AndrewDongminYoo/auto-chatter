@@ -94,16 +94,19 @@ async function recordLastInboundDms(client: PoolClient, messages: readonly Insta
 async function recordActiveContactDms(client: PoolClient, messages: readonly InstagramMessage[], now: Date): Promise<void> {
   const batch = messages.filter((message) => message.timestamp.getTime() <= now.getTime() + 60000 && /^[0-9]{1,40}$/.test(message.senderId));
   if (!batch.length) return;
-  await client.query("SELECT 1 FROM instagram_connections WHERE account_id=ANY($1::text[]) AND active ORDER BY id FOR SHARE", [[...new Set(batch.map((message) => message.accountId))]]);
+  // Only the connections locked here are written: a connection activated after this lock is not held by this
+  // transaction, so a deletion of its person data could commit first and leave a sender ID in the ledger.
+  const locked = await client.query<{ id: string }>("SELECT id::text FROM instagram_connections WHERE account_id=ANY($1::text[]) AND active ORDER BY id FOR SHARE", [[...new Set(batch.map((message) => message.accountId))]]);
+  if (!locked.rows.length) return;
   await recordActiveContacts(
     client,
     "inbound_dm_record_failed",
     `SELECT public.record_active_contacts(array_agg(c.workspace_id),array_agg(c.id),array_agg('dm_recipient'::text),
        array_agg(m.sender_id),array_agg(least(m.message_at,now())),array_agg('dm_received'::text))
      FROM unnest($1::text[],$2::text[],$3::timestamptz[]) AS m(account_id,sender_id,message_at)
-     JOIN instagram_connections c ON c.account_id=m.account_id AND c.active
+     JOIN instagram_connections c ON c.account_id=m.account_id AND c.id=ANY($4::uuid[])
      WHERE m.sender_id ~ '^[0-9]{1,40}$'`,
-    [batch.map((message) => message.accountId), batch.map((message) => message.senderId), batch.map((message) => message.timestamp)],
+    [batch.map((message) => message.accountId), batch.map((message) => message.senderId), batch.map((message) => message.timestamp), locked.rows.map((row) => row.id)],
   );
 }
 

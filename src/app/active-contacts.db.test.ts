@@ -617,6 +617,14 @@ test("workspace deletion keeps the month count and leaves no Instagram ID of the
   assert.equal((await ledger()).filter((row) => row.person_key).length, 1, "the other workspace keeps its key");
 });
 
+// Runs deploy/backfill-active-contacts.sql as psql -f would, minus its psql meta-commands (\\set ON_ERROR_STOP), which
+// are not SQL.
+async function runBackfill(): Promise<void> {
+  const script = await readFile(new URL("../../deploy/backfill-active-contacts.sql", import.meta.url), "utf8");
+  assert.match(script, /^\\set ON_ERROR_STOP on$/m);
+  await pool.query(script.replace(/^\\.*$/gm, ""));
+}
+
 test("the one-off backfill records only each workspace's current billing month and skips an unknown zone", async () => {
   await seedActivity();
   await comment(seoul, seoulConnection, "old-1", "6001", "2026-09-10T00:00:00Z");
@@ -625,7 +633,7 @@ test("the one-off backfill records only each workspace's current billing month a
   const recorded = keys((await ledger()).filter((row) => row.billing_month !== "2026-09-01" && row.workspace_id === seoul && row.activity_kind !== "dm_received"));
   await pool.query("TRUNCATE active_contacts");
 
-  await pool.query(await readFile(new URL("../../deploy/backfill-active-contacts.sql", import.meta.url), "utf8"));
+  await runBackfill();
   const backfilled = await ledger();
   const month = await currentMonth("Asia/Seoul");
   assert.ok(backfilled.length > 0);
@@ -636,6 +644,22 @@ test("the one-off backfill records only each workspace's current billing month a
   assert.ok(keys(backfilled).some((key) => key.endsWith("dm_recipient:8888")));
   // The script holds no session setting after it commits.
   assert.notEqual((await pool.query("SHOW lock_timeout")).rows[0].lock_timeout, "2s");
+});
+
+test("the one-off backfill does not count again a person that a live write recorded before an identity link", async () => {
+  // A DM of 8001 this month is recorded live under 8001; a link to 7001 is confirmed afterwards.
+  const event = await comment(seoul, seoulConnection, "c-1", "7001", "2026-09-10T00:00:00Z");
+  const reply = await queueReply(seoul, seoulConnection, event, "7001", "c-1");
+  await sendReply(reply, "8001", "2026-09-10T01:00:00Z");
+  await ingestMessages(pool, [dm("8001", "m-1", new Date(Date.now() - 60_000))]);
+  await confirmLink("8001", "7001", reply);
+  assert.equal(await linkedSender("8001"), "7001");
+  const stored = await ledger();
+  assert.ok(keys(stored).some((key) => key.endsWith("dm_recipient:8001")));
+
+  // The backfill resolves the same DM to comment_sender:7001, but the month already has 8001's row.
+  await runBackfill();
+  assert.deepEqual(await ledger(), stored);
 });
 
 test("re-running migration 077 writes no ledger row, even after an identity link changed, and keeps the canonical objects", async () => {
