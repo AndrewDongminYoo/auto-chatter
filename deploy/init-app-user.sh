@@ -21,6 +21,7 @@ REVOKE UPDATE ON instagram_contact_identity_link_events FROM automations_app;
 REVOKE UPDATE ON flow_versions FROM automations_app;
 REVOKE UPDATE ON flow_step_runs FROM automations_app;
 REVOKE UPDATE ON instagram_follow_messages FROM automations_app;
+REVOKE UPDATE ON active_contacts FROM automations_app;
 REVOKE UPDATE ON instagram_segment_snapshots FROM automations_app;
 REVOKE UPDATE ON instagram_segment_snapshot_members FROM automations_app;
 REVOKE UPDATE ON campaign_approval_events FROM automations_app;
@@ -28,6 +29,7 @@ REVOKE UPDATE ON webhook_redelivery_events FROM automations_app;
 REVOKE INSERT, UPDATE ON data_deletion_records FROM automations_app;
 REVOKE ALL ON workspace_deletion_records FROM automations_app;
 GRANT EXECUTE ON FUNCTION public.delete_connection_data(uuid,uuid,uuid,text) TO automations_app;
+GRANT EXECUTE ON FUNCTION public.active_contact_linked_sender(uuid,uuid,text), public.active_contact_time_zone_valid(text), public.record_active_contacts(uuid[],uuid[],text[],text[],timestamptz[],text[]) TO automations_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO automations_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE ON TABLES TO automations_app;

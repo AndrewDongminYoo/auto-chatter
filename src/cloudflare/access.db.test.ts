@@ -19,12 +19,18 @@ test("Supabase roles cannot read product data; the server role has DML without D
     );
     await client.query("DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role BYPASSRLS; END IF; END $$");
     await client.query("DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='automations_app') THEN CREATE ROLE automations_app; END IF; END $$");
+    // The schema reset drops tables, not functions, so a ledger function keeps the grants of an earlier run; revoke
+    // them so that only the scripts below grant EXECUTE.
+    await client.query("REVOKE ALL ON FUNCTION public.active_contact_linked_sender(uuid,uuid,text), public.active_contact_time_zone_valid(text), public.record_active_contacts(uuid[],uuid[],text[],text[],timestamptz[],text[]) FROM auto_chatter_server, automations_app");
     const bootstrap = await readFile(new URL("../../deploy/init-app-user.sh", import.meta.url), "utf8");
     const grants = bootstrap.match(/GRANT SELECT, INSERT, UPDATE ON ALL TABLES[\s\S]*?GRANT USAGE, SELECT ON ALL SEQUENCES[^;]*;/);
     assert.ok(grants, "Compose initializer must declare application table grants");
     await client.query(grants[0]);
     await client.query("SET ROLE automations_app");
     await assert.rejects(client.query("UPDATE workspaces SET plan='advanced'"), { code: "42501" });
+    // A fresh Compose volume gets only these grants: the ledger writer runs, and the ledger cannot be changed.
+    await client.query("SELECT public.record_active_contacts('{}','{}','{}','{}','{}','{}')");
+    await assert.rejects(client.query("UPDATE active_contacts SET person_key=person_key"), { code: "42501" });
     await client.query("UPDATE workspaces SET time_zone=time_zone");
     await assert.rejects(client.query("UPDATE data_deletion_records SET id=id"), { code: "42501" });
     await assert.rejects(client.query("INSERT INTO data_deletion_records(workspace_id,connection_id,requested_by,deleted_counts,retained_counts) VALUES(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'{}','{}')"), { code: "42501" });
@@ -81,6 +87,7 @@ test("Supabase roles cannot read product data; the server role has DML without D
     for (const role of ["anon", "authenticated", "service_role"]) {
       await client.query(`SET ROLE ${role}`);
       for (const table of [
+        "active_contacts",
         "webhook_endpoints",
         "webhook_signing_keys",
         "webhook_deliveries",
@@ -148,6 +155,8 @@ test("Supabase roles cannot read product data; the server role has DML without D
       });
       await assert.rejects(client.query("SELECT * FROM workspace_deletion_records"), { code: "42501" });
       await assert.rejects(client.query("SELECT public.delete_expired_oauth_states()"), { code: "42501" });
+      await assert.rejects(client.query("SELECT public.active_contact_linked_sender(gen_random_uuid(),gen_random_uuid(),'1')"), { code: "42501" });
+      await assert.rejects(client.query("SELECT public.record_active_contacts('{}','{}','{}','{}','{}','{}')"), { code: "42501" });
       await client.query("RESET ROLE");
     }
     await client.query("SET ROLE auto_chatter_server");
@@ -297,6 +306,27 @@ test("Supabase roles cannot read product data; the server role has DML without D
     ]);
     await assert.rejects(client.query("DELETE FROM scheduled_steps"), { code: "42501" });
     await assert.rejects(client.query("CREATE TABLE public.forbidden(id int)"), { code: "42501" });
+    // The send triggers and the ingestion paths write the active contact ledger as this role (#51): a privilege gap
+    // would only leave a WARNING or a log line, so the rows themselves are checked. A private reply that becomes sent
+    // fires the trigger; the ingestion paths call the ledger function directly. The role cannot change or delete rows.
+    const accessEvent = (
+      await client.query(
+        "INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','access-comment','1789','access-sender','hello') RETURNING id",
+      )
+    ).rows[0].id;
+    await client.query("INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text) VALUES('66666666-6666-4666-8666-666666666663','11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','1789','link','reply')");
+    await client.query(
+      "INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text) VALUES('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444',$1,'66666666-6666-4666-8666-666666666663','access-comment','1789','access-sender','reply')",
+      [accessEvent],
+    );
+    await client.query("UPDATE private_reply_outbox SET status='sent',provider_message_id='access-mid',recipient_id='902',sent_at=now() WHERE event_id=$1", [accessEvent]);
+    await client.query("SELECT public.record_active_contacts(ARRAY['11111111-1111-4111-8111-111111111111']::uuid[],ARRAY['44444444-4444-4444-8444-444444444444']::uuid[],ARRAY['dm_recipient'],ARRAY['901'],ARRAY[now()],ARRAY['dm_received'])");
+    assert.deepEqual((await client.query("SELECT person_key_kind,person_key,activity_kind FROM active_contacts ORDER BY person_key_kind")).rows, [
+      { person_key_kind: "comment_sender", person_key: "access-sender", activity_kind: "private_reply" },
+      { person_key_kind: "dm_recipient", person_key: "901", activity_kind: "dm_received" },
+    ]);
+    await assert.rejects(client.query("UPDATE active_contacts SET person_key=NULL"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM active_contacts"), { code: "42501" });
     const deletion = await client.query("SELECT public.delete_connection_data('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','33333333-3333-4333-8333-333333333333','access-account') AS result");
     assert.equal(deletion.rows[0].result.deleted_counts.channel_consent_events, 1);
     assert.deepEqual(deletion.rows[0].result.retained_counts, {
@@ -305,6 +335,8 @@ test("Supabase roles cannot read product data; the server role has DML without D
       channel_consent_state: 1,
     });
     assert.equal((await client.query("SELECT count(*) FROM data_deletion_records")).rows[0].count, "1");
+    // The connection deletion keeps the ledger rows and clears their person keys.
+    assert.deepEqual((await client.query("SELECT count(*)::int AS rows,count(person_key)::int AS keys FROM active_contacts")).rows, [{ rows: 2, keys: 0 }]);
     await assert.rejects(client.query("UPDATE data_deletion_records SET id=id"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM data_deletion_records"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_comment_events"), { code: "42501" });
@@ -320,6 +352,16 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await client.query("RESET ROLE");
     await client.query("SET ROLE automations_app");
     assert.equal((await client.query("SELECT count(*) FROM workspace_members")).rows[0].count, "1");
+    await client.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','compose-comment','1789','compose-sender','hello')");
+    // The comment ingestion's ledger statement (recordActiveContactComments in src/instagram/store.ts) as this role.
+    await client.query(
+      `SELECT public.record_active_contacts(array_agg(e.workspace_id),array_agg(e.connection_id),array_agg('comment_sender'::text),
+         array_agg(e.sender_id),array_agg(e.created_at),array_agg('comment'::text))
+       FROM instagram_comment_events e WHERE e.comment_id='compose-comment'`,
+    );
+    assert.equal((await client.query("SELECT count(*)::int AS n FROM active_contacts WHERE person_key='compose-sender'")).rows[0].n, 1);
+    await assert.rejects(client.query("UPDATE active_contacts SET person_key=NULL"), { code: "42501" });
+    await assert.rejects(client.query("DELETE FROM active_contacts"), { code: "42501" });
     await client.query("INSERT INTO instagram_oauth_states(state_hash,user_id,workspace_id,expires_at) VALUES ('compose-test','33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111',now()+interval '1 hour')");
     await assert.rejects(client.query("DELETE FROM instagram_oauth_states"), { code: "42501" });
     assert.equal((await client.query("SELECT public.delete_expired_oauth_states() AS deleted")).rows[0].deleted, 0);

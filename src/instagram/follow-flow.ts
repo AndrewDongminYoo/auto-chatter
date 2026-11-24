@@ -7,6 +7,7 @@ import { deliveryRecipientOptedOut } from "./channel-consent.ts";
 import { PreSendVerificationError, ProviderRateLimitedError, ProviderRejectedError } from "./reply-worker.ts";
 import { resumeRepliedFlowRun } from "./store.ts";
 import { lockDmStartSenders, startDmTriggerFlow } from "./dm-start-trigger.ts";
+import { recordActiveContacts } from "./active-contacts.ts";
 
 const normalized = (text: string) => text.normalize("NFC").trim().toLowerCase();
 export async function ingestMessages(pool: Pool, messages: readonly InstagramMessage[], now = new Date()): Promise<void> {
@@ -29,6 +30,7 @@ export async function ingestMessages(pool: Pool, messages: readonly InstagramMes
       await startDmTriggerFlow(client, message);
     }
     await recordLastInboundDms(client, messages, now);
+    await recordActiveContactDms(client, messages, now);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -78,6 +80,29 @@ async function recordLastInboundDms(client: PoolClient, messages: readonly Insta
      ORDER BY c.id,m.sender_id
      ON CONFLICT(connection_id,recipient_id) DO UPDATE SET last_message_at=excluded.last_message_at,updated_at=now()
      WHERE excluded.last_message_at>stored.last_message_at`,
+    [batch.map((message) => message.accountId), batch.map((message) => message.senderId), batch.map((message) => message.timestamp)],
+  );
+}
+
+// Records every inbound DM of the batch in the billing-month active contact ledger (#51), whether or not inbox storage
+// is on and including confirmation postbacks, which recordLastInboundDms leaves out. The filters follow that function:
+// a DM dated more than a minute ahead is skipped, each time is capped at the database clock, and a sender ID that is
+// not 1 to 40 digits is skipped. The active connections are locked FOR SHARE in ID order before the savepoint, so a
+// person or connection deletion waits for this transaction instead of missing a row it writes, and the lock stays when
+// the savepoint is rolled back. It is the last statement before COMMIT (recordActiveContacts), and one statement writes
+// the whole batch through record_active_contacts in key order with ON CONFLICT DO NOTHING.
+async function recordActiveContactDms(client: PoolClient, messages: readonly InstagramMessage[], now: Date): Promise<void> {
+  const batch = messages.filter((message) => message.timestamp.getTime() <= now.getTime() + 60000 && /^[0-9]{1,40}$/.test(message.senderId));
+  if (!batch.length) return;
+  await client.query("SELECT 1 FROM instagram_connections WHERE account_id=ANY($1::text[]) AND active ORDER BY id FOR SHARE", [[...new Set(batch.map((message) => message.accountId))]]);
+  await recordActiveContacts(
+    client,
+    "inbound_dm_record_failed",
+    `SELECT public.record_active_contacts(array_agg(c.workspace_id),array_agg(c.id),array_agg('dm_recipient'::text),
+       array_agg(m.sender_id),array_agg(least(m.message_at,now())),array_agg('dm_received'::text))
+     FROM unnest($1::text[],$2::text[],$3::timestamptz[]) AS m(account_id,sender_id,message_at)
+     JOIN instagram_connections c ON c.account_id=m.account_id AND c.active
+     WHERE m.sender_id ~ '^[0-9]{1,40}$'`,
     [batch.map((message) => message.accountId), batch.map((message) => message.senderId), batch.map((message) => message.timestamp)],
   );
 }

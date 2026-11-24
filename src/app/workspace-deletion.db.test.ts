@@ -59,8 +59,14 @@ test("deletes every record of the workspace, including opt-outs, and leaves othe
     "every table must be seeded for the workspace",
   );
   const foreignBefore = await counts(otherWorkspaceId, foreignConnectionId);
+  // The active contact ledger is not exported (only its counts are), so it is checked here (#51): its rows stay and
+  // lose their person keys.
+  const ledger = async () => (await pool.query("SELECT count(*)::int AS rows,count(person_key)::int AS keys FROM active_contacts WHERE workspace_id=$1", [workspaceId])).rows[0];
+  const ledgerBefore = await ledger();
+  assert.ok(ledgerBefore.keys > 0);
 
   const { result } = (await deleteWorkspace()).rows[0]!;
+  assert.deepEqual(await ledger(), { rows: ledgerBefore.rows, keys: 0 });
 
   assert.deepEqual(
     Object.entries(await counts(workspaceId, connectionId)).filter(([, count]) => count > 0),

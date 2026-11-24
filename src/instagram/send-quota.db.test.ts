@@ -274,8 +274,9 @@ test("the budget carry migration keeps a carry and one trigger when reapplied", 
   await pool.query(migration);
   await pool.query(migration);
   assert.deepEqual(await carry(), before);
-  const triggers = await pool.query("SELECT tgname FROM pg_trigger WHERE tgrelid='private_reply_outbox'::regclass AND NOT tgisinternal");
-  assert.deepEqual(triggers.rows, [{ tgname: "carry_deleted_private_reply_calls" }]);
+  const triggers = await pool.query("SELECT tgname FROM pg_trigger WHERE tgrelid='private_reply_outbox'::regclass AND NOT tgisinternal ORDER BY tgname");
+  // The active contact ledger trigger (migration 077) is the other trigger on the table.
+  assert.deepEqual(triggers.rows, [{ tgname: "carry_deleted_private_reply_calls" }, { tgname: "record_active_contact" }]);
   await assert.rejects(pool.query("UPDATE instagram_connections SET private_reply_carried_calls=-1 WHERE id=$1", [connectionId]), { code: "23514" });
 });
 
