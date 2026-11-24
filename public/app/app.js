@@ -976,11 +976,13 @@ function inviteItem(invite) {
 
 async function loadMembers() {
   const generation = segmentsGeneration;
+  const zoneWrite = timeZoneWriteRevision;
   try {
     const [members, invites] = await Promise.all([api("/api/workspace/members"), api("/api/workspace/invites")]);
     if (generation !== segmentsGeneration) return;
     byId("member-count").textContent = members.members.length;
-    workspacePlan = { plan: members.plan, limits: members.limits, usage: members.usage };
+    // As in loadWorkspace: a time zone save after this read started leaves the plan to refreshPlan.
+    if (zoneWrite === timeZoneWriteRevision) workspacePlan = { plan: members.plan, limits: members.limits, usage: members.usage };
     planControls();
     byId("members").replaceChildren(...members.members.map(memberItem));
     byId("invites").replaceChildren(...(invites.invites.length ? invites.invites.map(inviteItem) : [node("p", "대기 중인 초대가 없습니다.", "hint")]));
@@ -1544,7 +1546,8 @@ async function loadWorkspace() {
   const zoneInput = byId("time-zone-form").elements.time_zone;
   if (firstContext || zoneInput.value === (workspaceTimeZone ?? "")) zoneInput.value = timeZone ?? "";
   workspaceTimeZone = timeZone ?? undefined;
-  workspacePlan = { plan: membership.plan, limits: membership.limits, usage: membership.usage };
+  // A time zone save after this read started re-reads the plan itself (refreshPlan); the older usage is not kept.
+  if (zoneWrite === timeZoneWriteRevision) workspacePlan = { plan: membership.plan, limits: membership.limits, usage: membership.usage };
   planControls();
   timeZoneControls();
   const operationsVisible = currentRole === "owner" || currentRole === "admin";

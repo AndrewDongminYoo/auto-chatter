@@ -293,11 +293,60 @@ test("a time zone saved during a refresh survives its older membership snapshot"
   h.context.timeZoneWriteRevision++;
   h.context.workspaceTimeZone = "UTC";
   h.byId("time-zone-form").elements.time_zone.value = "UTC";
+  // The plan that refreshPlan read for the new zone is not replaced by this older snapshot's usage (#51).
+  const refreshed = { plan: "pro", limits: {}, usage: { active_contacts: { time_zone: "UTC" } } };
+  h.context.workspacePlan = refreshed;
   release();
   await pending;
   assert.equal(h.byId("time-zone-form").elements.time_zone.value, "UTC");
   assert.equal(h.context.workspaceTimeZone, "UTC");
   assert.equal(h.report.zone, "UTC");
+  assert.equal(h.context.workspacePlan, refreshed);
+});
+
+test("a member list read that started before a time zone save keeps the refreshed plan", async () => {
+  const begin = source.indexOf("async function loadMembers() {");
+  const end = source.indexOf("\n}\n", begin) + 3;
+  assert.ok(begin >= 0 && end > begin);
+  let release!: (value: object) => void;
+  let draws = 0;
+  const element = () => ({ textContent: "", replaceChildren() {} });
+  const context = vm.createContext({
+    segmentsGeneration: 1,
+    timeZoneWriteRevision: 0,
+    workspacePlan: undefined,
+    api: (url: string) =>
+      url === "/api/workspace/members"
+        ? new Promise<object>((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve({ invites: [] }),
+    byId: element,
+    node: () => ({}),
+    memberItem: () => ({}),
+    inviteItem: () => ({}),
+    notice: () => {},
+    errorMessage: String,
+    planControls: () => {
+      draws++;
+    },
+  });
+  vm.runInContext(source.slice(begin, end), context);
+  const pending = vm.runInContext("loadMembers()", context) as Promise<void>;
+  await new Promise<void>((done) => setImmediate(done));
+  const refreshed = { plan: "pro", limits: {}, usage: { active_contacts: { time_zone: "UTC" } } };
+  context.timeZoneWriteRevision++;
+  context.workspacePlan = refreshed;
+  release({ members: [], plan: "pro", limits: {}, usage: { active_contacts: { time_zone: "Asia/Seoul" } } });
+  await pending;
+  assert.equal(context.workspacePlan, refreshed);
+  assert.equal(draws, 1);
+  // Without a save in between, the member list's plan is used.
+  const next = vm.runInContext("loadMembers()", context) as Promise<void>;
+  await new Promise<void>((done) => setImmediate(done));
+  release({ members: [], plan: "pro", limits: {}, usage: { active_contacts: { time_zone: "UTC", count: 3 } } });
+  await next;
+  assert.equal(vm.runInContext("workspacePlan.usage.active_contacts.count", context), 3);
 });
 
 test("an unrelated action cannot unlock a rule save already in progress", async () => {
