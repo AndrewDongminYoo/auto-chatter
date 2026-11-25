@@ -1,4 +1,5 @@
-function createCampaignDrafts({ api, node, userId = () => undefined }) {
+// approvalLimitHelp returns the reason an approval cannot be recorded because of the plan (#52), or "" when it can.
+function createCampaignDrafts({ api, node, userId = () => undefined, approvalLimitHelp = () => "" }) {
   const byId = (id) => document.getElementById(id);
   const form = byId("campaign-draft-form");
   const fields = form.elements;
@@ -78,6 +79,7 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     invalid_campaign_approval: "실행 시점을 확인해 주세요. 예약은 날짜와 시각을 모두 선택해야 합니다.",
     campaign_approval_not_found: "승인을 찾을 수 없습니다. 승인 상태를 새로고침해 주세요.",
     campaign_approval_id_conflict: "승인 요청을 확인하지 못했습니다. 승인 상태를 새로고침한 뒤 다시 시도해 주세요.",
+    active_contact_limit: "이번 달 활성 연락처가 요금제 포함량을 넘어 실행 승인을 기록하지 않았습니다. 설정의 요금제 안내를 확인해 주세요.",
   };
   // A version whose run the monthly campaign send limit kept from starting (#52) sent nothing; say so.
   const approvalMessage = (error) =>
@@ -164,7 +166,10 @@ function createCampaignDrafts({ api, node, userId = () => undefined }) {
     byId("campaign-approval").hidden = !editing;
     byId("campaign-approval").setAttribute("aria-busy", String(approvalReading || approving));
     // The approve control needs the stored, unarchived, unchanged draft and a read that found no approval in force.
-    const canApprove = idle && !editing.archived && !operation && !conflict && !unavailable && !draftChanged() && approvalLoaded && !active && !staged && scheduleReady();
+    const limitHelp = approvalLimitHelp();
+    const canApprove = idle && !editing.archived && !operation && !conflict && !unavailable && !draftChanged() && approvalLoaded && !active && !staged && scheduleReady() && !limitHelp;
+    byId("campaign-approval-limit-help").textContent = limitHelp;
+    byId("campaign-approval-limit-help").hidden = !limitHelp || active;
     const inputsLocked = !idle || Boolean(staged) || !approvalLoaded || (!active && Boolean(editing?.archived));
     timing().disabled = inputsLocked;
     scheduleInput().disabled = inputsLocked;

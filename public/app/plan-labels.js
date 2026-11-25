@@ -38,18 +38,50 @@ function planSummary(entitlements) {
 }
 
 // The billing-month active contact counts (#51): people the workspace exchanged a message with, once per month and
-// connection. The months follow the workspace time zone the server used. No allowance or price is shown, because the
-// count is not billed yet. An older server without the counts shows nothing.
+// connection. The months follow the workspace time zone the server used. This month's count is shown against the
+// plan's monthly allowance (#52); no price is shown. An older server without the counts shows nothing, and one
+// without the allowance shows the counts alone.
+function planActiveContactLimit(entitlements) {
+  const limit = Number(entitlements?.limits.active_contacts_per_month);
+  return Number.isFinite(limit) && limit >= 0 ? limit : null;
+}
+
+// The server's rule (activeContactLimitBlocks in src/app/plans.ts): over the allowance every send stops; at it, only a
+// send to a person not yet counted this month stops.
+function planActiveContactsOver(entitlements) {
+  const counts = entitlements?.usage.active_contacts;
+  const limit = planActiveContactLimit(entitlements);
+  return Boolean(counts) && limit !== null && Number(counts.count) > limit;
+}
+
+function planActiveContactsFull(entitlements) {
+  const counts = entitlements?.usage.active_contacts;
+  const limit = planActiveContactLimit(entitlements);
+  return Boolean(counts) && limit !== null && Number(counts.count) === limit;
+}
+
 function planActiveContacts(entitlements) {
   const counts = entitlements?.usage.active_contacts;
   if (!counts) return "";
-  return `이번 달 활성 연락처 ${formatCount(Number(counts.count))}명 · 지난 달 ${formatCount(Number(counts.previous_count))}명`;
+  const limit = planActiveContactLimit(entitlements);
+  const current = limit === null ? `${formatCount(Number(counts.count))}명` : `${formatCount(Number(counts.count))}/${formatCount(limit)}명`;
+  return `이번 달 활성 연락처 ${current} · 지난 달 ${formatCount(Number(counts.previous_count))}명`;
 }
 
 function planActiveContactsHelp(entitlements) {
   const counts = entitlements?.usage.active_contacts;
   if (!counts) return "";
+  const limit = planActiveContactLimit(entitlements);
+  if (planActiveContactsOver(entitlements))
+    return `이번 달 활성 연락처가 요금제에 포함된 ${formatCount(limit)}명을 넘어 자동 답장, 직접 답장, 캠페인 발송을 모두 멈췄습니다. 받은 메시지 확인과 설정 변경은 그대로 할 수 있습니다. 다음 달이 되거나 요금제가 올라가면 다시 보내며, 멈춘 동안 보내지 못한 메시지는 나중에 보내지 않습니다.`;
+  if (planActiveContactsFull(entitlements))
+    return `이번 달 활성 연락처가 요금제에 포함된 ${formatCount(limit)}명에 도달했습니다. 이번 달에 메시지를 주고받은 사람에게는 계속 보내지만, 새로운 사람에게는 보내지 않습니다. 새로운 사람의 댓글이나 DM으로 포함량을 넘으면 모든 발송을 멈춥니다.`;
   return `메시지를 주고받은 사람을 달마다 한 번씩 셉니다. 달은 ${counts.time_zone} 기준입니다.`;
+}
+
+// The reason beside the disabled campaign approval while the workspace is over its allowance.
+function planActiveContactsApprovalHelp(entitlements) {
+  return planActiveContactsOver(entitlements) ? "이번 달 활성 연락처가 요금제 포함량을 넘어 실행 승인을 기록할 수 없습니다. 설정의 요금제 안내를 확인해 주세요." : "";
 }
 
 function planSeatHelp(entitlements) {

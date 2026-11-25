@@ -68,6 +68,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     reply_window_closed: "최근 텍스트 DM으로 열린 답장 가능 시간이 끝났거나 확인되지 않습니다.",
     recipient_opted_out: "수신 거부가 기록되어 메시지를 보내지 않았습니다.",
     consent_unavailable: "수신 동의를 확인하지 못해 발송을 보류했습니다. 잠시 후 다시 검사합니다.",
+    active_contact_limit: "이번 달 활성 연락처가 요금제 포함량을 넘었거나, 포함량에 도달해 이번 달에 처음 연락하는 사람에게는 보낼 수 없습니다. 설정의 요금제 안내를 확인해 주세요.",
+    active_contact_limit_unavailable: "활성 연락처 사용량을 확인하지 못해 발송을 보류했습니다. 잠시 후 다시 검사합니다.",
     scheduled_actor_unavailable: "예약한 멤버에게 현재 작업 공간의 답장 권한이 없어 발송을 차단했습니다.",
     scheduled_not_due: "예약한 시각을 기다리고 있습니다.",
     invalid_reply_schedule: "예약 날짜와 시각을 확인해 주세요.",
