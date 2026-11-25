@@ -211,6 +211,7 @@ function draftHarness(override?: DraftApi, initialApprovals: Approval[] = []) {
   });
   const writes: { path: string; method: string; body: Record<string, unknown> }[] = [];
   let allowDiscard = true;
+  let limitHelp = "";
   const api: DraftApi = async (path, method = "GET", body) => {
     if (method !== "GET") writes.push({ path, method, body: structuredClone(body!) });
     if (override) {
@@ -314,8 +315,12 @@ function draftHarness(override?: DraftApi, initialApprovals: Approval[] = []) {
     },
     node: (tag: string, text = "") => new DraftElement(text, tag),
     userId: () => "user-me",
+    approvalLimitHelp: () => limitHelp,
   });
   return {
+    setLimitHelp: (text: string) => {
+      limitHelp = text;
+    },
     controller,
     get,
     fields,
@@ -1101,6 +1106,24 @@ function assertDraftLocked(h: ApprovalHarness, locked: boolean) {
   assert.equal(h.get("campaign-draft-archive").disabled, locked);
   assert.equal(h.get("campaign-draft-approval-lock").hidden, !locked);
 }
+
+test("a workspace over its active contact allowance cannot start an approval and is told why", async () => {
+  const h = await adminDraft();
+  await openSaved(h);
+  const start = h.get("campaign-approval-start");
+  const help = h.get("campaign-approval-limit-help");
+  assert.deepEqual([start.disabled, help.hidden], [false, true]);
+  h.setLimitHelp("over the allowance");
+  // Any redraw of the approval area reads the plan again.
+  h.fields.body.value = `${savedDraft.body}!`;
+  await h.form.dispatch("input");
+  h.fields.body.value = savedDraft.body;
+  await h.form.dispatch("input");
+  assert.deepEqual([start.disabled, help.hidden, help.textContent], [true, false, "over the allowance"]);
+  h.setLimitHelp("");
+  await h.form.dispatch("input");
+  assert.deepEqual([start.disabled, help.hidden], [false, true]);
+});
 
 test("the approve control is offered only for a stored, unchanged, unarchived draft with no approval in force", async () => {
   const h = await adminDraft();

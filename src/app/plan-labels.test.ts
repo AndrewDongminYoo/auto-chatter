@@ -6,7 +6,7 @@ import { activeContactLimitReached, isPlanKey, PLANS, planLimits, type PlanKey }
 
 interface Entitlements {
   plan: string;
-  limits: { seats: number; connections: number; campaign_sends_per_month: number };
+  limits: { seats: number; connections: number; campaign_sends_per_month: number; active_contacts_per_month?: number };
   usage: { seats: number; connections: number; campaign_sends: number; active_contacts?: { time_zone: string; month: string; count: number; previous_month: string; previous_count: number } };
 }
 interface PlanLabels {
@@ -20,6 +20,9 @@ interface PlanLabels {
   planAcceptSeatRefusal(): string;
   planActiveContacts(entitlements: Entitlements | undefined): string;
   planActiveContactsHelp(entitlements: Entitlements | undefined): string;
+  planActiveContactsOver(entitlements: Entitlements | undefined): boolean;
+  planActiveContactsFull(entitlements: Entitlements | undefined): boolean;
+  planActiveContactsApprovalHelp(entitlements: Entitlements | undefined): string;
 }
 
 // public/app/plan-labels.js is a classic browser script; its top-level functions become context globals.
@@ -68,13 +71,28 @@ test("every plan has a Korean name, and the summary shows usage against the limi
   assert.equal(labels.planSummary(undefined), "");
 });
 
-test("the active contact line shows this and last month's counts without an allowance or price", () => {
-  const counted: Entitlements = {
-    ...entitlements("pro", 1, 1),
-    usage: { seats: 1, connections: 1, campaign_sends: 0, active_contacts: { time_zone: "America/Los_Angeles", month: "2026-11", count: 1234, previous_month: "2026-10", previous_count: 0 } },
-  };
-  assert.equal(labels.planActiveContacts(counted), "이번 달 활성 연락처 1,234명 · 지난 달 0명");
+test("the active contact line shows this month's count against the plan's allowance, with no price", () => {
+  const withCount = (plan: PlanKey, count: number): Entitlements => ({
+    ...entitlements(plan, 1, 1),
+    usage: { seats: 1, connections: 1, campaign_sends: 0, active_contacts: { time_zone: "America/Los_Angeles", month: "2026-11", count, previous_month: "2026-10", previous_count: 0 } },
+  });
+  const counted = withCount("pro", 1234);
+  assert.equal(labels.planActiveContacts(counted), "이번 달 활성 연락처 1,234/2,500명 · 지난 달 0명");
   assert.equal(labels.planActiveContactsHelp(counted), "메시지를 주고받은 사람을 달마다 한 번씩 셉니다. 달은 America/Los_Angeles 기준입니다.");
+  assert.deepEqual([labels.planActiveContactsFull(counted), labels.planActiveContactsOver(counted), labels.planActiveContactsApprovalHelp(counted)], [false, false, ""]);
+  // At the allowance only people not yet counted this month are refused; over it every send stops (the server rule).
+  const full = withCount("free", 25);
+  assert.equal(labels.planActiveContacts(full), "이번 달 활성 연락처 25/25명 · 지난 달 0명");
+  assert.deepEqual([labels.planActiveContactsFull(full), labels.planActiveContactsOver(full), labels.planActiveContactsApprovalHelp(full)], [true, false, ""]);
+  assert.match(labels.planActiveContactsHelp(full), /^이번 달 활성 연락처가 요금제에 포함된 25명에 도달했습니다\. .*새로운 사람에게는 보내지 않습니다\./);
+  const over = withCount("free", 26);
+  assert.deepEqual([labels.planActiveContactsFull(over), labels.planActiveContactsOver(over)], [false, true]);
+  assert.match(labels.planActiveContactsHelp(over), /^이번 달 활성 연락처가 요금제에 포함된 25명을 넘어 자동 답장, 직접 답장, 캠페인 발송을 모두 멈췄습니다\. 받은 메시지 확인과 설정 변경은 그대로 할 수 있습니다\./);
+  assert.match(labels.planActiveContactsApprovalHelp(over), /^이번 달 활성 연락처가 요금제 포함량을 넘어 실행 승인을 기록할 수 없습니다\./);
+  // An older server without the allowance shows the counts alone and never reports a stop.
+  const older = { ...counted, limits: { seats: 3, connections: 3, campaign_sends_per_month: 5000 } };
+  assert.equal(labels.planActiveContacts(older), "이번 달 활성 연락처 1,234명 · 지난 달 0명");
+  assert.equal(labels.planActiveContactsOver(older), false);
   // The plan line itself is unchanged, and a response without the counts shows no line.
   assert.equal(labels.planSummary(counted), "요금제: 프로 · 멤버 1/3명(대기 중인 초대 포함) · Instagram 계정 1/3개 · 이번 달 캠페인 발송 0/5,000건");
   assert.equal(labels.planActiveContacts(entitlements("pro", 1, 1)), "");
@@ -83,6 +101,7 @@ test("the active contact line shows this and last month's counts without an allo
   const app = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
   assert.match(app, /byId\("active-contact-summary"\)\.hidden = !planActiveContacts\(workspacePlan\);/);
   assert.match(app, /byId\("active-contact-help"\)\.hidden = !planActiveContactsHelp\(workspacePlan\);/);
+  assert.match(app, /byId\("active-contact-help"\)\.className = planActiveContactsOver\(workspacePlan\) \? "flow-alert warning alert-detail" : "hint";/);
 });
 
 test("the limit help appears only when a limit is reached, including after a downgrade", () => {
