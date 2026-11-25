@@ -7,6 +7,7 @@ import { deliveryRecipientOptedOut } from "./channel-consent.ts";
 import { evaluatePrivateReply } from "./reply-policy.ts";
 import { privateReplyBudgetOpenSql } from "./send-quota.ts";
 import { failureCode, logOperation } from "../app/operations-log.ts";
+import { ACTIVE_CONTACT_LIMIT, ACTIVE_CONTACT_LIMIT_UNAVAILABLE, activeContactLimitBlocks } from "../app/plans.ts";
 
 export interface PrivateReplyRequest {
   attemptId?: string;
@@ -237,6 +238,23 @@ export async function processNextPrivateReply(pool: Pool, transport: PrivateRepl
   );
   if (source.rows[0]?.enabled !== true) {
     await updateClaim(pool, "UPDATE private_reply_outbox SET status='blocked',failure_code=$3 WHERE id=$1 AND status='sending' AND attempt_id=$2", [row.id, attemptId, source.rows[0]?.from_flow ? "inactive_flow" : "inactive_rule"]);
+    return true;
+  }
+  // The active contact limit (#52) is checked before the row counts toward the hourly budget, so a workspace over its
+  // limit does not spend the budget on replies that never reach the provider. The transport's final guard checks again.
+  let limited: boolean;
+  try {
+    limited = await activeContactLimitBlocks(pool, row.workspace_id, row.connection_id, { kind: "comment_sender", id: row.sender_id });
+  } catch {
+    await updateClaim(pool, "UPDATE private_reply_outbox SET status='pending',attempt_id=NULL,attempt_started_at=NULL,next_attempt_at=now()+interval '1 minute',failure_code=$3 WHERE id=$1 AND status='sending' AND attempt_id=$2", [
+      row.id,
+      attemptId,
+      ACTIVE_CONTACT_LIMIT_UNAVAILABLE,
+    ]);
+    return true;
+  }
+  if (limited) {
+    await updateClaim(pool, "UPDATE private_reply_outbox SET status='blocked',failure_code=$3 WHERE id=$1 AND status='sending' AND attempt_id=$2", [row.id, attemptId, ACTIVE_CONTACT_LIMIT]);
     return true;
   }
   // The hourly budget counts this row from here on (#60). A transport can still stop before its POST, which

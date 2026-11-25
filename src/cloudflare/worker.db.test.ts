@@ -2117,7 +2117,13 @@ test("Cloudflare final guards block private follow and manual POST of a workspac
   await exceedActiveContactLimit(pool, workspace, connectionId);
   assert.equal(await consume(), "ack");
   assert.equal(privatePosts, 0);
-  assert.deepEqual((await pool.query("SELECT status,failure_code,rate_limit_retries FROM private_reply_outbox WHERE comment_id='comment-1'")).rows[0], { status: "blocked", failure_code: "active_contact_limit", rate_limit_retries: 0 });
+  // Stopped before the worker stamps provider_called_at, so the reply does not count toward the hourly budget.
+  assert.deepEqual((await pool.query("SELECT status,failure_code,rate_limit_retries,provider_called_at IS NULL AS uncounted FROM private_reply_outbox WHERE comment_id='comment-1'")).rows[0], {
+    status: "blocked",
+    failure_code: "active_contact_limit",
+    rate_limit_retries: 0,
+    uncounted: true,
+  });
 
   restoreMocks();
   published = [];

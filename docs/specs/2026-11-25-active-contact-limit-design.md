@@ -104,6 +104,7 @@
 - 판정은 `src/app/plans.ts`의 `activeContactLimitBlocks` 하나이며, 조회 한 번으로 요금제, 이번 달 숫자, 받는 사람의 원장 존재 여부를 읽습니다. migration은 없습니다.
   모든 발송 경로의 claim 뒤 최종 가드가 부릅니다: Cloudflare의 비공개 답장(`graphFetch`)과 팔로우(`beforeSend`), Node의 두 가드(`node-delivery.ts`), 팔로우 worker의 허가 판정(`follow-flow.ts`), 수동 답장의 `manualReplyStatus`, DM 플로우와 캠페인 worker의 가드.
 - Node worker(환경 변수 연결)도 같은 판정을 거칩니다.
+- 비공개 답장의 공통 worker(`processNextPrivateReply`)는 시간당 예산에 세는 `provider_called_at`을 기록하기 전에도 판정합니다. 최종 가드에서만 막으면, 초과 상태의 작업 공간에 쌓인 답장이 실제 호출 없이 예산 700건을 소진합니다. 그러면 요금제를 올린 뒤에도 그 기록이 1시간 동안 남아 새 답장을 붙잡습니다.
 - claim 쿼리, wake, 캠페인 정리 쿼리(`endUnreachableCampaignDeliveries`)에서 초과 작업 공간의 행을 빼지 않습니다. 빼면 행이 `pending`으로 계속 남아 초과가 풀릴 때 한꺼번에 나가기 때문입니다. 행은 claim된 뒤 막힙니다.
 - 각 가드에서 판정은 수신 거부(opt-out) 검사 뒤에 둡니다. 수신 거부로 끝나야 할 행이 `active_contact_limit`으로 끝나면, 수동 답장에서는 `safe_to_retry = true`가 되어 재시도할 수 있게 되기 때문입니다. DM 플로우와 캠페인 가드는 막는 이유를 모은 목록의 마지막에 둡니다.
 - 판정 조회가 오류를 내면 그 발송은 보내지 않고 기존의 재시도 경로(`pending`, 1분 뒤, `active_contact_limit_unavailable`)로 돌립니다. 한도를 확인하지 못한 채 보내지 않습니다.
