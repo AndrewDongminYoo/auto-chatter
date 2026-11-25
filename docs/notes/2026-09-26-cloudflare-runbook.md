@@ -871,7 +871,24 @@ Queue consumer와 Cron trigger 갱신에 권한이 더 필요한지는 확인하
 첫 수동 실행이 권한 오류로 실패하면 토큰에 바로 권한을 더하지 않고, 오류에 나온 권한을 검토해 승인한 뒤에만 같은 계정 범위로 추가합니다.
 계정 ID는 `wrangler.json`에 있으므로 secret으로 두지 않습니다.
 
-`scheduled_steps`로 확인하는 Cron 점검은 운영 DB 읽기가 필요하므로 워크플로에 넣지 않고, 배포 뒤 수동으로 확인합니다.
+<!-- cspell:words PGDATABASE PGHOST PGPASSFILE PGPORT PGSSLROOTCERT PGUSER -->
+
+`scheduled_steps`로 확인하는 Cron 점검은 운영 DB 읽기가 필요하므로, 운영 DB 조회 승인을 받은 뒤 로컬에서 실행합니다.
+PostgreSQL 17 클라이언트 기본 경로가 다르면 `PSQL17_BIN`에 `psql`의 절대 경로를 지정합니다.
+셸 환경에 운영 DB의 `PGHOST`, `PGDATABASE`, `PGUSER`, 필요한 `PGPORT`와 `PGSSLROOTCERT`를 설정하고, 비밀번호는 `PGPASSFILE` 또는 기존의 보호된 환경으로 전달합니다.
+이 스크립트는 서비스 설정 대신 환경 값을 사용하고 TLS `verify-full`을 강제합니다.
+
+```bash
+scripts/inspect-production.sh query /absolute/path/to/preflight.sql
+scripts/inspect-production.sh query /absolute/path/to/post-deploy-check.sql
+scripts/inspect-production.sh cron
+```
+
+마이그레이션 예상값은 각 작업의 사전·사후 SQL 파일에 적습니다.
+래퍼는 읽기 전용 트랜잭션으로 시작하고 클라이언트 오류 원문은 연결 정보 보호를 위해 숨깁니다.
+신뢰할 수 있는 검사 SQL만 지정합니다. 래퍼는 임의 SQL이나 psql 메타 명령의 권한을 제한하는 도구가 아닙니다.
+Cron 조회는 65초 간격으로 세 번 읽습니다.
+발송 설정 때문에 쉬는 단계를 제외한 각 단계의 마지막 성공이 배포 시각보다 늦고 마지막 실패가 배포 이후에 기록되지 않았는지 UTC로 비교합니다.
 
 ## 5. 발송 전환과 복구
 

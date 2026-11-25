@@ -40,6 +40,8 @@ node --test --test-name-pattern="seven-day boundary" src/instagram/reply-policy.
 - `*.db.test.ts` files refuse to run unless `TEST_DATABASE_URL` points at a database named `automations_test` on `localhost`/`127.0.0.1`, and they apply `db/schema.sql` themselves, then `TRUNCATE` every product table before each test. They run with `--test-concurrency=1`. The local Postgres container setup is in README.md.
 - `test:cloudflare` requires a disposable local PostgreSQL cluster: it creates roles and modifies public schema grants in `automations_test`.
 - Package scripts do not load `.env`; export variables into the shell first (`.env.example` lists the Meta ones).
+- For a dashboard preview against an already running loopback fixture server, run `scripts/check-preview.sh http://127.0.0.1:4173/app/`.
+  The script prints the accessibility snapshot and page errors, and closes its own isolated browser session on exit.
 - `.trunk/trunk.yaml` owns the Trunk linter set; pinact runs both `lint` and `upgrade`, and trufflehog runs offline.
   Its filesystem JSONL reader retains findings without a literal source match and fails on malformed records; the Python regression suite above also runs in CI.
   The pre-commit hook formats staged files and `trunk check` runs on pre-push; a file that must keep its formatting needs an explicit `lint.ignore` entry in `.trunk/trunk.yaml`.
