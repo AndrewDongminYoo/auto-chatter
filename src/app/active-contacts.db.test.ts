@@ -7,7 +7,7 @@ import { ingestComments } from "../instagram/store.ts";
 import { ingestMessages } from "../instagram/follow-flow.ts";
 import type { InstagramMessage } from "../instagram/message-events.ts";
 import { verifiedDmRecipientsSql } from "./inbox-identity.ts";
-import { activeContactUsage, workspaceEntitlements } from "./plans.ts";
+import { activeContactLimitBlocks, activeContactUsage, workspaceEntitlements, type ActiveContactRecipient } from "./plans.ts";
 import { seedWorkspace } from "./workspace-fixture.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -800,4 +800,47 @@ test("re-running migration 077 writes no ledger row, even after an identity link
   assert.ok(runner.indexOf("077_active_contacts.sql") > runner.indexOf("076_instagram_dm_profiles.sql") && runner.indexOf("077_active_contacts.sql") < runner.indexOf("supabase-access.sql"));
   assert.ok(runner.indexOf("078_active_contact_deletion_counts.sql") > runner.indexOf("077_active_contacts.sql") && runner.indexOf("078_active_contact_deletion_counts.sql") < runner.indexOf("supabase-access.sql"));
   assert.ok(!runner.includes("backfill-active-contacts"), "the one-off backfill is not part of the runner");
+});
+
+// Ledger rows of the 2026-11 Seoul billing month under made-up comment sender keys, as the ingestion would write them.
+async function fillLedger(count: number, prefix: string) {
+  await pool.query(
+    `INSERT INTO active_contacts(workspace_id,billing_month,connection_id,person_key_kind,person_key,first_activity_at,activity_kind,time_zone)
+     SELECT $1,'2026-11-01',$2,'comment_sender',$3||n,'2026-11-10T00:00:00Z','comment','Asia/Seoul' FROM generate_series(1,$4::int) n`,
+    [seoul, seoulConnection, prefix, count],
+  );
+}
+
+test("the active contact limit stops a new person at the limit and everyone over it, by the ledger's own person key", async () => {
+  const at = "2026-11-15T03:00:00Z";
+  const blocks = (recipient: ActiveContactRecipient | null, reference = at, ws = seoul, connection = seoulConnection) => activeContactLimitBlocks(pool, ws, connection, recipient, reference);
+  // DM recipient 8001 is linked to comment sender 7001; the comment and its reply leave one ledger row, under the
+  // comment sender. The free plan includes 25.
+  const event = await comment(seoul, seoulConnection, "c-1", "7001", "2026-11-10T00:00:00Z");
+  const reply = await queueReply(seoul, seoulConnection, event, "7001", "c-1");
+  await sendReply(reply, "8001", "2026-11-10T01:00:00Z");
+  await confirmLink("8001", "7001", reply);
+  await storeInbox("8001", "in-1");
+  await fillLedger(23, "p");
+  assert.equal((await activeContactUsage(pool, seoul, at)).count, 24);
+  assert.deepEqual([await blocks({ kind: "comment_sender", id: "new" }), await blocks({ kind: "dm_recipient", id: "8002" }), await blocks(null)], [false, false, false], "below the limit");
+  await fillLedger(1, "q");
+  assert.equal(await blocks({ kind: "comment_sender", id: "new" }), true, "at the limit a new comment sender is stopped");
+  assert.equal(await blocks({ kind: "dm_recipient", id: "8002" }), true, "at the limit an unlinked DM recipient is a new person");
+  assert.equal(await blocks({ kind: "comment_sender", id: "p1" }), false, "at the limit a counted person is still reached");
+  assert.equal(await blocks({ kind: "dm_recipient", id: "8001" }), false, "a DM recipient linked to a counted comment sender is counted");
+  assert.equal(await blocks({ kind: "comment_sender", id: "p1" }, at, seoul, angelesConnection), true, "a key counted on another connection is a new person on this one");
+  assert.equal(await blocks(null), false, "an approval is stopped only over the limit");
+  await fillLedger(1, "r");
+  assert.deepEqual([await blocks({ kind: "comment_sender", id: "p1" }), await blocks({ kind: "dm_recipient", id: "8001" }), await blocks(null)], [true, true, true], "over the limit");
+  // The month is the reference's calendar month in the workspace time zone: 2026-12-01 00:00 in Seoul releases it.
+  assert.equal(await blocks(null, "2026-11-30T14:59:59.999999Z"), true);
+  assert.equal(await blocks(null, "2026-11-30T15:00:00Z"), false);
+  // A higher plan releases it, another workspace is not affected, and a zone the ledger cannot use measures nothing.
+  assert.equal(await blocks(null, at, angeles, angelesConnection), false);
+  await pool.query("UPDATE workspaces SET plan='essential' WHERE id=$1", [seoul]);
+  assert.equal(await blocks(null), false);
+  await pool.query("UPDATE workspaces SET plan='free',time_zone='Invalid/Zone' WHERE id=$1", [seoul]);
+  assert.equal(await blocks({ kind: "comment_sender", id: "new" }), false);
+  await assert.rejects(activeContactLimitBlocks(pool, "99999999-9999-4999-8999-999999999999", null, null), { message: "workspace_required", status: 403 });
 });

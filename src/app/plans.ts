@@ -5,13 +5,15 @@ import { ApiError } from "./auth.ts";
 // db/schema.sql and migration 045 lists the same keys; plans.db.test.ts compares them.
 // Seats follow ManyChat's 2026 user seats; connections count connected Instagram accounts. campaign_sends_per_month
 // counts campaign delivery rows per calendar month in the workspace time zone; free approves no campaign.
+// active_contacts_per_month follows ManyChat's 2026 included active contacts; it is the current enforcement value, not a
+// launch price commitment (docs/specs/2026-11-25-active-contact-limit-design.md).
 export const PLANS = {
-  free: { seats: 1, connections: 1, campaign_sends_per_month: 0 },
-  essential: { seats: 2, connections: 2, campaign_sends_per_month: 1000 },
-  pro: { seats: 3, connections: 3, campaign_sends_per_month: 5000 },
-  business: { seats: 5, connections: 5, campaign_sends_per_month: 20000 },
-  advanced: { seats: 10, connections: 10, campaign_sends_per_month: 50000 },
-} as const satisfies Record<string, { seats: number; connections: number; campaign_sends_per_month: number }>;
+  free: { seats: 1, connections: 1, campaign_sends_per_month: 0, active_contacts_per_month: 25 },
+  essential: { seats: 2, connections: 2, campaign_sends_per_month: 1000, active_contacts_per_month: 250 },
+  pro: { seats: 3, connections: 3, campaign_sends_per_month: 5000, active_contacts_per_month: 2500 },
+  business: { seats: 5, connections: 5, campaign_sends_per_month: 20000, active_contacts_per_month: 7500 },
+  advanced: { seats: 10, connections: 10, campaign_sends_per_month: 50000, active_contacts_per_month: 25000 },
+} as const satisfies Record<string, { seats: number; connections: number; campaign_sends_per_month: number; active_contacts_per_month: number }>;
 
 export type PlanKey = keyof typeof PLANS;
 export type PlanLimits = (typeof PLANS)[PlanKey];
@@ -91,6 +93,59 @@ export async function activeContactUsage(db: Db, workspace: string, reference: s
   const row = (await db.query<ActiveContactUsage>(ACTIVE_CONTACT_USAGE_SQL, [workspace, reference])).rows[0];
   if (!row) throw new ApiError(403, "workspace_required");
   return row;
+}
+
+// The failure code of a send, manual reply or campaign approval that the active contact limit stops (#52).
+export const ACTIVE_CONTACT_LIMIT = "active_contact_limit";
+// The failure code of a send whose limit check could not be read; the send is deferred, never sent unchecked.
+export const ACTIVE_CONTACT_LIMIT_UNAVAILABLE = "active_contact_limit_unavailable";
+
+// The person a send reaches, as the ledger trigger of that send records it: a private reply or follow message records
+// the comment sender, a manual reply, campaign row or DM flow row records the DM recipient.
+export interface ActiveContactRecipient {
+  kind: "comment_sender" | "dm_recipient";
+  id: string;
+}
+
+// The workspace's current billing month count and whether the recipient already has a row in it. The month is the
+// calendar month of statement_timestamp() in the workspace's current time zone, as in ACTIVE_CONTACT_USAGE_SQL, and the
+// recipient's key is the one record_active_contacts would write: a DM recipient with a currently valid confirmed
+// identity link is its comment sender. A zone that AT TIME ZONE rejects has no month (`start` NULL): the ledger
+// records nothing for such a workspace, so the limit cannot be measured and the send is allowed.
+const ACTIVE_CONTACT_LIMIT_SQL = `WITH month AS MATERIALIZED (
+   SELECT w.plan,CASE WHEN public.active_contact_time_zone_valid(w.time_zone)
+     THEN date_trunc('month',coalesce($5::timestamptz,statement_timestamp()) AT TIME ZONE w.time_zone)::date END AS start
+   FROM workspaces w WHERE w.id=$1),
+ person AS MATERIALIZED (
+   SELECT CASE WHEN linked.sender_id IS NULL THEN $3::text ELSE 'comment_sender' END AS kind,coalesce(linked.sender_id,$4::text) AS key
+   FROM (SELECT CASE WHEN $3::text='dm_recipient' THEN public.active_contact_linked_sender($1,$2,$4) END AS sender_id) linked)
+ SELECT m.plan,m.start IS NOT NULL AS measurable,
+   (SELECT count(*) FROM active_contacts a WHERE a.workspace_id=$1 AND a.billing_month=m.start)::int AS count,
+   EXISTS(SELECT 1 FROM active_contacts a JOIN person p ON a.person_key_kind=p.kind AND a.person_key=p.key
+     WHERE a.workspace_id=$1 AND a.billing_month=m.start AND a.connection_id=$2) AS counted
+ FROM month m`;
+
+export interface ActiveContactLimitState {
+  limit: number;
+  count: number;
+  counted: boolean;
+}
+
+// The rule of the design: over the limit stops every send; at the limit, a send that would add a person stops.
+// `counted` is false for a check with no recipient (a campaign approval), so only the over-limit state stops it there.
+export function activeContactLimitReached(state: ActiveContactLimitState, recipient: boolean): boolean {
+  return state.count > state.limit || (recipient && !state.counted && state.count >= state.limit);
+}
+
+// Whether the active contact limit stops a send to `recipient` in `workspace`, or with no recipient, whether the
+// workspace is over its limit. `reference` pins the clock for tests. It reads the ledger without a lock, so sends in
+// flight at the same moment can each pass and the count can exceed the limit by at most that number (the design's
+// "동시성과 초과 폭").
+export async function activeContactLimitBlocks(db: Db, workspace: string, connection: string | null, recipient: ActiveContactRecipient | null, reference: string | null = null): Promise<boolean> {
+  const row = (await db.query<{ plan: PlanKey; measurable: boolean; count: number; counted: boolean }>(ACTIVE_CONTACT_LIMIT_SQL, [workspace, connection, recipient?.kind ?? null, recipient?.id ?? null, reference])).rows[0];
+  if (!row) throw new ApiError(403, "workspace_required");
+  if (!row.measurable) return false;
+  return activeContactLimitReached({ limit: planLimits(row.plan).active_contacts_per_month, count: row.count, counted: row.counted }, recipient !== null);
 }
 
 // The calendar month that holds an approval's due time, in the workspace's current time zone. A due time is never

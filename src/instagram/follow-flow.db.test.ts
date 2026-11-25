@@ -8,6 +8,7 @@ import { createNodeFollowTransport, assertNodePrivateReplyAllowed } from "./node
 import { ProviderRateLimitedError, ProviderRejectedError, runPrivateReplyWorker, processNextPrivateReply } from "./reply-worker.ts";
 import { recordChannelConsentEvent } from "./channel-consent.ts";
 import { ingestMessageReads } from "./message-reads.ts";
+import { exceedActiveContactLimit } from "../app/workspace-fixture.ts";
 const url = new URL(process.env.TEST_DATABASE_URL ?? "http://invalid");
 if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: url.toString() });
@@ -24,7 +25,8 @@ after(async () => {
   await pool.end();
 });
 beforeEach(async () => {
-  await pool.query("TRUNCATE workspaces CASCADE");
+  // The ledger has no foreign keys, so the workspace cascade leaves it alone.
+  await pool.query("TRUNCATE workspaces,active_contacts CASCADE");
   await pool.query("INSERT INTO workspaces VALUES($1)", [workspace]);
   await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active,send_enabled,access_token_encrypted,token_expires_at) VALUES($1,$2,'123',true,true,'test',now()+interval '1 day')", [connection, workspace]);
   await pool.query("INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text,enabled) VALUES($1,$2,$3,'111','link','Reply with confirm',true)", [rule, workspace, connection]);
@@ -653,6 +655,56 @@ test("Node final private and follow guards defer a contact paused after authoriz
     disposition: "retry",
     failureCode: "contact_paused",
   });
+  assert.equal(sends, 0);
+});
+
+test("over the active contact limit a confirmed follow reply ends blocked before the profile read, and the confirmation is still stored", async () => {
+  await exceedActiveContactLimit(pool, workspace, connection);
+  let reads = 0;
+  let sends = 0;
+  await ingestMessages(pool, [incoming()]);
+  assert.ok((await state()).confirmed_at instanceof Date, "receiving does not read the limit");
+  await processNextFollowReply(pool, connection, {
+    followStatus: async () => {
+      reads++;
+      return true;
+    },
+    send: async () => {
+      sends++;
+      return { messageId: "bad" };
+    },
+  });
+  assert.deepEqual([(await state()).status, (await state()).failure_code, reads, sends], ["blocked", "active_contact_limit", 0, 0]);
+  // An opt-out keeps its own code over the limit.
+  await pool.query("UPDATE instagram_follow_conversations SET status='pending',failure_code=NULL,next_attempt_at=now()");
+  await recordConsent("comment_sender", "456", "revoke", "77777777-7777-4777-8777-777777777777");
+  await processNextFollowReply(pool, connection, { followStatus: async () => true, send: async () => ({ messageId: "bad" }) });
+  assert.deepEqual([(await state()).status, (await state()).failure_code], ["blocked", "recipient_opted_out"]);
+});
+
+test("Node final private and follow guards block a workspace over its active contact limit", async () => {
+  const attemptId = "44444444-4444-4444-8444-444444444444";
+  await exceedActiveContactLimit(pool, workspace, connection);
+  await pool.query("UPDATE instagram_connections SET access_token_encrypted=NULL,token_expires_at=NULL");
+  await pool.query("UPDATE private_reply_outbox SET status='sending',attempt_id=$1,attempt_started_at=now()", [attemptId]);
+  await assert.rejects(assertNodePrivateReplyAllowed(pool, { accountId: "123", connectionId: connection }, { id: replyId, attemptId, workspaceId: workspace, connectionId: connection, accountId: "123", commentId: "222", mediaId: "111", senderId: "456", text: "Confirm" }), {
+    disposition: "block",
+    failureCode: "active_contact_limit",
+  });
+  await pool.query("UPDATE private_reply_outbox SET status='sent'");
+  await pool.query("UPDATE instagram_follow_conversations SET status='sending',confirmed_at=now(),attempt_id=$1,attempt_started_at=now()", [attemptId]);
+  let sends = 0;
+  const transport = createNodeFollowTransport(pool, {
+    accountId: "123",
+    connectionId: connection,
+    accessToken: "synthetic",
+    graphVersion: "v26.0",
+    fetchImpl: async () => {
+      sends++;
+      return Response.json({ message_id: "sent" });
+    },
+  });
+  await assert.rejects(transport.send("456", "Confirm", { replyId, attemptId }), { disposition: "block", failureCode: "active_contact_limit" });
   assert.equal(sends, 0);
 });
 

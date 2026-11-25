@@ -5,6 +5,7 @@ import { after, before, beforeEach, mock, test } from "node:test";
 import { Pool } from "pg";
 import { listFlowRuns } from "../app/flows.ts";
 import { connectionMetrics, evaluateAlerts } from "../app/operations-health.ts";
+import { exceedActiveContactLimit } from "../app/workspace-fixture.ts";
 import { resetTestSchema } from "../test-schema.ts";
 import { recordChannelConsentEvent } from "./channel-consent.ts";
 import { assertDmFlowDeliveryAllowed, processNextDmFlowDelivery, recoverStaleDmFlowDeliveries } from "./dm-flow-delivery-worker.ts";
@@ -31,7 +32,8 @@ before(async () => resetTestSchema(pool));
 beforeEach(async () => {
   mock.restoreAll();
   flow = null;
-  await pool.query("TRUNCATE workspaces,workspace_deletion_records,scheduled_steps CASCADE");
+  // The ledger has no foreign keys, so the workspace cascade leaves it alone.
+  await pool.query("TRUNCATE workspaces,workspace_deletion_records,scheduled_steps,active_contacts CASCADE");
   await pool.query("INSERT INTO workspaces(id,time_zone) VALUES($1,'UTC')", [W]);
   await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner')", [W, owner]);
   await pool.query(
@@ -408,6 +410,19 @@ const guardCases: Array<{ name: string; change: () => Promise<unknown>; expect: 
     },
     expect: ["blocked", "reply_window_closed"],
   },
+  {
+    name: "the workspace went over its active contact limit",
+    change: () => exceedActiveContactLimit(pool, W, C),
+    expect: ["blocked", "active_contact_limit"],
+  },
+  {
+    name: "an opt-out wins over the active contact limit",
+    change: async () => {
+      await exceedActiveContactLimit(pool, W, C);
+      await consent("dm_recipient", "9001");
+    },
+    expect: ["blocked", "recipient_opted_out"],
+  },
 ];
 for (const { name, change, expect } of guardCases)
   test(`the final guard after the claim: ${name}`, async () => {
@@ -433,6 +448,7 @@ for (const { name, change, expect } of guardCases.filter((guard) =>
     "the messaging ID opted out",
     // Security audit #62, fourth pass: a revoke reached through the reply bridge is a service revoke as well.
     "a comment sender bridged to the messaging ID opted out",
+    "the workspace went over its active contact limit",
   ].includes(guard.name),
 ))
   test(`the guard immediately before the POST: ${name}`, async () => {

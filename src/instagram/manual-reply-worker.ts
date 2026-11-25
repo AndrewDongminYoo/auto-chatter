@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { FollowSendContext } from "./follow-transport.ts";
 import type { Pool } from "pg";
 import { deliveryRecipientOptedOut, type ConsentQueryable } from "./channel-consent.ts";
+import { ACTIVE_CONTACT_LIMIT, ACTIVE_CONTACT_LIMIT_UNAVAILABLE, activeContactLimitBlocks } from "../app/plans.ts";
 export interface ManualReplyScope {
   workspace_id: string;
   connection_id: string;
@@ -65,6 +66,14 @@ export async function manualReplyStatus(pool: ConsentQueryable, row: Omit<Manual
   } catch {
     return result("consent_unavailable");
   }
+  // After the opt-out check, so an opted-out reply keeps its terminal recipient_opted_out (never safe to retry). The
+  // create, reschedule and retry APIs refuse with this code and the worker ends a claimed row failed with it, so a
+  // reply that the active contact limit stops is refused up front rather than accepted and stopped later (#52).
+  try {
+    if (await activeContactLimitBlocks(pool, current.workspace_id, current.connection_id, { kind: "dm_recipient", id: row.recipient_id })) return result(ACTIVE_CONTACT_LIMIT);
+  } catch {
+    return result(ACTIVE_CONTACT_LIMIT_UNAVAILABLE);
+  }
   return result(null);
 }
 export interface ManualReplyTransport {
@@ -89,7 +98,7 @@ export async function assertManualReplyAllowed(pool: ConsentQueryable, id: strin
   if (!row.schedule_due) throw new PreSendVerificationError("retry", "scheduled_not_due");
   if (row.token_changed) throw row.token_rotation_retryable ? new PreSendVerificationError("retry", "token_rotated") : new PreSendVerificationError("block", "delivery_changed");
   const failure = await manualReplyEligibility(pool, row, { id, attempt, encryptedToken });
-  if (failure) throw new PreSendVerificationError(failure === "token_rotated" || failure === "consent_unavailable" ? "retry" : "block", failure);
+  if (failure) throw new PreSendVerificationError(failure === "token_rotated" || failure === "consent_unavailable" || failure === ACTIVE_CONTACT_LIMIT_UNAVAILABLE ? "retry" : "block", failure);
 }
 export async function processNextManualReply(pool: Pool, connection: string, transport: ManualReplyTransport | null, encryptedToken: string | null): Promise<boolean> {
   const client = await pool.connect();

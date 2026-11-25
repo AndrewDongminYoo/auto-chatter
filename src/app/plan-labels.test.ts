@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
-import { isPlanKey, PLANS, planLimits, type PlanKey } from "./plans.ts";
+import { activeContactLimitReached, isPlanKey, PLANS, planLimits, type PlanKey } from "./plans.ts";
 
 interface Entitlements {
   plan: string;
@@ -34,17 +34,27 @@ const entitlements = (plan: PlanKey, seats: number, connections: number, campaig
   usage: { seats, connections, campaign_sends: campaignSends },
 });
 
-test("the catalog holds the five plans with the agreed seat, connection and monthly campaign send limits", () => {
+test("the catalog holds the five plans with the agreed seat, connection, monthly campaign send and active contact limits", () => {
   assert.deepEqual(PLANS, {
-    free: { seats: 1, connections: 1, campaign_sends_per_month: 0 },
-    essential: { seats: 2, connections: 2, campaign_sends_per_month: 1000 },
-    pro: { seats: 3, connections: 3, campaign_sends_per_month: 5000 },
-    business: { seats: 5, connections: 5, campaign_sends_per_month: 20000 },
-    advanced: { seats: 10, connections: 10, campaign_sends_per_month: 50000 },
+    free: { seats: 1, connections: 1, campaign_sends_per_month: 0, active_contacts_per_month: 25 },
+    essential: { seats: 2, connections: 2, campaign_sends_per_month: 1000, active_contacts_per_month: 250 },
+    pro: { seats: 3, connections: 3, campaign_sends_per_month: 5000, active_contacts_per_month: 2500 },
+    business: { seats: 5, connections: 5, campaign_sends_per_month: 20000, active_contacts_per_month: 7500 },
+    advanced: { seats: 10, connections: 10, campaign_sends_per_month: 50000, active_contacts_per_month: 25000 },
   });
   for (const key of Object.keys(PLANS)) assert.ok(isPlanKey(key), key);
   for (const value of ["gold", "", "toString", "__proto__", null, 1]) assert.equal(isPlanKey(value), false);
   assert.throws(() => planLimits("toString"), /Unknown workspace plan/);
+});
+
+test("the active contact limit stops every send over the limit and a new person's send at it", () => {
+  const at = (count: number, counted: boolean, recipient = true) => activeContactLimitReached({ limit: 25, count, counted }, recipient);
+  // Below the limit everyone is reached; at it, only people already counted this month; over it, nobody.
+  assert.deepEqual([at(24, false), at(24, true)], [false, false]);
+  assert.deepEqual([at(25, false), at(25, true)], [true, false]);
+  assert.deepEqual([at(26, false), at(26, true)], [true, true]);
+  // A check with no recipient (a campaign approval) stops only over the limit.
+  assert.deepEqual([at(25, false, false), at(26, false, false)], [false, true]);
 });
 
 test("every plan has a Korean name, and the summary shows usage against the limits", () => {

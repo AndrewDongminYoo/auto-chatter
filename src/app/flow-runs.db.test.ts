@@ -28,7 +28,8 @@ before(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query("TRUNCATE workspaces CASCADE");
+  // The ledger has no foreign keys, so the workspace cascade leaves it alone; earlier sends would fill the free plan.
+  await pool.query("TRUNCATE workspaces,active_contacts CASCADE");
   await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspaceId, otherWorkspaceId]);
   await pool.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2),($3,$4)", [workspaceId, userId, otherWorkspaceId, otherUserId]);
   await pool.query(

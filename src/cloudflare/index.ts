@@ -7,6 +7,7 @@ import { clearReauthRequired, markReauthRequired } from "../app/instagram-reauth
 import { refreshDueInstagramTokensWithFailures } from "../app/instagram-token-refresh.ts";
 import { checkDueInstagramSubscriptions } from "../app/instagram-subscription-check.ts";
 import { deliveryRecipientOptedOut } from "../instagram/channel-consent.ts";
+import { assertActiveContactLimit } from "../instagram/active-contact-limit.ts";
 import { durableLimits, type LimiterNamespace } from "./auth-limiter.ts";
 // The Durable Object class behind AUTH_LIMITER must be exported from the Worker's main module.
 export { AuthLimiter } from "./auth-limiter.ts";
@@ -268,6 +269,7 @@ export default {
                     if (error instanceof PreSendVerificationError) throw error;
                     throw new PreSendVerificationError("retry", "consent_unavailable");
                   }
+                  await assertActiveContactLimit(pool, reply.workspace_id, connectionId, { kind: "comment_sender", id: reply.sender_id });
                 }
               }
               const response = await rawGraphFetch(input, init);
@@ -359,6 +361,7 @@ export default {
                       if (error instanceof PreSendVerificationError) throw error;
                       throw new PreSendVerificationError("retry", "consent_unavailable");
                     }
+                    await assertActiveContactLimit(pool, reply.workspace_id, connectionId, { kind: "comment_sender", id: reply.sender_id });
                   },
                 }),
               ));
