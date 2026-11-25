@@ -136,7 +136,7 @@ const dashboardGlobals = [
 const readonly = (names) => Object.fromEntries(names.map((name) => [name, "readonly"]));
 
 export default [
-  { ignores: [".trunk/", ".wrangler/", "coverage/", "dist/", "node_modules/"] },
+  { ignores: [".agents/skills/**", ".trunk/", ".wrangler/", "coverage/", "dist/", "node_modules/"] },
   js.configs.recommended,
   { rules: { "no-unused-vars": ["error", unusedVars] } },
   {
