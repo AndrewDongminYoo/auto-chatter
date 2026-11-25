@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool, type QueryConfig } from "pg";
 import { appApi } from "./api.ts";
-import { seedCampaignSends, seedWorkspace } from "./workspace-fixture.ts";
+import { exceedActiveContactLimit, seedCampaignSends, seedWorkspace } from "./workspace-fixture.ts";
 import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -29,7 +29,8 @@ before(async () => pool.query(await readFile(new URL("../../db/schema.sql", impo
 beforeEach(async () => {
   scheduleClock = null;
   previewClock = null;
-  await pool.query("TRUNCATE workspaces,workspace_deletion_records CASCADE");
+  // The ledger has no foreign keys, so the workspace cascade leaves it alone.
+  await pool.query("TRUNCATE workspaces,workspace_deletion_records,active_contacts CASCADE");
   await pool.query("INSERT INTO workspaces(id,time_zone,plan) VALUES($1,'UTC','advanced'),($2,'UTC','advanced')", [workspace, foreignWorkspace]);
   await pool.query(
     `INSERT INTO workspace_members(workspace_id,user_id,role)
@@ -754,6 +755,19 @@ test("the monthly campaign send limit refuses an approval that would exceed it a
     reserved: "1",
     remaining: "0",
   });
+});
+
+test("a workspace over its active contact limit approves no campaign and writes nothing; at the limit it still approves", async () => {
+  await setPlan("essential");
+  await candidate("1001", "2001");
+  const { id } = await draftFor();
+  await exceedActiveContactLimit(pool, workspace, C);
+  const before = await writes();
+  assert.deepEqual(await expect(await approve(id, approval()), 409), { error: "active_contact_limit" });
+  assert.deepEqual(await writes(), before, "a refusal writes nothing");
+  // At the limit the workspace is not over it; each delivery row is checked again when it sends.
+  await pool.query("DELETE FROM active_contacts WHERE person_key='over-1'");
+  await expect(await approve(id, approval()), 201);
 });
 
 test("approvals in force due in the same month count, a later month does not, and a reschedule into a full month is refused", async () => {

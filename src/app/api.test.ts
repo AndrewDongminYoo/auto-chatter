@@ -2499,7 +2499,7 @@ test("the dashboard bootstrap spends no write limit for a member and only the us
     role: "owner",
     time_zone: "Asia/Seoul",
     plan: "free",
-    limits: { seats: 1, connections: 1, campaign_sends_per_month: 0 },
+    limits: { seats: 1, connections: 1, campaign_sends_per_month: 0, active_contacts_per_month: 25 },
     usage: { seats: 1, connections: 0, campaign_sends: 0, active_contacts: { time_zone: "Asia/Seoul", month: "2026-11", count: 3, previous_month: "2026-10", previous_count: 5 } },
   });
   assert.deepEqual([user.keys, workspace.keys], [[], []]);

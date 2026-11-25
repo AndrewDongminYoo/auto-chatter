@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, mock, test } from "node:test";
 import { Pool, type PoolClient, type QueryConfig } from "pg";
 import { cancelCampaignRun, startDueCampaignRuns } from "../app/campaign-runs.ts";
+import { exceedActiveContactLimit } from "../app/workspace-fixture.ts";
 import { connectionAlerts, connectionMetrics, evaluateAlerts } from "../app/operations-health.ts";
 import { assertCampaignDeliveryAllowed, completeCampaignRuns, endUnreachableCampaignDeliveries, processNextCampaignDelivery, recoverStaleCampaignDeliveries } from "./campaign-delivery-worker.ts";
 import { recordChannelConsentEvent } from "./channel-consent.ts";
@@ -38,7 +39,8 @@ let sequence = 0;
 before(async () => pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8")));
 beforeEach(async () => {
   mock.restoreAll();
-  await pool.query("TRUNCATE workspaces,workspace_deletion_records,scheduled_steps CASCADE");
+  // The ledger has no foreign keys, so the workspace cascade leaves it alone.
+  await pool.query("TRUNCATE workspaces,workspace_deletion_records,scheduled_steps,active_contacts CASCADE");
   await pool.query("INSERT INTO workspaces(id,time_zone,plan) VALUES($1,'UTC','advanced')", [W]);
   await pool.query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'admin')", [W, owner, admin]);
   await pool.query(
@@ -452,6 +454,24 @@ const guardCases: Array<{ name: string; change: () => Promise<unknown>; expect: 
     },
     expect: ["blocked", "reply_window_closed"],
   },
+  {
+    name: "the workspace went over its active contact limit",
+    change: () => exceedActiveContactLimit(pool, W, C),
+    expect: ["blocked", "active_contact_limit"],
+  },
+  {
+    name: "at the active contact limit, a recipient not counted this month would add a person",
+    change: () => exceedActiveContactLimit(pool, W, C, 0),
+    expect: ["blocked", "active_contact_limit"],
+  },
+  {
+    name: "an opt-out wins over the active contact limit",
+    change: async () => {
+      await exceedActiveContactLimit(pool, W, C);
+      await consent("comment_sender", "1001", "service_reply", "revoke");
+    },
+    expect: ["blocked", "recipient_opted_out"],
+  },
 ];
 for (const { name, change, expect } of guardCases)
   test(`the final guard: ${name}`, async () => {
@@ -486,7 +506,9 @@ test("the guard immediately before the POST sees a change made after the second 
 // Security audit #62, fourth pass: CLAUDE.md requires every automated send path to recheck the contact pause and the
 // service revokes after the claim and immediately before the POST. Each change is made after the worker's own
 // guards, when it stamps provider_called_at, so only the transport's beforeSend guard can see it.
-for (const { name, change, expect } of guardCases.filter((guard) => ["the marketing grant was revoked", "the comment sender opted out", "another DM recipient bridged to the sender opted out", "the contact was paused", "a handoff paused the contact"].includes(guard.name)))
+for (const { name, change, expect } of guardCases.filter((guard) =>
+  ["the marketing grant was revoked", "the comment sender opted out", "another DM recipient bridged to the sender opted out", "the contact was paused", "a handoff paused the contact", "the workspace went over its active contact limit"].includes(guard.name),
+))
   test(`the guard immediately before the POST: ${name}`, async () => {
     const run = await campaign([["1001", "2001"]]);
     const seen = graph();
@@ -842,7 +864,9 @@ const pauseContact = (sender: string) =>
     [W, C, sender],
   );
 const closeWindow = (recipient: string) => pool.query("UPDATE instagram_inbox_messages SET message_at=now()-interval '25 hours' WHERE recipient_id=$1", [recipient]);
-for (const { name, change, expect } of guardCases)
+// The active contact limit (#52) is not a sweep reason: a paused contact's row stays pending while the workspace is
+// over its limit, and the final guard blocks it once the contact is resumed and the row is claimed.
+for (const { name, change, expect } of guardCases.filter((guard) => guard.expect[1] !== "active_contact_limit"))
   test(`the sweep gives a paused contact's row the guard's outcome: ${name}`, async () => {
     const run = await campaign([["1001", "2001"]]);
     await change();

@@ -12,6 +12,7 @@ import { signingKeyContext } from "../app/webhook-delivery.ts";
 import { CAMPAIGN_HOURLY_BUDGET, PRIVATE_REPLY_HOURLY_BUDGET } from "../instagram/send-quota.ts";
 import { getCampaignRun, startDueCampaignRuns } from "../app/campaign-runs.ts";
 import { resetTestSchema } from "../test-schema.ts";
+import { exceedActiveContactLimit } from "../app/workspace-fixture.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
@@ -73,7 +74,8 @@ async function rows() {
 }
 
 async function resetStoredFixture() {
-  await pool.query("TRUNCATE private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces, scheduled_steps CASCADE");
+  // The ledger has no foreign keys, so the workspace cascade leaves it alone.
+  await pool.query("TRUNCATE private_reply_outbox, instagram_comment_events, instagram_comment_rules, instagram_connections, workspaces, scheduled_steps, active_contacts CASCADE");
   await pool.query("INSERT INTO workspaces VALUES ('11111111-1111-4111-8111-111111111111')");
   await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,active) VALUES ($1,'11111111-1111-4111-8111-111111111111','123',true)", [connectionId]);
   await pool.query(
@@ -2069,6 +2071,103 @@ test("Cloudflare opt-out final guards block private follow and manual POST", asy
     status: "blocked",
     failure_code: "recipient_opted_out",
   });
+});
+
+test("Cloudflare final guards block private follow and manual POST of a workspace over its active contact limit", async () => {
+  const workspace = "11111111-1111-4111-8111-111111111111";
+  const { user } = await manualFixture();
+  await exceedActiveContactLimit(pool, workspace, connectionId);
+  let posts = 0;
+  mock.method(globalThis, "fetch", async (_input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      posts++;
+      return Response.json({ message_id: "must-not-send" });
+    }
+    return Response.json({ user_id: "123" });
+  });
+  assert.equal(await consume(), "ack");
+  assert.equal(posts, 0);
+  // Stopped before the provider call, so it is safe to retry; a retry passes the same check when it is created.
+  assert.deepEqual((await pool.query("SELECT status,failure_code,safe_to_retry FROM instagram_manual_replies")).rows[0], { status: "failed", failure_code: "active_contact_limit", safe_to_retry: true });
+  const { queueManualReply } = await import("../app/manual-replies.ts");
+  await assert.rejects(
+    queueManualReply(pool, user, connectionId, "456", new URLSearchParams(), { request_key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", text: "Blocked", expected_handoff_version: 1 }, true),
+    (error: unknown) => error instanceof Error && error.message === "active_contact_limit" && (error as { status?: number }).status === 409,
+  );
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM instagram_manual_replies")).rows[0].n, 1, "a refused reply writes nothing");
+
+  restoreMocks();
+  published = [];
+  sends = 0;
+  await resetStoredFixture();
+  let privatePosts = 0;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const graphUrl = new URL(String(input));
+    if (init?.method === "POST") {
+      privatePosts++;
+      return Response.json({ message_id: "must-not-send" });
+    }
+    if (graphUrl.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (graphUrl.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
+    return Response.json({ id: graphUrl.pathname.split("/").at(-1), from: { id: "sender-1" }, media: { id: "media-1" }, timestamp: new Date().toISOString() });
+  });
+  assert.equal((await worker.fetch(request(), env)).status, 200);
+  // The comment is stored and counted although the workspace is over its limit; only the reply stops.
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM active_contacts WHERE person_key='sender-1'")).rows[0].n, 1);
+  await exceedActiveContactLimit(pool, workspace, connectionId);
+  assert.equal(await consume(), "ack");
+  assert.equal(privatePosts, 0);
+  assert.deepEqual((await pool.query("SELECT status,failure_code,rate_limit_retries FROM private_reply_outbox WHERE comment_id='comment-1'")).rows[0], { status: "blocked", failure_code: "active_contact_limit", rate_limit_retries: 0 });
+
+  restoreMocks();
+  published = [];
+  sends = 0;
+  await resetStoredFixture();
+  await pool.query("UPDATE instagram_comment_rules SET follow_gate_enabled=true,confirmation_keyword='확인',follower_reply_text='Final',non_follower_reply_text='Follow'");
+  let followPosts = 0;
+  mock.method(globalThis, "fetch", async (input: URL | RequestInfo, init?: RequestInit) => {
+    const graphUrl = new URL(String(input));
+    if (init?.method === "POST") {
+      followPosts++;
+      return Response.json({ message_id: `follow-${followPosts}`, recipient_id: "456" });
+    }
+    if (graphUrl.pathname.endsWith("/me")) return Response.json({ user_id: "123" });
+    if (graphUrl.pathname.endsWith("/456")) return Response.json({ is_user_follow_business: true });
+    if (graphUrl.pathname.endsWith("/media-1")) return Response.json({ id: "media-1", owner: { id: "123" } });
+    return Response.json({ id: graphUrl.pathname.split("/").at(-1), from: { id: "456" }, media: { id: "media-1" }, timestamp: new Date().toISOString() });
+  });
+  assert.equal((await worker.fetch(request("follow-limit", "456"), env)).status, 200);
+  assert.equal(await consume(), "ack");
+  assert.equal(followPosts, 1);
+  await pool.query("UPDATE private_reply_outbox SET sent_at=now()-interval '1 second'");
+  await ingestMessages(pool, [{ accountId: "123", senderId: "456", messageId: "follow-limit-confirm", text: "확인", timestamp: new Date() }]);
+  // The limit is reached after the worker's own permission check, so only the beforeSend guard can see it.
+  const originalQuery = Pool.prototype.query;
+  let exceeded = false;
+  mock.method(Pool.prototype, "query", async function (this: Pool, sql: string, values?: unknown[]) {
+    if (!exceeded && sql.includes("flow.confirmed_at>now()-interval '24 hours'") && sql.includes("c.access_token_encrypted=$4")) {
+      exceeded = true;
+      await exceedActiveContactLimit(pool, workspace, connectionId);
+    }
+    return Reflect.apply(originalQuery, this, [sql, values]);
+  });
+  followPosts = 0;
+  assert.equal(await consume(), "ack");
+  assert.equal(exceeded, true);
+  assert.equal(followPosts, 0);
+  assert.deepEqual((await pool.query("SELECT status,failure_code FROM instagram_follow_conversations")).rows[0], { status: "blocked", failure_code: "active_contact_limit" });
+});
+
+test("an opted-out manual reply over the active contact limit keeps its terminal opt-out", async () => {
+  await manualFixture();
+  await exceedActiveContactLimit(pool, "11111111-1111-4111-8111-111111111111", connectionId);
+  await recordConsent("dm_recipient", "456", "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee");
+  mock.method(globalThis, "fetch", async (_input: URL | RequestInfo, init?: RequestInit) => {
+    if (init?.method === "POST") throw new Error("must not send");
+    return Response.json({ user_id: "123" });
+  });
+  assert.equal(await consume(), "ack");
+  assert.deepEqual((await pool.query("SELECT status,failure_code,safe_to_retry FROM instagram_manual_replies")).rows[0], { status: "failed", failure_code: "recipient_opted_out", safe_to_retry: false });
 });
 
 test("Cloudflare consent read failures defer private follow and manual before POST", async () => {

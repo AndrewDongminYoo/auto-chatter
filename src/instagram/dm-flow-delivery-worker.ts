@@ -4,6 +4,7 @@ import { instagramAdapter } from "./channel-adapter.ts";
 import { messagingRecipientOptedOut, type ConsentQueryable } from "./channel-consent.ts";
 import type { FollowSendContext } from "./follow-transport.ts";
 import { PreSendVerificationError, rateLimitRetryDelaysSeconds } from "./reply-worker.ts";
+import { ACTIVE_CONTACT_LIMIT, ACTIVE_CONTACT_LIMIT_UNAVAILABLE, activeContactLimitBlocks } from "../app/plans.ts";
 
 // The DM flow delivery worker (#291, docs/specs/2026-11-08-instagram-dm-start-triggers.md): it claims one pending
 // flow_dm_deliveries row of a connection, the first message of a run that a DM started, and sends it as one
@@ -99,6 +100,11 @@ export async function assertDmFlowDeliveryAllowed(pool: ConsentQueryable, claim:
       blocks.push("recipient_opted_out");
   } catch {
     retries.push("consent_unavailable");
+  }
+  try {
+    if (await activeContactLimitBlocks(pool, claim.workspaceId, claim.connectionId, { kind: "dm_recipient", id: row.recipient_id })) blocks.push(ACTIVE_CONTACT_LIMIT);
+  } catch {
+    retries.push(ACTIVE_CONTACT_LIMIT_UNAVAILABLE);
   }
   if (blocks.length) throw new PreSendVerificationError("block", blocks[0]);
   if (retries.length) throw new PreSendVerificationError("retry", retries[0]);

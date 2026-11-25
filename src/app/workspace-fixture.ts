@@ -1,4 +1,5 @@
 import type { Pool } from "pg";
+import { planLimits } from "./plans.ts";
 
 // Seeds one row in every exported table for one workspace; the export and workspace deletion DB tests share it.
 // Returns the IDs of the DM-trigger version, the DM start event and its run, which the export test looks up by ID.
@@ -348,4 +349,18 @@ export async function seedCampaignSends(pool: Pool, workspace: string, connectio
     [workspace, run, connection, count, rows.status ?? "pending", rows.providerCalled ?? false],
   );
   return run;
+}
+
+// Puts a workspace over its active contact limit (#52): `extra` more ledger rows than its plan includes, in the current
+// billing month of its time zone, under comment sender keys no test uses ("over-1", ...). With the default 1 the send
+// guards stop every send of the workspace; with 0 the workspace is at its limit and only a send to a person not yet
+// counted this month stops. Either way the guards answer active_contact_limit.
+export async function exceedActiveContactLimit(pool: Pick<Pool, "query">, workspace: string, connection: string, extra = 1): Promise<void> {
+  const plan = (await pool.query<{ plan: string }>("SELECT plan FROM workspaces WHERE id=$1", [workspace])).rows[0]!.plan;
+  await pool.query(
+    `INSERT INTO active_contacts(workspace_id,billing_month,connection_id,person_key_kind,person_key,first_activity_at,activity_kind,time_zone)
+     SELECT w.id,date_trunc('month',statement_timestamp() AT TIME ZONE w.time_zone)::date,$2,'comment_sender','over-'||n,statement_timestamp(),'comment',w.time_zone
+     FROM workspaces w CROSS JOIN generate_series(1,$3::int) n WHERE w.id=$1`,
+    [workspace, connection, planLimits(plan).active_contacts_per_month + extra],
+  );
 }

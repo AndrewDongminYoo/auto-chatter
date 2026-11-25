@@ -4,7 +4,7 @@ import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
 import { CAMPAIGN_PREVIEW_REASONS, campaignDraftDetail, evaluateCampaignPreview, transaction, utc } from "./campaign-drafts.ts";
 import { dueLocalSql, localDueSql } from "./inbox-reminders.ts";
 import { SCHEDULE_MIN_AHEAD, scheduleLocal } from "./manual-replies.ts";
-import { campaignAllowanceBody, campaignDueMonthSql, campaignSendAllowance, campaignSendsFit, type CampaignSendAllowance } from "./plans.ts";
+import { ACTIVE_CONTACT_LIMIT, activeContactLimitBlocks, campaignAllowanceBody, campaignDueMonthSql, campaignSendAllowance, campaignSendsFit, type CampaignSendAllowance } from "./plans.ts";
 
 // Execution approvals record what an administrator approved and when it should run. Nothing here queues, schedules
 // or sends a message; the campaign_start step (campaign-runs.ts, #36) starts one run per due approval while sending is
@@ -160,6 +160,9 @@ export async function approveCampaignDraft(pool: Pool, user: User, draftId: stri
       )
     ).rows[0];
     if (executed) return { error: "campaign_version_executed" as const, approval: await detail(client, workspace, executed.id) };
+    // A workspace over its active contact limit approves no campaign (#52). The check reads the current billing month,
+    // not the due month, whose ledger is still nearly empty; the delivery guard checks each row again when it sends.
+    if (await activeContactLimitBlocks(client, workspace, null, null)) throw new ApiError(409, ACTIVE_CONTACT_LIMIT);
     const scheduled = await readSchedule(client, workspace, request);
     // The same evaluation as the preview API, in this transaction and after the draft lock.
     const preview = (await evaluateCampaignPreview(client, workspace, draft))!;

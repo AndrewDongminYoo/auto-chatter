@@ -158,7 +158,7 @@ migration을 먼저 적용하면 기존 작업 공간은 `advanced`가 되고, �
 
 ## #52에 남은 일
 
-- 활성 연락처 한도. 계량과 표시는 [#51](https://github.com/AndrewDongminYoo/auto-chatter/issues/51)에서 구현했습니다([설계](2026-11-24-active-contact-ledger-design.md)).
+- 활성 연락처 한도. 계량과 표시는 [#51](https://github.com/AndrewDongminYoo/auto-chatter/issues/51)에서 구현했습니다([설계](2026-11-24-active-contact-ledger-design.md)). 집행은 [활성 연락처 한도 집행](2026-11-25-active-contact-limit-design.md)이 맡습니다.
 - AI 사용 예산.
 - 초과 사용 상한과 경고, 초과 승인.
 - 청구월과 결제를 통한 요금제 변경([#54](https://github.com/AndrewDongminYoo/auto-chatter/issues/54)).

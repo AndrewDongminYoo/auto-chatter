@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import { InstagramFollowTransport } from "./follow-transport.ts";
 import { PreSendVerificationError, type PrivateReplyRequest } from "./reply-worker.ts";
 import { deliveryRecipientOptedOut } from "./channel-consent.ts";
+import { assertActiveContactLimit } from "./active-contact-limit.ts";
 
 // Environment credentials belong to one explicitly configured, non-OAuth connection.
 export function createNodeFollowTransport(
@@ -52,6 +53,7 @@ export function createNodeFollowTransport(
         if (error instanceof PreSendVerificationError) throw error;
         throw new PreSendVerificationError("retry", "consent_unavailable");
       }
+      await assertActiveContactLimit(pool, row.workspace_id, config.connectionId, { kind: "comment_sender", id: row.sender_id });
     },
   });
 }
@@ -90,4 +92,5 @@ export async function assertNodePrivateReplyAllowed(pool: Pool, config: { connec
     if (error instanceof PreSendVerificationError) throw error;
     throw new PreSendVerificationError("retry", "consent_unavailable");
   }
+  await assertActiveContactLimit(pool, row.workspace_id, config.connectionId, { kind: "comment_sender", id: row.sender_id });
 }

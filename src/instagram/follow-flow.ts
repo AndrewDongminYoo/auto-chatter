@@ -8,6 +8,7 @@ import { PreSendVerificationError, ProviderRateLimitedError, ProviderRejectedErr
 import { resumeRepliedFlowRun } from "./store.ts";
 import { lockDmStartSenders, startDmTriggerFlow } from "./dm-start-trigger.ts";
 import { recordActiveContacts } from "./active-contacts.ts";
+import { ACTIVE_CONTACT_LIMIT, ACTIVE_CONTACT_LIMIT_UNAVAILABLE, activeContactLimitBlocks } from "../app/plans.ts";
 
 const normalized = (text: string) => text.normalize("NFC").trim().toLowerCase();
 export async function ingestMessages(pool: Pool, messages: readonly InstagramMessage[], now = new Date()): Promise<void> {
@@ -331,6 +332,13 @@ export async function processNextFollowReply(pool: Pool, connectionId: string, t
     } catch {
       return "consent_unavailable";
     }
+    // After the opt-out check, so an opted-out reply keeps its own code. The follow message's ledger person is the
+    // comment sender of its private reply (record_active_contact_activity).
+    try {
+      if (await activeContactLimitBlocks(pool, replyScope.workspace_id, connectionId, { kind: "comment_sender", id: replyScope.sender_id })) return "limited";
+    } catch {
+      return "limit_unavailable";
+    }
     const result = await pool.query(
       `SELECT NOT EXISTS(SELECT 1 FROM instagram_contact_automation automation WHERE automation.workspace_id=reply.workspace_id
      AND automation.connection_id=reply.connection_id AND automation.sender_id=reply.sender_id AND (automation.paused OR automation.handoff_paused)) AS automation_active
@@ -350,11 +358,16 @@ export async function processNextFollowReply(pool: Pool, connectionId: string, t
   const checkPermission = async () => {
     const permission = await permitted();
     if (permission === "allowed") return true;
-    await update(
-      permission === "paused" || permission === "consent_unavailable" ? "pending" : "blocked",
-      permission === "paused" ? "contact_paused" : permission === "consent_unavailable" ? "consent_unavailable" : permission === "opted_out" ? "recipient_opted_out" : "delivery_not_permitted",
-      permission === "paused" || permission === "consent_unavailable" ? 60 : 0,
-    );
+    const deferred = permission === "paused" || permission === "consent_unavailable" || permission === "limit_unavailable";
+    const codes = {
+      consent_unavailable: "consent_unavailable",
+      denied: "delivery_not_permitted",
+      limit_unavailable: ACTIVE_CONTACT_LIMIT_UNAVAILABLE,
+      limited: ACTIVE_CONTACT_LIMIT,
+      opted_out: "recipient_opted_out",
+      paused: "contact_paused",
+    } as const;
+    await update(deferred ? "pending" : "blocked", codes[permission], deferred ? 60 : 0);
     return false;
   };
   if (now().getTime() - row.confirmed_at?.getTime() >= 24 * 3600000) {

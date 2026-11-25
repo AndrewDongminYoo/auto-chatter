@@ -7,6 +7,7 @@ import { deliveryRecipientOptedOut, deliveryRecipientOptedOutSql, type ConsentQu
 import type { FollowSendContext } from "./follow-transport.ts";
 import { PreSendVerificationError } from "./reply-worker.ts";
 import { campaignBudgetOpenSql } from "./send-quota.ts";
+import { ACTIVE_CONTACT_LIMIT, ACTIVE_CONTACT_LIMIT_UNAVAILABLE, activeContactLimitBlocks } from "../app/plans.ts";
 
 // The campaign delivery worker (#36, docs/specs/2026-10-27-campaign-runs.md): it claims one pending
 // campaign_deliveries row of a connection and sends the approval's stored body to the row's stored DM recipient as
@@ -97,6 +98,11 @@ export async function assertCampaignDeliveryAllowed(pool: ConsentQueryable, clai
     }
     if (stage === 5) blocks.push("marketing_consent_required");
     else if (stage === 6) blocks.push("reply_window_closed");
+  }
+  try {
+    if (await activeContactLimitBlocks(pool, claim.workspaceId, claim.connectionId, { kind: "dm_recipient", id: row.recipient_id })) blocks.push(ACTIVE_CONTACT_LIMIT);
+  } catch {
+    retries.push(ACTIVE_CONTACT_LIMIT_UNAVAILABLE);
   }
   if (blocks.length) throw new PreSendVerificationError("block", blocks[0]);
   if (retries.length) throw new PreSendVerificationError("retry", retries[0]);
