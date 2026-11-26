@@ -185,6 +185,22 @@ test("durableLimits gives API writes 120 per user per minute and 3,000 per works
   ]);
 });
 
+test("a caller's limit replaces the default count in the same window object (#52)", async () => {
+  const calls: { name: string; limit: number; period: number }[] = [];
+  const limits = durableLimits({
+    idFromName: (name: string) => name,
+    get: (id: unknown) => ({
+      fetch: async (_input: string, init?: RequestInit) => {
+        calls.push({ name: String(id), ...(JSON.parse(String(init?.body)) as { limit: number; period: number }) });
+        return Response.json({ success: true });
+      },
+    }),
+  });
+  await limits.API_WRITE_WORKSPACE_LIMIT.limit({ key: "workspace", limit: 500 });
+  // A plan change keeps the object name, so the count of the current window carries over.
+  assert.deepEqual(calls, [{ name: "api-write-workspace:workspace", limit: 500, period: 3_600_000 }]);
+});
+
 test("durableLimits fails closed when the limiter object does not answer", async () => {
   const limits = durableLimits({
     idFromName: (name: string) => name,

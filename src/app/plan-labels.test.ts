@@ -37,13 +37,13 @@ const entitlements = (plan: PlanKey, seats: number, connections: number, campaig
   usage: { seats, connections, campaign_sends: campaignSends },
 });
 
-test("the catalog holds the five plans with the agreed seat, connection, monthly campaign send and active contact limits", () => {
+test("the catalog holds the five plans with the agreed seat, connection, monthly campaign send, active contact and hourly API write limits", () => {
   assert.deepEqual(PLANS, {
-    free: { seats: 1, connections: 1, campaign_sends_per_month: 0, active_contacts_per_month: 25 },
-    essential: { seats: 2, connections: 2, campaign_sends_per_month: 1000, active_contacts_per_month: 250 },
-    pro: { seats: 3, connections: 3, campaign_sends_per_month: 5000, active_contacts_per_month: 2500 },
-    business: { seats: 5, connections: 5, campaign_sends_per_month: 20000, active_contacts_per_month: 7500 },
-    advanced: { seats: 10, connections: 10, campaign_sends_per_month: 50000, active_contacts_per_month: 25000 },
+    free: { seats: 1, connections: 1, campaign_sends_per_month: 0, active_contacts_per_month: 25, api_writes_per_hour: 500 },
+    essential: { seats: 2, connections: 2, campaign_sends_per_month: 1000, active_contacts_per_month: 250, api_writes_per_hour: 1000 },
+    pro: { seats: 3, connections: 3, campaign_sends_per_month: 5000, active_contacts_per_month: 2500, api_writes_per_hour: 1500 },
+    business: { seats: 5, connections: 5, campaign_sends_per_month: 20000, active_contacts_per_month: 7500, api_writes_per_hour: 3000 },
+    advanced: { seats: 10, connections: 10, campaign_sends_per_month: 50000, active_contacts_per_month: 25000, api_writes_per_hour: 6000 },
   });
   for (const key of Object.keys(PLANS)) assert.ok(isPlanKey(key), key);
   for (const value of ["gold", "", "toString", "__proto__", null, 1]) assert.equal(isPlanKey(value), false);

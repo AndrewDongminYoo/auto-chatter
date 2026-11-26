@@ -398,7 +398,7 @@ test("every role reads the plan, its limits and the usage; the owner's member li
   await ledgerRows(otherWorkspaceId, 0, ["7001"]);
   const expected = {
     plan: "business",
-    limits: { seats: 5, connections: 5, campaign_sends_per_month: 20000, active_contacts_per_month: 7500 },
+    limits: { seats: 5, connections: 5, campaign_sends_per_month: 20000, active_contacts_per_month: 7500, api_writes_per_hour: 3000 },
     usage: {
       seats: 3,
       connections: 1,
@@ -440,7 +440,7 @@ test("the campaign usage counts this month's delivery rows except those cancelle
   });
   await seedCampaignSends(pool, workspaceId, connection, owner.id, 6, "now()-interval '40 days'");
   const entitlements = await workspaceEntitlements(pool, workspaceId);
-  assert.deepEqual(entitlements.limits, { seats: 2, connections: 2, campaign_sends_per_month: 1000, active_contacts_per_month: 250 });
+  assert.deepEqual(entitlements.limits, { seats: 2, connections: 2, campaign_sends_per_month: 1000, active_contacts_per_month: 250, api_writes_per_hour: 1000 });
   assert.deepEqual({ ...entitlements.usage, active_contacts: undefined }, { seats: 1, connections: 0, campaign_sends: 5, active_contacts: undefined });
   // Another workspace's rows never count.
   assert.equal((await workspaceEntitlements(pool, otherWorkspaceId)).usage.campaign_sends, 0);

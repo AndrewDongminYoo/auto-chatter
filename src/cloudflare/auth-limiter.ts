@@ -63,13 +63,14 @@ export class AuthLimiter {
 // 60 minutes can span two of them; the project allowance is half of Supabase's 30 mails per hour so that even a
 // burst at a window boundary stays within the provider quota. The workspace export and the Instagram OAuth start
 // are limited per user (#166). Signed-in API writes are limited per user and per workspace, and the inbox list per
-// user (#167).
+// user (#167). The workspace write limit takes the plan's count from the caller (#52); its period never changes,
+// because the stored window keeps the end set by its first request.
 export function durableLimits(namespace: LimiterNamespace): Required<AuthRateLimitEnv> {
   const limiter = (name: string, limit: number, period: number) => ({
-    async limit({ key }: { key: string }): Promise<{ success: boolean }> {
+    async limit({ key, limit: count = limit }: { key: string; limit?: number }): Promise<{ success: boolean }> {
       const response = await namespace.get(namespace.idFromName(`${name}:${key}`)).fetch("https://auth-limiter/hit", {
         method: "POST",
-        body: JSON.stringify({ limit, period }),
+        body: JSON.stringify({ limit: count, period }),
       });
       if (!response.ok) throw new Error("Auth limiter unavailable");
       return { success: ((await response.json()) as { success?: unknown }).success === true };

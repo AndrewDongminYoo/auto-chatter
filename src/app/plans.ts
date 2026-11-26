@@ -7,13 +7,15 @@ import { ApiError } from "./auth.ts";
 // counts campaign delivery rows per calendar month in the workspace time zone; free approves no campaign.
 // active_contacts_per_month follows ManyChat's 2026 included active contacts; it is the current enforcement value, not a
 // launch price commitment (docs/specs/2026-11-25-active-contact-limit-design.md).
+// api_writes_per_hour is the per-workspace signed-in API write limit, a fixed one-hour window roughly in proportion to
+// seats; advanced stays above the former fixed 3,000 (docs/specs/2026-10-12-api-request-limits.md).
 export const PLANS = {
-  free: { seats: 1, connections: 1, campaign_sends_per_month: 0, active_contacts_per_month: 25 },
-  essential: { seats: 2, connections: 2, campaign_sends_per_month: 1000, active_contacts_per_month: 250 },
-  pro: { seats: 3, connections: 3, campaign_sends_per_month: 5000, active_contacts_per_month: 2500 },
-  business: { seats: 5, connections: 5, campaign_sends_per_month: 20000, active_contacts_per_month: 7500 },
-  advanced: { seats: 10, connections: 10, campaign_sends_per_month: 50000, active_contacts_per_month: 25000 },
-} as const satisfies Record<string, { seats: number; connections: number; campaign_sends_per_month: number; active_contacts_per_month: number }>;
+  free: { seats: 1, connections: 1, campaign_sends_per_month: 0, active_contacts_per_month: 25, api_writes_per_hour: 500 },
+  essential: { seats: 2, connections: 2, campaign_sends_per_month: 1000, active_contacts_per_month: 250, api_writes_per_hour: 1000 },
+  pro: { seats: 3, connections: 3, campaign_sends_per_month: 5000, active_contacts_per_month: 2500, api_writes_per_hour: 1500 },
+  business: { seats: 5, connections: 5, campaign_sends_per_month: 20000, active_contacts_per_month: 7500, api_writes_per_hour: 3000 },
+  advanced: { seats: 10, connections: 10, campaign_sends_per_month: 50000, active_contacts_per_month: 25000, api_writes_per_hour: 6000 },
+} as const satisfies Record<string, { seats: number; connections: number; campaign_sends_per_month: number; active_contacts_per_month: number; api_writes_per_hour: number }>;
 
 export type PlanKey = keyof typeof PLANS;
 export type PlanLimits = (typeof PLANS)[PlanKey];

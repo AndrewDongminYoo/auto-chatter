@@ -1,7 +1,8 @@
 import { ApiError, isRecord } from "./auth.ts";
 
 export interface RateLimitBinding {
-  limit(input: { key: string }): Promise<{ success: boolean }>;
+  // `limit` replaces the binding's default count for this request; the key's window is the same object either way.
+  limit(input: { key: string; limit?: number }): Promise<{ success: boolean }>;
 }
 
 export interface AuthRateLimitEnv {
