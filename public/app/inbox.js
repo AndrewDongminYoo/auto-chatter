@@ -1302,6 +1302,18 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     byId("inbox-messages").replaceChildren(fragment);
   }
 
+  // A withdrawal keeps the message ID and time, so a list loaded before it still shows the withdrawn text (#20). When
+  // the loaded page holds the list row's newest message (same time; the newest page is in ID order, highest first, as
+  // the list breaks ties), the row takes that message's kind and preview.
+  function refreshListedPreview(state, rows) {
+    const entry = listed.get(conversationKey(state));
+    const newest = rows.reduce((found, row) => (!found || Date.parse(row.message_at) > Date.parse(found.message_at) ? row : found), null);
+    if (!entry || !newest || Date.parse(newest.message_at) !== Date.parse(entry.row.last_message_at)) return;
+    entry.row.last_message_kind = newest.deleted_at ? "deleted" : newest.kind;
+    entry.row.last_message_preview = [...newest.text].slice(0, 80).join("");
+    rowContent(entry.button, entry.row);
+  }
+
   async function loadConversation(older = false) {
     const state = selected;
     if (!state || (older && (state.loading || (!state.beforeMessages && !state.beforeReplies)))) return;
@@ -1326,6 +1338,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         state.replies.clear();
       }
       for (const row of messages.messages) state.messages.set(row.id, row);
+      if (!older) refreshListedPreview(state, messages.messages);
       if (messages.state && writes === state.convoWrites) state.convo = messages.state;
       if (messages.label_set && labelWrites === state.labelWrites) showLabelSet(state, messages.label_set);
       if ("reminder" in messages && reminderWrites === state.reminderWrites) showReminder(state, messages.reminder);
