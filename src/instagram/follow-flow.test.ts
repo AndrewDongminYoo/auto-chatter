@@ -10,16 +10,79 @@ const message = {
   timestamp: Date.now(),
   message: { mid: "message-1", text: "확인" },
 };
-test("messages accept inbound text only and reject echo, self, deleted and mismatched recipients", () => {
+test("messages accept inbound text only and reject echo, self and mismatched recipients", () => {
   assert.equal(parseMessageEvents(body([message])).length, 1);
   for (const changed of [
     { ...message, message: { ...message.message, is_echo: true } },
     { ...message, sender: { id: "123" } },
     { ...message, recipient: { id: "999" } },
-    { ...message, message: { ...message.message, is_deleted: true } },
+    { ...message, message: { ...message.message, is_deleted: true, is_echo: true } },
+    { ...message, message: { ...message.message, is_deleted: true }, sender: { id: "123" } },
+    { ...message, message: { ...message.message, is_deleted: true }, recipient: { id: "999" } },
     { ...message, timestamp: "bad" },
   ])
     assert.deepEqual(parseMessageEvents(body([changed])), []);
+});
+
+test("an attachment, an unsupported message and a deleted event are parsed without their media (#20)", () => {
+  const at = new Date(message.timestamp);
+  const parsed = parseMessageEvents(
+    body([
+      {
+        ...message,
+        message: {
+          mid: "a1",
+          attachments: [
+            { type: "image", payload: { url: "https://cdn.example/secret.jpg" } },
+            { type: "ig_reel", payload: { url: "https://cdn.example/r.mp4", title: "릴스 제목", reel_video_id: "77" } },
+            { type: "sticker_pack", payload: { url: "https://cdn.example/s.png" } },
+            { type: 7 },
+          ],
+        },
+      },
+      { ...message, message: { mid: "t1", text: "사진 보내요", attachments: [{ type: "image", payload: { url: "https://cdn.example/x.jpg" } }] } },
+      { ...message, message: { mid: "u1", is_unsupported: true } },
+      { ...message, message: { mid: "m0", is_deleted: true } },
+      { timestamp: message.timestamp, message: { mid: "m9", is_deleted: true } },
+      { ...message, message: { mid: "e1", attachments: [] } },
+      { ...message, message: { mid: "e2", text: null, attachments: [{ type: "image" }] } },
+    ]),
+  );
+  assert.deepEqual(parsed, [
+    { accountId: "123", senderId: "456", messageId: "a1", text: "", timestamp: at, content: "attachment", attachments: [{ type: "image" }, { type: "ig_reel", title: "릴스 제목" }, { type: "other" }] },
+    { accountId: "123", senderId: "456", messageId: "t1", text: "사진 보내요", timestamp: at, attachments: [{ type: "image" }] },
+    { accountId: "123", senderId: "456", messageId: "u1", text: "", timestamp: at, content: "unsupported" },
+    { accountId: "123", senderId: "456", messageId: "m0", text: "", timestamp: at, content: "deleted" },
+    { accountId: "123", senderId: "", messageId: "m9", text: "", timestamp: at, content: "deleted" },
+  ]);
+  assert.doesNotMatch(JSON.stringify(parsed), /cdn\.example|reel_video_id|"77"/);
+});
+
+test("attachment lists keep ten items and drop an empty, overlong or NUL title", () => {
+  const items = Array.from({ length: 12 }, (_, index) => ({ type: "file", payload: { title: index === 0 ? "" : index === 1 ? "가".repeat(201) : index === 2 ? "a\u0000b" : `f${index}` } }));
+  const [parsed] = parseMessageEvents(body([{ ...message, message: { mid: "a2", attachments: items } }]));
+  assert.equal(parsed?.attachments?.length, 10);
+  assert.deepEqual(parsed?.attachments?.slice(0, 4), [{ type: "file" }, { type: "file" }, { type: "file" }, { type: "file", title: "f3" }]);
+  const [exact] = parseMessageEvents(body([{ ...message, message: { mid: "a3", attachments: [{ type: "file", payload: { title: "가".repeat(200) } }] } }]));
+  assert.equal(exact?.attachments?.[0]?.title, "가".repeat(200));
+  // jsonb refuses an unpaired surrogate, so that title is dropped and a valid pair is kept.
+  const lone = `a${String.fromCharCode(0xd800)}b`;
+  const pair = `a${String.fromCodePoint(0x1f600)}b`;
+  const [surrogates] = parseMessageEvents(
+    body([
+      {
+        ...message,
+        message: {
+          mid: "a4",
+          attachments: [
+            { type: "image", payload: { title: lone } },
+            { type: "image", payload: { title: pair } },
+          ],
+        },
+      },
+    ]),
+  );
+  assert.deepEqual(surrogates?.attachments, [{ type: "image" }, { type: "image", title: pair }]);
 });
 test("messages and postbacks with a NUL in the message ID are dropped before any query sees them", () => {
   const mid = "message\u00001";

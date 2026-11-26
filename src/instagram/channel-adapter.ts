@@ -1,6 +1,6 @@
 import type { ChannelAdapter, ChannelCapabilities, ChannelEvent, ContentType } from "../channels/contract.ts";
 import { parseCommentEvents, type InstagramComment } from "./webhook.ts";
-import { parseMessageEvents, type InstagramMessage } from "./message-events.ts";
+import { parseMessageEvents, type InstagramAttachment, type InstagramMessage } from "./message-events.ts";
 import { PreSendVerificationError, ProviderRateLimitedError, ProviderRejectedError } from "./reply-worker.ts";
 
 type Surface = "cloudflare_oauth" | "node_instagram" | "node_facebook";
@@ -51,13 +51,19 @@ export const instagramAdapter: ChannelAdapter = {
         ...(comment.parentId === undefined ? {} : { parentId: comment.parentId }),
         ...(comment.senderUsername === undefined ? {} : { actorName: comment.senderUsername }),
       })),
-      ...messages.map((message): ChannelEvent => ({
-        account: { channel: "instagram", accountId: message.accountId },
-        receipt: { family: "message", providerId: message.messageId },
-        actor: { kind: "dm_recipient", value: message.senderId },
-        occurredAt: message.timestamp,
-        ...(message.confirmationReplyId === undefined ? { kind: "text_message", text: message.text } : { kind: "confirmation_postback", title: message.text, replyBinding: message.confirmationReplyId }),
-      })),
+      ...messages.map((message): ChannelEvent => {
+        const base = {
+          account: { channel: "instagram", accountId: message.accountId },
+          receipt: { family: "message" as const, providerId: message.messageId },
+          actor: { kind: "dm_recipient", value: message.senderId },
+          occurredAt: message.timestamp,
+        };
+        if (message.content === "attachment") return { ...base, kind: "attachment_message", attachments: message.attachments ?? [] };
+        if (message.content === "unsupported") return { ...base, kind: "unsupported_message" };
+        if (message.content === "deleted") return { ...base, kind: "message_deleted" };
+        if (message.confirmationReplyId !== undefined) return { ...base, kind: "confirmation_postback", title: message.text, replyBinding: message.confirmationReplyId };
+        return { ...base, kind: "text_message", text: message.text, ...(message.attachments ? { attachments: message.attachments } : {}) };
+      }),
     ];
   },
   acceptSendResult(value) {
@@ -98,15 +104,16 @@ export function partitionInstagramEvents(events: readonly ChannelEvent[]): {
         text: event.text,
         ...(event.parentId === undefined ? {} : { parentId: event.parentId }),
       });
-    else
-      messages.push({
-        accountId: event.account.accountId,
-        messageId: event.receipt.providerId,
-        senderId: event.actor.value,
-        text: event.kind === "text_message" ? event.text : event.title,
-        timestamp: event.occurredAt,
-        ...(event.kind === "confirmation_postback" ? { confirmationReplyId: event.replyBinding } : {}),
-      });
+    else {
+      const base = { accountId: event.account.accountId, messageId: event.receipt.providerId, senderId: event.actor.value, timestamp: event.occurredAt };
+      // The adapter produced these attachments from parseMessageEvents, so their types are the parser's types.
+      const attachments = (value: readonly { type: string; title?: string }[]) => value as InstagramAttachment[];
+      if (event.kind === "attachment_message") messages.push({ ...base, text: "", content: "attachment", attachments: attachments(event.attachments) });
+      else if (event.kind === "unsupported_message") messages.push({ ...base, text: "", content: "unsupported" });
+      else if (event.kind === "message_deleted") messages.push({ ...base, text: "", content: "deleted" });
+      else if (event.kind === "confirmation_postback") messages.push({ ...base, text: event.title, confirmationReplyId: event.replyBinding });
+      else messages.push({ ...base, text: event.text, ...(event.attachments ? { attachments: attachments(event.attachments) } : {}) });
+    }
   }
   return { comments, messages };
 }

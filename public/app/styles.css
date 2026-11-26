@@ -1359,6 +1359,32 @@ select:disabled {
 #inbox-messages .bubble {
   white-space: pre-wrap;
 }
+/* A received message is a filled bubble as wide as its text in both schemes (#20). The rule preview on the
+   automation screen keeps its outlined bubble. */
+#inbox-messages .bubble.incoming {
+  width: fit-content;
+  max-width: 80%;
+  background: var(--muted);
+  border-color: transparent;
+}
+/* A notice is service text, not the sender's words: no fill, a dashed outline, muted text and a leading icon. */
+#inbox-messages .bubble.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted-foreground);
+}
+#inbox-messages .message-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+#inbox-messages .message-note .icon {
+  width: 16px;
+  height: 16px;
+}
 #inbox-conversations button {
   text-align: left;
   width: 100%;

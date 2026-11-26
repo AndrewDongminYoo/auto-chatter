@@ -52,7 +52,8 @@ FROM (
   FROM flow_dm_deliveries WHERE status='sent'
   UNION ALL
   SELECT workspace_id,connection_id,'dm_recipient',recipient_id,least(message_at,received_at),'dm_received'
-  FROM instagram_inbox_messages
+  -- A withdrawal-first row (#20) carries the withdrawal time, not a received DM, as ingestion does not count it.
+  FROM instagram_inbox_messages WHERE kind<>'deleted'
   UNION ALL
   SELECT workspace_id,connection_id,'dm_recipient',sender_id,least(message_at,created_at),'dm_received'
   FROM instagram_dm_start_events

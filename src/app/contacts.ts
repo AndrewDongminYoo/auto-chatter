@@ -360,14 +360,16 @@ export function segmentConditionSql(workspaceId: string, conditions: ContactCond
   const dmConsentMatches = `($16::text IS NULL OR (e.connection_id,e.sender_id) IN (SELECT dm.connection_id,dm.sender_id FROM dm_verified dm
     WHERE CASE WHEN $17::text='no_record' THEN NOT EXISTS(SELECT 1 ${dmConsentScope})
     ELSE EXISTS(SELECT 1 ${dmConsentScope} AND state.decision=CASE WHEN $17='granted' THEN 'grant' ELSE 'revoke' END) END))`;
-  // DM activity: a verified recipient whose latest stored inbox message (text or postback) in its own connection
-  // lies in [as_of - $18 days, as_of), as last_comment_days reads the latest comment. Like DM consent, any verified
+  // DM activity: a verified recipient whose latest stored inbox message (text, postback, attachment or unsupported) in
+  // its own connection lies in [as_of - $18 days, as_of), as last_comment_days reads the latest comment. A
+  // withdrawal-first 'deleted' row (#20) carries the withdrawal time, not a received DM, so it is skipped. Like DM consent, any verified
   // recipient may match, not necessarily the one that matches DM consent. It reads stored messages only: it opens
   // no messaging window and decides no delivery eligibility. The latest message is one probe of
   // instagram_inbox_messages_latest_idx (migration 059), so a long history is not read in full.
   const dmActivityMatches = `($18::int IS NULL OR (e.connection_id,e.sender_id) IN (SELECT dm.connection_id,dm.sender_id FROM dm_verified dm
     CROSS JOIN LATERAL (SELECT message.message_at AS last_message_at FROM instagram_inbox_messages message
       WHERE message.workspace_id=$1 AND message.connection_id=dm.connection_id AND message.recipient_id=dm.recipient_id
+        AND message.kind<>'deleted'
       ORDER BY message.message_at DESC LIMIT 1) latest
     WHERE latest.last_message_at>=(SELECT as_of - $18::int * interval '24 hours' FROM evaluation)
       AND latest.last_message_at<(SELECT as_of FROM evaluation)))`;

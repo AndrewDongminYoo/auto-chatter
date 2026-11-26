@@ -25,7 +25,7 @@ export async function manualReplyStatus(pool: ConsentQueryable, row: Omit<Manual
         AND r.provider_message_id IS NOT NULL AND length(btrim(r.provider_message_id))>0 AND r.sent_at<=clock_timestamp()
     ) SELECT c.workspace_id::text,c.id::text AS connection_id,c.active AS connection_active,c.inbox_enabled,c.send_enabled,c.access_token_encrypted,c.access_token_encrypted IS DISTINCT FROM $4::text AS token_changed,c.token_expires_at>clock_timestamp() AS token_valid,c.send_paused_until>clock_timestamp() AS cooldown,c.account_id,h.active AS handoff_active,h.version,h.sender_id,a.handoff_paused,
     (SELECT count(DISTINCT sender_id)=1 AND bool_or(fresh) AND min(sender_id)=h.sender_id FROM candidates) AS identity_verified,
-    (SELECT max(message_at) FROM instagram_inbox_messages m WHERE m.workspace_id=c.workspace_id AND m.connection_id=c.id AND m.recipient_id=$3 AND m.kind='text') AS last_inbound,
+    (SELECT max(message_at) FROM instagram_inbox_messages m WHERE m.workspace_id=c.workspace_id AND m.connection_id=c.id AND m.recipient_id=$3 AND m.kind IN ('text','attachment','unsupported')) AS last_inbound,
     clock_timestamp() AS checked_at,
     EXISTS(SELECT 1 FROM instagram_manual_replies unresolved WHERE unresolved.workspace_id=c.workspace_id AND unresolved.connection_id=c.id AND unresolved.recipient_id=$3 AND unresolved.status='unknown' AND unresolved.resolved_at IS NULL) AS blocked_by_unknown
     FROM instagram_connections c LEFT JOIN instagram_inbox_handoffs h ON h.workspace_id=c.workspace_id AND h.connection_id=c.id AND h.recipient_id=$3

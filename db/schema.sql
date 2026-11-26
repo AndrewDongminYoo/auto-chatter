@@ -333,11 +333,23 @@ CREATE TABLE IF NOT EXISTS instagram_inbox_messages (
   recipient_id text NOT NULL CHECK(recipient_id ~ '^[0-9]+$'),
   message_id text NOT NULL,
   text text NOT NULL CHECK(length(text)<=10000),
-  kind text NOT NULL CHECK(kind IN ('text','postback')),
+  kind text NOT NULL CHECK(kind IN ('text','postback','attachment','unsupported','deleted')),
   message_at timestamptz NOT NULL,
   received_at timestamptz NOT NULL DEFAULT now(),
+  -- The kind and optional title of each received attachment (#20), never a media URL or media ID.
+  attachments jsonb,
+  -- When the sender withdrew the message; the stored text and attachments are cleared at the same time.
+  deleted_at timestamptz,
   FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id),
-  UNIQUE(connection_id,message_id)
+  UNIQUE(connection_id,message_id),
+  CONSTRAINT instagram_inbox_messages_content CHECK(
+    (attachments IS NULL OR (jsonb_typeof(attachments)='array' AND jsonb_array_length(attachments) BETWEEN 1 AND 10))
+    AND (kind<>'attachment' OR attachments IS NOT NULL OR deleted_at IS NOT NULL)
+    AND (kind NOT IN ('attachment','unsupported','deleted') OR text='')
+    AND (kind<>'deleted' OR deleted_at IS NOT NULL)
+    AND (kind<>'postback' OR attachments IS NULL)
+    AND (deleted_at IS NULL OR (text='' AND attachments IS NULL))
+  )
 );
 CREATE INDEX IF NOT EXISTS instagram_inbox_messages_conversation_idx
   ON instagram_inbox_messages(workspace_id,connection_id,recipient_id,id DESC);

@@ -9,6 +9,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   const states = new Map();
   // Listed conversation buttons by key, so a read mark can update its unread badge without reloading the list.
   const listed = new Map();
+  // One start sequence for list and conversation requests, so a listed preview keeps the newer source (#20).
+  let previewSeq = 0;
   let epoch = 0,
     searchText = "",
     listRequest = 0,
@@ -150,7 +152,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     button.replaceChildren(
       head,
       ...(row.sender_username ? [node("span", `@${row.sender_username}`, "conversation-line conversation-sender")] : []),
-      node("span", row.last_message_preview ?? "", "conversation-line conversation-snippet"),
+      node("span", messagePreview(row.last_message_kind, row.last_message_preview), "conversation-line conversation-snippet"),
       node("span", `DM 사용자 ${formatText(row.recipient_id)}`, "conversation-line conversation-id"),
       node("span", `${formatCount(row.message_count, { useGrouping: false })}개 · ${date(row.last_message_at)}`, "conversation-line"),
       node("span", summary(row.state), "conversation-line"),
@@ -1252,6 +1254,23 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     item.append(details);
   }
 
+  // Line icons for the message notices, drawn like the navigation icons in index.html.
+  const noticePaths = {
+    attachment: "M20 11.5l-7.8 7.8a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8",
+    deleted: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z M5.6 5.6l12.8 12.8",
+    unsupported: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z M12 7.5v5.5 M12 16.5v.01",
+  };
+  function noticeIcon(kind) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "icon");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", noticePaths[kind]);
+    svg.append(path);
+    return svg;
+  }
+
   function timeline(state) {
     const rows = [...[...state.messages.values()].map((message) => ({ time: message.message_at, id: `m:${message.id}`, message })), ...[...state.replies.values()].map((reply) => ({ time: reply.created_at, id: `r:${reply.id}`, reply }))].sort(
       (a, b) => Date.parse(a.time) - Date.parse(b.time) || a.id.localeCompare(b.id),
@@ -1263,11 +1282,40 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         continue;
       }
       const item = node("article", "", "inbox-message incoming-message");
-      item.append(node("p", row.message.text, "bubble incoming"), node("p", `${row.message.kind === "postback" ? "버튼 응답 · " : "수신 · "}${date(row.time)}`, "hint"));
+      // Attachments, unsupported and withdrawn messages show a text notice with an icon, drawn apart from the sender's
+      // own words; the service never stores their media (#20).
+      const content = messageContent(row.message);
+      if (content.notice) {
+        const bubble = node("p", "", `bubble incoming notice notice-${content.notice}`);
+        bubble.append(noticeIcon(content.notice), node("span", content.body));
+        item.append(bubble);
+      } else item.append(node("p", content.body, "bubble incoming"));
+      // A typed DM's attachments are named under its bubble with the clip icon; a notice bubble already shows it.
+      if (content.note && content.notice) item.append(node("p", content.note, "hint"));
+      else if (content.note) {
+        const note = node("p", "", "hint message-note");
+        note.append(noticeIcon("attachment"), node("span", content.note));
+        item.append(note);
+      }
+      item.append(node("p", `${row.message.kind === "postback" ? "버튼 응답 · " : "수신 · "}${date(row.time)}`, "hint"));
       fragment.append(item);
     }
     if (!rows.length) fragment.append(node("p", "보관한 메시지가 없습니다.", "hint"));
     byId("inbox-messages").replaceChildren(fragment);
+  }
+
+  // A withdrawal keeps the message ID and time, so a list loaded before it still shows the withdrawn text (#20). The
+  // conversation response carries the newest message's kind and preview as the list picks them (`latest`), so the row
+  // takes them whatever page loaded. List and conversation requests share one start sequence (`seq`): a row that a
+  // list request started after this conversation read already set is newer, so the response leaves it alone. The count
+  // and time stay until the list reloads, as before.
+  function refreshListedPreview(state, latest, seq) {
+    const entry = listed.get(conversationKey(state));
+    if (!entry || !latest || (entry.row.preview_seq ?? 0) > seq) return;
+    entry.row.last_message_kind = latest.last_message_kind;
+    entry.row.last_message_preview = latest.last_message_preview;
+    entry.row.preview_seq = seq;
+    rowContent(entry.button, entry.row);
   }
 
   async function loadConversation(older = false) {
@@ -1275,6 +1323,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     if (!state || (older && (state.loading || (!state.beforeMessages && !state.beforeReplies)))) return;
     const session = epoch,
       request = ++state.readRequest,
+      previewAt = ++previewSeq,
       writes = state.convoWrites,
       labelWrites = state.labelWrites,
       reminderWrites = state.reminderWrites;
@@ -1294,6 +1343,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         state.replies.clear();
       }
       for (const row of messages.messages) state.messages.set(row.id, row);
+      if (!older) refreshListedPreview(state, messages.latest, previewAt);
       if (messages.state && writes === state.convoWrites) state.convo = messages.state;
       if (messages.label_set && labelWrites === state.labelWrites) showLabelSet(state, messages.label_set);
       if ("reminder" in messages && reminderWrites === state.reminderWrites) showReminder(state, messages.reminder);
@@ -1488,7 +1538,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     if (searchText) query.set("q", searchText);
     if (more) query.set("after", after);
     const reads = readSeq,
-      unreadOnly = query.has("unread");
+      unreadOnly = query.has("unread"),
+      previewAt = ++previewSeq;
     try {
       const page = await api(`/api/inbox?${query}`);
       if (epoch !== session || request !== listRequest) return;
@@ -1506,6 +1557,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         // The open conversation's title follows the newest list row even when the unread filter hides that row.
         if (open) conversationTitle(row);
         if (unreadOnly && row.unread_count === 0) continue;
+        row.preview_seq = previewAt;
         const button = node("button", "", "secondary");
         rowContent(button, row);
         button.dataset.key = `${row.connection_id}:${row.recipient_id}`;

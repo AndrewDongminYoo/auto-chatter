@@ -115,6 +115,8 @@ const dashboardGlobals = [
   { readers: ["app"], names: ["createInbox"] },
   // manual-reply-reports.js
   { readers: ["app"], names: ["createManualReplyReports"] },
+  // message-labels.js
+  { readers: ["inbox"], names: ["messageContent", "messagePreview"] },
   // notice-placement.js
   { readers: ["app"], names: ["actionErrorPlacement", "noticeCloseFocusTarget", "viewChangeClearsMessages"] },
   // plan-labels.js

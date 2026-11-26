@@ -265,6 +265,44 @@ test("a redelivered DM, a disabled flow, a postback and a sender ID the tables c
   assert.equal((await started()).length, 1);
 });
 
+test("an attachment, an unsupported message and a withdrawal start nothing, while a typed DM with an attachment does (#20)", async () => {
+  await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  const at = new Date(Date.now() + 1000);
+  const base = { accountId: "owned-account", text: "", timestamp: at };
+  await ingestMessages(pool, [
+    { ...base, senderId: "9201", messageId: "a1", content: "attachment", attachments: [{ type: "image" }] },
+    { ...base, senderId: "9202", messageId: "u1", content: "unsupported" },
+    { ...base, senderId: "9203", messageId: "d1", content: "deleted" },
+  ]);
+  assert.deepEqual(await started(), []);
+  // The withdrawal is not a DM: it opens no window and counts no active contact. The other two do both.
+  const inbound = await pool.query("SELECT recipient_id FROM instagram_dm_last_inbound ORDER BY recipient_id");
+  assert.deepEqual(
+    inbound.rows.map((row) => row.recipient_id),
+    ["9201", "9202"],
+  );
+  const counted = await pool.query("SELECT count(*)::int AS count FROM active_contacts");
+  assert.equal(counted.rows[0].count, 2);
+  await ingestMessages(pool, [{ ...base, senderId: "9204", messageId: "t1", text: "사진이에요", attachments: [{ type: "image" }] }]);
+  assert.deepEqual(
+    (await started()).map((row) => row.sender_id),
+    ["9204"],
+  );
+});
+
+test("an original that arrives after its withdrawal starts nothing on a connection that stores the inbox (#20)", async () => {
+  await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  await pool.query("UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now()-interval '1 day' WHERE id=$1", [connectionId]);
+  const at = new Date(Date.now() + 1000);
+  await ingestMessages(pool, [{ accountId: "owned-account", senderId: "9301", messageId: "late", text: "", timestamp: at, content: "deleted" }]);
+  await dm("9301", "취소한 말", { id: "late", at });
+  await dm("9302", "다른 말", { at });
+  assert.deepEqual(
+    (await started()).map((row) => row.sender_id),
+    ["9302"],
+  );
+});
+
 test("a DM that the reply wait takes starts nothing, also when it is delivered again", async () => {
   await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
   const flow = await createFlow({

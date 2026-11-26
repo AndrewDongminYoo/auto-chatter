@@ -14,8 +14,9 @@ export async function lockConversation(client: PoolClient, connectionId: string,
   await client.query(`SELECT ${lock}(hashtextextended('inbox-conversation:' || $1::uuid::text || ':' || $2, 0))`, [connectionId, recipientId]);
 }
 
-// A DM dated more than a minute ahead, or with text PostgreSQL cannot store, is never stored.
-const storable = (message: InstagramMessage, now: Date) => message.timestamp.getTime() <= now.getTime() + 60000 && !message.text.includes("\u0000");
+// A DM dated more than a minute ahead, or with text PostgreSQL cannot store, is never stored. A deleted event without
+// a sender cannot name its conversation, so it never inserts a row (withdrawInboxMessage).
+const storable = (message: InstagramMessage, now: Date) => message.timestamp.getTime() <= now.getTime() + 60000 && !message.text.includes("\u0000") && /^[0-9]+$/.test(message.senderId);
 
 // Takes, before any DM of the batch is stored, the conversation lock exclusive for every conversation the batch
 // can store a DM into (#127). The read position is an ID watermark (`m.id > last_read_message_id`), so the DMs of
@@ -24,11 +25,15 @@ const storable = (message: InstagramMessage, now: Date) => message.timestamp.get
 // The connections of the batch's accounts are locked FOR SHARE first, in ID order like the deletion functions,
 // and only then is the storage predicate of storeInboxMessage evaluated, so the INSERT sees the connection state
 // read here. The conversations are then locked in (connection, recipient) order, so batches with their senders
-// in opposite orders queue instead of deadlocking.
+// in opposite orders queue instead of deadlocking. The accounts of every withdrawal are locked in the same first
+// statement, also one without a sender that stores nothing, because withdrawInboxMessage updates their connections'
+// rows; a later lock of a lower connection ID would invert the order the deletion functions take (#20).
 export async function lockInboxConversations(client: PoolClient, messages: readonly InstagramMessage[], now: Date): Promise<void> {
   const batch = messages.filter((message) => storable(message, now));
+  const accounts = new Set([...batch, ...messages.filter((message) => message.content === "deleted")].map((message) => message.accountId));
+  if (!accounts.size) return;
+  await client.query("SELECT 1 FROM instagram_connections WHERE account_id=ANY($1::text[]) ORDER BY id FOR SHARE", [[...accounts]]);
   if (!batch.length) return;
-  await client.query("SELECT 1 FROM instagram_connections WHERE account_id=ANY($1::text[]) ORDER BY id FOR SHARE", [[...new Set(batch.map((message) => message.accountId))]]);
   const conversations = await client.query<{ connection_id: string; recipient_id: string }>(
     `SELECT DISTINCT c.id AS connection_id,m.recipient_id
      FROM unnest($1::text[],$2::text[],$3::timestamptz[]) AS m(account_id,recipient_id,message_at)
@@ -41,17 +46,26 @@ export async function lockInboxConversations(client: PoolClient, messages: reado
 
 // A newly stored DM reopens its closed conversation (#22), with an audit row and no actor. A redelivered
 // message inserts nothing and reopens nothing; a conversation without a state row is already open. The
-// assignee and the handoff stay as they are.
-export async function storeInboxMessage(client: PoolClient, message: InstagramMessage, now: Date): Promise<void> {
-  if (!storable(message, now)) return;
+// assignee and the handoff stay as they are. Returns true only when the DM was not stored because its sender had
+// already withdrawn it (a 'deleted' row holds its message ID, #20), so the caller does not hand the withdrawn text to
+// any automation; that read runs only on a conflict or for a DM the inbox cannot store (a NUL in its text, a time
+// ahead), never for a newly stored DM.
+export async function storeInboxMessage(client: PoolClient, message: InstagramMessage, now: Date): Promise<boolean> {
+  if (message.content === "deleted") {
+    await withdrawInboxMessage(client, message, now);
+    return false;
+  }
+  if (!storable(message, now)) return withdrawnEarlier(client, message);
+  const kind = message.content ?? (message.confirmationReplyId ? "postback" : "text");
   const stored = await client.query<{ workspace_id: string; connection_id: string }>(
-    `INSERT INTO instagram_inbox_messages AS stored(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at)
-     SELECT workspace_id,id,$2,$3,$4,$5,$6 FROM instagram_connections
+    `INSERT INTO instagram_inbox_messages AS stored(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at,attachments)
+     SELECT workspace_id,id,$2,$3,$4,$5,$6,$7::jsonb FROM instagram_connections
      WHERE account_id=$1 AND active AND inbox_enabled AND inbox_enabled_at<=$6
      ON CONFLICT(connection_id,message_id) DO NOTHING
      RETURNING stored.workspace_id::text,stored.connection_id::text`,
-    [message.accountId, message.senderId, message.messageId, message.text, message.confirmationReplyId ? "postback" : "text", message.timestamp],
+    [message.accountId, message.senderId, message.messageId, message.text, kind, message.timestamp, message.attachments?.length ? JSON.stringify(message.attachments) : null],
   );
+  if (!stored.rowCount) return withdrawnEarlier(client, message);
   const inserted = stored.rows.sort((a, b) => a.connection_id.localeCompare(b.connection_id));
   for (const row of inserted) {
     // The connection FOR SHARE comes before the conversation, the order of the state API and the deletion
@@ -74,9 +88,45 @@ export async function storeInboxMessage(client: PoolClient, message: InstagramMe
        SELECT $1,$2,$3,version,'auto_reopen','closed','open',assignee_user_id,assignee_user_id,NULL FROM reopened`,
       [row.workspace_id, row.connection_id, message.senderId],
     );
-    // A button postback is never matched against keyword rules; only a typed DM is.
-    if (!message.confirmationReplyId) await applyLabelRules(client, row.workspace_id, row.connection_id, message.senderId, message.text);
+    // A button postback, an attachment and an unsupported message are never matched against keyword rules; only a
+    // typed DM is.
+    if (kind === "text") await applyLabelRules(client, row.workspace_id, row.connection_id, message.senderId, message.text);
   }
+  return false;
+}
+
+// Whether a connection of the message's account holds a withdrawal of this message ID (#20).
+async function withdrawnEarlier(client: PoolClient, message: InstagramMessage): Promise<boolean> {
+  const withdrawn = await client.query<{ withdrawn: boolean }>(
+    `SELECT EXISTS(SELECT 1 FROM instagram_inbox_messages m JOIN instagram_connections c ON c.id=m.connection_id AND c.workspace_id=m.workspace_id
+       WHERE c.account_id=$1 AND m.message_id=$2 AND m.deleted_at IS NOT NULL) AS withdrawn`,
+    [message.accountId, message.messageId],
+  );
+  return withdrawn.rows[0]!.withdrawn;
+}
+
+// The sender withdrew a message (#20). Server roles cannot DELETE, so every stored copy of the message on the
+// account's connections, active or not, keeps its row, kind and time and loses its text and attachments; deleted_at
+// keeps the first withdrawal. A connection that stores new DMs and has no copy yet gets a 'deleted' row first, so the
+// original, when it arrives later, hits ON CONFLICT DO NOTHING and is never stored. That needs the sender, which names
+// the conversation. The connections are locked FOR SHARE in ID order, as every ingestion step does, before any row is
+// written. The caller holds the message ID lock, so a redelivery of the original cannot interleave. A withdrawal
+// reopens nothing and runs no label rule.
+async function withdrawInboxMessage(client: PoolClient, message: InstagramMessage, now: Date): Promise<void> {
+  await client.query("SELECT 1 FROM instagram_connections WHERE account_id=$1 ORDER BY id FOR SHARE", [message.accountId]);
+  await client.query(
+    `UPDATE instagram_inbox_messages m SET text='',attachments=NULL,deleted_at=coalesce(m.deleted_at,clock_timestamp())
+     FROM instagram_connections c WHERE c.account_id=$1 AND m.connection_id=c.id AND m.workspace_id=c.workspace_id AND m.message_id=$2`,
+    [message.accountId, message.messageId],
+  );
+  if (!storable(message, now)) return;
+  await client.query(
+    `INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at,deleted_at)
+     SELECT workspace_id,id,$2,$3,'','deleted',$4,clock_timestamp() FROM instagram_connections
+     WHERE account_id=$1 AND active AND inbox_enabled AND inbox_enabled_at<=$4
+     ON CONFLICT(connection_id,message_id) DO NOTHING`,
+    [message.accountId, message.senderId, message.messageId, message.timestamp],
+  );
 }
 
 type LabelRule = {

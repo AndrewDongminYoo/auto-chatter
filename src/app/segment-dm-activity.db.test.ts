@@ -206,6 +206,19 @@ test("DM activity reads the latest stored DM of verified recipients in a half-op
   assert.deepEqual(senders(await listContacts(listClock(), outsider, query({ last_dm_days: "3" }))), ["100"]);
 });
 
+test("DM activity counts a stored attachment and skips a withdrawal-first row, which marks no received DM (#20)", async () => {
+  await bridge("120", "9020");
+  await bridge("121", "9021");
+  await bridge("122", "9022");
+  await pool.query(
+    `INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at,attachments,deleted_at)
+     VALUES($1,$2,'9020','w-1','','deleted',$3,NULL,$3),($1,$2,'9021','a-1','','attachment',$3,'[{"type":"image"}]',NULL),
+       ($1,$2,'9022','old-1','','text','2026-09-01T00:00:00Z',NULL,NULL),($1,$2,'9022','w-2','','deleted',$3,NULL,$3)`,
+    [workspace, C, inWindow],
+  );
+  assert.deepEqual(senders(await listContacts(listClock(), owner, query({ connection_id: C, last_dm_days: "3" }))), ["121"]);
+});
+
 test("DM activity combines with DM consent over any verified recipient, not one recipient for both", async () => {
   await fixture();
   // 111's grant is on 9012 (an old DM) and its recent DM on 9011; it matches both conditions.

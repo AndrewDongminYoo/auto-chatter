@@ -80,11 +80,16 @@ export async function listInbox(pool: Pool, user: User, query: URLSearchParams, 
        GROUP BY m.workspace_id,m.connection_id,m.recipient_id
      )
      SELECT m.connection_id,m.recipient_id,c.username,m.message_count,m.last_message_at,m.unread_count,
-       -- The list shows the start of the newest stored DM: one lookup per conversation through
-       -- instagram_inbox_messages_latest_idx.
+       -- The list shows the start of the newest stored DM and its kind, 'deleted' once the sender withdrew it (#20).
+       -- Each is one lookup through instagram_inbox_messages_latest_idx. They stay scalar subqueries in this list,
+       -- which PostgreSQL runs after the sort and limit, for the listed page only; a lateral join would run them for
+       -- every conversation of the workspace.
        (SELECT left(last.text,80) FROM instagram_inbox_messages last
         WHERE last.workspace_id=m.workspace_id AND last.connection_id=m.connection_id AND last.recipient_id=m.recipient_id
         ORDER BY last.message_at DESC,last.id DESC LIMIT 1) AS last_message_preview,
+       (SELECT CASE WHEN last.deleted_at IS NOT NULL THEN 'deleted' ELSE last.kind END FROM instagram_inbox_messages last
+        WHERE last.workspace_id=m.workspace_id AND last.connection_id=m.connection_id AND last.recipient_id=m.recipient_id
+        ORDER BY last.message_at DESC,last.id DESC LIMIT 1) AS last_message_kind,
        -- The sender's username from the Instagram User Profile API (#395 stage 2), and whether it is due for a fetch.
        p.username AS profile_username,(p.connection_id IS NULL OR p.next_fetch_at<=now()) AS profile_due,
        -- The commenter's newest stored username, only through a confirmed identity link of the same workspace and
@@ -194,15 +199,29 @@ export async function inboxMessages(pool: Pool, user: User, connection: string, 
   const workspace = await workspaceFor(pool, user, "agent");
   const owned = await pool.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [connection, workspace]);
   if (!owned.rowCount) throw new ApiError(404, "connection_not_found");
+  // Each page row also carries the conversation's newest message as the list picks it (time, then ID), whatever page
+  // this is, so the screen can replace a list preview whose message was withdrawn after the list loaded (#20). One
+  // statement reads both, so the page and that preview show the same withdrawals. The newest message is one row
+  // through instagram_inbox_messages_latest_idx.
   const result = await pool.query(
-    `SELECT id::text,message_id,text,kind,message_at,received_at FROM instagram_inbox_messages
-    WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 AND ($4::numeric IS NULL OR id<$4::numeric)
-    ORDER BY instagram_inbox_messages.id DESC LIMIT 51`,
+    `SELECT m.*,latest.last_message_preview AS latest_preview,latest.last_message_kind AS latest_kind
+     FROM (SELECT id::text,message_id,text,kind,message_at,received_at,attachments,deleted_at FROM instagram_inbox_messages
+       WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 AND ($4::numeric IS NULL OR id<$4::numeric)
+       ORDER BY instagram_inbox_messages.id DESC LIMIT 51) m
+     CROSS JOIN LATERAL (SELECT left(last.text,80) AS last_message_preview,
+         CASE WHEN last.deleted_at IS NOT NULL THEN 'deleted' ELSE last.kind END AS last_message_kind
+       FROM instagram_inbox_messages last WHERE last.workspace_id=$1 AND last.connection_id=$2 AND last.recipient_id=$3
+       ORDER BY last.message_at DESC,last.id DESC LIMIT 1) latest
+     ORDER BY m.id::bigint DESC`,
     [workspace, connection, recipient, query.get("before")],
   );
-  const messages = result.rows.slice(0, 50);
+  const messages = result.rows.slice(0, 50).map(({ latest_preview: _preview, latest_kind: _kind, ...row }) => row);
+  const first = result.rows[0];
   return {
     messages,
+    // A page with no rows (no messages, or past the oldest) carries no newest message; the screen reads it only for
+    // the newest page.
+    latest: first ? { last_message_preview: first.latest_preview, last_message_kind: first.latest_kind } : null,
     before: result.rows.length > 50 ? messages.at(-1)!.id : null,
     state: await readConversationState(pool, workspace, connection, recipient),
     label_set: await readConversationLabels(pool, workspace, connection, recipient),
