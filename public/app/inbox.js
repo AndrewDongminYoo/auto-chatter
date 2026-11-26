@@ -1302,16 +1302,14 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     byId("inbox-messages").replaceChildren(fragment);
   }
 
-  // A withdrawal keeps the message ID and time, so a list loaded before it still shows the withdrawn text (#20). When
-  // the loaded page's newest message is the list row's newest one or a later one (the newest page is in ID order,
-  // highest first, as the list breaks ties), the row takes that message's kind and preview. The count and time stay
-  // until the list reloads, as before.
-  function refreshListedPreview(state, rows) {
+  // A withdrawal keeps the message ID and time, so a list loaded before it still shows the withdrawn text (#20). The
+  // conversation response carries the newest message's kind and preview as the list picks them (`latest`), so the row
+  // takes them whatever page loaded. The count and time stay until the list reloads, as before.
+  function refreshListedPreview(state, latest) {
     const entry = listed.get(conversationKey(state));
-    const newest = rows.reduce((found, row) => (!found || Date.parse(row.message_at) > Date.parse(found.message_at) ? row : found), null);
-    if (!entry || !newest || Date.parse(newest.message_at) < Date.parse(entry.row.last_message_at)) return;
-    entry.row.last_message_kind = newest.deleted_at ? "deleted" : newest.kind;
-    entry.row.last_message_preview = [...newest.text].slice(0, 80).join("");
+    if (!entry || !latest) return;
+    entry.row.last_message_kind = latest.last_message_kind;
+    entry.row.last_message_preview = latest.last_message_preview;
     rowContent(entry.button, entry.row);
   }
 
@@ -1339,7 +1337,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         state.replies.clear();
       }
       for (const row of messages.messages) state.messages.set(row.id, row);
-      if (!older) refreshListedPreview(state, messages.messages);
+      if (!older) refreshListedPreview(state, messages.latest);
       if (messages.state && writes === state.convoWrites) state.convo = messages.state;
       if (messages.label_set && labelWrites === state.labelWrites) showLabelSet(state, messages.label_set);
       if ("reminder" in messages && reminderWrites === state.reminderWrites) showReminder(state, messages.reminder);

@@ -116,6 +116,21 @@ test("a withdrawal clears the stored text and attachments once and keeps the row
   assert.notEqual(status.window_expires_at, null);
 });
 
+test("the conversation response names its newest message as the list does, whatever the arrival order", async () => {
+  // The newest DM by time arrived first, so it has the lower ID; a page ordered by ID would show the other one first.
+  await pool.query(
+    `INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at)
+     VALUES($1,$2,'901','newest','latest words','text',now()-interval '1 minute'),($1,$2,'901','older','older words','text',now()-interval '1 hour')`,
+    [W, C],
+  );
+  const read = async () => (await inboxMessages(pool, user, C, "901", new URLSearchParams())).latest;
+  assert.deepEqual(await read(), { last_message_preview: "latest words", last_message_kind: "text" });
+  await ingestMessages(pool, parseMessageEvents(body([envelope("901", { mid: "newest", is_deleted: true })])));
+  assert.deepEqual(await read(), { last_message_preview: "", last_message_kind: "deleted" });
+  assert.equal((await listInbox(pool, user, new URLSearchParams())).conversations[0]?.last_message_kind, "deleted");
+  assert.equal((await inboxMessages(pool, user, C, "902", new URLSearchParams())).latest, null);
+});
+
 test("a withdrawal that arrives first keeps the late original out, and one without a sender clears only stored copies", async () => {
   await ingestMessages(pool, parseMessageEvents(body([envelope("901", { mid: "t1", is_deleted: true })])));
   assert.deepEqual(await stored(), [{ recipient_id: "901", message_id: "t1", text: "", kind: "deleted", attachments: null, deleted: true }]);

@@ -206,8 +206,18 @@ export async function inboxMessages(pool: Pool, user: User, connection: string, 
     [workspace, connection, recipient, query.get("before")],
   );
   const messages = result.rows.slice(0, 50);
+  // The conversation's newest message as the list picks it (time, then ID), whatever page this is, so the screen can
+  // replace a list preview whose message was withdrawn after the list loaded (#20). It reads one row through
+  // instagram_inbox_messages_latest_idx.
+  const latest = await pool.query<{ last_message_preview: string; last_message_kind: string }>(
+    `SELECT left(text,80) AS last_message_preview,CASE WHEN deleted_at IS NOT NULL THEN 'deleted' ELSE kind END AS last_message_kind
+     FROM instagram_inbox_messages WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3
+     ORDER BY message_at DESC,id DESC LIMIT 1`,
+    [workspace, connection, recipient],
+  );
   return {
     messages,
+    latest: latest.rows[0] ?? null,
     before: result.rows.length > 50 ? messages.at(-1)!.id : null,
     state: await readConversationState(pool, workspace, connection, recipient),
     label_set: await readConversationLabels(pool, workspace, connection, recipient),
