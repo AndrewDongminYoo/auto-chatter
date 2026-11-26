@@ -199,25 +199,29 @@ export async function inboxMessages(pool: Pool, user: User, connection: string, 
   const workspace = await workspaceFor(pool, user, "agent");
   const owned = await pool.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2", [connection, workspace]);
   if (!owned.rowCount) throw new ApiError(404, "connection_not_found");
+  // Each page row also carries the conversation's newest message as the list picks it (time, then ID), whatever page
+  // this is, so the screen can replace a list preview whose message was withdrawn after the list loaded (#20). One
+  // statement reads both, so the page and that preview show the same withdrawals. The newest message is one row
+  // through instagram_inbox_messages_latest_idx.
   const result = await pool.query(
-    `SELECT id::text,message_id,text,kind,message_at,received_at,attachments,deleted_at FROM instagram_inbox_messages
-    WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 AND ($4::numeric IS NULL OR id<$4::numeric)
-    ORDER BY instagram_inbox_messages.id DESC LIMIT 51`,
+    `SELECT m.*,latest.last_message_preview AS latest_preview,latest.last_message_kind AS latest_kind
+     FROM (SELECT id::text,message_id,text,kind,message_at,received_at,attachments,deleted_at FROM instagram_inbox_messages
+       WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 AND ($4::numeric IS NULL OR id<$4::numeric)
+       ORDER BY instagram_inbox_messages.id DESC LIMIT 51) m
+     CROSS JOIN LATERAL (SELECT left(last.text,80) AS last_message_preview,
+         CASE WHEN last.deleted_at IS NOT NULL THEN 'deleted' ELSE last.kind END AS last_message_kind
+       FROM instagram_inbox_messages last WHERE last.workspace_id=$1 AND last.connection_id=$2 AND last.recipient_id=$3
+       ORDER BY last.message_at DESC,last.id DESC LIMIT 1) latest
+     ORDER BY m.id::bigint DESC`,
     [workspace, connection, recipient, query.get("before")],
   );
-  const messages = result.rows.slice(0, 50);
-  // The conversation's newest message as the list picks it (time, then ID), whatever page this is, so the screen can
-  // replace a list preview whose message was withdrawn after the list loaded (#20). It reads one row through
-  // instagram_inbox_messages_latest_idx.
-  const latest = await pool.query<{ last_message_preview: string; last_message_kind: string }>(
-    `SELECT left(text,80) AS last_message_preview,CASE WHEN deleted_at IS NOT NULL THEN 'deleted' ELSE kind END AS last_message_kind
-     FROM instagram_inbox_messages WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3
-     ORDER BY message_at DESC,id DESC LIMIT 1`,
-    [workspace, connection, recipient],
-  );
+  const messages = result.rows.slice(0, 50).map(({ latest_preview: _preview, latest_kind: _kind, ...row }) => row);
+  const first = result.rows[0];
   return {
     messages,
-    latest: latest.rows[0] ?? null,
+    // A page with no rows (no messages, or past the oldest) carries no newest message; the screen reads it only for
+    // the newest page.
+    latest: first ? { last_message_preview: first.latest_preview, last_message_kind: first.latest_kind } : null,
     before: result.rows.length > 50 ? messages.at(-1)!.id : null,
     state: await readConversationState(pool, workspace, connection, recipient),
     label_set: await readConversationLabels(pool, workspace, connection, recipient),
