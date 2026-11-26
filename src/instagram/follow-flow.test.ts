@@ -65,6 +65,24 @@ test("attachment lists keep ten items and drop an empty, overlong or NUL title",
   assert.deepEqual(parsed?.attachments?.slice(0, 4), [{ type: "file" }, { type: "file" }, { type: "file" }, { type: "file", title: "f3" }]);
   const [exact] = parseMessageEvents(body([{ ...message, message: { mid: "a3", attachments: [{ type: "file", payload: { title: "가".repeat(200) } }] } }]));
   assert.equal(exact?.attachments?.[0]?.title, "가".repeat(200));
+  // jsonb refuses an unpaired surrogate, so that title is dropped and a valid pair is kept.
+  const lone = `a${String.fromCharCode(0xd800)}b`;
+  const pair = `a${String.fromCodePoint(0x1f600)}b`;
+  const [surrogates] = parseMessageEvents(
+    body([
+      {
+        ...message,
+        message: {
+          mid: "a4",
+          attachments: [
+            { type: "image", payload: { title: lone } },
+            { type: "image", payload: { title: pair } },
+          ],
+        },
+      },
+    ]),
+  );
+  assert.deepEqual(surrogates?.attachments, [{ type: "image" }, { type: "image", title: pair }]);
 });
 test("messages and postbacks with a NUL in the message ID are dropped before any query sees them", () => {
   const mid = "message\u00001";

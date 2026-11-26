@@ -20,9 +20,10 @@ export async function ingestMessages(pool: Pool, messages: readonly InstagramMes
     await lockDmStartSenders(client, messages);
     await lockInboxConversations(client, messages, now);
     for (const message of messages) {
-      await storeInboxMessage(client, message, now);
-      // An attachment, an unsupported message and a withdrawal are only stored (#20).
-      if (!reachesAutomation(message)) continue;
+      const withdrawn = await storeInboxMessage(client, message, now);
+      // An attachment, an unsupported message and a withdrawal are only stored, and a DM whose sender withdrew it
+      // before it arrived reaches nothing (#20). Without inbox storage there is no withdrawal row to see.
+      if (withdrawn || !reachesAutomation(message)) continue;
       if (message.timestamp.getTime() > now.getTime() + 60000 || message.timestamp.getTime() <= now.getTime() - 24 * 3600000) continue;
       // Read (and lock the connection) before the lookups: a reply recorded as sent between them would
       // otherwise leave this DM neither matched nor kept.

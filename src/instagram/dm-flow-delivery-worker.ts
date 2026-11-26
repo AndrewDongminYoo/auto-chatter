@@ -30,7 +30,7 @@ export function dmFlowDeliveryDueSql(d: string): string {
 // included, every stored inbox text, attachment and unsupported message from it (#20), and its last inbound DM time.
 // A stored postback (a button tap) and a withdrawal-first 'deleted' row are left out on purpose:
 // the manual-reply window (docs/specs/2026-09-27-inbox-manual-replies.md) does not let a confirmation postback open
-// it either, and campaigns read the same kind='text' anchor. The latest inbound text DM time that ingestion keeps per
+// it either, and campaigns read the same kinds as this anchor. The latest inbound DM time that ingestion keeps per
 // connection and sender (#300, instagram_dm_last_inbound) covers a DM that started nothing on a connection whose
 // inbox storage is off. Ingestion accepts a DM dated up to 60 s ahead, so each time is capped at the moment it was
 // stored (the last-inbound time already is); a fresh DM therefore opens the window instead of reading as unverified.

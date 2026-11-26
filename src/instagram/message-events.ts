@@ -33,6 +33,9 @@ export const reachesAutomation = (message: InstagramMessage): boolean => message
 const digits = (value: unknown): value is string => typeof value === "string" && /^\d+$/.test(value);
 const validMid = (mid: unknown): mid is string => typeof mid === "string" && mid.length > 0 && mid.length <= 512 && !mid.includes("\u0000");
 
+const utf8Encoder = new TextEncoder();
+const utf8 = new TextDecoder("utf-8");
+
 function readAttachments(value: unknown): InstagramAttachment[] {
   if (!Array.isArray(value)) return [];
   const attachments: InstagramAttachment[] = [];
@@ -41,7 +44,9 @@ function readAttachments(value: unknown): InstagramAttachment[] {
     if (!isRecord(item) || typeof item.type !== "string") continue;
     const type = (ATTACHMENT_TYPES as readonly string[]).includes(item.type) ? (item.type as AttachmentType) : "other";
     const title = isRecord(item.payload) ? item.payload.title : undefined;
-    const keep = typeof title === "string" && title.length > 0 && [...title].length <= MAX_ATTACHMENT_TITLE && !title.includes("\u0000");
+    // jsonb refuses NUL and an unpaired surrogate escape, which would roll back the whole webhook batch, so such a title
+    // is dropped and the attachment kind is kept. An unpaired surrogate becomes U+FFFD in UTF-8, so it fails the round trip.
+    const keep = typeof title === "string" && title.length > 0 && [...title].length <= MAX_ATTACHMENT_TITLE && !title.includes("\u0000") && utf8.decode(utf8Encoder.encode(title)) === title;
     attachments.push(keep ? { type, title } : { type });
   }
   return attachments;

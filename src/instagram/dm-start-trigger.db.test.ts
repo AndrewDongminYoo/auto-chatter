@@ -290,6 +290,19 @@ test("an attachment, an unsupported message and a withdrawal start nothing, whil
   );
 });
 
+test("an original that arrives after its withdrawal starts nothing on a connection that stores the inbox (#20)", async () => {
+  await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
+  await pool.query("UPDATE instagram_connections SET inbox_enabled=true,inbox_enabled_at=now()-interval '1 day' WHERE id=$1", [connectionId]);
+  const at = new Date(Date.now() + 1000);
+  await ingestMessages(pool, [{ accountId: "owned-account", senderId: "9301", messageId: "late", text: "", timestamp: at, content: "deleted" }]);
+  await dm("9301", "취소한 말", { id: "late", at });
+  await dm("9302", "다른 말", { at });
+  assert.deepEqual(
+    (await started()).map((row) => row.sender_id),
+    ["9302"],
+  );
+});
+
 test("a DM that the reply wait takes starts nothing, also when it is delivered again", async () => {
   await enabledFlow(dmDocument({ type: "instagram_dm_default" }, "Hi"));
   const flow = await createFlow({
