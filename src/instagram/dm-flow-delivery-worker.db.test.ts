@@ -281,6 +281,34 @@ test("the 24-hour window is anchored on the sender's latest inbound DM and read 
   assert.deepEqual(recipients(seen), ["9001", "9002"]);
 });
 
+test("a stored attachment or unsupported DM opens the window and a withdrawal-first row does not (#20)", async () => {
+  const seen = graph();
+  const opened: string[] = [];
+  for (const [sender, kind, attachments] of [
+    ["9101", "attachment", '[{"type":"image"}]'],
+    ["9102", "unsupported", null],
+  ] as const) {
+    const id = await dmRow(sender, { messageAt: "now()-interval '25 hours'" });
+    await pool.query("UPDATE instagram_dm_start_events SET created_at=now()-interval '25 hours' WHERE sender_id=$1", [sender]);
+    await pool.query(
+      `INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at,attachments)
+       VALUES($1,$2,$3,$4,'',$5,now()-interval '1 hour',$6::jsonb)`,
+      [W, C, sender, `inbox-${sender}`, kind, attachments],
+    );
+    opened.push(id);
+  }
+  const withdrawn = await dmRow("9103", { messageAt: "now()-interval '25 hours'" });
+  await pool.query("UPDATE instagram_dm_start_events SET created_at=now()-interval '25 hours' WHERE sender_id='9103'");
+  await pool.query(
+    `INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at,deleted_at)
+     VALUES($1,$2,'9103','inbox-9103','','deleted',now(),now())`,
+    [W, C],
+  );
+  while (await deliver(seen));
+  for (const id of opened) assert.equal((await row(id)).status, "sent");
+  assert.deepEqual([(await row(withdrawn)).status, (await row(withdrawn)).failure_code], ["blocked", "reply_window_closed"]);
+});
+
 // Security audit #62, fourth pass: the window belongs to one connection. A fresh DM start event of the same messaging
 // ID on another connection of the workspace is that connection's DM, so it does not reopen this connection's window.
 test("a fresh DM start event of the same sender on another connection does not reopen the window", async () => {

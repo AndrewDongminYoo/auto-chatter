@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import type { InstagramMessage } from "./message-events.ts";
+import { reachesAutomation, opensWindow, type InstagramMessage } from "./message-events.ts";
 import type { FollowTransport } from "./follow-transport.ts";
 import { lockInboxConversations, storeInboxMessage } from "./inbox.ts";
 import { deliveryRecipientOptedOut } from "./channel-consent.ts";
@@ -21,6 +21,8 @@ export async function ingestMessages(pool: Pool, messages: readonly InstagramMes
     await lockInboxConversations(client, messages, now);
     for (const message of messages) {
       await storeInboxMessage(client, message, now);
+      // An attachment, an unsupported message and a withdrawal are only stored (#20).
+      if (!reachesAutomation(message)) continue;
       if (message.timestamp.getTime() > now.getTime() + 60000 || message.timestamp.getTime() <= now.getTime() - 24 * 3600000) continue;
       // Read (and lock the connection) before the lookups: a reply recorded as sent between them would
       // otherwise leave this DM neither matched nor kept.
@@ -56,9 +58,10 @@ async function lockMessageIds(client: PoolClient, messages: readonly InstagramMe
   );
 }
 
-// Keeps the latest inbound text DM time per connection and messaging sender ID (#300), whether or not inbox storage
-// is on, so the DM flow 24-hour window sees a DM that started nothing and was not stored. Only the time is kept: no
-// text and no postback, which does not open the window. A DM dated more than a minute ahead is skipped, as the inbox
+// Keeps the latest inbound DM time per connection and messaging sender ID (#300), whether or not inbox storage is on,
+// so the DM flow 24-hour window sees a DM that started nothing and was not stored. A typed DM, an attachment and an
+// unsupported message count (#20). Only the time is kept: no text, and no postback or withdrawal, which do not open
+// the window. A DM dated more than a minute ahead is skipped, as the inbox
 // skips it, and each time is capped at the database clock. A sender ID the table cannot store (more than 40 digits)
 // is skipped instead of failing the batch. The connections are locked FOR SHARE in ID order first, as
 // lockInboxConversations does, so a person or connection deletion waits for this transaction instead of missing a
@@ -68,7 +71,7 @@ async function lockMessageIds(client: PoolClient, messages: readonly InstagramMe
 // (connection, sender) order, so two such batches queue instead of deadlocking, and an older redelivery never moves
 // a time back.
 async function recordLastInboundDms(client: PoolClient, messages: readonly InstagramMessage[], now: Date): Promise<void> {
-  const batch = messages.filter((message) => !message.confirmationReplyId && message.timestamp.getTime() <= now.getTime() + 60000);
+  const batch = messages.filter((message) => opensWindow(message) && message.timestamp.getTime() <= now.getTime() + 60000);
   if (!batch.length) return;
   await client.query("SELECT 1 FROM instagram_connections WHERE account_id=ANY($1::text[]) AND active ORDER BY id FOR SHARE", [[...new Set(batch.map((message) => message.accountId))]]);
   await client.query(
@@ -86,14 +89,15 @@ async function recordLastInboundDms(client: PoolClient, messages: readonly Insta
 }
 
 // Records every inbound DM of the batch in the billing-month active contact ledger (#51), whether or not inbox storage
-// is on and including confirmation postbacks, which recordLastInboundDms leaves out. The filters follow that function:
+// is on and including confirmation postbacks, which recordLastInboundDms leaves out, and attachment and unsupported
+// messages (#20). A withdrawal is not a new DM and is left out. The filters follow that function:
 // a DM dated more than a minute ahead is skipped, each time is capped at the database clock, and a sender ID that is
 // not 1 to 40 digits is skipped. The active connections are locked FOR SHARE in ID order before the savepoint, so a
 // person or connection deletion waits for this transaction instead of missing a row it writes, and the lock stays when
 // the savepoint is rolled back. It is the last statement before COMMIT (recordActiveContacts), and one statement writes
 // the whole batch through record_active_contacts in key order with ON CONFLICT DO NOTHING.
 async function recordActiveContactDms(client: PoolClient, messages: readonly InstagramMessage[], now: Date): Promise<void> {
-  const batch = messages.filter((message) => message.timestamp.getTime() <= now.getTime() + 60000 && /^[0-9]{1,40}$/.test(message.senderId));
+  const batch = messages.filter((message) => message.content !== "deleted" && message.timestamp.getTime() <= now.getTime() + 60000 && /^[0-9]{1,40}$/.test(message.senderId));
   if (!batch.length) return;
   // Only the connections locked here are written: a connection activated after this lock is not held by this
   // transaction, so a deletion of its person data could commit first and leave a sender ID in the ledger.

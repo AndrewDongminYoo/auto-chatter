@@ -24,8 +24,18 @@ interface EventBase {
 }
 export type ChannelEvent =
   | (EventBase & { kind: "comment"; mediaId: string; parentId?: string; actorName?: string; text: string; occurredAt: null })
-  | (EventBase & { kind: "text_message"; text: string; occurredAt: Date })
-  | (EventBase & { kind: "confirmation_postback"; title: string; replyBinding: string; occurredAt: Date });
+  | (EventBase & { kind: "text_message"; text: string; attachments?: ReceivedAttachment[]; occurredAt: Date })
+  | (EventBase & { kind: "confirmation_postback"; title: string; replyBinding: string; occurredAt: Date })
+  // Received content that the inbox shows but no automation reads (#20).
+  | (EventBase & { kind: "attachment_message"; attachments: ReceivedAttachment[]; occurredAt: Date })
+  | (EventBase & { kind: "unsupported_message"; occurredAt: Date })
+  // The sender withdrew an earlier message. The actor value is empty when the provider did not name the sender.
+  | (EventBase & { kind: "message_deleted"; occurredAt: Date });
+// The kind and optional title of a received attachment. No media URL or media ID is carried.
+export interface ReceivedAttachment {
+  type: string;
+  title?: string;
+}
 
 // A receipt key is not an outgoing idempotency key. Database uniqueness remains authoritative.
 export function eventReceiptKey(event: ChannelEvent): string {

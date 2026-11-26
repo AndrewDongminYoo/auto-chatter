@@ -27,7 +27,8 @@ export function dmFlowDeliveryDueSql(d: string): string {
 
 // The 24-hour messaging window, measured on the database clock. The anchor is the latest inbound text DM known for
 // the row's messaging sender ID on its connection: every DM start event of that sender, the one of this run
-// included, every stored inbox text message from it, and its last inbound text DM time. A stored postback (a button tap) is left out on purpose:
+// included, every stored inbox text, attachment and unsupported message from it (#20), and its last inbound DM time.
+// A stored postback (a button tap) and a withdrawal-first 'deleted' row are left out on purpose:
 // the manual-reply window (docs/specs/2026-09-27-inbox-manual-replies.md) does not let a confirmation postback open
 // it either, and campaigns read the same kind='text' anchor. The latest inbound text DM time that ingestion keeps per
 // connection and sender (#300, instagram_dm_last_inbound) covers a DM that started nothing on a connection whose
@@ -38,7 +39,7 @@ const WINDOW_ANCHOR = `greatest(
       WHERE start.workspace_id=d.workspace_id AND start.connection_id=d.connection_id AND start.sender_id=d.recipient_id),
      (SELECT max(least(message.message_at,message.received_at)) FROM instagram_inbox_messages message
       WHERE message.workspace_id=d.workspace_id AND message.connection_id=d.connection_id
-        AND message.recipient_id=d.recipient_id AND message.kind='text'),
+        AND message.recipient_id=d.recipient_id AND message.kind IN ('text','attachment','unsupported')),
      (SELECT inbound.last_message_at FROM instagram_dm_last_inbound inbound
       WHERE inbound.workspace_id=d.workspace_id AND inbound.connection_id=d.connection_id
         AND inbound.recipient_id=d.recipient_id))`;

@@ -36,6 +36,10 @@ test("Instagram channel event seam preserves parser content ordering and postbac
           { ...message, message: { ...message.message, is_deleted: true } },
           { ...message, is_self: true },
           { ...message, message: undefined, postback: { mid: "bad", title: "other", payload: "arbitrary" } },
+          { ...message, message: { mid: "a1", text: "with photo", attachments: [{ type: "image", payload: { url: "https://cdn.example/a.jpg" } }] } },
+          { ...message, message: { mid: "a2", attachments: [{ type: "share", payload: { title: "post" } }] } },
+          { ...message, message: { mid: "u1", is_unsupported: true } },
+          { timestamp: 1000, message: { mid: "d1", is_deleted: true } },
         ],
       },
     ],
@@ -43,7 +47,7 @@ test("Instagram channel event seam preserves parser content ordering and postbac
   const events = instagramAdapter.decodeWebhook(body);
   assert.deepEqual(
     events.map((event) => event.kind),
-    ["comment", "text_message", "confirmation_postback"],
+    ["comment", "text_message", "confirmation_postback", "message_deleted", "text_message", "attachment_message", "unsupported_message", "message_deleted"],
   );
   assert.equal(events[0]!.occurredAt, null);
   assert.equal(events[0]!.kind === "comment" ? events[0]!.actorName : null, "commenter.one");

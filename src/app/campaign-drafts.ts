@@ -90,7 +90,8 @@ export const utc = (column: string) => `to_char(${column} AT TIME ZONE 'UTC','YY
 export const CONNECTION_SENDABLE = "coalesce(c.active AND c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>evaluation.as_of,false)";
 export const CONTACT_PAUSED = "coalesce(a.paused OR a.handoff_paused,false)";
 // Stages 4-7 of one verified DM recipient: 4 opted out (the recipient or its comment sender revoked marketing or
-// service replies), 5 no exact explicit marketing grant, 6 no stored text DM in the last 24 hours, 7 candidate.
+// service replies), 5 no exact explicit marketing grant, 6 no stored text, attachment or unsupported DM in the last 24 hours (#20),
+// 7 candidate.
 // `workspace` is the workspace expression: $1 here, the delivery row's workspace in the campaign sweep (#273).
 export const recipientStageSql = (workspace: string) => `CASE
      WHEN EXISTS(SELECT 1 FROM channel_consent_state state WHERE state.workspace_id=${workspace} AND state.connection_id=v.connection_id
@@ -105,7 +106,7 @@ export const recipientStageSql = (workspace: string) => `CASE
 const RECIPIENT_STAGE = recipientStageSql("$1");
 export const latestTextSql = (workspace: string) => `(SELECT max(message.message_at) AS message_at
      FROM instagram_inbox_messages message WHERE message.workspace_id=${workspace} AND message.connection_id=v.connection_id
-       AND message.recipient_id=v.recipient_id AND message.kind='text') latest`;
+       AND message.recipient_id=v.recipient_id AND message.kind IN ('text','attachment','unsupported')) latest`;
 const LATEST_TEXT = latestTextSql("$1");
 // One statement and one clock (as_of). Stages 1-3 belong to the member; stages 4-6 belong to each verified DM
 // recipient, and the member takes the furthest stage any of its recipients reaches (7 is candidate). The
