@@ -475,8 +475,8 @@ const untouchedPool = () =>
 const membershipOnlyPool = () =>
   ({
     query: async (sql: string) => {
-      assert.match(sql, /^SELECT workspace_id FROM workspace_members WHERE user_id=\$1 AND removed_at IS NULL$/);
-      return { rows: [{ workspace_id: workspaceId }] };
+      assert.match(sql, /^SELECT m\.workspace_id, w\.plan FROM workspace_members m JOIN workspaces w ON w\.id=m\.workspace_id WHERE m\.user_id=\$1 AND m\.removed_at IS NULL$/);
+      return { rows: [{ workspace_id: workspaceId, plan: "free" }] };
     },
     connect: async () => assert.fail("a refused request must not write the database"),
     end: async () => {},
@@ -2333,7 +2333,7 @@ test("segment create and edit read a body large enough for the largest tree the 
   // An agent passes the write limits and the body read, then the admin check refuses it; an oversized body is 413.
   const pool = {
     query: async (sql: string) => {
-      assert.match(sql, /FROM workspace_members WHERE user_id=\$1 AND removed_at IS NULL$/);
+      assert.match(sql, /WHERE (m\.)?user_id=\$1 AND (m\.)?removed_at IS NULL$/);
       return { rows: [{ workspace_id: workspaceId, role: "agent" }] };
     },
     connect: async () => assert.fail("a refused request must not write the database"),
@@ -2487,6 +2487,36 @@ test("a write over the per-workspace limit returns 429 after only the membership
   assert.deepEqual(workspace.keys, [workspaceId]);
 });
 
+test("the per-workspace write limit is the plan's hourly allowance, read with the membership (#52)", async () => {
+  for (const [plan, expected] of [
+    ["free", 500],
+    ["pro", 1500],
+    ["advanced", 6000],
+    // An unknown value cannot pass the workspaces_plan CHECK; the limiter keeps its fixed default.
+    [undefined, undefined],
+  ] as const) {
+    const limits: (number | undefined)[] = [];
+    const workspace = {
+      limit: async ({ limit }: { key: string; limit?: number }) => {
+        limits.push(limit);
+        return { success: false };
+      },
+    };
+    const pool = () =>
+      ({
+        query: async (sql: string) => {
+          assert.match(sql, /^SELECT m\.workspace_id, w\.plan FROM workspace_members m JOIN workspaces w ON w\.id=m\.workspace_id WHERE m\.user_id=\$1 AND m\.removed_at IS NULL$/);
+          return { rows: [{ workspace_id: workspaceId, plan }] };
+        },
+        connect: async () => assert.fail("a refused request must not write the database"),
+        end: async () => {},
+      }) as unknown as Pool;
+    const response = await appApi(writeRequest(`/api/connections/${connectionId}/contacts/888`, "PATCH"), { ...config, API_WRITE_USER_LIMIT: recordingLimit(true).binding, API_WRITE_WORKSPACE_LIMIT: workspace }, pool, sessionFetch);
+    assert.equal(response.status, 429);
+    assert.deepEqual(limits, [expected]);
+  }
+});
+
 test("the dashboard bootstrap spends no write limit for a member and only the user limit to create (#167)", async () => {
   const user = recordingLimit(false),
     workspace = recordingLimit(false);
@@ -2499,7 +2529,7 @@ test("the dashboard bootstrap spends no write limit for a member and only the us
     role: "owner",
     time_zone: "Asia/Seoul",
     plan: "free",
-    limits: { seats: 1, connections: 1, campaign_sends_per_month: 0, active_contacts_per_month: 25 },
+    limits: { seats: 1, connections: 1, campaign_sends_per_month: 0, active_contacts_per_month: 25, api_writes_per_hour: 500 },
     usage: { seats: 1, connections: 0, campaign_sends: 0, active_contacts: { time_zone: "Asia/Seoul", month: "2026-11", count: 3, previous_month: "2026-10", previous_count: 5 } },
   });
   assert.deepEqual([user.keys, workspace.keys], [[], []]);
@@ -2729,7 +2759,7 @@ test("a segment snapshot request with a zero-byte body passes the body check wha
       () =>
         ({
           query: async (sql: string) => {
-            if (/^SELECT workspace_id FROM workspace_members WHERE user_id=\$1 AND removed_at IS NULL$/.test(sql)) return { rows: [{ workspace_id: workspaceId }] };
+            if (/^SELECT m\.workspace_id, w\.plan FROM workspace_members m JOIN workspaces w ON w\.id=m\.workspace_id WHERE m\.user_id=\$1 AND m\.removed_at IS NULL$/.test(sql)) return { rows: [{ workspace_id: workspaceId, plan: "free" }] };
             reached = true;
             throw new Error("database reached");
           },

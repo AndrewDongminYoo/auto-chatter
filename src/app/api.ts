@@ -32,6 +32,7 @@ import { exportWorkspace } from "./workspace-export.ts";
 import { compareSegmentSnapshot, createSegmentSnapshot, exportSegmentSnapshotCsv, getSegmentSnapshot, listSegmentSnapshots, listWorkspaceSegmentSnapshots } from "./segment-snapshots.ts";
 import { failureCode, logOperation } from "./operations-log.ts";
 import { operationsHealth } from "./operations-health.ts";
+import { isPlanKey, PLANS } from "./plans.ts";
 import { manualReplyReport } from "./manual-reply-reports.ts";
 import { flowRunReport } from "./flow-run-reports.ts";
 import { handoffReport } from "./handoff-reports.ts";
@@ -61,11 +62,11 @@ async function spendUserAllowance(binding: RateLimitBinding | undefined, key: st
 // Spends one request from a default API limit (#167). Unlike spendUserAllowance, a missing binding or a limiter
 // that does not answer lets the request through and reports "unavailable": these limits bound growth, and a
 // limiter outage must not stop every dashboard write. The caller logs the outage once per request.
-async function spendApiAllowance(binding: RateLimitBinding | undefined, key: string): Promise<"ok" | "unavailable"> {
+async function spendApiAllowance(binding: RateLimitBinding | undefined, key: string, limit?: number): Promise<"ok" | "unavailable"> {
   if (!binding) return "unavailable";
   let allowance: { success: boolean };
   try {
-    allowance = await binding.limit({ key });
+    allowance = await binding.limit(limit === undefined ? { key } : { key, limit });
   } catch {
     return "unavailable";
   }
@@ -121,8 +122,8 @@ export async function appApi(
     const user = await auth.user(request);
     // Default request limits (#167). An unavailable limiter is logged once per request with a fixed code only.
     let limitUnavailableLogged = false;
-    const spendApiLimit = async (binding: RateLimitBinding | undefined, key: string) => {
-      if ((await spendApiAllowance(binding, key)) === "ok" || limitUnavailableLogged) return;
+    const spendApiLimit = async (binding: RateLimitBinding | undefined, key: string, limit?: number) => {
+      if ((await spendApiAllowance(binding, key, limit)) === "ok" || limitUnavailableLogged) return;
       limitUnavailableLogged = true;
       logOperation({ event: "rate_limit_unavailable", code: "api_limit_unavailable", correlation_id: correlationId }, "warn");
     };
@@ -163,14 +164,16 @@ export async function appApi(
       // The workspace write limit reads only the caller's membership, before any route handler and before the #166
       // OAuth start allowance. A user without a workspace has only the user limit.
       // A missing binding is logged as unavailable without reading the membership.
-      const membership = async () => (await pool.query<{ workspace_id: string }>("SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND removed_at IS NULL", [user.id])).rows[0]?.workspace_id;
+      // The same read returns the plan, whose hourly allowance is the workspace limit (#52). The workspaces_plan
+      // CHECK admits only catalog keys; any other value keeps the limiter's fixed default, as these limits fail open.
+      const membership = async () => (await pool.query<{ workspace_id: string; plan: unknown }>("SELECT m.workspace_id, w.plan FROM workspace_members m JOIN workspaces w ON w.id=m.workspace_id WHERE m.user_id=$1 AND m.removed_at IS NULL", [user.id])).rows[0];
       if (bootstrap) {
         if (!(await membership())) await spendApiLimit(env.API_WRITE_USER_LIMIT, user.id);
       } else if (write && !memberRemoval) {
         if (!env.API_WRITE_WORKSPACE_LIMIT) await spendApiLimit(undefined, "");
         else {
-          const workspace = await membership();
-          if (workspace) await spendApiLimit(env.API_WRITE_WORKSPACE_LIMIT, workspace);
+          const member = await membership();
+          if (member) await spendApiLimit(env.API_WRITE_WORKSPACE_LIMIT, member.workspace_id, isPlanKey(member.plan) ? PLANS[member.plan].api_writes_per_hour : undefined);
         }
       }
       if (url.pathname === "/api/instagram/connect" && request.method === "POST") {
