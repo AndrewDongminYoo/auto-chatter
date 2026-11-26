@@ -26,9 +26,28 @@ function attachmentName(type) {
   return Object.hasOwn(attachmentNames, type) ? attachmentNames[/** @type {keyof typeof attachmentNames} */ (type)] : "첨부";
 }
 
+const titleLength = 40;
+
+/**
+ * A shared post's title is its whole caption, often several lines long (#20), so only its first non-blank line is
+ * shown, with runs of whitespace collapsed and at most 40 code points followed by an ellipsis. The stored title is
+ * not changed.
+ * @param {string} title
+ */
+function shortTitle(title) {
+  const line = (title.split(/\r?\n/).find((part) => part.trim()) ?? "").replace(/\s+/g, " ").trim();
+  const points = [...line];
+  return points.length > titleLength ? `${points.slice(0, titleLength).join("").trimEnd()}…` : line;
+}
+
 /** @param {{ type: string, title?: string }[] | null | undefined} attachments */
 function attachmentSummary(attachments) {
-  return (attachments ?? []).map((item) => (item.title ? `${attachmentName(item.type)}(${item.title})` : attachmentName(item.type))).join(" · ");
+  return (attachments ?? [])
+    .map((item) => {
+      const title = item.title ? shortTitle(item.title) : "";
+      return title ? `${attachmentName(item.type)}(${title})` : attachmentName(item.type);
+    })
+    .join(" · ");
 }
 
 /**

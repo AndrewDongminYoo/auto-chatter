@@ -34,6 +34,17 @@ test("an attachment-only DM shows its kinds and titles and points to Instagram",
   for (const type of ["toString", "__proto__", "sticker"]) assert.equal(labels.messageContent({ kind: "attachment", text: "", attachments: [{ type }] }).body, "첨부");
 });
 
+test("a long shared-post caption shows its first non-blank line, cut at 40 code points", () => {
+  // A shared post arrives with its whole caption as the title (live check, 2026-11-26).
+  const caption = "\n  🚨 (공유) 금턴 시대,   실제 인턴 합격 자소서 공개!\n\n알바, 대외활동 등 평범한 경험도 합격 자소서의 소재가 될 수 있어요!";
+  assert.equal(labels.messageContent({ kind: "attachment", text: "", attachments: [{ type: "share", title: caption }] }).body, "게시물 공유(🚨 (공유) 금턴 시대, 실제 인턴 합격 자소서 공개!)");
+  const long = `${"가".repeat(39)}😀😀 끝`;
+  assert.equal(labels.messageContent({ kind: "attachment", text: "", attachments: [{ type: "share", title: long }] }).body, `게시물 공유(${"가".repeat(39)}😀…)`);
+  assert.equal(labels.messageContent({ kind: "attachment", text: "", attachments: [{ type: "share", title: "가".repeat(40) }] }).body, `게시물 공유(${"가".repeat(40)})`);
+  assert.equal(labels.messageContent({ kind: "attachment", text: "", attachments: [{ type: "share", title: " \n \n " }] }).body, "게시물 공유");
+  assert.equal(labels.messageContent({ kind: "text", text: "봐 주세요", attachments: [{ type: "share", title: caption }] }).note, "첨부: 게시물 공유(🚨 (공유) 금턴 시대, 실제 인턴 합격 자소서 공개!) · Instagram 앱에서 확인하세요.");
+});
+
 test("an unsupported or withdrawn message shows a notice instead of any stored text", () => {
   assert.deepEqual(plain(labels.messageContent({ kind: "unsupported", text: "" })), { body: "Instagram에서만 볼 수 있는 메시지입니다.", note: "", notice: "unsupported" });
   for (const message of [
