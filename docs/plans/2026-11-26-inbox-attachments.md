@@ -6,7 +6,7 @@
 ## 단계
 
 1. `parseMessageEvents`가 첨부·미지원·취소를 해석하고, 채널 계약과 어댑터가 새 이벤트 종류를 전달합니다.
-   검증: `node --test src/instagram/message-events.test.ts src/instagram/channel-adapter.test.ts`
+   검증: `node --test src/instagram/follow-flow.test.ts src/instagram/channel-adapter.test.ts` (파서 테스트는 `follow-flow.test.ts`에 있습니다)
 2. migration 079가 `instagram_inbox_messages`의 `kind` CHECK를 넓히고 `attachments`, `deleted_at` 열을 더합니다. `db/schema.sql`과 `deploy/migrate-multi-user.sql`을 함께 고칩니다.
    검증: 격리된 PostgreSQL에서 runner를 두 번 실행합니다.
 3. `ingestMessages`가 첨부·미지원 DM을 저장하고 원장과 마지막 수신 시각에 기록하며, 자동화 경로에는 넘기지 않습니다. 취소 이벤트는 본문을 비우거나 취소 표시 행을 먼저 넣습니다.

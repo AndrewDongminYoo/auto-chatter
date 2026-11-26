@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { ingestMessages } from "./follow-flow.ts";
+import { storeInboxMessage } from "./inbox.ts";
 import { parseMessageEvents, type InstagramMessage } from "./message-events.ts";
 import { manualReplyStatus } from "./manual-reply-worker.ts";
 import { inboxMessages, listInbox } from "../app/inbox.ts";
@@ -213,6 +214,18 @@ test("the content CHECK refuses text on content-only kinds, a deleted row with t
     await assert.rejects(insert(kind, text, attachments, deleted), /instagram_inbox_messages_content/, `${kind} ${text} ${attachments} ${deleted}`);
   await insert("text", "hi", '[{"type":"image"}]');
   await insert("attachment", "", null, true);
+});
+
+test("a late original the inbox cannot store still reports its earlier withdrawal, so it reaches no automation", async () => {
+  await ingestMessages(pool, parseMessageEvents(body([envelope("901", { mid: "nul", is_deleted: true })])));
+  const client = await pool.connect();
+  try {
+    const original: InstagramMessage = { accountId: account, senderId: "901", messageId: "nul", text: `a${String.fromCharCode(0)}b`, timestamp: at() };
+    assert.equal(await storeInboxMessage(client, original, new Date()), true);
+    assert.equal(await storeInboxMessage(client, { ...original, messageId: "never-withdrawn" }, new Date()), false);
+  } finally {
+    client.release();
+  }
 });
 
 // The parser output is the only producer; this keeps a hand-built withdrawal without a sender from inserting a row.

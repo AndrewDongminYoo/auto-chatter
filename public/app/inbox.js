@@ -9,6 +9,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
   const states = new Map();
   // Listed conversation buttons by key, so a read mark can update its unread badge without reloading the list.
   const listed = new Map();
+  // One start sequence for list and conversation requests, so a listed preview keeps the newer source (#20).
+  let previewSeq = 0;
   let epoch = 0,
     searchText = "",
     listRequest = 0,
@@ -1304,12 +1306,15 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
 
   // A withdrawal keeps the message ID and time, so a list loaded before it still shows the withdrawn text (#20). The
   // conversation response carries the newest message's kind and preview as the list picks them (`latest`), so the row
-  // takes them whatever page loaded. The count and time stay until the list reloads, as before.
-  function refreshListedPreview(state, latest) {
+  // takes them whatever page loaded. List and conversation requests share one start sequence (`seq`): a row that a
+  // list request started after this conversation read already set is newer, so the response leaves it alone. The count
+  // and time stay until the list reloads, as before.
+  function refreshListedPreview(state, latest, seq) {
     const entry = listed.get(conversationKey(state));
-    if (!entry || !latest) return;
+    if (!entry || !latest || (entry.row.preview_seq ?? 0) > seq) return;
     entry.row.last_message_kind = latest.last_message_kind;
     entry.row.last_message_preview = latest.last_message_preview;
+    entry.row.preview_seq = seq;
     rowContent(entry.button, entry.row);
   }
 
@@ -1318,6 +1323,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     if (!state || (older && (state.loading || (!state.beforeMessages && !state.beforeReplies)))) return;
     const session = epoch,
       request = ++state.readRequest,
+      previewAt = ++previewSeq,
       writes = state.convoWrites,
       labelWrites = state.labelWrites,
       reminderWrites = state.reminderWrites;
@@ -1337,7 +1343,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         state.replies.clear();
       }
       for (const row of messages.messages) state.messages.set(row.id, row);
-      if (!older) refreshListedPreview(state, messages.latest);
+      if (!older) refreshListedPreview(state, messages.latest, previewAt);
       if (messages.state && writes === state.convoWrites) state.convo = messages.state;
       if (messages.label_set && labelWrites === state.labelWrites) showLabelSet(state, messages.label_set);
       if ("reminder" in messages && reminderWrites === state.reminderWrites) showReminder(state, messages.reminder);
@@ -1532,7 +1538,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     if (searchText) query.set("q", searchText);
     if (more) query.set("after", after);
     const reads = readSeq,
-      unreadOnly = query.has("unread");
+      unreadOnly = query.has("unread"),
+      previewAt = ++previewSeq;
     try {
       const page = await api(`/api/inbox?${query}`);
       if (epoch !== session || request !== listRequest) return;
@@ -1550,6 +1557,7 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
         // The open conversation's title follows the newest list row even when the unread filter hides that row.
         if (open) conversationTitle(row);
         if (unreadOnly && row.unread_count === 0) continue;
+        row.preview_seq = previewAt;
         const button = node("button", "", "secondary");
         rowContent(button, row);
         button.dataset.key = `${row.connection_id}:${row.recipient_id}`;

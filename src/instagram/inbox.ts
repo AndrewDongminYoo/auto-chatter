@@ -48,13 +48,14 @@ export async function lockInboxConversations(client: PoolClient, messages: reado
 // message inserts nothing and reopens nothing; a conversation without a state row is already open. The
 // assignee and the handoff stay as they are. Returns true only when the DM was not stored because its sender had
 // already withdrawn it (a 'deleted' row holds its message ID, #20), so the caller does not hand the withdrawn text to
-// any automation; that read runs only on a conflict, never for a newly stored DM.
+// any automation; that read runs only on a conflict or for a DM the inbox cannot store (a NUL in its text, a time
+// ahead), never for a newly stored DM.
 export async function storeInboxMessage(client: PoolClient, message: InstagramMessage, now: Date): Promise<boolean> {
   if (message.content === "deleted") {
     await withdrawInboxMessage(client, message, now);
     return false;
   }
-  if (!storable(message, now)) return false;
+  if (!storable(message, now)) return withdrawnEarlier(client, message);
   const kind = message.content ?? (message.confirmationReplyId ? "postback" : "text");
   const stored = await client.query<{ workspace_id: string; connection_id: string }>(
     `INSERT INTO instagram_inbox_messages AS stored(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at,attachments)
@@ -64,14 +65,7 @@ export async function storeInboxMessage(client: PoolClient, message: InstagramMe
      RETURNING stored.workspace_id::text,stored.connection_id::text`,
     [message.accountId, message.senderId, message.messageId, message.text, kind, message.timestamp, message.attachments?.length ? JSON.stringify(message.attachments) : null],
   );
-  if (!stored.rowCount) {
-    const withdrawn = await client.query<{ withdrawn: boolean }>(
-      `SELECT EXISTS(SELECT 1 FROM instagram_inbox_messages m JOIN instagram_connections c ON c.id=m.connection_id AND c.workspace_id=m.workspace_id
-         WHERE c.account_id=$1 AND m.message_id=$2 AND m.deleted_at IS NOT NULL) AS withdrawn`,
-      [message.accountId, message.messageId],
-    );
-    return withdrawn.rows[0]!.withdrawn;
-  }
+  if (!stored.rowCount) return withdrawnEarlier(client, message);
   const inserted = stored.rows.sort((a, b) => a.connection_id.localeCompare(b.connection_id));
   for (const row of inserted) {
     // The connection FOR SHARE comes before the conversation, the order of the state API and the deletion
@@ -99,6 +93,16 @@ export async function storeInboxMessage(client: PoolClient, message: InstagramMe
     if (kind === "text") await applyLabelRules(client, row.workspace_id, row.connection_id, message.senderId, message.text);
   }
   return false;
+}
+
+// Whether a connection of the message's account holds a withdrawal of this message ID (#20).
+async function withdrawnEarlier(client: PoolClient, message: InstagramMessage): Promise<boolean> {
+  const withdrawn = await client.query<{ withdrawn: boolean }>(
+    `SELECT EXISTS(SELECT 1 FROM instagram_inbox_messages m JOIN instagram_connections c ON c.id=m.connection_id AND c.workspace_id=m.workspace_id
+       WHERE c.account_id=$1 AND m.message_id=$2 AND m.deleted_at IS NOT NULL) AS withdrawn`,
+    [message.accountId, message.messageId],
+  );
+  return withdrawn.rows[0]!.withdrawn;
 }
 
 // The sender withdrew a message (#20). Server roles cannot DELETE, so every stored copy of the message on the
