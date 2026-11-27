@@ -153,6 +153,7 @@ function workspaceHarness() {
     currentWorkspaceId: "workspace-a",
     currentRole: "owner",
     workspaceTimeZone: "Asia/Seoul",
+    planRefreshRequest: 0,
     timeZoneWriteRevision: 0,
     currentView: "home",
     connections: [],
@@ -304,6 +305,85 @@ test("a time zone saved during a refresh survives its older membership snapshot"
   assert.equal(h.context.workspacePlan, refreshed);
 });
 
+test("a plan refresh during a workspace refresh survives its older membership snapshot", async () => {
+  const h = workspaceHarness();
+  const api = h.context.api;
+  let release!: () => void;
+  h.context.api = (url: string) =>
+    url === "/api/connections"
+      ? new Promise((resolve) => {
+          release = () => resolve({ connections: [] });
+        })
+      : api(url);
+  const pending = h.load();
+  await new Promise<void>((done) => setImmediate(done));
+  // A note save re-read the plan (#52) after this snapshot's membership read started.
+  h.context.planRefreshRequest++;
+  const refreshed = { plan: "pro", limits: {}, usage: { user_records: { count: 5 } } };
+  h.context.workspacePlan = refreshed;
+  release();
+  await pending;
+  assert.equal(h.context.workspacePlan, refreshed);
+  assert.equal(h.context.workspaceTimeZone, "Asia/Seoul");
+});
+
+test("a plan refresh from the previous context does not keep the new context's plan empty", async () => {
+  const h = workspaceHarness();
+  Object.assign(h.membership, { workspace_id: "workspace-b", plan: "pro", limits: {}, usage: {} });
+  const api = h.context.api;
+  let release!: () => void;
+  h.context.api = (url: string) =>
+    url === "/api/connections"
+      ? new Promise((resolve) => {
+          release = () => resolve({ connections: [] });
+        })
+      : api(url);
+  const pending = h.load();
+  await new Promise<void>((done) => setImmediate(done));
+  // The workspace transition retired the old context; a refresh it had started still moved the counter, and the
+  // session reset cleared the plan.
+  assert.equal(h.context.currentWorkspaceId, undefined);
+  h.context.planRefreshRequest++;
+  h.context.workspacePlan = undefined;
+  release();
+  await pending;
+  assert.equal(h.context.workspacePlan?.plan, "pro");
+});
+
+test("a connection data deletion re-reads the plan card's user record counts (#52)", async () => {
+  const begin = source.indexOf("function forgetDeletedConnection(connectionId) {");
+  const end = source.indexOf("\n}\n", begin) + 3;
+  let refreshes = 0;
+  const list = { querySelectorAll: () => [], replaceChildren() {} };
+  const context = vm.createContext({
+    contactCsvPreview: { invalidate() {} },
+    invalidateSegmentPreview() {},
+    invalidateContactExport() {},
+    purgedContactConnections: new Set<string>(),
+    contactsDirty: new Set<string>(),
+    contactsSaving: false,
+    selectedContact: undefined,
+    clearContactDetail() {},
+    byId: () => list,
+    inbox: { forgetConnection() {} },
+    loadContacts: async () => {},
+    activityRows: [],
+    renderActivity() {},
+    segmentsGeneration: 1,
+    loadActivity: async () => {},
+    emptyState() {},
+    // A failed re-read must not reject out of the deletion handler.
+    refreshPlan: () => {
+      refreshes++;
+      return Promise.reject(new Error("offline"));
+    },
+  });
+  vm.runInContext(source.slice(begin, end), context);
+  vm.runInContext('forgetDeletedConnection("connection-a")', context);
+  await new Promise<void>((done) => setImmediate(done));
+  assert.equal(refreshes, 1);
+});
+
 test("a member list read that started before a time zone save keeps the refreshed plan", async () => {
   const begin = source.indexOf("async function loadMembers() {");
   const end = source.indexOf("\n}\n", begin) + 3;
@@ -313,6 +393,7 @@ test("a member list read that started before a time zone save keeps the refreshe
   const element = () => ({ textContent: "", replaceChildren() {} });
   const context = vm.createContext({
     segmentsGeneration: 1,
+    planRefreshRequest: 0,
     timeZoneWriteRevision: 0,
     workspacePlan: undefined,
     api: (url: string) =>
@@ -347,6 +428,15 @@ test("a member list read that started before a time zone save keeps the refreshe
   release({ members: [], plan: "pro", limits: {}, usage: { active_contacts: { time_zone: "UTC", count: 3 } } });
   await next;
   assert.equal(vm.runInContext("workspacePlan.usage.active_contacts.count", context), 3);
+  // A plan refresh after a user record change (#52) started after this read; its newer count is kept.
+  const counted = { plan: "pro", limits: {}, usage: { user_records: { count: 5 } } };
+  const stale = vm.runInContext("loadMembers()", context) as Promise<void>;
+  await new Promise<void>((done) => setImmediate(done));
+  context.planRefreshRequest++;
+  context.workspacePlan = counted;
+  release({ members: [], plan: "pro", limits: {}, usage: { user_records: { count: 4 } } });
+  await stale;
+  assert.equal(context.workspacePlan, counted);
 });
 
 test("an unrelated action cannot unlock a rule save already in progress", async () => {
@@ -777,6 +867,7 @@ test("a connection data deletion drops the loaded activity before its reload, so
     invalidateSegmentPreview: noop,
     invalidateContactExport: noop,
     loadContacts: async () => {},
+    refreshPlan: async () => {},
     byId: (id: string) => nodes.get(id),
     connections: [{ id: "c1" }],
     sendStatusLabels: { sent: "Meta 접수" },

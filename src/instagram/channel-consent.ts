@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { requireUserRecordSlot } from "../app/plans.ts";
 
 // Preserve existing imports while the pure policy is shared with other channel adapters.
 export * from "../channels/policy.ts";
@@ -105,6 +106,9 @@ export interface RecordChannelConsentEventInput {
   evidenceReference: string;
   occurredAt: Date;
   actorId: string;
+  // Only the dashboard API sets this (#52): a new grant then needs a free slot under the user record limit. A revoke,
+  // a replayed request key and a caller without the flag are never refused by the limit.
+  enforceUserRecordLimit?: boolean;
 }
 
 export interface RecordChannelConsentEventResult {
@@ -134,6 +138,10 @@ export async function recordChannelConsentEvent(pool: Pool, input: RecordChannel
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const limited = input.enforceUserRecordLimit === true && input.decision === "grant";
+    // The workspace row comes before the connection, the order of the other workspace-then-connection writes, and
+    // serializes the grants of every connection of the workspace while they count.
+    if (limited) await client.query("SELECT 1 FROM workspaces WHERE id=$1 FOR NO KEY UPDATE", [input.workspaceId]);
     const connection = await client.query("SELECT id FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR UPDATE", [input.connectionId, input.workspaceId]);
     if (!connection.rows[0]) throw new ConsentConnectionNotFoundError();
 
@@ -149,6 +157,10 @@ export async function recordChannelConsentEvent(pool: Pool, input: RecordChannel
     let eventId: string;
     let applied = true;
     if (inserted.rows[0]) {
+      // The check follows the INSERT, so only a row this transaction really wrote counts against the limit: the
+      // conflict itself decides a replay, also when a data deletion removed the earlier row meanwhile. The count
+      // includes the new row, and a refusal rolls it back.
+      if (limited) await requireUserRecordSlot(client, input.workspaceId, "consent_events", 1);
       eventId = inserted.rows[0].id;
     } else {
       applied = false;

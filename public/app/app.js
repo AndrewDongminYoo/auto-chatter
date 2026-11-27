@@ -496,6 +496,7 @@ const errors = {
   label_rule_conflict: "다른 화면에서 이 규칙이 먼저 바뀌어 최신 내용을 다시 불러왔습니다. 확인한 뒤 다시 저장해 주세요.",
   invalid_note: "메모는 1–2,000자로 입력해 주세요.",
   invalid_note_request: "메모 요청을 확인해 주세요. 새로고침한 뒤 다시 시도해 주세요.",
+  user_record_limit_reached: "요금제에 저장할 수 있는 기록 수에 도달해 저장하지 않았습니다. 설정의 요금제 안내에서 저장한 메모와 동의 기록 수를 확인해 주세요.",
   conversation_not_found: "대화를 찾을 수 없습니다. 삭제되었을 수 있으니 인박스를 새로고침해 주세요.",
   invalid_reminder_due: "리마인더 날짜와 시각을 확인해 주세요.",
   reminder_due_out_of_range: "리마인더는 지금부터 1분 뒤에서 90일 안으로 정해 주세요.",
@@ -786,6 +787,9 @@ function forgetDeletedConnection(connectionId) {
   if (selectedContact?.contact.connection_id === connectionId) clearContactDetail();
   for (const card of byId("contacts-list").querySelectorAll(".contact-row")) if (card.dataset.connectionId === connectionId) card.remove();
   inbox.forgetConnection(connectionId);
+  // The deletion removed the connection's notes and consent grants, so the plan card re-reads its user record
+  // counts (#52); a failed re-read keeps the previous count, as after a note save.
+  void refreshPlan().catch(() => {});
   if (!contactsDirty.size && !contactsSaving) void loadContacts();
   // The deleted connection's loaded rows go before the reload, so a failed reload cannot be filtered back into view.
   activityRows = activityRows.filter((row) => row.connection_id !== connectionId);
@@ -979,12 +983,13 @@ function inviteItem(invite) {
 async function loadMembers() {
   const generation = segmentsGeneration;
   const zoneWrite = timeZoneWriteRevision;
+  const planRefresh = planRefreshRequest;
   try {
     const [members, invites] = await Promise.all([api("/api/workspace/members"), api("/api/workspace/invites")]);
     if (generation !== segmentsGeneration) return;
     byId("member-count").textContent = members.members.length;
-    // As in loadWorkspace: a time zone save after this read started leaves the plan to refreshPlan.
-    if (zoneWrite === timeZoneWriteRevision) workspacePlan = { plan: members.plan, limits: members.limits, usage: members.usage };
+    // As in loadWorkspace: a time zone save or a plan refresh after this read started leaves the plan to refreshPlan.
+    if (zoneWrite === timeZoneWriteRevision && planRefresh === planRefreshRequest) workspacePlan = { plan: members.plan, limits: members.limits, usage: members.usage };
     planControls();
     byId("members").replaceChildren(...members.members.map(memberItem));
     byId("invites").replaceChildren(...(invites.invites.length ? invites.invites.map(inviteItem) : [node("p", "대기 중인 초대가 없습니다.", "hint")]));
@@ -1006,8 +1011,9 @@ function inviteControls() {
 // The plan line in the settings and the limit help beside the invite and connect actions. Both actions stay
 // enabled at the limit, because a new link for an invited email and re-authorizing a connected account are
 // allowed; the server refuses a new email or a new account.
-// Re-reads the plan, limits and usage after a time zone save, so the plan card's months follow the new zone (#51).
-// Only the latest request in the same session and workspace may redraw the card.
+// Re-reads the plan, limits and usage after a time zone save, so the plan card's months follow the new zone (#51),
+// and after a user record change (#52). Only the latest request in the same session and workspace may redraw the
+// card, and a workspace or member list read that started before it does not replace its plan.
 let planRefreshRequest = 0;
 async function refreshPlan() {
   const request = ++planRefreshRequest;
@@ -1025,6 +1031,8 @@ function planControls() {
   byId("active-contact-help").hidden = !planActiveContactsHelp(workspacePlan);
   // Over the allowance every send has stopped (#52), so the line takes the warning style instead of a hint.
   byId("active-contact-help").className = planActiveContactsOver(workspacePlan) ? "flow-alert warning alert-detail" : "hint";
+  byId("user-record-summary").textContent = planUserRecords(workspacePlan);
+  byId("user-record-summary").hidden = !planUserRecords(workspacePlan);
   byId("seat-limit-help").textContent = planSeatHelp(workspacePlan);
   byId("seat-limit-help").hidden = !planSeatsFull(workspacePlan);
   byId("connection-limit-help").textContent = planConnectionHelp(workspacePlan);
@@ -1534,6 +1542,7 @@ async function readWorkspace(request) {
 async function loadWorkspace() {
   const request = ++workspaceLoadRequest;
   const zoneWrite = timeZoneWriteRevision;
+  const planRefresh = planRefreshRequest;
   globalSendRevision++;
   const snapshot = await readWorkspace(request);
   if (!snapshot || request !== workspaceLoadRequest || snapshot.session !== workspaceGeneration) return;
@@ -1550,8 +1559,10 @@ async function loadWorkspace() {
   const zoneInput = byId("time-zone-form").elements.time_zone;
   if (firstContext || zoneInput.value === (workspaceTimeZone ?? "")) zoneInput.value = timeZone ?? "";
   workspaceTimeZone = timeZone ?? undefined;
-  // A time zone save after this read started re-reads the plan itself (refreshPlan); the older usage is not kept.
-  if (zoneWrite === timeZoneWriteRevision) workspacePlan = { plan: membership.plan, limits: membership.limits, usage: membership.usage };
+  // A time zone save or a user record change after this read started re-reads the plan itself (refreshPlan); the
+  // older usage is not kept. A new context always takes this plan: a refresh the previous context started cannot
+  // redraw it, because refreshPlan drops a response from another session or workspace.
+  if (firstContext || (zoneWrite === timeZoneWriteRevision && planRefresh === planRefreshRequest)) workspacePlan = { plan: membership.plan, limits: membership.limits, usage: membership.usage };
   planControls();
   timeZoneControls();
   const operationsVisible = currentRole === "owner" || currentRole === "admin";
@@ -4416,6 +4427,8 @@ const inbox = createInbox({
   getUserId: () => currentUserId,
   getTimeZone: () => workspaceTimeZone,
   getSendSettings: (account) => globalSendDeliveryStatus(globalSendEnabled, instagramConnectAvailable, account),
+  // A failed re-read keeps the previous count; the note result is already shown in the inbox.
+  onUserRecordsChanged: () => void refreshPlan().catch(() => {}),
 });
 function resetInbox() {
   inbox.reset();

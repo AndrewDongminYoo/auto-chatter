@@ -51,6 +51,7 @@ export async function recordConsentEvent(pool: Pool, user: User, connectionId: s
       evidenceReference: input.evidence_reference,
       occurredAt,
       actorId: user.id,
+      enforceUserRecordLimit: true,
     });
     return {
       event_id: result.eventId,

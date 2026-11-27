@@ -84,6 +84,16 @@ function planActiveContactsApprovalHelp(entitlements) {
   return planActiveContactsOver(entitlements) ? "이번 달 활성 연락처가 요금제 포함량을 넘어 실행 승인을 기록할 수 없습니다. 설정의 요금제 안내를 확인해 주세요." : "";
 }
 
+// Stored inbox notes and consent records against the plan's per-kind limit (#52). The limit counts every stored row
+// of each kind, so a downgrade can leave a count over it. An older server without the counts shows nothing.
+function planUserRecords(entitlements) {
+  const counts = entitlements?.usage.user_records;
+  const limit = Number(entitlements?.limits.user_records_per_workspace);
+  if (!counts || !Number.isFinite(limit)) return "";
+  const count = (value) => `${formatCount(Number(value))}/${formatCount(limit)}건`;
+  return `저장한 메모 ${count(counts.inbox_notes)} · 동의 기록 ${count(counts.consent_events)}`;
+}
+
 function planSeatHelp(entitlements) {
   if (!planSeatsFull(entitlements)) return "";
   return `요금제의 멤버 자리 ${entitlements.limits.seats}개를 모두 쓰고 있어 새 이메일은 초대할 수 없습니다. 이미 초대한 이메일로는 새 링크를 만들 수 있습니다. 대기 중인 초대를 취소하거나 멤버를 제거하면 자리가 생깁니다.`;
