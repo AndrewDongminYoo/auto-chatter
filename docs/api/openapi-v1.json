@@ -1,0 +1,188 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "auto-chatter external API",
+    "version": "1",
+    "description": "The external API for servers that hold a workspace API key. A workspace admin issues the key in the dashboard. The key is shown once, and it reads only the data of its own workspace.\n\nEvery request counts toward a limit of 600 requests per minute per client IP address, before the key is read. Each valid key then has a limit of 60 requests per minute. Both limits apply to all paths together.\n\nThe server does not serve this document."
+  },
+  "servers": [{ "url": "https://auto-chat.donminzzi.kr" }],
+  "security": [{ "apiKey": [] }],
+  "paths": {
+    "/v1/key": {
+      "get": {
+        "operationId": "getKey",
+        "summary": "Describe the API key of the request",
+        "description": "Returns the ID, name, scopes, workspace and expiry of the key in the Authorization header. Use it to check a key before a sync.",
+        "responses": {
+          "200": {
+            "description": "The key is valid.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Key" } } }
+          },
+          "401": { "$ref": "#/components/responses/InvalidApiKey" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "405": { "$ref": "#/components/responses/MethodNotAllowed" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/contacts": {
+      "get": {
+        "operationId": "listContacts",
+        "summary": "List the comment contacts of the workspace",
+        "description": "Returns the comment contacts of the key's workspace in pages, in a fixed order of the connection ID and then the sender ID. Do not rely on this order: use only the cursor to read the next page. A contact is one comment sender on one connected Instagram account. Contacts of disconnected accounts are included.\n\nTo read all contacts, send the first request without `after`. Then send each next request with `after` set to the `next_cursor` of the previous page, unchanged, and with the same `connection_id`. Stop when `next_cursor` is `null`. Do not read or build a cursor: its format can change.\n\nEach page is a separate read. A contact never comes twice in one full read, and a contact that existed for the whole read is never missed. A contact that is recorded during a full read at a position that the read has already passed is not in that read; it is in the next full read.\n\nThe response does not include the comment sender's username, consent state, comment or message text, or credentials. No field of a contact proves messaging consent or delivery eligibility.\n\nThe key needs the `contacts:read` scope.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "The maximum number of contacts in the page.",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 100 }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "The `next_cursor` of the previous page, unchanged.",
+            "schema": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "description": "Only the contacts of this connected account. A cursor of another connection is refused.",
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of contacts.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContactPage" } } }
+          },
+          "400": {
+            "description": "An unknown or repeated query parameter, a `limit` outside 1-100, a malformed cursor or connection ID, or a cursor of another connection than `connection_id`.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "invalid_request" } } }
+          },
+          "401": { "$ref": "#/components/responses/InvalidApiKey" },
+          "403": {
+            "description": "The key does not have the `contacts:read` scope.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "insufficient_scope" } } }
+          },
+          "404": {
+            "description": "`connection_id` is not a connection of the key's workspace. A connection of another workspace gets the same response as an ID that does not exist.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "connection_not_found" } } }
+          },
+          "405": { "$ref": "#/components/responses/MethodNotAllowed" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "apiKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "`Authorization: Bearer ac_live_...`. The key is not accepted in the query string."
+      }
+    },
+    "responses": {
+      "InvalidApiKey": {
+        "description": "The key is missing, malformed, unknown, revoked or expired. All of these get the same response. A key is revoked when the admin who made it is removed from the workspace or loses the admin role.",
+        "headers": { "WWW-Authenticate": { "schema": { "type": "string" }, "example": "Bearer realm=\"auto-chatter\"" } },
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "invalid_api_key" } } }
+      },
+      "NotFound": {
+        "description": "The path does not exist. A path is checked only after the key is accepted.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "not_found" } } }
+      },
+      "MethodNotAllowed": {
+        "description": "The path does not accept the method.",
+        "headers": { "Allow": { "schema": { "type": "string" }, "example": "GET" } },
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "method_not_allowed" } } }
+      },
+      "RateLimited": {
+        "description": "The client IP address or the key used its requests for this minute.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "rate_limited" } } }
+      },
+      "Unavailable": {
+        "description": "The service cannot answer now, for example when the request limiter or the database is not available. Try again later.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "examples": {
+              "limiter": { "value": { "error": "api_key_limit_unavailable" } },
+              "service": { "value": { "error": "service_unavailable" } }
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": { "error": { "type": "string" } }
+      },
+      "Key": {
+        "type": "object",
+        "required": ["id", "name", "scopes", "workspace_id", "expires_at"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "scopes": { "type": "array", "items": { "type": "string", "enum": ["contacts:read"] } },
+          "workspace_id": { "type": "string", "format": "uuid" },
+          "expires_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ContactPage": {
+        "type": "object",
+        "required": ["contacts", "next_cursor"],
+        "properties": {
+          "contacts": { "type": "array", "maxItems": 100, "items": { "$ref": "#/components/schemas/Contact" } },
+          "next_cursor": {
+            "type": ["string", "null"],
+            "description": "The `after` value of the next page, or `null` on the last page."
+          }
+        }
+      },
+      "Contact": {
+        "type": "object",
+        "description": "The fields of the contact CSV export v1, with JSON names.",
+        "additionalProperties": false,
+        "required": ["channel", "identity_kind", "connection_id", "sender_id", "connection_username", "first_comment_recorded_at", "last_comment_recorded_at", "comment_count", "automation_paused", "tags", "fields"],
+        "properties": {
+          "channel": { "type": "string", "const": "instagram" },
+          "identity_kind": { "type": "string", "const": "comment_sender" },
+          "connection_id": { "type": "string", "format": "uuid" },
+          "sender_id": { "type": "string", "description": "The Instagram-scoped ID of the comment sender, as a string." },
+          "connection_username": {
+            "type": ["string", "null"],
+            "description": "The username of the connected account, not of the comment sender."
+          },
+          "first_comment_recorded_at": { "type": "string", "format": "date-time" },
+          "last_comment_recorded_at": { "type": "string", "format": "date-time" },
+          "comment_count": { "type": "string", "pattern": "^[0-9]+$", "description": "The number of stored comments, as a decimal string." },
+          "automation_paused": { "type": "boolean", "description": "True when automation is paused for the contact by hand or by a human handoff." },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "fields": {
+            "type": "object",
+            "description": "The set values of the contact fields that are not archived, keyed by field ID. A number value is sent with all of its stored digits; read it with a parser that keeps that precision when it matters.",
+            "propertyNames": { "format": "uuid" },
+            "additionalProperties": { "$ref": "#/components/schemas/FieldValue" }
+          }
+        }
+      },
+      "FieldValue": {
+        "type": "object",
+        "required": ["name", "type", "value"],
+        "properties": {
+          "name": { "type": "string" },
+          "type": { "type": "string", "enum": ["text", "number", "boolean", "date"] },
+          "value": { "type": ["string", "number", "boolean"], "description": "A string for text and date (YYYY-MM-DD) fields, a number or a boolean." }
+        }
+      }
+    }
+  }
+}
