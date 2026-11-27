@@ -21,6 +21,7 @@
 2026-11-27에 #52 행을 #414 배포(Worker `dd7b6543`)에 맞춰 갱신했습니다.
 같은 날 #52 행을 #416 배포(Worker `4310e6e7`)에 맞춰 다시 갱신했습니다.
 같은 날 #48 행을 #417과 migration 080 운영 적용(Worker `eb7c4df5`)에 맞춰 갱신했습니다.
+같은 날 #48 행을 운영 실제 키의 `GET /v1/key` 확인과 연락처 읽기 API 로컬 구현에 맞춰 다시 갱신했습니다.
 
 [목표 명세](../specs/2026-09-25-messaging-automation-platform.md)와 [백로그](2026-09-27-manychat-backlog.md)의 알려진 필수 작업을 코드·로컬 검사·실계정·운영 적용으로 구분합니다.
 기준은 `591cc091e5e3cdb55bba20fe65d3c662df800fd4`이며 아래 이슈별 목록의 미완료는 구현된 첫 DM·팔로우·연락처 기능을 없다고 판정한 것이 아닙니다.
@@ -223,10 +224,10 @@
   - 공급자·실계정: 미검증
   - 운영 완료: 031 적용·배포, 실제 전송 미검증
 - [#48](https://github.com/AndrewDongminYoo/auto-chatter/issues/48) 작업 공간 API 키·연락처/플로 외부 API·제한과 감사
-  - 현재 코드: 작업 공간 API 키의 발급·해시 보관·만료(30·90·180·365일)·폐기·만든 관리자의 제거와 강등 시 자동 폐기·추가 전용 감사 기록, 사용 중인 키 최대 10개, 권한 `contacts:read`, 키 확인 경로 `GET /v1/key`와 IP별·키별 요청 한도, 마지막 사용 시각과 IP 기록, 설정 화면 구현(#417, migration 080, [설계](../specs/2026-11-27-workspace-api-keys-design.md)); 연락처 변경·플로 시작 외부 API, OpenAPI 계약 문서, 외부 API 권한 침해 테스트는 미구현
-  - 로컬 증거: 단위·DB·workerd 테스트, 설정 화면 로컬 mock 미리보기
+  - 현재 코드: 작업 공간 API 키의 발급·해시 보관·만료(30·90·180·365일)·폐기·만든 관리자의 제거와 강등 시 자동 폐기·추가 전용 감사 기록, 사용 중인 키 최대 10개, 권한 `contacts:read`, 키 확인 경로 `GET /v1/key`와 IP별·키별 요청 한도, 마지막 사용 시각과 IP 기록, 설정 화면 구현(#417, migration 080, [설계](../specs/2026-11-27-workspace-api-keys-design.md)); 댓글 연락처를 CSV v1 범위로 커서 페이지 단위로 읽는 `GET /v1/contacts`, OpenAPI 3.1 계약 문서(`docs/api/openapi-v1.json`), 작업 공간 경계와 키 거절의 권한 침해 테스트 로컬 구현([설계](../specs/2026-11-27-public-contacts-api-design.md)); 연락처 변경·플로 시작 외부 API는 미구현
+  - 로컬 증거: 단위·DB·workerd 테스트, 설정 화면 로컬 mock 미리보기; 연락처 API는 단위·DB·workerd 테스트만 있으며 운영 배포 전
   - 공급자·실계정: 해당 없음
-  - 운영 완료: migration 080 2026-11-27 운영 적용(백업 후 runner), Worker `eb7c4df5`(main `11cfbae`) 배포와 공개 smoke 35/35 통과, 운영 `/v1/key`의 무인증·잘못된 키 `401 invalid_api_key` 확인, 실제 키 발급과 사용은 확인하지 않음; 완료하지 않음
+  - 운영 완료: migration 080 2026-11-27 운영 적용(백업 후 runner), Worker `eb7c4df5`(main `11cfbae`) 배포와 공개 smoke 35/35 통과, 운영 `/v1/key`의 무인증·잘못된 키 `401 invalid_api_key` 확인, 운영 대시보드에서 발급한 실제 키(만료 2026-12-27)로 `GET /v1/key` `200` 확인([운영 확인](../specs/2026-11-27-workspace-api-keys-design.md#운영-확인)); 연락처 API는 운영에 배포하지 않음; 완료하지 않음
 - [#49](https://github.com/AndrewDongminYoo/auto-chatter/issues/49) Google Sheets 리드 동기화·중복 방지·CSV 대안
   - 현재 코드: 미구현
   - 로컬 증거: 미검증
