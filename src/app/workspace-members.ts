@@ -5,6 +5,7 @@ import { lockWorkspaceForMember, normalizeEmail, workspaceFor } from "./settings
 import { unassignRemovedMember } from "./inbox-conversations.ts";
 import { cancelRemovedMemberReminders } from "./inbox-reminders.ts";
 import { requireInviteSeat, requireMemberSeat, workspaceEntitlements } from "./plans.ts";
+import { revokeMemberApiKeys } from "./api-keys.ts";
 
 const INVITE_DAYS = 7;
 const MAX_OPEN_INVITES = 20;
@@ -115,15 +116,20 @@ export async function changeMemberRole(pool: Pool, user: User, memberId: string,
   const role = inviteRole(input.role);
   const workspace = await workspaceFor(pool, user, "owner");
   return transaction(pool, async (client) => {
+    // The workspace row first, as removeMember takes it: delete_workspace_data locks it before the API keys that a
+    // demotion revokes, so taking the member row first could deadlock with a workspace deletion.
+    await client.query("SELECT 1 FROM workspaces WHERE id=$1 FOR SHARE", [workspace]);
     await targetMember(client, workspace, user, memberId);
     await client.query("UPDATE workspace_members SET role=$3 WHERE user_id=$1 AND workspace_id=$2", [memberId, workspace, role]);
-    return { user_id: memberId, role };
+    // A member below admin can no longer hold API keys, so the ones they made stop with the change (#48).
+    const revoked = role === "agent" ? await revokeMemberApiKeys(client, workspace, memberId, "member_demoted") : 0;
+    return { user_id: memberId, role, revoked_api_keys: revoked };
   });
 }
 
 // The row stays with removed_at set: server roles cannot DELETE, and every request filters removed members out.
-// The member's conversations become unassigned and their pending reminders are cancelled in the same transaction;
-// replies they already queued are kept.
+// The member's conversations become unassigned, their pending reminders are cancelled and the API keys they made are
+// revoked in the same transaction; replies they already queued are kept.
 export async function removeMember(pool: Pool, user: User, memberId: string) {
   const workspace = await workspaceFor(pool, user, "owner");
   return transaction(pool, async (client) => {
@@ -133,7 +139,8 @@ export async function removeMember(pool: Pool, user: User, memberId: string) {
     await client.query("UPDATE workspace_members SET removed_at=now(),removed_by=$3 WHERE user_id=$1 AND workspace_id=$2", [memberId, workspace, user.id]);
     const unassigned = await unassignRemovedMember(client, workspace, memberId, user.id);
     const cancelled = await cancelRemovedMemberReminders(client, workspace, memberId);
-    return { user_id: memberId, removed: true, unassigned_conversations: unassigned, cancelled_reminders: cancelled };
+    const revoked = await revokeMemberApiKeys(client, workspace, memberId, "member_removed");
+    return { user_id: memberId, removed: true, unassigned_conversations: unassigned, cancelled_reminders: cancelled, revoked_api_keys: revoked };
   });
 }
 
@@ -157,6 +164,7 @@ async function currentWorkspaceMovable(client: PoolClient, workspace: string, us
        OR EXISTS(SELECT 1 FROM instagram_inbox_label_rules WHERE workspace_id=$1)
        OR EXISTS(SELECT 1 FROM workspace_reply_templates WHERE workspace_id=$1)
        OR EXISTS(SELECT 1 FROM webhook_endpoints WHERE workspace_id=$1)
+       OR EXISTS(SELECT 1 FROM api_keys WHERE workspace_id=$1)
        OR EXISTS(SELECT 1 FROM workspace_invites WHERE workspace_id=$1)
        OR EXISTS(SELECT 1 FROM instagram_oauth_states WHERE workspace_id=$1 AND consumed_at IS NULL AND expires_at>now())
        AS busy`,

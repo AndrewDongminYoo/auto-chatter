@@ -71,6 +71,9 @@ export const EXPORTED_TABLES: Record<string, { scope: "self" | "workspace" | "co
   webhook_signing_keys: { scope: "workspace", omit: ["secret_encrypted"] },
   webhook_deliveries: { scope: "workspace" },
   webhook_redelivery_events: { scope: "workspace" },
+  // Only the key hash stays in the database; the prefix, scopes, dates and last use are exported.
+  api_keys: { scope: "workspace", omit: ["key_hash"] },
+  api_key_events: { scope: "workspace" },
   data_deletion_records: { scope: "workspace" },
 };
 

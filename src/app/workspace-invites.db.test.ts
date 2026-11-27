@@ -221,7 +221,7 @@ test("a removed member is refused on the next request and a role change applies 
   const { token } = await invite();
   assert.equal((await accept(invitee, token)).status, 200);
   const changed = await request(owner, "PATCH", `/api/workspace/members/${invitee.id}`, { role: "admin" });
-  assert.deepEqual(await body(changed), { user_id: invitee.id, role: "admin" });
+  assert.deepEqual(await body(changed), { user_id: invitee.id, role: "admin", revoked_api_keys: 0 });
   assert.equal((await request(invitee, "POST", "/api/flows", { name: "admin flow" })).status, 201);
 
   assert.equal((await request(owner, "DELETE", `/api/workspace/members/${invitee.id}`)).status, 200);

@@ -20,6 +20,9 @@ export interface AuthRateLimitEnv {
   API_WRITE_USER_LIMIT?: RateLimitBinding;
   API_WRITE_WORKSPACE_LIMIT?: RateLimitBinding;
   INBOX_LIST_LIMIT?: RateLimitBinding;
+  // External API limits (#48): every /v1/ request per client IP, and every authenticated request per API key.
+  API_IP_LIMIT?: RateLimitBinding;
+  API_KEY_LIMIT?: RateLimitBinding;
 }
 
 // The routes whose Supabase call sends an auth mail.

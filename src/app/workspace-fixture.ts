@@ -298,6 +298,14 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
     )
   ).rows[0].event_id;
   await pool.query("INSERT INTO webhook_redelivery_events(workspace_id,connection_id,delivery_event_id,actor_id) VALUES($1,$2,$3,$4)", [workspace, connection, delivery, user]);
+  const apiKey = (
+    await pool.query(
+      `INSERT INTO api_keys(workspace_id,name,key_prefix,key_hash,scopes,created_by,expires_at,last_used_at,last_used_ip)
+       VALUES($1,'crm','ac_live_abcd',encode(sha256(convert_to($2,'UTF8')),'hex'),ARRAY['contacts:read'],$3,now()+interval '90 days',now(),'203.0.113.5') RETURNING id`,
+      [workspace, `API-KEY-SECRET-${account}`, user],
+    )
+  ).rows[0].id;
+  await pool.query("INSERT INTO api_key_events(workspace_id,api_key_id,kind,actor_id) VALUES($1,$2,'created',$3)", [workspace, apiKey, user]);
   await pool.query(
     `INSERT INTO data_deletion_records(workspace_id,connection_id,requested_by,deleted_counts,retained_counts)
      VALUES($1,$2,$3,'{"instagram_comment_events":0}','{}')`,

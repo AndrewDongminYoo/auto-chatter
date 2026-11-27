@@ -416,6 +416,7 @@ test("removing a member unassigns their conversations with audit and keeps statu
     removed: true,
     unassigned_conversations: 2,
     cancelled_reminders: 0,
+    revoked_api_keys: 0,
   });
 
   const first = await detail();

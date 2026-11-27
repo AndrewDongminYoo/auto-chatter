@@ -63,7 +63,8 @@ export class AuthLimiter {
 // 60 minutes can span two of them; the project allowance is half of Supabase's 30 mails per hour so that even a
 // burst at a window boundary stays within the provider quota. The workspace export and the Instagram OAuth start
 // are limited per user (#166). Signed-in API writes are limited per user and per workspace, and the inbox list per
-// user (#167). The workspace write limit takes the plan's count from the caller (#52); its period never changes,
+// user (#167). The external API counts every /v1/ request per client IP and every authenticated one per API key
+// (#48). The workspace write limit takes the plan's count from the caller (#52); its period never changes,
 // because the stored window keeps the end set by its first request.
 export function durableLimits(namespace: LimiterNamespace): Required<AuthRateLimitEnv> {
   const limiter = (name: string, limit: number, period: number) => ({
@@ -87,5 +88,7 @@ export function durableLimits(namespace: LimiterNamespace): Required<AuthRateLim
     API_WRITE_USER_LIMIT: limiter("api-write-user", 120, 60_000),
     API_WRITE_WORKSPACE_LIMIT: limiter("api-write-workspace", 3_000, 3_600_000),
     INBOX_LIST_LIMIT: limiter("inbox-list", 60, 60_000),
+    API_IP_LIMIT: limiter("api-ip", 600, 60_000),
+    API_KEY_LIMIT: limiter("api-key", 60, 60_000),
   };
 }

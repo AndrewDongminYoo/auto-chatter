@@ -72,12 +72,13 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("DELETE FROM flow_runs"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_unmatched_replies"), { code: "42501" });
     await assert.rejects(client.query("UPDATE webhook_redelivery_events SET actor_id=actor_id"), { code: "42501" });
+    await assert.rejects(client.query("UPDATE api_key_events SET kind=kind"), { code: "42501" });
     // Target snapshots never change after creation, and only the deletion functions remove them.
     for (const table of ["instagram_segment_snapshots", "instagram_segment_snapshot_members"]) {
       await assert.rejects(client.query(`UPDATE ${table} SET workspace_id=workspace_id`), { code: "42501" });
       await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
     }
-    for (const table of ["webhook_endpoints", "webhook_signing_keys", "webhook_deliveries", "webhook_redelivery_events"]) await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
+    for (const table of ["webhook_endpoints", "webhook_signing_keys", "webhook_deliveries", "webhook_redelivery_events", "api_keys", "api_key_events"]) await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
     for (let run = 0; run < 2; run++) await client.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now()) ON CONFLICT(name) DO UPDATE SET last_success_at=now()");
     await assert.rejects(client.query("DELETE FROM scheduled_steps"), { code: "42501" });
     await client.query("RESET ROLE");
@@ -285,12 +286,13 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("DELETE FROM flow_runs"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_unmatched_replies"), { code: "42501" });
     await assert.rejects(client.query("UPDATE webhook_redelivery_events SET actor_id=actor_id"), { code: "42501" });
+    await assert.rejects(client.query("UPDATE api_key_events SET kind=kind"), { code: "42501" });
     // Target snapshots never change after creation, and only the deletion functions remove them.
     for (const table of ["instagram_segment_snapshots", "instagram_segment_snapshot_members"]) {
       await assert.rejects(client.query(`UPDATE ${table} SET workspace_id=workspace_id`), { code: "42501" });
       await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
     }
-    for (const table of ["webhook_endpoints", "webhook_signing_keys", "webhook_deliveries", "webhook_redelivery_events"]) await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
+    for (const table of ["webhook_endpoints", "webhook_signing_keys", "webhook_deliveries", "webhook_redelivery_events", "api_keys", "api_key_events"]) await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM channel_consent_events"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM channel_consent_state"), { code: "42501" });
     for (let run = 0; run < 2; run++) await client.query("INSERT INTO scheduled_steps(name,last_failure_at,failure_code) VALUES('wake',now(),'database_error') ON CONFLICT(name) DO UPDATE SET last_failure_at=now(),failure_code='database_error'");
@@ -445,12 +447,13 @@ test("Supabase roles cannot read product data; the server role has DML without D
     await assert.rejects(client.query("DELETE FROM flow_runs"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM instagram_unmatched_replies"), { code: "42501" });
     await assert.rejects(client.query("UPDATE webhook_redelivery_events SET actor_id=actor_id"), { code: "42501" });
+    await assert.rejects(client.query("UPDATE api_key_events SET kind=kind"), { code: "42501" });
     // Target snapshots never change after creation, and only the deletion functions remove them.
     for (const table of ["instagram_segment_snapshots", "instagram_segment_snapshot_members"]) {
       await assert.rejects(client.query(`UPDATE ${table} SET workspace_id=workspace_id`), { code: "42501" });
       await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
     }
-    for (const table of ["webhook_endpoints", "webhook_signing_keys", "webhook_deliveries", "webhook_redelivery_events"]) await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
+    for (const table of ["webhook_endpoints", "webhook_signing_keys", "webhook_deliveries", "webhook_redelivery_events", "api_keys", "api_key_events"]) await assert.rejects(client.query(`DELETE FROM ${table}`), { code: "42501" });
     for (let run = 0; run < 2; run++) await client.query("INSERT INTO scheduled_steps(name,last_success_at) VALUES('cron',now()) ON CONFLICT(name) DO UPDATE SET last_success_at=now()");
     await assert.rejects(client.query("DELETE FROM scheduled_steps"), { code: "42501" });
     await assert.rejects(client.query("DELETE FROM channel_consent_events"), { code: "42501" });

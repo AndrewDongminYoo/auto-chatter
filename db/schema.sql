@@ -1682,6 +1682,52 @@ CREATE TABLE IF NOT EXISTS webhook_redelivery_events (
 );
 CREATE INDEX IF NOT EXISTS webhook_redelivery_events_delivery_idx
   ON webhook_redelivery_events(delivery_event_id,created_at);
+-- Workspace API keys (#48, docs/specs/2026-11-27-workspace-api-keys-design.md). An external system sends the key
+-- in an Authorization header; only the SHA-256 hex of the whole key is stored, and key_prefix (its first 12
+-- characters) lets the dashboard tell keys apart. Every key expires. created_by is a plain user ID, not a foreign
+-- key: a member row can move to another workspace. created_by_email is the creator's email when the key was made.
+-- A key is revoked by an administrator (revoked, revoked_by set) or, in the transaction that removes or demotes
+-- its creator, automatically (member_removed or member_demoted, no revoked_by). last_used_at and last_used_ip are
+-- the latest authenticated request, written at most once per minute. Server roles never delete these rows;
+-- delete_workspace_data does. The limit of active keys per workspace is enforced in code under the workspace lock.
+CREATE TABLE IF NOT EXISTS api_keys (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  name text NOT NULL CHECK(length(btrim(name)) BETWEEN 1 AND 80),
+  key_prefix text NOT NULL CHECK(key_prefix ~ '^ac_live_[A-Za-z0-9_-]{4}$'),
+  key_hash text NOT NULL UNIQUE CHECK(key_hash ~ '^[0-9a-f]{64}$'),
+  scopes text[] NOT NULL CHECK(cardinality(scopes) >= 1 AND scopes <@ ARRAY['contacts:read']::text[]),
+  created_by uuid NOT NULL,
+  created_by_email text CHECK(length(created_by_email) BETWEEN 3 AND 320),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  expires_at timestamptz NOT NULL,
+  last_used_at timestamptz,
+  last_used_ip text CHECK(last_used_ip ~ '^[0-9A-Fa-f.:]{2,45}$'),
+  revoked_at timestamptz,
+  revoked_by uuid,
+  revoked_reason text CHECK(revoked_reason IN ('revoked','member_removed','member_demoted')),
+  CHECK(expires_at > created_at),
+  CHECK((revoked_at IS NULL) = (revoked_reason IS NULL)),
+  CHECK((revoked_by IS NOT NULL) = (revoked_reason IS NOT DISTINCT FROM 'revoked')),
+  CHECK(last_used_ip IS NULL OR last_used_at IS NOT NULL),
+  UNIQUE(id,workspace_id)
+);
+CREATE INDEX IF NOT EXISTS api_keys_workspace_idx ON api_keys(workspace_id,created_at);
+CREATE INDEX IF NOT EXISTS api_keys_creator_idx ON api_keys(workspace_id,created_by) WHERE revoked_at IS NULL;
+-- Append-only audit of API key issue and revocation. An automatic revocation has no actor. Expiry is not
+-- recorded: expires_at already shows it.
+CREATE TABLE IF NOT EXISTS api_key_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL,
+  api_key_id uuid NOT NULL,
+  kind text NOT NULL CHECK(kind IN ('created','revoked','member_removed','member_demoted')),
+  actor_id uuid,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  CHECK((actor_id IS NULL) = (kind IN ('member_removed','member_demoted'))),
+  FOREIGN KEY(api_key_id,workspace_id) REFERENCES api_keys(id,workspace_id)
+);
+CREATE INDEX IF NOT EXISTS api_key_events_key_idx ON api_key_events(api_key_id,created_at);
+CREATE INDEX IF NOT EXISTS api_key_events_workspace_idx ON api_key_events(workspace_id,created_at);
 -- The billing-month active contact ledger (#51, docs/specs/2026-11-24-active-contact-ledger-design.md). One row per
 -- workspace, billing month, connection and person key: the first recorded message exchanged with that person in that
 -- month. billing_month is the first day of the calendar month of the activity time in the workspace time zone that was
@@ -2765,6 +2811,13 @@ BEGIN
   DELETE FROM public.instagram_oauth_states WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_oauth_states', affected);
+  -- API key audit points at the keys.
+  DELETE FROM public.api_key_events WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('api_key_events', affected);
+  DELETE FROM public.api_keys WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('api_keys', affected);
   DELETE FROM public.workspace_invites WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('workspace_invites', affected);

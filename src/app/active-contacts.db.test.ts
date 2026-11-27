@@ -789,9 +789,12 @@ test("re-running migration 077 writes no ledger row, even after an identity link
   // redefines the connection and person deletion functions after it, as the runner does.
   const migration = await readFile(new URL("../../db/migrations/077_active_contacts.sql", import.meta.url), "utf8");
   const counts = await readFile(new URL("../../db/migrations/078_active_contact_deletion_counts.sql", import.meta.url), "utf8");
+  // 080 redefines the workspace deletion function after them.
+  const apiKeys = await readFile(new URL("../../db/migrations/080_api_keys.sql", import.meta.url), "utf8");
   for (let run = 0; run < 2; run++) {
     await pool.query(migration);
     await pool.query(counts);
+    await pool.query(apiKeys);
   }
   assert.deepEqual(await ledger(), stored);
   assert.deepEqual(await definitions(), canonical);

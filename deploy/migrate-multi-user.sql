@@ -79,5 +79,6 @@ BEGIN;
 \ir ../db/migrations/077_active_contacts.sql
 \ir ../db/migrations/078_active_contact_deletion_counts.sql
 \ir ../db/migrations/079_inbox_attachments.sql
+\ir ../db/migrations/080_api_keys.sql
 \ir supabase-access.sql
 COMMIT;

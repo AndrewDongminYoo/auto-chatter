@@ -153,6 +153,7 @@ async function receive(request: Request, env: Env, correlationId: string): Promi
       },
       correlationId,
     );
+  if (url.pathname.startsWith("/v1/")) return publicApi(request, durableLimits(env.AUTH_LIMITER), (poolCorrelationId) => openPool(env, poolCorrelationId), correlationId);
   if (url.pathname === "/instagram/deauthorize") return deauthorize(request, env, correlationId);
   if (url.pathname !== "/webhooks/instagram") return new Response(null, { status: 404 });
   if (!env.INSTAGRAM_APP_SECRET || !env.INSTAGRAM_VERIFY_TOKEN) throw new ConfigurationError("Webhook secrets missing");
@@ -640,6 +641,7 @@ import { InstagramLoginPrivateReplyTransport } from "../instagram/instagram-logi
 import { publicPage } from "./public-pages.ts";
 import { openPool } from "./pool.ts";
 import { appApi } from "../app/api.ts";
+import { publicApi } from "../app/public-api.ts";
 import type { AuthEnv } from "../app/auth.ts";
 import { deleteExpiredOAuthStates, type InstagramOAuthEnv } from "../app/instagram-oauth.ts";
 import { DEAUTHORIZE_BODY_LIMIT, deauthorizeInstagramUser, parseDeauthorizeBody } from "../app/instagram-deauthorization.ts";

@@ -3,7 +3,7 @@ import { signingKeyContext } from "../app/webhook-delivery.ts";
 import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 import { resetTestSchema } from "../test-schema.ts";
 import assert from "node:assert/strict";
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { Pool } from "pg";
@@ -2093,6 +2093,79 @@ test("workerd logs no database_connection_error when a successful API request cl
   } finally {
     await runtime.dispose();
     await pool.query("ALTER ROLE auto_chatter_server LOGIN").catch(() => {});
+    await pool.end();
+  }
+});
+
+test("workerd /v1/key counts each API key and each client IP in the limiter object (#48)", async () => {
+  const databaseUrl = process.env.TEST_DATABASE_URL;
+  const url = new URL(databaseUrl);
+  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
+  const pool = new Pool({ connectionString: databaseUrl });
+  const workspace = "11111111-1111-4111-8111-111111111111",
+    user = "66666666-6666-4666-8666-666666666666";
+  const serverUrl = new URL(databaseUrl);
+  serverUrl.username = "auto_chatter_server";
+  serverUrl.password = "runtime-test-only";
+  const config = JSON.parse(await readFile(new URL("../../wrangler.json", import.meta.url), "utf8"));
+  const runtime = new Miniflare({
+    modules: true,
+    scriptPath: ".wrangler/build/index.js",
+    compatibilityDate: config.compatibility_date,
+    compatibilityFlags: config.compatibility_flags,
+    hyperdrives: { HYPERDRIVE: serverUrl.href },
+    durableObjects: Object.fromEntries(config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }])),
+    bindings: { SEND_ENABLED: "false" },
+    outboundService: async () => {
+      throw new Error("The external API makes no outbound request");
+    },
+  });
+  const key = (index) => `ac_live_${String(index).padStart(43, "k")}`;
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const get = (headers) => runtime.dispatchFetch("https://app.test/v1/key", { headers });
+  try {
+    await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
+    await pool.query("TRUNCATE workspaces CASCADE");
+    await pool.query("INSERT INTO workspaces VALUES($1)", [workspace]);
+    await pool.query("INSERT INTO workspace_members VALUES($1,$2)", [user, workspace]);
+    for (const index of [1, 2])
+      await pool.query(
+        `INSERT INTO api_keys(workspace_id,name,key_prefix,key_hash,scopes,created_by,expires_at)
+         VALUES($1,$2,$3,$4,ARRAY['contacts:read'],$5,now()+interval '30 days')`,
+        [workspace, `key ${index}`, key(index).slice(0, 12), hash(key(index)), user],
+      );
+    await pool.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8"));
+    await pool.query("ALTER ROLE auto_chatter_server LOGIN PASSWORD 'runtime-test-only'");
+
+    // 60 requests per key per minute, then 429; another key from the same address keeps its own count.
+    for (let index = 0; index < 61; index++) {
+      const response = await get({ Authorization: `Bearer ${key(1)}`, "CF-Connecting-IP": "198.51.100.10" });
+      assert.equal(response.status, index < 60 ? 200 : 429, `key request ${index}`);
+      const body = await response.json();
+      if (index === 0) {
+        assert.equal(body.name, "key 1");
+        assert.deepEqual(body.scopes, ["contacts:read"]);
+        assert.equal(response.headers.get("access-control-allow-origin"), null);
+      }
+      if (index === 60) assert.deepEqual(body, { error: "rate_limited" });
+    }
+    assert.equal((await get({ Authorization: `Bearer ${key(2)}`, "CF-Connecting-IP": "198.51.100.10" })).status, 200);
+    // The restricted server role wrote the last use.
+    assert.equal((await pool.query("SELECT last_used_ip FROM api_keys WHERE name='key 1'")).rows[0].last_used_ip, "198.51.100.10");
+
+    // 600 requests per client IP per minute, refused ones included, counted before any key is read.
+    for (let index = 0; index < 600; index++) {
+      const response = await get({ Authorization: "Bearer not-a-key", "CF-Connecting-IP": "198.51.100.20" });
+      assert.equal(response.status, 401, `ip request ${index}`);
+      await response.arrayBuffer();
+    }
+    const limited = await get({ Authorization: `Bearer ${key(2)}`, "CF-Connecting-IP": "198.51.100.20" });
+    assert.equal(limited.status, 429);
+    assert.deepEqual(await limited.json(), { error: "rate_limited" });
+    // Another address is not affected.
+    assert.equal((await get({ Authorization: `Bearer ${key(2)}`, "CF-Connecting-IP": "198.51.100.21" })).status, 200);
+  } finally {
+    await runtime.dispose();
     await pool.end();
   }
 });
