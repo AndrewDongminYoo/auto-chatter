@@ -152,6 +152,7 @@ Write new or changed per-feature invariants there, not here: this file keeps onl
 - [DM start triggers](docs/agents/feature-invariants.md#dm-start-triggers): `src/instagram/dm-start-trigger.ts`
 - [Deletion, workspace and operations](docs/agents/feature-invariants.md#deletion-workspace-and-operations): `src/app/data-deletion.ts`, `src/app/workspace-*.ts`, `src/app/plans.ts`, `src/app/operations-*.ts`, the deletion functions in `db/schema.sql` and `db/migrations/`, `deploy/*.sql`
 - [Active contact ledger](docs/agents/feature-invariants.md#active-contact-ledger): `active_contacts` and its functions and triggers in `db/schema.sql`, `src/instagram/active-contacts.ts`, `recordActiveContactComments` in `src/instagram/store.ts`, `recordActiveContactDms` in `src/instagram/follow-flow.ts`, the `sent` updates of the send workers
+- [Workspace API keys](docs/agents/feature-invariants.md#workspace-api-keys): `src/app/api-keys.ts`, `src/app/public-api.ts`, `public/app/api-key-labels.js`
 - [Reports](docs/agents/feature-invariants.md#reports): `src/app/*-reports.ts`, `public/app/*-reports.js`
 
 ## Deployment
