@@ -526,6 +526,7 @@ test("two documents clear a session change without rebroadcasting it", () => {
       "timeZoneControls",
       "hideInviteLink",
       "hideWebhookSecret",
+      "hideApiKeySecret",
       "renderConditionTree",
       "leaveSegmentEdit",
       "clearContactDetail",

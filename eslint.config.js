@@ -10,6 +10,8 @@ const dashboardScript = (name) => `public/app/${name}.js`;
 // Their top-level declarations are page globals that other scripts (and the src/app vm tests) read.
 // Each group below lists the names one script defines, scoped to the scripts that read them.
 const dashboardGlobals = [
+  // api-key-labels.js
+  { readers: ["app"], names: ["apiKeyDates", "apiKeyLastUse", "apiKeyStatus"] },
   // campaign-drafts.js
   { readers: ["app"], names: ["createCampaignDrafts"] },
   // campaign-run-reports.js
@@ -48,7 +50,23 @@ const dashboardGlobals = [
   { readers: ["app"], names: ["countSummary", "countTotal", "deletedLabels", "retainedLabels"] },
   // display-values.js
   {
-    readers: ["app", "campaign-drafts", "campaign-run-reports", "contact-csv-preview", "contact-identity-links", "deletion-labels", "flow-editor", "flow-run-reports", "handoff-reports", "inbox", "manual-reply-reports", "plan-labels", "segment-snapshots", "webhook-labels"],
+    readers: [
+      "api-key-labels",
+      "app",
+      "campaign-drafts",
+      "campaign-run-reports",
+      "contact-csv-preview",
+      "contact-identity-links",
+      "deletion-labels",
+      "flow-editor",
+      "flow-run-reports",
+      "handoff-reports",
+      "inbox",
+      "manual-reply-reports",
+      "plan-labels",
+      "segment-snapshots",
+      "webhook-labels",
+    ],
     names: ["formatText", "errorMessage", "formatCount", "formatDate", "formatDateTime", "formatTime"],
   },
   // flow-editor-model.js

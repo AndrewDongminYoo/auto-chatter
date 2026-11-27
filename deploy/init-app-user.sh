@@ -26,6 +26,7 @@ REVOKE UPDATE ON instagram_segment_snapshots FROM automations_app;
 REVOKE UPDATE ON instagram_segment_snapshot_members FROM automations_app;
 REVOKE UPDATE ON campaign_approval_events FROM automations_app;
 REVOKE UPDATE ON webhook_redelivery_events FROM automations_app;
+REVOKE UPDATE ON api_key_events FROM automations_app;
 REVOKE INSERT, UPDATE ON data_deletion_records FROM automations_app;
 REVOKE ALL ON workspace_deletion_records FROM automations_app;
 GRANT EXECUTE ON FUNCTION public.delete_connection_data(uuid,uuid,uuid,text) TO automations_app;

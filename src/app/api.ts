@@ -38,6 +38,7 @@ import { flowRunReport } from "./flow-run-reports.ts";
 import { handoffReport } from "./handoff-reports.ts";
 import { campaignRunReport } from "./campaign-run-reports.ts";
 import { FLOW_REQUEST_BYTES, archiveFlow, createFlow, getFlow, getFlowVersion, listFlowRuns, listFlowVersions, listFlows, publishFlow, saveFlowDraft, setFlowEnabled, testFlowRun } from "./flows.ts";
+import { createApiKey, listApiKeys, revokeApiKey } from "./api-keys.ts";
 import { createWebhookEndpoint, listWebhookDeliveries, listWebhookEndpoints, redeliverWebhook, retireWebhookKey, rotateWebhookKey, setWebhookEndpointActive } from "./webhooks.ts";
 
 function instagramConnectAvailable(user: User, env: InstagramOAuthEnv): boolean {
@@ -511,6 +512,10 @@ export async function appApi(
         const tested = await testFlowRun(pool, user, flow[1]!, await readJson(request, FLOW_REQUEST_BYTES));
         return json(tested, "errors" in tested ? 422 : 200);
       }
+      if (url.pathname === "/api/workspace/api-keys" && request.method === "GET") return json(await listApiKeys(pool, user));
+      if (url.pathname === "/api/workspace/api-keys" && request.method === "POST") return json(await createApiKey(pool, user, await readJson(request)), 201);
+      const apiKeyRevoke = /^\/api\/workspace\/api-keys\/([a-f0-9-]+)\/revoke$/.exec(url.pathname);
+      if (apiKeyRevoke && request.method === "POST") return json(await revokeApiKey(pool, user, apiKeyRevoke[1]!));
       if (url.pathname === "/api/webhooks/endpoints" && request.method === "GET") return json({ endpoints: await listWebhookEndpoints(pool, user) });
       if (url.pathname === "/api/webhooks/endpoints" && request.method === "POST") return json(await createWebhookEndpoint(pool, user, await readJson(request), env), 201);
       const webhookEndpoint = /^\/api\/webhooks\/endpoints\/([a-f0-9-]+)\/(rotate|retire|enable|disable)$/.exec(url.pathname);

@@ -322,6 +322,10 @@ function resetSession({ broadcast = true } = {}) {
   byId("webhook-deliveries").replaceChildren();
   byId("webhook-form").reset();
   hideWebhookSecret();
+  byId("api-keys-section").hidden = true;
+  byId("api-keys").replaceChildren();
+  byId("api-key-form").reset();
+  hideApiKeySecret();
   contactsGeneration++;
   contactsDirty.clear();
   purgedContactConnections.clear();
@@ -551,6 +555,12 @@ const errors = {
   webhook_endpoint_limit_reached: "켜 둘 수 있는 주소는 최대 5개입니다. 사용하지 않는 주소를 끈 뒤 다시 시도해 주세요.",
   webhook_rotation_in_progress: "이미 키를 교체하는 중입니다. 이전 키를 폐기한 뒤 다시 교체해 주세요.",
   webhook_key_required: "유효한 키가 하나뿐이라 폐기할 수 없습니다. 먼저 키를 교체해 주세요.",
+  invalid_api_key: "키 이름은 1–80자로 입력하고, 줄바꿈이나 보이지 않는 문자(여러 이모지를 이어 붙인 기호 등)는 빼 주세요. 계속 실패하면 목록을 새로 고친 뒤 다시 시도해 주세요.",
+  invalid_api_key_expiry: "만료 기간은 30일, 90일, 180일, 365일 가운데 골라 주세요.",
+  invalid_api_key_scopes: "키 권한을 확인할 수 없습니다. 페이지를 새로 고친 뒤 다시 시도해 주세요.",
+  api_key_limit_reached: "사용 중인 키는 최대 10개입니다. 쓰지 않는 키를 폐기한 뒤 다시 발급해 주세요.",
+  api_key_not_found: "키를 찾을 수 없습니다. 목록을 새로 고쳐 주세요.",
+  api_key_already_revoked: "이미 폐기된 키입니다. 목록을 새로 고쳐 주세요.",
   invalid_webhook_delivery: "전송 기록을 확인할 수 없습니다. 목록을 새로 고쳐 주세요.",
   webhook_delivery_not_found: "전송 기록을 찾을 수 없습니다. 목록을 새로 고쳐 주세요.",
   webhook_delivery_not_dead: "전송이 중단된 기록만 다시 보낼 수 있습니다. 목록을 새로 고쳐 주세요.",
@@ -1240,6 +1250,76 @@ async function loadWebhooks() {
   }
 }
 
+// Workspace API keys (#48) are admin-only, like the webhooks. A new key is shown once in the panel and kept nowhere
+// else: dismissing it, a reload or a session reset clears it. While a key is in flight or showing, issuing stays locked.
+let apiKeySecretPending = false;
+function apiKeySecretLocked() {
+  return apiKeySecretPending || !byId("api-key-secret").hidden;
+}
+function apiKeySecretControls() {
+  byId("api-key-form").querySelector("button[type=submit]").disabled = apiKeySecretLocked();
+}
+function showApiKeySecret(created) {
+  byId("api-key-secret-value").value = created.key;
+  byId("api-key-secret-help").textContent = `"${formatText(created.name)}" 키입니다. 지금 한 번만 보여 주며 닫거나 새로 고치면 다시 볼 수 없으니 외부 시스템에 저장한 뒤 닫아 주세요. 닫기 전에는 새 키를 발급할 수 없습니다.`;
+  byId("api-key-secret").hidden = false;
+  byId("api-key-secret-value").select();
+  apiKeySecretControls();
+}
+function hideApiKeySecret() {
+  byId("api-key-secret-value").value = "";
+  byId("api-key-secret-help").textContent = "";
+  byId("api-key-secret").hidden = true;
+  apiKeySecretControls();
+}
+function apiKeyItem(key) {
+  const item = node("div", "", "item");
+  const status = apiKeyStatus(key, Date.now());
+  const badges = node("div", "", "badges");
+  badges.append(badge(status.label, status.tone));
+  item.append(
+    node("strong", key.name),
+    badges,
+    node("p", `${formatText(key.key_prefix)}… · 권한 ${formatText(Array.isArray(key.scopes) ? key.scopes.join(", ") : null)}`, "hint"),
+    node(
+      "p",
+      apiKeyDates(key, (value) => formatDateTime(value)),
+      "hint",
+    ),
+    node(
+      "p",
+      apiKeyLastUse(key, (value) => formatDateTime(value)),
+      "hint",
+    ),
+  );
+  if (key.revoked_at) return item;
+  const revoke = node("button", "폐기", "secondary danger");
+  revoke.addEventListener("click", () =>
+    action(revoke, async () => {
+      if (!confirm(`"${formatText(key.name)}" 키를 폐기할까요? 폐기하면 이 키를 쓰는 외부 시스템의 요청이 바로 거절되며 되돌릴 수 없습니다.`)) return;
+      await api(`/api/workspace/api-keys/${key.id}/revoke`, "POST");
+      notice("키를 폐기했습니다.");
+      await loadApiKeys();
+    }),
+  );
+  item.append(revoke);
+  return item;
+}
+// Only the latest list request renders, so an older response cannot restore a revoked key or drop a newly issued one.
+let apiKeysRequest = 0;
+async function loadApiKeys() {
+  const generation = segmentsGeneration;
+  const request = ++apiKeysRequest;
+  const current = () => generation === segmentsGeneration && request === apiKeysRequest;
+  try {
+    const listed = await api("/api/workspace/api-keys");
+    if (!current()) return;
+    byId("api-keys").replaceChildren(...(listed.keys.length ? listed.keys.map(apiKeyItem) : [node("p", "발급한 키가 없습니다.", "hint")]));
+  } catch (error) {
+    if (current()) notice(errorMessage(error), true);
+  }
+}
+
 // Menu views: each one shows a group of sections. Switching only hides the others, so drafts and inputs stay.
 const views = ["home", "accounts", "automation", "inbox", "contacts", "campaigns", "reports", "settings"];
 // A menu whose link is hidden for the current role (campaigns for members and viewers) is not opened from an address.
@@ -1331,7 +1411,7 @@ async function loadView(name) {
         await Promise.all([flowReports.configure(currentRole, workspaceTimeZone, connections), campaignReports.configure(currentRole, workspaceTimeZone)]);
       } else if (name === "settings") {
         const admin = currentRole === "owner" || currentRole === "admin";
-        if (admin) await Promise.all([loadOperations(), loadWebhooks(), ...(currentRole === "owner" ? [loadMembers()] : [])]);
+        if (admin) await Promise.all([loadOperations(), loadWebhooks(), loadApiKeys(), ...(currentRole === "owner" ? [loadMembers()] : [])]);
       }
     })
     .catch((error) => {
@@ -1574,6 +1654,7 @@ async function loadWorkspace() {
   byId("nav-campaigns").hidden = !operationsVisible;
   byId("operations-section").hidden = !operationsVisible;
   byId("webhooks-section").hidden = !operationsVisible;
+  byId("api-keys-section").hidden = !operationsVisible;
   byId("nav-reports").hidden = !operationsVisible;
   byId("home-reports-link").hidden = !operationsVisible;
   byId("members-section").hidden = currentRole !== "owner";
@@ -2278,6 +2359,44 @@ byId("copy-webhook-secret").addEventListener("click", async () => {
   }
 });
 byId("dismiss-webhook-secret").addEventListener("click", hideWebhookSecret);
+byId("api-keys-refresh").addEventListener("click", (event) => action(event.currentTarget, loadApiKeys));
+byId("api-key-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button[type=submit]");
+  if (apiKeySecretLocked()) return;
+  action(button, async () => {
+    apiKeySecretPending = true;
+    apiKeySecretControls();
+    try {
+      const generation = segmentsGeneration;
+      const created = await api("/api/workspace/api-keys", "POST", {
+        name: form.elements.name.value,
+        expires_in_days: Number(form.elements.expires_in_days.value),
+        scopes: ["contacts:read"],
+      });
+      // A session reset while the request was in flight must not reveal the key to the next session.
+      if (generation !== segmentsGeneration) return;
+      showApiKeySecret(created);
+      form.reset();
+      notice("API 키를 발급했습니다. 외부 시스템에 저장한 뒤 닫아 주세요.");
+      await loadApiKeys();
+    } finally {
+      apiKeySecretPending = false;
+    }
+  }).then(apiKeySecretControls);
+});
+byId("copy-api-key-secret").addEventListener("click", async () => {
+  const secret = byId("api-key-secret-value");
+  try {
+    await navigator.clipboard.writeText(secret.value);
+    notice("API 키를 복사했습니다.");
+  } catch {
+    secret.select();
+    notice("API 키를 선택했습니다. 직접 복사해 주세요.", true);
+  }
+});
+byId("dismiss-api-key-secret").addEventListener("click", hideApiKeySecret);
 byId("copy-invite").addEventListener("click", async () => {
   const link = byId("invite-link");
   try {

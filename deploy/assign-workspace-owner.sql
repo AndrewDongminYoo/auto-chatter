@@ -5,19 +5,26 @@ BEGIN;
 CREATE FUNCTION pg_temp.assign_workspace_owner(target_user uuid, target_workspace uuid) RETURNS void
 LANGUAGE plpgsql AS $$
 DECLARE previous_workspace uuid;
+DECLARE locked_workspace uuid;
 BEGIN
   IF NOT EXISTS(SELECT 1 FROM auth.users WHERE id=target_user AND email_confirmed_at IS NOT NULL) THEN
     RAISE EXCEPTION 'Confirmed Supabase user required';
   END IF;
   PERFORM pg_advisory_xact_lock(hashtext(target_user::text));
-  PERFORM 1 FROM workspaces WHERE id=target_workspace FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'Workspace not found'; END IF;
+  -- Workspace rows before the membership row, in ID order, as the app takes them (acceptInvite, createApiKey):
+  -- locking the membership first could deadlock with an API key issue in the previous workspace.
+  SELECT workspace_id INTO previous_workspace FROM workspace_members WHERE user_id=target_user AND removed_at IS NULL;
+  PERFORM 1 FROM workspaces WHERE id=LEAST(target_workspace,COALESCE(previous_workspace,target_workspace)) FOR UPDATE;
+  PERFORM 1 FROM workspaces WHERE id=GREATEST(target_workspace,COALESCE(previous_workspace,target_workspace)) FOR UPDATE;
+  IF NOT EXISTS(SELECT 1 FROM workspaces WHERE id=target_workspace) THEN RAISE EXCEPTION 'Workspace not found'; END IF;
   IF EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id=target_workspace AND role='owner' AND removed_at IS NULL AND user_id<>target_user) THEN
     RAISE EXCEPTION 'Workspace already owned';
   END IF;
-  SELECT workspace_id INTO previous_workspace FROM workspace_members WHERE user_id=target_user AND removed_at IS NULL FOR UPDATE;
+  SELECT workspace_id INTO locked_workspace FROM workspace_members WHERE user_id=target_user AND removed_at IS NULL FOR UPDATE;
+  IF locked_workspace IS DISTINCT FROM previous_workspace THEN
+    RAISE EXCEPTION 'Membership changed during the assignment; run the script again';
+  END IF;
   IF previous_workspace IS NOT NULL AND previous_workspace<>target_workspace THEN
-    PERFORM 1 FROM workspaces WHERE id=previous_workspace FOR UPDATE;
     -- The same emptiness rule as currentWorkspaceMovable in src/app/workspace-members.ts.
     IF EXISTS(SELECT 1 FROM instagram_connections WHERE workspace_id=previous_workspace)
       OR EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id=previous_workspace AND user_id<>target_user AND removed_at IS NULL)
@@ -35,6 +42,7 @@ BEGIN
       OR EXISTS(SELECT 1 FROM instagram_inbox_label_rules WHERE workspace_id=previous_workspace)
       OR EXISTS(SELECT 1 FROM workspace_reply_templates WHERE workspace_id=previous_workspace)
       OR EXISTS(SELECT 1 FROM webhook_endpoints WHERE workspace_id=previous_workspace)
+      OR EXISTS(SELECT 1 FROM api_keys WHERE workspace_id=previous_workspace)
       OR EXISTS(SELECT 1 FROM workspace_invites WHERE workspace_id=previous_workspace)
       OR EXISTS(SELECT 1 FROM instagram_oauth_states WHERE workspace_id=previous_workspace AND consumed_at IS NULL AND expires_at>now()) THEN
       RAISE EXCEPTION 'Existing workspace is not empty or has an active OAuth flow';
