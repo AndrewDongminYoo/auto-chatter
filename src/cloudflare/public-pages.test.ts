@@ -31,7 +31,9 @@ for (const [pathname, title] of [
     if (pathname === "/privacy") assert.ok(html.includes("'데이터 내보내기'에서 작업 공간의 기록을 JSON 파일로"));
     if (pathname === "/privacy") assert.ok(html.includes("작업 공간 멤버와 초대 정보:</strong> 작업 공간 소유자가 초대한 사람의 이메일 주소"));
     if (pathname === "/privacy") assert.ok(html.includes("초대 기록은 취소·만료·사용된 것을 포함해 작업 공간을 삭제할 때까지 보관합니다"));
-    if (pathname === "/privacy") assert.ok(html.includes("시행일: 2026년 10월 2일"));
+    if (pathname === "/privacy") assert.ok(html.includes("시행일: 2026년 11월 27일"));
+    // Workspace API keys (#48): the last use time and IP are a stored category of their own.
+    if (pathname === "/privacy") assert.ok(html.includes("<strong>API 키의 마지막 사용 시각과 IP:</strong>"));
     // Target snapshots (#35): identifiers only, nothing sent, kept until a deletion function removes them.
     if (pathname === "/privacy") {
       assert.ok(html.includes("대상을 고정해도 메시지는 보내지 않으며, 명단에는 식별자만 저장하고"));
