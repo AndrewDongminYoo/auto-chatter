@@ -6,8 +6,14 @@ import { activeContactLimitReached, isPlanKey, PLANS, planLimits, type PlanKey }
 
 interface Entitlements {
   plan: string;
-  limits: { seats: number; connections: number; campaign_sends_per_month: number; active_contacts_per_month?: number };
-  usage: { seats: number; connections: number; campaign_sends: number; active_contacts?: { time_zone: string; month: string; count: number; previous_month: string; previous_count: number } };
+  limits: { seats: number; connections: number; campaign_sends_per_month: number; active_contacts_per_month?: number; user_records_per_workspace?: number };
+  usage: {
+    seats: number;
+    connections: number;
+    campaign_sends: number;
+    active_contacts?: { time_zone: string; month: string; count: number; previous_month: string; previous_count: number };
+    user_records?: { consent_events: number; inbox_notes: number };
+  };
 }
 interface PlanLabels {
   planName(plan: string): string;
@@ -23,6 +29,7 @@ interface PlanLabels {
   planActiveContactsOver(entitlements: Entitlements | undefined): boolean;
   planActiveContactsFull(entitlements: Entitlements | undefined): boolean;
   planActiveContactsApprovalHelp(entitlements: Entitlements | undefined): string;
+  planUserRecords(entitlements: Entitlements | undefined): string;
 }
 
 // public/app/plan-labels.js is a classic browser script; its top-level functions become context globals.
@@ -39,11 +46,11 @@ const entitlements = (plan: PlanKey, seats: number, connections: number, campaig
 
 test("the catalog holds the five plans with the agreed seat, connection, monthly campaign send, active contact and hourly API write limits", () => {
   assert.deepEqual(PLANS, {
-    free: { seats: 1, connections: 1, campaign_sends_per_month: 0, active_contacts_per_month: 25, api_writes_per_hour: 500 },
-    essential: { seats: 2, connections: 2, campaign_sends_per_month: 1000, active_contacts_per_month: 250, api_writes_per_hour: 1000 },
-    pro: { seats: 3, connections: 3, campaign_sends_per_month: 5000, active_contacts_per_month: 2500, api_writes_per_hour: 1500 },
-    business: { seats: 5, connections: 5, campaign_sends_per_month: 20000, active_contacts_per_month: 7500, api_writes_per_hour: 3000 },
-    advanced: { seats: 10, connections: 10, campaign_sends_per_month: 50000, active_contacts_per_month: 25000, api_writes_per_hour: 6000 },
+    free: { seats: 1, connections: 1, campaign_sends_per_month: 0, active_contacts_per_month: 25, api_writes_per_hour: 500, user_records_per_workspace: 1000 },
+    essential: { seats: 2, connections: 2, campaign_sends_per_month: 1000, active_contacts_per_month: 250, api_writes_per_hour: 1000, user_records_per_workspace: 10000 },
+    pro: { seats: 3, connections: 3, campaign_sends_per_month: 5000, active_contacts_per_month: 2500, api_writes_per_hour: 1500, user_records_per_workspace: 50000 },
+    business: { seats: 5, connections: 5, campaign_sends_per_month: 20000, active_contacts_per_month: 7500, api_writes_per_hour: 3000, user_records_per_workspace: 150000 },
+    advanced: { seats: 10, connections: 10, campaign_sends_per_month: 50000, active_contacts_per_month: 25000, api_writes_per_hour: 6000, user_records_per_workspace: 500000 },
   });
   for (const key of Object.keys(PLANS)) assert.ok(isPlanKey(key), key);
   for (const value of ["gold", "", "toString", "__proto__", null, 1]) assert.equal(isPlanKey(value), false);
@@ -118,9 +125,25 @@ test("the limit help appears only when a limit is reached, including after a dow
   assert.equal(labels.planSeatsFull(undefined), false);
 });
 
+test("the stored record line shows each kind's count against the plan's per-kind limit", () => {
+  const withRecords = (plan: PlanKey, notes: number, events: number): Entitlements => ({
+    ...entitlements(plan, 1, 1),
+    usage: { seats: 1, connections: 1, campaign_sends: 0, user_records: { inbox_notes: notes, consent_events: events } },
+  });
+  assert.equal(labels.planUserRecords(withRecords("pro", 1234, 0)), "저장한 메모 1,234/50,000건 · 동의 기록 0/50,000건");
+  assert.equal(labels.planUserRecords(withRecords("free", 1500, 1000)), "저장한 메모 1,500/1,000건 · 동의 기록 1,000/1,000건", "a downgrade can leave a count over the limit");
+  // A response without the counts or the limit, from an older server, shows no line.
+  assert.equal(labels.planUserRecords(entitlements("pro", 1, 1)), "");
+  assert.equal(labels.planUserRecords({ ...withRecords("pro", 1, 1), limits: { seats: 3, connections: 3, campaign_sends_per_month: 5000 } }), "");
+  assert.equal(labels.planUserRecords(undefined), "");
+  const app = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
+  assert.match(app, /byId\("user-record-summary"\)\.hidden = !planUserRecords\(workspacePlan\);/);
+  assert.match(readFileSync(new URL("../../public/app/index.html", import.meta.url), "utf8"), /<p id="user-record-summary" class="hint" hidden><\/p>/);
+});
+
 test("the dashboard explains every limit code, and the callback's limit code is shown on return", () => {
   const app = readFileSync(new URL("../../public/app/app.js", import.meta.url), "utf8");
-  for (const code of ["seat_limit_reached", "connection_limit_reached", "broadcast_limit_reached"]) assert.match(app, new RegExp(`^  ${code}:\\s*"[^"]*[가-힣][^"]*",$`, "m"), code);
+  for (const code of ["seat_limit_reached", "connection_limit_reached", "broadcast_limit_reached", "user_record_limit_reached"]) assert.match(app, new RegExp(`^  ${code}:\\s*"[^"]*[가-힣][^"]*",$`, "m"), code);
   assert.match(app, /const instagramErrors = \[[^\]]*"connection_limit_reached"/);
 });
 

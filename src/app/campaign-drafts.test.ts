@@ -650,6 +650,7 @@ test("session invalidation prevents a pending workspace bootstrap from configuri
       currentUserId: undefined,
       currentRole: undefined,
       workspaceTimeZone: undefined,
+      planRefreshRequest: 0,
       timeZoneWriteRevision: 0,
       workspacePlan: undefined,
       contactCsvPreview: controller,

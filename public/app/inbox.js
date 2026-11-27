@@ -1,4 +1,4 @@
-function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZone, getSendSettings }) {
+function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZone, getSendSettings, onUserRecordsChanged = () => {} }) {
   const byId = (id) => document.getElementById(id);
   function renderSendSettings() {
     const account = getConnections().find((entry) => entry.id === selected?.row.connection_id);
@@ -603,6 +603,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     try {
       const memo = await api(`${conversationPath(state)}/notes`, "POST", { body: state.memoDraft });
       if (epoch !== session) return;
+      // The settings plan card counts the stored notes (#52).
+      onUserRecordsChanged();
       state.memoDraft = "";
       state.memoNotice = "메모를 남겼습니다.";
       // A list request still in flight may have been read before this note committed; drop it and reload.
@@ -620,6 +622,8 @@ function createInbox({ api, node, getConnections, getRole, getUserId, getTimeZon
     } catch (error) {
       if (epoch !== session) return;
       const refused = error.status >= 400 && error.status < 500;
+      // The refusal points to the settings plan card, so its count is read again.
+      if (error.code === "user_record_limit_reached") onUserRecordsChanged();
       // The draft stays, so a refused or unconfirmed note can be sent again after checking the list.
       state.memoNotice = refused ? errorMessage(error) : "메모가 저장됐는지 확인하지 못했습니다. 메모 목록을 확인한 뒤 필요하면 다시 남겨 주세요.";
       if (!refused && selected === state) void loadMemos();

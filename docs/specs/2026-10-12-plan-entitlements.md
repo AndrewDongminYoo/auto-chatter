@@ -7,6 +7,7 @@
 활성 연락처([#51](https://github.com/AndrewDongminYoo/auto-chatter/issues/51)), AI 예산, 초과 사용 승인, 청구월과 결제를 통한 요금제 변경([#54](https://github.com/AndrewDongminYoo/auto-chatter/issues/54))은 이 문서의 범위가 아닙니다(아래 [#52에 남은 일](#52에-남은-일)).
 migration 045가 열 하나와 CHECK 하나를 더하며, 운영 DB 적용과 배포는 이 PR의 범위가 아닙니다.
 2026-11-09에 두 번째 단계로 [월 캠페인 발송 한도](#월-캠페인-발송-한도)를 더했습니다. 이 단계는 migration을 더하지 않습니다.
+2026-11-27에 메모와 동의 기록의 저장량 상한(`user_records_per_workspace`)을 더했습니다. 값, 세는 방법, 잠금은 [사용자 기록 저장량 상한](2026-11-27-user-record-limit-design.md)에 있으며, 이 단계도 migration을 더하지 않습니다.
 
 ## 요금제 목록
 
@@ -104,6 +105,7 @@ migration 없이 기존 표에 기록합니다.
 ## 요금제를 낮출 때
 
 이미 있는 멤버, 열린 초대, 연결된 계정은 한도를 넘어도 그대로 남고, 새로 더하는 것만 거절합니다.
+저장한 메모와 동의 기록도 그대로 남고 새 기록만 거절합니다([사용자 기록 저장량 상한](2026-11-27-user-record-limit-design.md#세는-방법)).
 유효한 캠페인 승인도 그대로 남고 같은 달 안의 시각 변경과 취소를 할 수 있으며, 실행 시작 검사가 보낼지 정합니다. 기존 데이터는 지우지 않습니다.
 연결된 계정의 재인증과 멤버 제거, 초대 취소, 연결 해제는 계속 할 수 있습니다.
 
@@ -133,6 +135,7 @@ CHECK에 없는 키는 `23514`로 거절됩니다.
 
 `usage.seats`는 멤버와 열린 초대의 합, `usage.connections`는 연결된 계정 수이며 위 정의와 같은 SQL로 셉니다. `usage.campaign_sends`는 지금 달의 `used`이며 `reserved`를 더하지 않습니다.
 설정 화면은 요금제 이름과 세 사용량을 한 줄로 보여 줍니다(`public/app/plan-labels.js`). 한도가 0인 요금제는 ‘캠페인 발송 불가’로 보이고, 요금제를 낮춘 달에 발송한 행이 있으면 그 수를 함께 보입니다.
+`limits.user_records_per_workspace`와 `usage.user_records`, 요금제 카드의 저장 기록 줄은 [사용자 기록 저장량 상한](2026-11-27-user-record-limit-design.md#사용량과-화면)에 있습니다.
 캠페인 미리보기의 `plan_broadcast_limit`과 승인·실행 화면의 문구는 [캠페인 초안 계약](2026-10-21-campaign-drafts.md#비용)과 [캠페인 실행 계약](2026-10-27-campaign-runs.md#실행-현황-화면)에 있습니다.
 멤버 자리가 다 차도 초대 버튼은 그대로 두고, 새 이메일은 초대할 수 없지만 이미 초대한 이메일로는 새 링크를 만들 수 있다고 자리를 비우는 방법과 함께 안내합니다. 연결 한도에서도 연결 버튼을 그대로 두고 재연결은 되지만 새 계정은 안 된다고 안내합니다.
 초대받은 사람이 수락에서 `seat_limit_reached`를 받으면 소유자용 문구 대신, 소유자에게 자리를 요청한 뒤 받은 초대 링크를 다시 열라는 문구를 보여 줍니다. 거절된 초대는 열린 채로 남으므로 그 링크는 만료나 취소 전까지 다시 쓸 수 있습니다.
@@ -159,6 +162,7 @@ migration을 먼저 적용하면 기존 작업 공간은 `advanced`가 되고, �
 ## #52에 남은 일
 
 - 활성 연락처 한도. 계량과 표시는 [#51](https://github.com/AndrewDongminYoo/auto-chatter/issues/51)에서 구현했습니다([설계](2026-11-24-active-contact-ledger-design.md)). 집행은 [활성 연락처 한도 집행](2026-11-25-active-contact-limit-design.md)이 맡습니다.
+- 저장량 상한. 메모와 대시보드 동의 기록은 [사용자 기록 저장량 상한](2026-11-27-user-record-limit-design.md)이 맡고, 상태 변경의 감사 표는 요청 한도로만 묶습니다.
 - AI 사용 예산.
 - 초과 사용 상한과 경고, 초과 승인.
 - 청구월과 결제를 통한 요금제 변경([#54](https://github.com/AndrewDongminYoo/auto-chatter/issues/54)).

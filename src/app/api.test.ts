@@ -2437,9 +2437,11 @@ const ownerPool = () => {
   const campaign = { plan: "free", month: "2026-11", used: "0", reserved: "0" };
   // The billing-month active contact counts (#51).
   const activeContacts = { time_zone: "Asia/Seoul", month: "2026-11", count: 3, previous_month: "2026-10", previous_count: 5 };
+  // The stored user record counts (#52).
+  const userRecords = { consent_events: 2, inbox_notes: 4 };
   return {
     query: async (sql: string) => ({
-      rows: [sql.includes("open_invites") ? usage : sql.includes("campaign_deliveries") ? campaign : sql.includes("active_contacts") ? activeContacts : row],
+      rows: [sql.includes("open_invites") ? usage : sql.includes("campaign_deliveries") ? campaign : sql.includes("active_contacts") ? activeContacts : sql.includes("instagram_inbox_notes") ? userRecords : row],
       rowCount: 1,
     }),
     connect: async () => ({
@@ -2529,8 +2531,8 @@ test("the dashboard bootstrap spends no write limit for a member and only the us
     role: "owner",
     time_zone: "Asia/Seoul",
     plan: "free",
-    limits: { seats: 1, connections: 1, campaign_sends_per_month: 0, active_contacts_per_month: 25, api_writes_per_hour: 500 },
-    usage: { seats: 1, connections: 0, campaign_sends: 0, active_contacts: { time_zone: "Asia/Seoul", month: "2026-11", count: 3, previous_month: "2026-10", previous_count: 5 } },
+    limits: { seats: 1, connections: 1, campaign_sends_per_month: 0, active_contacts_per_month: 25, api_writes_per_hour: 500, user_records_per_workspace: 1000 },
+    usage: { seats: 1, connections: 0, campaign_sends: 0, active_contacts: { time_zone: "Asia/Seoul", month: "2026-11", count: 3, previous_month: "2026-10", previous_count: 5 }, user_records: { consent_events: 2, inbox_notes: 4 } },
   });
   assert.deepEqual([user.keys, workspace.keys], [[], []]);
   // Without a membership the request creates a workspace, so it spends the user limit after the membership read.

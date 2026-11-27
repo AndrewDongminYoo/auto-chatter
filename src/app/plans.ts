@@ -9,13 +9,15 @@ import { ApiError } from "./auth.ts";
 // launch price commitment (docs/specs/2026-11-25-active-contact-limit-design.md).
 // api_writes_per_hour is the per-workspace signed-in API write limit, a fixed one-hour window roughly in proportion to
 // seats; advanced stays above the former fixed 3,000 (docs/specs/2026-10-12-api-request-limits.md).
+// user_records_per_workspace caps the stored rows of each user-written record kind in USER_RECORD_TABLES separately;
+// it is the current enforcement value, not a launch price commitment (docs/specs/2026-11-27-user-record-limit-design.md).
 export const PLANS = {
-  free: { seats: 1, connections: 1, campaign_sends_per_month: 0, active_contacts_per_month: 25, api_writes_per_hour: 500 },
-  essential: { seats: 2, connections: 2, campaign_sends_per_month: 1000, active_contacts_per_month: 250, api_writes_per_hour: 1000 },
-  pro: { seats: 3, connections: 3, campaign_sends_per_month: 5000, active_contacts_per_month: 2500, api_writes_per_hour: 1500 },
-  business: { seats: 5, connections: 5, campaign_sends_per_month: 20000, active_contacts_per_month: 7500, api_writes_per_hour: 3000 },
-  advanced: { seats: 10, connections: 10, campaign_sends_per_month: 50000, active_contacts_per_month: 25000, api_writes_per_hour: 6000 },
-} as const satisfies Record<string, { seats: number; connections: number; campaign_sends_per_month: number; active_contacts_per_month: number; api_writes_per_hour: number }>;
+  free: { seats: 1, connections: 1, campaign_sends_per_month: 0, active_contacts_per_month: 25, api_writes_per_hour: 500, user_records_per_workspace: 1000 },
+  essential: { seats: 2, connections: 2, campaign_sends_per_month: 1000, active_contacts_per_month: 250, api_writes_per_hour: 1000, user_records_per_workspace: 10000 },
+  pro: { seats: 3, connections: 3, campaign_sends_per_month: 5000, active_contacts_per_month: 2500, api_writes_per_hour: 1500, user_records_per_workspace: 50000 },
+  business: { seats: 5, connections: 5, campaign_sends_per_month: 20000, active_contacts_per_month: 7500, api_writes_per_hour: 3000, user_records_per_workspace: 150000 },
+  advanced: { seats: 10, connections: 10, campaign_sends_per_month: 50000, active_contacts_per_month: 25000, api_writes_per_hour: 6000, user_records_per_workspace: 500000 },
+} as const satisfies Record<string, { seats: number; connections: number; campaign_sends_per_month: number; active_contacts_per_month: number; api_writes_per_hour: number; user_records_per_workspace: number }>;
 
 export type PlanKey = keyof typeof PLANS;
 export type PlanLimits = (typeof PLANS)[PlanKey];
@@ -66,8 +68,39 @@ export async function workspaceEntitlements(db: Db, workspace: string) {
       connections: current.connections,
       campaign_sends: campaign.used,
       active_contacts: await activeContactUsage(db, workspace),
+      user_records: await userRecordUsage(db, workspace),
     },
   };
+}
+
+// The append-only record kinds that members write and the user record limit caps (#52), each counted over every row
+// of the workspace. The deletion functions remove rows, so they lower the count; a downgrade removes nothing.
+const USER_RECORD_TABLES = {
+  consent_events: "channel_consent_events",
+  inbox_notes: "instagram_inbox_notes",
+} as const;
+
+export type UserRecordKind = keyof typeof USER_RECORD_TABLES;
+
+// The failure code of a write that the user record limit refuses; the write stores nothing.
+export const USER_RECORD_LIMIT = "user_record_limit_reached";
+
+// Both counts read a workspace_id-leading index: (workspace_id,request_key) and the notes conversation index.
+const USER_RECORD_USAGE_SQL = `SELECT
+  (SELECT count(*) FROM ${USER_RECORD_TABLES.consent_events} WHERE workspace_id=$1)::int AS consent_events,
+  (SELECT count(*) FROM ${USER_RECORD_TABLES.inbox_notes} WHERE workspace_id=$1)::int AS inbox_notes`;
+
+async function userRecordUsage(db: Db, workspace: string): Promise<Record<UserRecordKind, number>> {
+  return (await db.query<Record<UserRecordKind, number>>(USER_RECORD_USAGE_SQL, [workspace])).rows[0]!;
+}
+
+// A new record of `kind` needs the workspace's count of that kind to be below the plan's limit. The caller holds the
+// workspace row FOR NO KEY UPDATE or stronger, so two writers of the workspace never count at once. `written` is the
+// number of rows of this kind that the caller's transaction has already inserted; they are not counted.
+export async function requireUserRecordSlot(db: Db, workspace: string, kind: UserRecordKind, written = 0): Promise<void> {
+  const row = (await db.query<{ plan: PlanKey; count: number }>(`SELECT w.plan,(SELECT count(*) FROM ${USER_RECORD_TABLES[kind]} r WHERE r.workspace_id=w.id)::int AS count FROM workspaces w WHERE w.id=$1`, [workspace])).rows[0];
+  if (!row) throw new ApiError(403, "workspace_required");
+  if (row.count - written >= planLimits(row.plan).user_records_per_workspace) throw new ApiError(409, USER_RECORD_LIMIT);
 }
 
 // The active contact counts of this and the previous billing month (#51), summed over the workspace's connections.

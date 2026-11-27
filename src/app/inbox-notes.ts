@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 import { ApiError, isRecord, isUuid, type User } from "./auth.ts";
+import { requireUserRecordSlot } from "./plans.ts";
 import { membershipFor, workspaceFor } from "./settings.ts";
 
 // Internal notes on an inbox conversation (#23-B): text members write for each other. A note is append-only (a
@@ -31,14 +32,17 @@ export async function addInboxNote(pool: Pool, user: User, connection: string, r
   try {
     await client.query("BEGIN");
     // The lock order of the other conversation writes: the workspace row, the caller's membership row, then the
-    // connection, so a note queues behind the deletion functions instead of outliving the conversation.
-    await client.query("SELECT 1 FROM workspaces WHERE id=$1 FOR SHARE", [workspace]);
+    // connection, so a note queues behind the deletion functions instead of outliving the conversation. The workspace
+    // row is taken FOR NO KEY UPDATE, not FOR SHARE, so note writers count the user record limit one at a time; it
+    // still admits the key-share locks of inserts that reference the workspace.
+    await client.query("SELECT 1 FROM workspaces WHERE id=$1 FOR NO KEY UPDATE", [workspace]);
     const member = await client.query("SELECT 1 FROM workspace_members WHERE workspace_id=$1 AND user_id=$2 AND removed_at IS NULL FOR SHARE", [workspace, user.id]);
     if (!member.rowCount) throw new ApiError(403, "workspace_required");
     const owned = await client.query("SELECT 1 FROM instagram_connections WHERE id=$1 AND workspace_id=$2 FOR SHARE", [connection, workspace]);
     if (!owned.rowCount) throw new ApiError(404, "connection_not_found");
     const exists = await client.query("SELECT 1 FROM instagram_inbox_messages WHERE workspace_id=$1 AND connection_id=$2 AND recipient_id=$3 LIMIT 1", [workspace, connection, recipient]);
     if (!exists.rowCount) throw new ApiError(404, "conversation_not_found");
+    await requireUserRecordSlot(client, workspace, "inbox_notes");
     const result = await client.query<NoteRow>(
       `WITH note AS (
          INSERT INTO instagram_inbox_notes(workspace_id,connection_id,recipient_id,author_id,body)

@@ -120,7 +120,7 @@ const dashboardGlobals = [
   // notice-placement.js
   { readers: ["app"], names: ["actionErrorPlacement", "noticeCloseFocusTarget", "viewChangeClearsMessages"] },
   // plan-labels.js
-  { readers: ["app"], names: ["planAcceptSeatRefusal", "planActiveContacts", "planActiveContactsApprovalHelp", "planActiveContactsHelp", "planActiveContactsOver", "planConnectionHelp", "planConnectionsFull", "planSeatHelp", "planSeatsFull", "planSummary"] },
+  { readers: ["app"], names: ["planAcceptSeatRefusal", "planActiveContacts", "planActiveContactsApprovalHelp", "planActiveContactsHelp", "planActiveContactsOver", "planConnectionHelp", "planConnectionsFull", "planSeatHelp", "planSeatsFull", "planSummary", "planUserRecords"] },
   // reply-templates.js
   { readers: ["inbox"], names: ["createReplyTemplates"] },
   // segment-snapshots.js
