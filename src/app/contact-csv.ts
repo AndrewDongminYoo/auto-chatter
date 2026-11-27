@@ -65,7 +65,21 @@ export const CONTACT_CSV_LIMITS: Readonly<ContactCsvLimits> = Object.freeze({
   timeoutMs: 10_000,
   batchSize: 25,
 });
-type CsvContact = {
+// The v1 row of each contact in a preceding `contacts` CTE (connection_id, sender_id, first_at, last_at,
+// comment_count), in the export order. $1 is the workspace. The external contacts API reads the same rows.
+export const CONTACT_ROWS_SQL = `SELECT e.connection_id,e.sender_id,c.username,e.comment_count,
+           to_char(e.first_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS first_at,
+           to_char(e.last_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS last_at,
+           coalesce(automation.paused OR automation.handoff_paused,false) AS paused,
+           (SELECT coalesce(json_agg(tag ORDER BY tag COLLATE "C"),'[]'::json)::text FROM unnest(tags.tags) AS tag) AS tags_json,
+           (SELECT coalesce(json_object_agg(f.id::text,json_build_object('name',f.name,'type',f.type,'value',v.value) ORDER BY f.id),'{}'::json)::text
+             FROM instagram_contact_field_values v JOIN instagram_contact_fields f ON f.id=v.field_id AND f.workspace_id=v.workspace_id
+             WHERE v.workspace_id=$1 AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND NOT f.archived AND v.value IS NOT NULL) AS fields_json
+         FROM contacts e JOIN instagram_connections c ON c.id=e.connection_id AND c.workspace_id=$1
+         LEFT JOIN instagram_contact_tags tags ON tags.workspace_id=$1 AND tags.connection_id=e.connection_id AND tags.sender_id=e.sender_id
+         LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=$1 AND automation.connection_id=e.connection_id AND automation.sender_id=e.sender_id
+         ORDER BY e.connection_id,e.sender_id COLLATE "C"`;
+export type CsvContact = {
   connection_id: string;
   sender_id: string;
   username: string | null;
@@ -149,18 +163,7 @@ export async function exportContactCsv(pool: Pool, user: User, options: Partial<
       const rows = (
         await query<CsvContact>(
           `${contacts.text}
-         SELECT e.connection_id,e.sender_id,c.username,e.comment_count,
-           to_char(e.first_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS first_at,
-           to_char(e.last_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS last_at,
-           coalesce(automation.paused OR automation.handoff_paused,false) AS paused,
-           (SELECT coalesce(json_agg(tag ORDER BY tag COLLATE "C"),'[]'::json)::text FROM unnest(tags.tags) AS tag) AS tags_json,
-           (SELECT coalesce(json_object_agg(f.id::text,json_build_object('name',f.name,'type',f.type,'value',v.value) ORDER BY f.id),'{}'::json)::text
-             FROM instagram_contact_field_values v JOIN instagram_contact_fields f ON f.id=v.field_id AND f.workspace_id=v.workspace_id
-             WHERE v.workspace_id=$1 AND v.connection_id=e.connection_id AND v.sender_id=e.sender_id AND NOT f.archived AND v.value IS NOT NULL) AS fields_json
-         FROM contacts e JOIN instagram_connections c ON c.id=e.connection_id AND c.workspace_id=$1
-         LEFT JOIN instagram_contact_tags tags ON tags.workspace_id=$1 AND tags.connection_id=e.connection_id AND tags.sender_id=e.sender_id
-         LEFT JOIN instagram_contact_automation automation ON automation.workspace_id=$1 AND automation.connection_id=e.connection_id AND automation.sender_id=e.sender_id
-         ORDER BY e.connection_id,e.sender_id COLLATE "C"`,
+         ${CONTACT_ROWS_SQL}`,
           contacts.values,
         )
       ).rows;

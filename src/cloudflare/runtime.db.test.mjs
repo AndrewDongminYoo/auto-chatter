@@ -2169,3 +2169,85 @@ test("workerd /v1/key counts each API key and each client IP in the limiter obje
     await pool.end();
   }
 });
+
+test("workerd /v1/contacts reads the key's workspace through the restricted role and shares the key limit (#48)", async () => {
+  const databaseUrl = process.env.TEST_DATABASE_URL;
+  const url = new URL(databaseUrl);
+  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
+  const pool = new Pool({ connectionString: databaseUrl });
+  const workspace = "11111111-1111-4111-8111-111111111111",
+    other = "22222222-2222-4222-8222-222222222222",
+    user = "66666666-6666-4666-8666-666666666666",
+    connection = "33333333-3333-4333-8333-333333333333",
+    foreignConnection = "44444444-4444-4444-8444-444444444444";
+  const serverUrl = new URL(databaseUrl);
+  serverUrl.username = "auto_chatter_server";
+  serverUrl.password = "runtime-test-only";
+  const config = JSON.parse(await readFile(new URL("../../wrangler.json", import.meta.url), "utf8"));
+  const runtime = new Miniflare({
+    modules: true,
+    scriptPath: ".wrangler/build/index.js",
+    compatibilityDate: config.compatibility_date,
+    compatibilityFlags: config.compatibility_flags,
+    hyperdrives: { HYPERDRIVE: serverUrl.href },
+    durableObjects: Object.fromEntries(config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }])),
+    bindings: { SEND_ENABLED: "false" },
+    outboundService: async () => {
+      throw new Error("The external API makes no outbound request");
+    },
+  });
+  const key = `ac_live_${"c".repeat(43)}`;
+  const headers = { Authorization: `Bearer ${key}`, "CF-Connecting-IP": "198.51.100.30" };
+  const get = (path) => runtime.dispatchFetch(`https://app.test${path}`, { headers });
+  try {
+    await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
+    await pool.query("TRUNCATE workspaces CASCADE");
+    await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspace, other]);
+    await pool.query("INSERT INTO workspace_members VALUES($1,$2)", [user, workspace]);
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,username) VALUES($1,$2,'123','shop'),($3,$4,'900','foreign_shop')", [connection, workspace, foreignConnection, other]);
+    await pool.query(
+      `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+       VALUES($1,$2,'c1','m','00123','text'),($3,$4,'c2','m','00999','foreign text')`,
+      [workspace, connection, other, foreignConnection],
+    );
+    const field = (await pool.query("INSERT INTO instagram_contact_fields(workspace_id,name,type) VALUES($1,'big','number') RETURNING id", [workspace])).rows[0].id;
+    await pool.query("INSERT INTO instagram_contact_field_values(workspace_id,connection_id,sender_id,field_id,value) VALUES($1,$2,'00123',$3,'9007199254740993.123456789'::jsonb)", [workspace, connection, field]);
+    await pool.query(
+      `INSERT INTO api_keys(workspace_id,name,key_prefix,key_hash,scopes,created_by,expires_at)
+       VALUES($1,'contacts',$2,$3,ARRAY['contacts:read'],$4,now()+interval '30 days')`,
+      [workspace, key.slice(0, 12), createHash("sha256").update(key).digest("hex"), user],
+    );
+    await pool.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8"));
+    await pool.query("ALTER ROLE auto_chatter_server LOGIN PASSWORD 'runtime-test-only'");
+
+    const response = await get("/v1/contacts");
+    const text = await response.text();
+    assert.equal(response.status, 200, text);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("access-control-allow-origin"), null);
+    assert.match(text, /9007199254740993\.123456789/);
+    const body = JSON.parse(text);
+    assert.deepEqual(
+      body.contacts.map(({ connection_id, sender_id, connection_username }) => [connection_id, sender_id, connection_username]),
+      [[connection, "00123", "shop"]],
+    );
+    assert.equal(body.next_cursor, null);
+    assert.equal((await pool.query("SELECT last_used_ip FROM api_keys WHERE name='contacts'")).rows[0].last_used_ip, "198.51.100.30");
+    const foreign = await get(`/v1/contacts?connection_id=${foreignConnection}`);
+    assert.equal(foreign.status, 404);
+    assert.deepEqual(await foreign.json(), { error: "connection_not_found" });
+
+    // /v1/key and /v1/contacts spend the same 60 requests per key per minute.
+    for (let index = 2; index < 60; index++) {
+      const each = await get(index % 2 ? "/v1/key" : "/v1/contacts?limit=1");
+      assert.equal(each.status, 200, `request ${index}`);
+      await each.arrayBuffer();
+    }
+    const limited = await get("/v1/contacts");
+    assert.equal(limited.status, 429);
+    assert.deepEqual(await limited.json(), { error: "rate_limited" });
+  } finally {
+    await runtime.dispose();
+    await pool.end();
+  }
+});

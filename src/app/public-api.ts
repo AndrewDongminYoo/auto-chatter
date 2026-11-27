@@ -3,10 +3,16 @@ import { ApiError, json } from "./auth.ts";
 import type { AuthRateLimitEnv, RateLimitBinding } from "./auth-rate-limit.ts";
 import { clientIp, findActiveApiKey, recordApiKeyUse } from "./api-keys.ts";
 import { failureCode, logOperation } from "./operations-log.ts";
+import { contactsPageJson, parseContactsQuery, readContactsPage } from "./public-contacts.ts";
 
 // The external API under /v1/ (#48), for servers that hold a workspace API key. It is separate from /api/*: no
 // session, no same-origin check and no CORS headers. The key is accepted only as `Authorization: Bearer <key>`.
 // Every refusal of the key is the same 401, so a caller cannot tell a malformed, unknown, revoked or expired key apart.
+
+// Every path and method the external API serves. docs/api/openapi-v1.json describes the same list, and a unit test
+// compares the two.
+export const PUBLIC_API_ROUTES = { "/v1/contacts": ["GET"], "/v1/key": ["GET"] } as const satisfies Record<string, readonly string[]>;
+type PublicApiPath = keyof typeof PUBLIC_API_ROUTES;
 
 // The scheme name is case-insensitive (RFC 9110 section 11.1); the key itself is not.
 const BEARER = /^Bearer (\S+)$/i;
@@ -42,17 +48,23 @@ export async function publicApi(request: Request, env: Pick<AuthRateLimitEnv, "A
       const key = await findActiveApiKey(pool, presented);
       if (!key) return invalidKey();
       await spend(env.API_KEY_LIMIT, key.id);
+      const methods: readonly string[] | undefined = Object.hasOwn(PUBLIC_API_ROUTES, url.pathname) ? PUBLIC_API_ROUTES[url.pathname as PublicApiPath] : undefined;
+      if (!methods) return json({ error: "not_found" }, 404);
+      if (!methods.includes(request.method)) {
+        const response = json({ error: "method_not_allowed" }, 405);
+        response.headers.set("Allow", methods.join(", "));
+        return response;
+      }
+      // Only a successful authenticated request is recorded as the key's last use.
       if (url.pathname === "/v1/key") {
-        if (request.method !== "GET") {
-          const response = json({ error: "method_not_allowed" }, 405);
-          response.headers.set("Allow", "GET");
-          return response;
-        }
-        // Only a successful authenticated request is recorded as the key's last use.
         await recordApiKeyUse(pool, key.id, ip);
         return json({ id: key.id, name: key.name, scopes: key.scopes, workspace_id: key.workspace_id, expires_at: key.expires_at });
       }
-      return json({ error: "not_found" }, 404);
+      if (!key.scopes.includes("contacts:read")) return json({ error: "insufficient_scope" }, 403);
+      const page = await readContactsPage(pool, key.workspace_id, parseContactsQuery(url.searchParams));
+      if (!page.found) return json({ error: "connection_not_found" }, 404);
+      await recordApiKeyUse(pool, key.id, ip);
+      return new Response(contactsPageJson(page), { headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
     } finally {
       await pool.end();
     }
