@@ -39,9 +39,8 @@ export function parseContactWriteTarget(connection: string, sender: string): Con
   return { connectionId: connection.toLowerCase(), senderId };
 }
 
-// A request tag is kept in the dashboard's single-pass form (normalizeContactTags), which is the form the dashboard
-// save stores and flow and segment conditions compare. Two single-pass forms of one normalizedStoredTag form (such as
-// "j" + U+030C and U+01F0) both stay, as the dashboard save keeps both: a segment condition matches only its own form.
+// A request tag is kept in the dashboard's form (normalizeContactTags), which is the form the dashboard save stores and
+// flow and segment conditions compare.
 function tagList(value: unknown): string[] {
   if (value === undefined) return [];
   try {
@@ -198,9 +197,9 @@ export async function writeContact(pool: Pick<Pool, "connect">, workspaceId: str
     if (!current.found) throw new ApiError(404, "contact_not_found");
     if (write.add.length || write.remove.length) {
       // A removed tag is matched by its normalizedStoredTag form, so a tag sent back as GET returned it is removed even
-      // when the normalization changes it again. An added tag is stored in its single-pass form, as the dashboard save
-      // stores it, unless that exact string is stored: a kept tag of another single-pass form stays beside it, so a
-      // segment or flow condition on either form still matches.
+      // when it was stored before the rule ran NFC again after lowercasing (such as "j" + U+030C). An added tag is
+      // stored in the dashboard's form unless that exact string is stored: a kept tag of the older form stays beside
+      // it. Segment and flow conditions normalize their tags again, so they match the new form.
       const removeForms = new Set(write.remove.map(normalizedStoredTag));
       const kept = (current.tags ?? []).filter((tag) => !removeForms.has(normalizedStoredTag(tag)));
       const tags = [...new Set([...kept, ...write.add])].sort();

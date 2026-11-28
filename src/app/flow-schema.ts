@@ -114,7 +114,8 @@ function text(value: unknown, max: number): boolean {
 
 export function normalizeTag(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 200) return null;
-  const result = value.trim().normalize("NFC").toLowerCase();
+  // The same rule as the contact tag rule in contacts.ts, NFC again after lowercasing included.
+  const result = value.trim().normalize("NFC").toLowerCase().normalize("NFC");
   return result && result.length <= 40 && !/[\p{Cc}\p{Cf}]/u.test(result) ? result : null;
 }
 
