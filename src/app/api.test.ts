@@ -2388,7 +2388,7 @@ test("contact mutations reject cross-origin writes and invalid tags before a wri
 test("contact routes accept encoded string sender IDs without changing identity", async () => {
   const sender = "sender/one% test";
   const query = async (sql: string, values: unknown[] = []) => ({
-    rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : values[2] === sender ? [{ tags: ["lead"] }] : [],
+    rows: sql.includes("workspace_members") ? [{ workspace_id: workspaceId, role: "owner" }] : values[2] === sender ? [{ found: true, tags: ["lead"] }] : [],
   });
   const pool = {
     query,
@@ -2398,7 +2398,7 @@ test("contact routes accept encoded string sender IDs without changing identity"
   const request = new Request(`https://app.test/api/connections/${connectionId}/contacts/${encodeURIComponent(sender)}`, {
     method: "PATCH",
     headers: { origin: "https://app.test", cookie: "__Host-ac-access=test", "content-type": "application/json" },
-    body: JSON.stringify({ tags: ["lead"] }),
+    body: JSON.stringify({ tags: ["lead"], expected_tags: ["lead"] }),
   });
   const result = await appApi(request, config, () => pool, mediaFetch());
   assert.equal(result.status, 200);

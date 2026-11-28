@@ -5,7 +5,9 @@ import { roleAllows, workspaceFor, type WorkspaceRole } from "./settings.ts";
 
 // Workspace API keys (#48): an external system such as a CRM reads the workspace's data with one. The key is
 // returned once at issue; only its SHA-256 hash is stored. Every route needs the admin role, like the webhooks.
-export const API_KEY_SCOPES = ["contacts:read"] as const;
+// A key reads contacts, or reads and writes them: a write answers with the written contact, so contacts:write always
+// comes with contacts:read. The scopes are stored in this order, which the api_keys CHECK also requires.
+export const API_KEY_SCOPES = ["contacts:read", "contacts:write"] as const;
 export const API_KEY_EXPIRY_DAYS = [30, 90, 180, 365] as const;
 export const DEFAULT_API_KEY_EXPIRY_DAYS = 90;
 export const MAX_ACTIVE_API_KEYS = 10;
@@ -41,8 +43,8 @@ export function parseApiKeyRequest(input: unknown): { name: string; expiresInDay
   const expiresInDays = "expires_in_days" in input ? input.expires_in_days : DEFAULT_API_KEY_EXPIRY_DAYS;
   if (!(API_KEY_EXPIRY_DAYS as readonly unknown[]).includes(expiresInDays)) throw new ApiError(400, "invalid_api_key_expiry");
   const scopes = input.scopes;
-  if (!Array.isArray(scopes) || scopes.length === 0 || new Set(scopes).size !== scopes.length || scopes.some((scope) => !(API_KEY_SCOPES as readonly unknown[]).includes(scope))) throw new ApiError(400, "invalid_api_key_scopes");
-  return { name, expiresInDays: expiresInDays as number, scopes: scopes as ApiKeyScope[] };
+  if (!Array.isArray(scopes) || !scopes.includes("contacts:read") || new Set(scopes).size !== scopes.length || scopes.some((scope) => !(API_KEY_SCOPES as readonly unknown[]).includes(scope))) throw new ApiError(400, "invalid_api_key_scopes");
+  return { name, expiresInDays: expiresInDays as number, scopes: API_KEY_SCOPES.filter((scope) => scopes.includes(scope)) };
 }
 
 async function transaction<T>(pool: Pool, work: (client: PoolClient) => Promise<T>): Promise<T> {

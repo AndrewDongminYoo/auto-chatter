@@ -1391,7 +1391,7 @@
               </div>
               <button id="api-keys-refresh" class="secondary" data-loading-label="불러오는 중…">다시 불러오기</button>
             </div>
-            <p class="hint">CRM이나 자체 서버가 이 작업 공간의 정보를 읽어 갈 때 쓰는 키입니다. 모든 키에는 만료일이 있고, 사용 중인 키는 최대 10개입니다. 키를 만든 멤버가 제거되거나 상담원으로 바뀌면 그 멤버가 만든 키는 자동으로 폐기됩니다.</p>
+            <p class="hint">CRM이나 자체 서버가 이 작업 공간의 연락처를 읽거나 태그와 추가 정보를 바꿀 때 쓰는 키입니다. 모든 키에는 만료일이 있고, 사용 중인 키는 최대 10개입니다. 키를 만든 멤버가 제거되거나 상담원으로 바뀌면 그 멤버가 만든 키는 자동으로 폐기됩니다.</p>
             <div id="api-keys" class="account-list"></div>
             <form id="api-key-form" class="invite-form">
               <label>
@@ -1407,7 +1407,9 @@
                   <option value="365">365일</option>
                 </select>
               </label>
-              <p class="hint">권한: 연락처 읽기(contacts:read)</p>
+              <label class="toggle"
+                ><input name="contacts_write" type="checkbox" /><span>연락처 쓰기 허용(contacts:write)<small>연락처 읽기(contacts:read)에 더해 연락처의 태그를 붙이거나 떼고 추가 정보 값을 바꿀 수 있습니다. 메시지는 보내지 않습니다.</small></span></label
+              >
               <button type="submit" data-loading-label="발급하는 중…">키 발급</button>
             </form>
             <div id="api-key-secret" class="invite-result" hidden>

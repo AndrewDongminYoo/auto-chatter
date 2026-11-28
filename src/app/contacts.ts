@@ -21,12 +21,33 @@ export const CONTACT_TAG_LENGTH = 40;
 function tag(value: unknown): string {
   if (typeof value !== "string" || value.length > 200) throw new ApiError(400, "invalid_contact_tags");
   const result = value.trim().normalize("NFC").toLowerCase();
-  if (!result || result.length > CONTACT_TAG_LENGTH || /[\p{Cc}\p{Cf}]/u.test(result)) throw new ApiError(400, "invalid_contact_tags");
+  // A lone surrogate (Cs) would reach PostgreSQL as U+FFFD, so the stored tag would differ from the requested one.
+  if (!result || result.length > CONTACT_TAG_LENGTH || /[\p{Cc}\p{Cf}\p{Cs}]/u.test(result)) throw new ApiError(400, "invalid_contact_tags");
   return result;
 }
 export function normalizeContactTags(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > CONTACT_TAG_LIMIT) throw new ApiError(400, "invalid_contact_tags");
   return [...new Set(value.map(tag))].sort();
+}
+// The normalized form of a stored tag, for comparing stored tags with normalized input. The normalization is not
+// idempotent for every string (lowercasing can make a pair NFC composes, such as "J" + U+030C), so stored tags are
+// compared after the normalization repeated until the value stops changing (at most two changing passes for any code
+// point, or any cased or decomposable character with one combining mark). The result is the same for a tag in its
+// original, once-normalized or stored form, so input is compared in this form too. A stored tag the rule refuses
+// stays as stored.
+export function normalizedStoredTag(value: string): string {
+  let result = value;
+  for (let pass = 0; pass < 4; pass++) {
+    let next: string;
+    try {
+      next = tag(result);
+    } catch {
+      return result;
+    }
+    if (next === result) return result;
+    result = next;
+  }
+  return result;
 }
 // A tag condition names 1 to 5 tags: all of them must be present (all) or at least one (any).
 // A set that collapses to one tag is the single-tag condition, whatever the mode.
@@ -701,15 +722,36 @@ export async function listContacts(pool: Pool, user: User, options: URLSearchPar
     after: result.rows.length > 50 && last ? Buffer.from(JSON.stringify({ connection_id: last.connection_id, sender_id: last.sender_id })).toString("base64url") : null,
   };
 }
+// Whether the workspace's connection has comments from the sender, and the stored tags (NULL without a row). Read
+// after lockContact by the dashboard tag save and the external contact write.
+// A tag list as a comparable key: the distinct exact strings in code unit order.
+function exactTagSet(tags: string[]): string {
+  return JSON.stringify([...new Set(tags)].sort());
+}
+export const CURRENT_CONTACT_TAGS_SQL = `SELECT EXISTS(SELECT 1 FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3) AS found,
+  (SELECT tags FROM instagram_contact_tags WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3) AS tags`;
+// The dashboard replaces the whole tag list, so it also sends expected_tags, the list it read when the edit started.
+// After lockContact the stored tags (none is an empty list) are compared with it as sorted sets of the exact strings,
+// because flow runs, the CSV import and the external API may store another order. The strings are not normalized: two
+// stored strings with one normalizedStoredTag form (such as "j" + U+030C and U+01F0) are distinct tags to segments and
+// flows, so a list that names only one of them is stale. The dashboard sends back the strings it read. A difference
+// answers 409 contact_tags_stale and writes nothing, so a save from an editor opened before another write cannot remove
+// that write's tags.
 export async function saveContactTags(pool: Pool, user: User, connectionId: string, senderId: string, input: unknown) {
   if (!isUuid(connectionId) || !senderIdentity(senderId) || !isRecord(input)) throw new ApiError(400, "invalid_contact_tags");
   const tags = normalizeContactTags(input.tags);
+  const expectedInput = input.expected_tags;
+  if (!Array.isArray(expectedInput) || expectedInput.length > CONTACT_TAG_LIMIT || expectedInput.some((value) => typeof value !== "string" || value.length > 200)) throw new ApiError(400, "invalid_contact_tags");
+  const expected = exactTagSet(expectedInput as string[]);
   const workspaceId = await workspaceFor(pool, user, "agent");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await lockContactConnection(client, workspaceId, connectionId);
     await lockContact(client, connectionId, senderId);
+    const current = (await client.query<{ found: boolean; tags: string[] | null }>(CURRENT_CONTACT_TAGS_SQL, [workspaceId, connectionId, senderId])).rows[0]!;
+    if (!current.found) throw new ApiError(404, "contact_not_found");
+    if (exactTagSet(current.tags ?? []) !== expected) throw new ApiError(409, "contact_tags_stale");
     const result = await client.query(
       `INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags)
  SELECT $1,$2,$3,$4::text[] WHERE EXISTS(SELECT 1 FROM instagram_comment_events WHERE workspace_id=$1 AND connection_id=$2 AND sender_id=$3)

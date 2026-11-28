@@ -467,6 +467,7 @@ const errors = {
   keywords_required: "키워드를 하나 이상 입력해 주세요.",
   invalid_contact_automation: "연락처 자동화 설정을 확인해 주세요.",
   invalid_contact_tags: "태그는 한 줄에 하나씩 최대 20개, 각각 40자까지 입력해 주세요.",
+  contact_tags_stale: "다른 곳에서 이 연락처의 태그가 바뀌어 저장하지 않았습니다. 최신 태그를 다시 불러와 입력한 변경을 합쳤으니 확인한 뒤 다시 저장해 주세요.",
   invalid_contact_export_request: "연락처 내보내기 요청을 확인해 주세요.",
   contact_export_too_large: "내보내기 한도(5,000명 또는 5 MiB)를 넘었습니다. 파일을 만들지 않았습니다.",
   contact_export_rate_limited: "연락처 내보내기 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
@@ -2373,7 +2374,7 @@ byId("api-key-form").addEventListener("submit", (event) => {
       const created = await api("/api/workspace/api-keys", "POST", {
         name: form.elements.name.value,
         expires_in_days: Number(form.elements.expires_in_days.value),
-        scopes: ["contacts:read"],
+        scopes: form.elements.contacts_write.checked ? ["contacts:read", "contacts:write"] : ["contacts:read"],
       });
       // A session reset while the request was in flight must not reveal the key to the next session.
       if (generation !== segmentsGeneration) return;
@@ -2920,11 +2921,20 @@ function contactDetail(contact, renderRow) {
   save.dataset.loadingLabel = "저장 중…";
   tagEditor.append(label, hint, save);
   const key = `${contact.connection_id}:${contact.sender_id}`;
+  // The stored tags the draft started from. A save sends them as expected_tags, so the server refuses it with
+  // contact_tags_stale when the tags changed elsewhere since then instead of removing that change. A refresh moves the
+  // base only while the draft is unchanged, or after such a refusal, when it reads the tags the draft must now build on
+  // and moves the draft's own additions and removals onto them.
+  let tagBase = contact.tags;
+  let rebaseTags = false;
   // Counts the saves that finished in this detail, per kind; a detail read that a save overtook must not restore that kind's state from before it.
   const saves = { automation: 0, fields: 0, tags: 0 };
   input.addEventListener("input", () => {
     if (input.value !== contact.tags.join("\n")) contactsDirty.add(key);
-    else contactsDirty.delete(key);
+    else {
+      contactsDirty.delete(key);
+      tagBase = contact.tags;
+    }
     input.setCustomValidity("");
   });
   tagEditor.addEventListener("submit", (event) => {
@@ -2942,9 +2952,11 @@ function contactDetail(contact, renderRow) {
       try {
         const result = await api(`/api/connections/${contact.connection_id}/contacts/${encodeURIComponent(contact.sender_id)}`, "PATCH", {
           tags: values,
+          expected_tags: tagBase,
         });
         if (generation !== contactsGeneration) return;
         contact.tags = result.tags;
+        tagBase = result.tags;
         saves.tags++;
         renderRow();
         if (!selected()) return;
@@ -2952,6 +2964,14 @@ function contactDetail(contact, renderRow) {
         input.value = result.tags.join("\n");
         contactsDirty.delete(key);
         notice("태그를 저장했습니다. 필터 결과를 갱신하려면 필터를 다시 적용해 주세요.");
+      } catch (error) {
+        // The reload shows the stored tags, makes them the base of the next save and applies the draft's changes to them.
+        if (error?.code === "contact_tags_stale" && generation === contactsGeneration && selected()) {
+          contactsDirty.add(key);
+          rebaseTags = true;
+          void load();
+        }
+        throw error;
       } finally {
         input.disabled = false;
         if (generation === contactsGeneration) contactsSaving = false;
@@ -3110,9 +3130,32 @@ function contactDetail(contact, renderRow) {
     contact.last_comment_at = detail.last_comment_at;
     if (saves.tags === savesAtStart.tags) {
       contact.tags = detail.tags;
+      if (rebaseTags) {
+        // Moves the draft's own changes onto the reread tags, so saving it again without an edit keeps what changed elsewhere.
+        // Tags compare the way the server normalizes them, so a draft that only changes a tag's spelling (VIP for vip)
+        // neither removes nor adds it; the reread tags keep their stored spelling.
+        const key = (tag) => tag.trim().normalize("NFC").toLowerCase();
+        const draft = list(input.value);
+        const draftKeys = new Set(draft.map(key));
+        const baseKeys = new Set(tagBase.map(key));
+        const removed = new Set(tagBase.map(key).filter((tag) => !draftKeys.has(tag)));
+        const merged = detail.tags.filter((tag) => !removed.has(key(tag)));
+        const mergedKeys = new Set(merged.map(key));
+        for (const tag of draft) {
+          if (baseKeys.has(key(tag)) || mergedKeys.has(key(tag))) continue;
+          merged.push(tag);
+          mergedKeys.add(key(tag));
+        }
+        input.value = merged.join("\n");
+        tagBase = detail.tags;
+      }
+      rebaseTags = false;
       // A draft that now equals the stored tags is no longer a change, as the input listener would decide.
       if (input.value === contact.tags.join("\n")) contactsDirty.delete(key);
-      if (!contactsDirty.has(key)) input.value = contact.tags.join("\n");
+      if (!contactsDirty.has(key)) {
+        input.value = contact.tags.join("\n");
+        tagBase = contact.tags;
+      }
     }
     detailFields = detail.fields;
     if (saves.fields === savesAtStart.fields) {

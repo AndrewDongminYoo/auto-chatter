@@ -173,6 +173,7 @@ test("members of one workspace cannot read or change another workspace", async (
   assert.equal((await request(outsiderId, "POST", `/api/flows/${id}/disable`)).status, 404);
   const contacts = await request(outsiderId, "PATCH", `/api/connections/${connectionId}/contacts/123`, {
     tags: ["vip"],
+    expected_tags: [],
   });
   assert.equal(contacts.status, 404);
   assert.deepEqual(((await (await request(outsiderId, "GET", "/api/flows")).json()) as { flows: unknown[] }).flows, []);

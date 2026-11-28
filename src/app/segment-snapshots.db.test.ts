@@ -16,6 +16,12 @@ if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for database te
 const testUrl = new URL(databaseUrl);
 if (testUrl.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(testUrl.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: databaseUrl });
+
+// The dashboard tag save with the stored tags as expected_tags, for tests that set tags without an editing conflict.
+async function saveTags(db: Pool, user: Parameters<typeof saveContactTags>[1], connectionId: string, senderId: string, input: { tags: unknown }) {
+  const stored = await db.query<{ tags: string[] }>("SELECT tags FROM instagram_contact_tags WHERE connection_id::text=$1 AND sender_id=$2", [connectionId, senderId]);
+  return saveContactTags(db, user, connectionId, senderId, { ...input, expected_tags: stored.rows[0]?.tags ?? [] });
+}
 const workspace = "11111111-1111-4111-8111-111111111111",
   foreign = "22222222-2222-4222-8222-222222222222";
 const C = "33333333-3333-4333-8333-333333333333",
@@ -158,7 +164,7 @@ async function fixture() {
     ["c", ["vip"], C],
     ["e", ["lead"], C2],
   ] as const)
-    await saveContactTags(pool, owner, conn, sender, { tags });
+    await saveTags(pool, owner, conn, sender, { tags });
   const score = (await pool.query("INSERT INTO instagram_contact_fields(workspace_id,name,type) VALUES($1,'score','number') RETURNING id", [workspace])).rows[0].id as string;
   for (const [sender, value, conn] of [
     ["a", "10", C],
@@ -206,8 +212,8 @@ test("comparison counts changed membership even when the current total is unchan
   await fixture();
   const segment = await createContactSegment(pool, owner, { name: "Comparison", connection_id: C, tag: "lead" });
   const snapshot = await createSegmentSnapshot(pool, owner, segment.id, undefined);
-  await saveContactTags(pool, owner, C, "a", { tags: [] });
-  await saveContactTags(pool, owner, C, "c", { tags: ["lead"] });
+  await saveTags(pool, owner, C, "a", { tags: [] });
+  await saveTags(pool, owner, C, "c", { tags: ["lead"] });
   const response = await request(ownerId, "GET", `/api/segment-snapshots/${snapshot.id}/comparison`);
   assert.equal(response!.status, 200, await response!.clone().text());
   const result = await response!.json();
@@ -242,9 +248,9 @@ test("comparison scopes keys by connection and workspace and counts empty or lar
     removed: "0",
     retained: "0",
   });
-  await saveContactTags(pool, owner, C, "same", { tags: ["lead"] });
+  await saveTags(pool, owner, C, "same", { tags: ["lead"] });
   const frozen = await createSegmentSnapshot(pool, owner, segment.id, undefined);
-  await saveContactTags(pool, owner, C2, "same", { tags: ["lead"] });
+  await saveTags(pool, owner, C2, "same", { tags: ["lead"] });
   assert.deepEqual((await compareSegmentSnapshot(pool, owner, frozen.id)).counts, {
     original: "1",
     baseline: "1",

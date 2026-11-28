@@ -37,10 +37,13 @@ function requireJsonType(request: Request): void {
   if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) throw new ApiError(415, "json_required");
 }
 
-export async function readJson(request: Request, maxBytes = 16_384): Promise<unknown> {
+// A parser of the decoded body text; anything it throws is 400 invalid_json, as a JSON.parse error is.
+export type JsonTextParser = (text: string) => unknown;
+
+export async function readJson(request: Request, maxBytes = 16_384, parse?: JsonTextParser): Promise<unknown> {
   requireJsonType(request);
   if (!request.body) throw new ApiError(400, "invalid_json");
-  return parseJsonBytes(await readBodyBytes(request.body, maxBytes));
+  return parseJsonBytes(await readBodyBytes(request.body, maxBytes), parse);
 }
 
 // A body of zero bytes is no input whatever its headers say (a streamed empty body has neither a null body nor a
@@ -74,9 +77,9 @@ async function readBodyBytes(body: ReadableStream<Uint8Array>, maxBytes: number)
   return Buffer.concat(chunks);
 }
 
-function parseJsonBytes(bytes: Uint8Array): unknown {
+function parseJsonBytes(bytes: Uint8Array, parse: JsonTextParser = (text) => JSON.parse(text)): unknown {
   try {
-    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    return parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
     throw new ApiError(400, "invalid_json");
   }

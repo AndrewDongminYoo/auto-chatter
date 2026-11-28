@@ -25,6 +25,22 @@ export interface AuthRateLimitEnv {
   API_KEY_LIMIT?: RateLimitBinding;
 }
 
+// Spends one request from a default API limit (#167). Unlike the per-user allowances, a missing binding or a limiter
+// that does not answer lets the request through and reports "unavailable": these limits bound growth, and a
+// limiter outage must not stop every dashboard write. The caller logs the outage once per request. The external
+// contact write spends the workspace write limit through it too (#48).
+export async function spendApiAllowance(binding: RateLimitBinding | undefined, key: string, limit?: number): Promise<"ok" | "unavailable"> {
+  if (!binding) return "unavailable";
+  let allowance: { success: boolean };
+  try {
+    allowance = await binding.limit(limit === undefined ? { key } : { key, limit });
+  } catch {
+    return "unavailable";
+  }
+  if (!allowance.success) throw new ApiError(429, "rate_limited");
+  return "ok";
+}
+
 // The routes whose Supabase call sends an auth mail.
 const MAIL_PATHS = new Set(["/api/auth/signup", "/api/auth/recover", "/api/auth/resend-confirmation"]);
 

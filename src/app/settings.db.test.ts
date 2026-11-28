@@ -17,6 +17,12 @@ import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 const url = new URL(process.env.TEST_DATABASE_URL ?? "http://invalid");
 if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
 const pool = new Pool({ connectionString: url.toString() });
+
+// The dashboard tag save with the stored tags as expected_tags, for tests that set tags without an editing conflict.
+async function saveTags(db: Pool, user: Parameters<typeof saveContactTags>[1], connectionId: string, senderId: string, input: { tags: unknown }) {
+  const stored = await db.query<{ tags: string[] }>("SELECT tags FROM instagram_contact_tags WHERE connection_id::text=$1 AND sender_id=$2", [connectionId, senderId]);
+  return saveContactTags(db, user, connectionId, senderId, { ...input, expected_tags: stored.rows[0]?.tags ?? [] });
+}
 const a = { id: "11111111-1111-4111-8111-111111111111", email: "a@example.test" };
 const b = { id: "22222222-2222-4222-8222-222222222222", email: "b@example.test" };
 const connectionId = "33333333-3333-4333-8333-333333333333";
@@ -624,7 +630,7 @@ test("combined tag and field filters honor AND OR truth tables without widening 
   ] as const) {
     await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,$3,'media',$3,'private')", [workspace, connectionId, sender]);
     await fieldRequest("PUT", fieldValuePath(field.id, sender), { value });
-    await saveContactTags(pool, a, connectionId, sender, { tags });
+    await saveTags(pool, a, connectionId, sender, { tags });
   }
   const other = "77777777-7777-4777-8777-777777777777";
   const foreign = "88888888-8888-4888-8888-888888888888";
@@ -681,7 +687,7 @@ test("combined saved filters preserve OR and re-evaluate either current conditio
   await fieldContact();
   const field = await createField("Combined boolean", "boolean");
   await fieldRequest("PUT", fieldValuePath(field.id), { value: true });
-  await saveContactTags(pool, a, connectionId, "sender", { tags: ["lead"] });
+  await saveTags(pool, a, connectionId, "sender", { tags: ["lead"] });
   const response = await fieldRequest("POST", "/api/contact-segments", {
     name: "Tag or false",
     connection_id: connectionId,
@@ -698,7 +704,7 @@ test("combined saved filters preserve OR and re-evaluate either current conditio
   assert.deepEqual((await listContactSegments(pool, a))[0], segment);
   const query = new URLSearchParams({ segment_id: segment.id });
   assert.equal((await listContacts(pool, a, query)).contacts.length, 1);
-  await saveContactTags(pool, a, connectionId, "sender", { tags: [] });
+  await saveTags(pool, a, connectionId, "sender", { tags: [] });
   assert.equal((await listContacts(pool, a, query)).contacts.length, 0);
   await fieldRequest("PUT", fieldValuePath(field.id), { value: false });
   assert.equal((await listContacts(pool, a, query)).contacts.length, 1);
@@ -711,7 +717,7 @@ test("combined saved filters preserve OR and re-evaluate either current conditio
 
 test("combined filters reject meaningless or malformed OR even when the tag matches", async () => {
   await fieldContact();
-  await saveContactTags(pool, a, connectionId, "sender", { tags: ["lead"] });
+  await saveTags(pool, a, connectionId, "sender", { tags: ["lead"] });
   const field = await createField("Validated combination", "number");
   const base = { name: "Invalid combination", tag: "lead", field_id: field.id, field_operator: "gte", field_value: 0 };
   for (const condition_operator of ["and", "or"]) {
@@ -813,7 +819,7 @@ test("contact preview counts grouped identities with current filters and workspa
     // Repeated comments still describe one contact in this connection.
     await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) SELECT $1,$2,$3||n,'media',$3,'private' FROM generate_series(1,3) n", [workspace, connectionId, sender]);
     await fieldRequest("PUT", fieldValuePath(field.id, sender), { value });
-    await saveContactTags(pool, a, connectionId, sender, { tags });
+    await saveTags(pool, a, connectionId, sender, { tags });
   }
   const other = "77777777-7777-4777-8777-777777777777";
   const foreign = "88888888-8888-4888-8888-888888888888";
@@ -874,7 +880,7 @@ test("contact preview counts grouped identities with current filters and workspa
   });
   const savedPath = `/api/contacts?preview=true&segment_id=${segment.id}`;
   assert.equal((await (await fieldRequest("GET", savedPath)).json()).total, "4");
-  await saveContactTags(pool, a, connectionId, "tag-only", { tags: [] });
+  await saveTags(pool, a, connectionId, "tag-only", { tags: [] });
   const changed = await (await fieldRequest("GET", savedPath)).json();
   assert.equal(changed.total, "3");
   assert.equal(changed.evaluated, "5");
@@ -903,7 +909,7 @@ test("contact activity uses the latest stored comment and partitions exclusions 
   for (const [sender, time, value, tags] of rows) {
     await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$3,'private',$4)", [workspace, connectionId, sender, time]);
     await fieldRequest("PUT", fieldValuePath(field.id, sender), { value });
-    await saveContactTags(pool, a, connectionId, sender, { tags });
+    await saveTags(pool, a, connectionId, sender, { tags });
   }
   // An older in-range event must not admit latest-outside; an older out-of-range event must not exclude tag-only.
   for (const [sender, time] of [
@@ -1081,7 +1087,7 @@ test("contact consent filters keep identity scope and classify after activity be
   for (const [sender, value, tags] of rows) {
     await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text,created_at) VALUES($1,$2,$3,'media',$3,'private',$4)", [workspace, connectionId, sender, sender === "outside" ? before : from]);
     await fieldRequest("PUT", fieldValuePath(field.id, sender), { value });
-    await saveContactTags(pool, a, connectionId, sender, { tags });
+    await saveTags(pool, a, connectionId, sender, { tags });
   }
   const consent = (
     sender: string,
@@ -1332,13 +1338,13 @@ test("ordered saved segments preserve values and re-evaluate scoped current data
   assert.deepEqual((await listContactSegments(pool, a))[0], segment);
   const query = new URLSearchParams({ segment_id: segment.id });
   assert.equal((await listContacts(pool, a, query)).contacts.length, 0);
-  await saveContactTags(pool, a, connectionId, "sender", { tags: ["lead"] });
+  await saveTags(pool, a, connectionId, "sender", { tags: ["lead"] });
   assert.equal((await listContacts(pool, a, query)).contacts.length, 1);
   const other = "77777777-7777-4777-8777-777777777777";
   await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id) VALUES($1,$2,'ordered-other')", [other, workspace]);
   await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'ordered-other','media','sender','private')", [workspace, other]);
   await fieldRequest("PUT", fieldValuePath(field.id, "sender", other), { value: 20 });
-  await saveContactTags(pool, a, other, "sender", { tags: ["lead"] });
+  await saveTags(pool, a, other, "sender", { tags: ["lead"] });
   assert.deepEqual(
     (await listContacts(pool, a, query)).contacts.map((contact) => contact.connection_id),
     [connectionId],
@@ -1701,16 +1707,38 @@ test("contacts deduplicate comments and return no content or credentials across 
 });
 test("contact tags normalize, filter, clear and cannot target foreign or nonexistent contacts", async () => {
   await contactEvents();
-  await saveContactTags(pool, a, connectionId, "888", { tags: [" Lead ", "lead", "관심"] });
+  await saveTags(pool, a, connectionId, "888", { tags: [" Lead ", "lead", "관심"] });
   assert.deepEqual((await listContacts(pool, a)).contacts[0].tags, ["lead", "관심"]);
   assert.equal((await listContacts(pool, a, new URLSearchParams({ tag: " LEAD " }))).contacts.length, 1);
   assert.equal((await listContacts(pool, a, new URLSearchParams({ tag: "customer" }))).contacts.length, 0);
-  await assert.rejects(saveContactTags(pool, b, connectionId, "888", { tags: ["foreign"] }), (e: unknown) => e instanceof ApiError && e.status === 404);
-  await assert.rejects(saveContactTags(pool, a, connectionId, "999", { tags: ["new"] }), (e: unknown) => e instanceof ApiError && e.status === 404);
-  for (const tags of [[""], ["x".repeat(41)], Array(21).fill("tag"), [null], "lead"]) await assert.rejects(saveContactTags(pool, a, connectionId, "888", { tags }), (e: unknown) => e instanceof ApiError && e.status === 400);
+  await assert.rejects(saveTags(pool, b, connectionId, "888", { tags: ["foreign"] }), (e: unknown) => e instanceof ApiError && e.status === 404);
+  await assert.rejects(saveTags(pool, a, connectionId, "999", { tags: ["new"] }), (e: unknown) => e instanceof ApiError && e.status === 404);
+  for (const tags of [[""], ["x".repeat(41)], Array(21).fill("tag"), [null], "lead"]) await assert.rejects(saveTags(pool, a, connectionId, "888", { tags }), (e: unknown) => e instanceof ApiError && e.status === 400);
   assert.deepEqual((await listContacts(pool, a)).contacts[0].tags, ["lead", "관심"]);
-  await saveContactTags(pool, a, connectionId, "888", { tags: [] });
+  await saveTags(pool, a, connectionId, "888", { tags: [] });
   assert.deepEqual((await listContacts(pool, a)).contacts[0].tags, []);
+});
+
+test("a dashboard tag save needs the stored tags as expected_tags and refuses a stale list without writing", async () => {
+  await contactEvents();
+  const tagsOf = async () => (await listContacts(pool, a)).contacts[0].tags;
+  await saveContactTags(pool, a, connectionId, "888", { tags: ["b", "a"], expected_tags: [] });
+  // The comparison is of sorted sets of the exact strings: another order is not stale, another spelling is.
+  const stale = (e: unknown) => e instanceof ApiError && e.status === 409 && e.message === "contact_tags_stale";
+  await pool.query("UPDATE instagram_contact_tags SET tags=ARRAY['b','a'] WHERE sender_id='888'");
+  await assert.rejects(saveContactTags(pool, a, connectionId, "888", { tags: ["a", "b", "c"], expected_tags: [" B", "a"] }), stale);
+  await saveContactTags(pool, a, connectionId, "888", { tags: ["a", "b", "c"], expected_tags: ["b", "a"] });
+  assert.deepEqual(await tagsOf(), ["a", "b", "c"]);
+  // An editor opened before another write: the save is refused and the other write's tag stays.
+  await assert.rejects(saveContactTags(pool, a, connectionId, "888", { tags: ["a"], expected_tags: ["a", "b"] }), stale);
+  await assert.rejects(saveContactTags(pool, a, connectionId, "888", { tags: [], expected_tags: [] }), stale);
+  assert.deepEqual(await tagsOf(), ["a", "b", "c"]);
+  // expected_tags is required: an array of at most 20 strings of at most 200 characters.
+  for (const input of [{ tags: ["a"] }, { tags: ["a"], expected_tags: null }, { tags: ["a"], expected_tags: [1] }, { tags: ["a"], expected_tags: ["x".repeat(201)] }, { tags: ["a"], expected_tags: Array.from({ length: 21 }, (_, i) => `t${i}`) }])
+    await assert.rejects(saveContactTags(pool, a, connectionId, "888", input), (e: unknown) => e instanceof ApiError && e.status === 400 && e.message === "invalid_contact_tags");
+  // A contact that does not exist is 404 whatever expected_tags holds.
+  await assert.rejects(saveContactTags(pool, a, connectionId, "999", { tags: ["a"], expected_tags: ["z"] }), (e: unknown) => e instanceof ApiError && e.status === 404);
+  await assert.rejects(saveContactTags(pool, b, connectionId, "888", { tags: ["a"], expected_tags: ["a", "b", "c"] }), (e: unknown) => e instanceof ApiError && e.status === 404);
 });
 
 test("contact identity and tag filters stay separate for each account", async () => {
@@ -1725,7 +1753,7 @@ test("contact identity and tag filters stay separate for each account", async ()
     { accountId: "124", commentId: "other", postId: "12345", senderId: "888", text: "other account" },
     { accountId: "125", commentId: "foreign", postId: "12345", senderId: "888", text: "foreign" },
   ]);
-  await saveContactTags(pool, a, connectionId, "888", { tags: ["lead"] });
+  await saveTags(pool, a, connectionId, "888", { tags: ["lead"] });
   assert.equal((await listContacts(pool, a)).contacts.length, 2);
   const own = (await listContacts(pool, a, new URLSearchParams({ connection_id: other }))).contacts;
   assert.equal(own.length, 1);
@@ -1796,7 +1824,7 @@ test("existing string sender identities can be tagged and used at a page boundar
   const next = await listContacts(pool, a, new URLSearchParams({ after: page.after }));
   assert.equal(next.contacts.length, 1);
   assert.equal(next.contacts[0].sender_id, "sender-051");
-  await saveContactTags(pool, a, connectionId, "sender-050", { tags: ["lead"] });
+  await saveTags(pool, a, connectionId, "sender-050", { tags: ["lead"] });
 });
 
 test("saved segments isolate workspace and evaluate current tags", async () => {
@@ -1808,9 +1836,9 @@ test("saved segments isolate workspace and evaluate current tags", async () => {
   assert.deepEqual(await listContactSegments(pool, b), []);
   const query = new URLSearchParams({ segment_id: segment.id });
   assert.equal((await listContacts(pool, a, query)).contacts.length, 0);
-  await saveContactTags(pool, a, connectionId, "sender", { tags: ["lead"] });
+  await saveTags(pool, a, connectionId, "sender", { tags: ["lead"] });
   assert.equal((await listContacts(pool, a, query)).contacts[0]?.sender_id, "sender");
-  await saveContactTags(pool, a, connectionId, "sender", { tags: [] });
+  await saveTags(pool, a, connectionId, "sender", { tags: [] });
   assert.equal((await listContacts(pool, a, query)).contacts.length, 0);
   for (const action of [() => createContactSegment(pool, b, { name: "Foreign", connection_id: connectionId }), () => listContacts(pool, b, query), () => archiveContactSegment(pool, b, segment.id)])
     await assert.rejects(action, (e: unknown) => e instanceof ApiError && e.status === 404);
@@ -1985,7 +2013,7 @@ test("segment edits replace the whole definition, increment the version and chan
   });
   assert.deepEqual(await segmentRows(), before);
   assert.equal((await listContacts(pool, a, query)).contacts.length, 0);
-  await saveContactTags(pool, a, connectionId, "sender", { tags: ["lead"] });
+  await saveTags(pool, a, connectionId, "sender", { tags: ["lead"] });
   assert.equal((await listContacts(pool, a, query)).contacts.length, 1);
   // The jsonb value, the timestamps and the day count compare as unchanged too, not only the text columns.
   let current = 5;
@@ -3501,7 +3529,7 @@ test("relative comment activity combines with tag OR field and consent, and pagi
   assert.equal(second.after, null);
   assert.equal(new Set([...first.contacts, ...second.contacts].map((c) => c.sender_id)).size, 55);
   assert.ok([...first.contacts, ...second.contacts].every((c) => c.comment_count === "2" && c.first_comment_at.toISOString() === "2020-01-01T00:00:00.000Z"));
-  await saveContactTags(pool, a, connectionId, "001", { tags: ["lead"] });
+  await saveTags(pool, a, connectionId, "001", { tags: ["lead"] });
   await fieldRequest("PUT", fieldValuePath(field.id, "002"), { value: 1 });
   q.delete("after");
   q.set("preview", "true");
@@ -3750,7 +3778,7 @@ test("calendar comment activity judges the latest stored comment and keeps the e
     ["b-latest-inside", "2026-10-17T02:00:00.000000Z"],
     ["c-inside", "2026-10-17T02:30:00.000000Z"],
   ]);
-  await saveContactTags(pool, a, connectionId, "b-latest-inside", { tags: ["lead"] });
+  await saveTags(pool, a, connectionId, "b-latest-inside", { tags: ["lead"] });
   const q = new URLSearchParams({ last_comment_period: "today", preview: "true", tag: "lead" });
   const result = await listContacts(relativeClock(asOf), a, q);
   assert.equal(result.total, "1");
@@ -3901,7 +3929,7 @@ async function multiTagContacts() {
     ["some", ["b", "c"], -1],
   ] as const) {
     await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,$3,'media',$3,'private')", [workspace, connectionId, sender]);
-    if (tags) await saveContactTags(pool, a, connectionId, sender, { tags });
+    if (tags) await saveTags(pool, a, connectionId, sender, { tags });
     if (value !== null) assert.equal((await fieldRequest("PUT", fieldValuePath(field.id, sender), { value })).status, 200);
   }
   assert.equal((await pool.query("SELECT count(*) FROM instagram_contact_tags WHERE sender_id='none'")).rows[0].count, "0");
@@ -4167,7 +4195,7 @@ async function multiFieldContacts() {
     ["some", ["vip"], { [plan.id]: "pro", [score.id]: 1, [vip.id]: false }],
   ] as const) {
     await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,$3,'media',$3,'private')", [workspace, connectionId, sender]);
-    if (tags) await saveContactTags(pool, a, connectionId, sender, { tags });
+    if (tags) await saveTags(pool, a, connectionId, sender, { tags });
     for (const [id, value] of Object.entries(values)) assert.equal((await fieldRequest("PUT", fieldValuePath(id, sender), { value })).status, 200);
   }
   // T: all, some. N: all. D: all. B: all. S: all, none. U: none, empty.

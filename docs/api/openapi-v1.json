@@ -3,7 +3,7 @@
   "info": {
     "title": "auto-chatter external API",
     "version": "1",
-    "description": "The external API for servers that hold a workspace API key. A workspace admin issues the key in the dashboard. The key is shown once, and it reads only the data of its own workspace.\n\nEvery request counts toward a limit of 600 requests per minute per client IP address, before the key is read. Each valid key then has a limit of 60 requests per minute. Both limits apply to all paths together.\n\nThe server does not serve this document."
+    "description": "The external API for servers that hold a workspace API key. A workspace admin issues the key in the dashboard. The key is shown once, and it reads only the data of its own workspace.\n\nEvery request counts toward a limit of 600 requests per minute per client IP address, before the key is read. Each valid key then has a limit of 60 requests per minute. Both limits apply to all paths together.\n\nA contact write also counts toward the workspace's hourly write limit of its plan, which writes in the dashboard use too. A write refused with 400, 401, 403, 413 or 415 does not count toward it.\n\nThe server does not serve this document."
   },
   "servers": [{ "url": "https://auto-chat.donminzzi.kr" }],
   "security": [{ "apiKey": [] }],
@@ -77,6 +77,119 @@
           "503": { "$ref": "#/components/responses/Unavailable" }
         }
       }
+    },
+    "/v1/contacts/{connection_id}/{sender_id}": {
+      "patch": {
+        "operationId": "updateContact",
+        "summary": "Add or remove tags and set field values of one contact",
+        "description": "Changes the tags and the field values of one existing comment contact of the key's workspace, and returns the contact after the change. A contact exists when the sender has commented on the connected account; this request does not create contacts.\n\nTags in `tags.remove` are removed first, then tags in `tags.add` are added. Tags that the request does not name stay as they are, also the tags that an agent added in the dashboard. Each tag is trimmed, normalized to NFC and lower-cased, and has at most 40 characters. A contact has at most 20 tags.\n\nA field is named by its ID from `GET /v1/fields`. The value must match the field type: a string of at most 1,000 characters for `text`, a number that a 64-bit floating-point value holds exactly for `number` (for example, `9007199254740993` is refused), a boolean for `boolean`, and a `YYYY-MM-DD` string for `date`. `null` clears the value. Fields that the request does not name stay as they are.\n\nAll changes of one request are applied together, or none is applied.\n\nThe request is idempotent: it sets a result state, so sending the same request again gives the same result. After a timeout or a `5xx` or `429` response, send the same request again. There is no `Idempotency-Key` header.\n\nNo tag or field value proves messaging consent or delivery eligibility, and this request sends no message.\n\nThe key needs the `contacts:write` scope.",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "description": "The `connection_id` of the contact.",
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "sender_id",
+            "in": "path",
+            "required": true,
+            "description": "The `sender_id` of the contact, percent-encoded.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "At most 16 KiB of JSON with the `Content-Type: application/json` header. At least one tag or field must be named.",
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ContactUpdate" },
+              "example": { "tags": { "add": ["vip"], "remove": ["trial"] }, "fields": { "3f0c8f5e-2d7a-4c3b-9a51-6d1e2b7c9f00": "gold" } }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The change is applied. The body is the contact after the change.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Contact" } } }
+          },
+          "400": {
+            "description": "The request, its body or a path parameter is not valid. `invalid_request`: the request has a query string, the body is not JSON, names a key twice in one object, has an unknown key, names no change, has a tag that is not valid, names the same tag in `add` and `remove`, has more than 20 tags in one list or more than 20 fields, or a path parameter is not valid. `invalid_field_value`: a value does not match the type of its field, or a number has more precision than a 64-bit floating-point value holds.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "examples": {
+                  "request": { "value": { "error": "invalid_request" } },
+                  "value": { "value": { "error": "invalid_field_value" } }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/InvalidApiKey" },
+          "403": {
+            "description": "The key does not have the `contacts:write` scope.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "insufficient_scope" } } }
+          },
+          "404": {
+            "description": "`connection_not_found`: the connection is not a connection of the key's workspace. `contact_not_found`: the sender has no comment on the connection. `field_not_found`: a field is archived or is not a field of the key's workspace. An ID of another workspace gets the same response as an ID that does not exist.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "examples": {
+                  "connection": { "value": { "error": "connection_not_found" } },
+                  "contact": { "value": { "error": "contact_not_found" } },
+                  "field": { "value": { "error": "field_not_found" } }
+                }
+              }
+            }
+          },
+          "405": { "$ref": "#/components/responses/MethodNotAllowed" },
+          "409": {
+            "description": "The contact would have more than 20 tags. Nothing is changed.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "contact_tag_limit" } } }
+          },
+          "413": {
+            "description": "The body is larger than 16 KiB.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "request_too_large" } } }
+          },
+          "415": {
+            "description": "The `Content-Type` header is not `application/json`.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "json_required" } } }
+          },
+          "429": {
+            "description": "The client IP address or the key used its requests for this minute, or the workspace used its writes for this hour.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "rate_limited" } } }
+          },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/fields": {
+      "get": {
+        "operationId": "listFields",
+        "summary": "List the contact fields of the workspace",
+        "description": "Returns the contact fields of the key's workspace that are not archived, ordered by name. Use a field's `id` to set its value with `PATCH /v1/contacts/{connection_id}/{sender_id}`.\n\nThe key needs the `contacts:read` scope.",
+        "responses": {
+          "200": {
+            "description": "The fields.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FieldList" } } }
+          },
+          "400": {
+            "description": "The request has a query parameter.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "invalid_request" } } }
+          },
+          "401": { "$ref": "#/components/responses/InvalidApiKey" },
+          "403": {
+            "description": "The key does not have the `contacts:read` scope.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "insufficient_scope" } } }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "405": { "$ref": "#/components/responses/MethodNotAllowed" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
     }
   },
   "components": {
@@ -131,7 +244,11 @@
         "properties": {
           "id": { "type": "string", "format": "uuid" },
           "name": { "type": "string" },
-          "scopes": { "type": "array", "items": { "type": "string", "enum": ["contacts:read"] } },
+          "scopes": {
+            "type": "array",
+            "description": "`contacts:read` reads contacts and fields. `contacts:write` also changes contacts; a key with it always has `contacts:read`.",
+            "items": { "type": "string", "enum": ["contacts:read", "contacts:write"] }
+          },
           "workspace_id": { "type": "string", "format": "uuid" },
           "expires_at": { "type": "string", "format": "date-time" }
         }
@@ -171,6 +288,45 @@
             "description": "The set values of the contact fields that are not archived, keyed by field ID. A number value is sent with all of its stored digits; read it with a parser that keeps that precision when it matters.",
             "propertyNames": { "format": "uuid" },
             "additionalProperties": { "$ref": "#/components/schemas/FieldValue" }
+          }
+        }
+      },
+      "ContactUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tags": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "add": { "type": "array", "maxItems": 20, "items": { "type": "string", "minLength": 1 } },
+              "remove": { "type": "array", "maxItems": 20, "items": { "type": "string", "minLength": 1 } }
+            }
+          },
+          "fields": {
+            "type": "object",
+            "description": "New values keyed by field ID. `null` clears a value.",
+            "maxProperties": 20,
+            "propertyNames": { "format": "uuid" },
+            "additionalProperties": { "type": ["string", "number", "boolean", "null"] }
+          }
+        }
+      },
+      "FieldList": {
+        "type": "object",
+        "required": ["fields"],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "name", "type"],
+              "properties": {
+                "id": { "type": "string", "format": "uuid" },
+                "name": { "type": "string" },
+                "type": { "type": "string", "enum": ["text", "number", "boolean", "date"] }
+              }
+            }
           }
         }
       },
