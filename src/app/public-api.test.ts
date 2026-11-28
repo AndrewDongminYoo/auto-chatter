@@ -7,6 +7,7 @@ import { ApiError } from "./auth.ts";
 import { matchPublicApiRoute, PUBLIC_API_ROUTES, publicApi } from "./public-api.ts";
 import { exactNumberReviver, hasDuplicateJsonKey, parseContactWrite, parseContactWriteBody, parseContactWriteTarget } from "./public-contact-writes.ts";
 import { decodeContactsCursor, encodeContactsCursor, parseContactsQuery } from "./public-contacts.ts";
+import { flowStartRequestHash, parseFlowStart, parseFlowStartBody } from "./public-flow-starts.ts";
 
 const keyId = "44444444-4444-4444-8444-444444444444";
 const workspaceId = "22222222-2222-4222-8222-222222222222";
@@ -24,8 +25,8 @@ test("a generated API key is ac_live_ and 43 base64url characters, and only its 
   for (const value of [undefined, "", `ac_test_${"a".repeat(43)}`, `ac_live_${"a".repeat(42)}`, `ac_live_${"a".repeat(44)}`, `ac_live_${"a".repeat(42)}=`, ` ${key}`]) assert.equal(isApiKeyFormat(value), false, String(value));
 });
 
-test("an API key request accepts contacts:read with or without contacts:write, a listed expiry and a 1-80 character name", () => {
-  assert.deepEqual(API_KEY_SCOPES, ["contacts:read", "contacts:write"]);
+test("an API key request accepts contacts:read with or without contacts:write and flows:start, a listed expiry and a 1-80 character name", () => {
+  assert.deepEqual(API_KEY_SCOPES, ["contacts:read", "contacts:write", "flows:start"]);
   assert.deepEqual(parseApiKeyRequest({ name: "  CRM  ", scopes: ["contacts:read"] }), { name: "CRM", expiresInDays: 90, scopes: ["contacts:read"] });
   // A write key is stored in one order, the order the api_keys CHECK compares.
   for (const scopes of [
@@ -33,6 +34,9 @@ test("an API key request accepts contacts:read with or without contacts:write, a
     ["contacts:write", "contacts:read"],
   ])
     assert.deepEqual(parseApiKeyRequest({ name: "CRM", scopes }).scopes, ["contacts:read", "contacts:write"]);
+  // A flow start key, with or without contacts:write, is stored in the same order.
+  assert.deepEqual(parseApiKeyRequest({ name: "CRM", scopes: ["flows:start", "contacts:read"] }).scopes, ["contacts:read", "flows:start"]);
+  assert.deepEqual(parseApiKeyRequest({ name: "CRM", scopes: ["flows:start", "contacts:write", "contacts:read"] }).scopes, ["contacts:read", "contacts:write", "flows:start"]);
   for (const days of [30, 90, 180, 365]) assert.equal(parseApiKeyRequest({ name: "CRM", scopes: ["contacts:read"], expires_in_days: days }).expiresInDays, days);
   assert.equal(parseApiKeyRequest({ name: "a".repeat(80), scopes: ["contacts:read"] }).name.length, 80);
   const refused: [unknown, string][] = [
@@ -48,6 +52,8 @@ test("an API key request accepts contacts:read with or without contacts:write, a
     [{ name: "CRM" }, "invalid_api_key_scopes"],
     [{ name: "CRM", scopes: [] }, "invalid_api_key_scopes"],
     [{ name: "CRM", scopes: ["contacts:write"] }, "invalid_api_key_scopes"],
+    [{ name: "CRM", scopes: ["flows:start"] }, "invalid_api_key_scopes"],
+    [{ name: "CRM", scopes: ["contacts:read", "flows:start", "flows:start"] }, "invalid_api_key_scopes"],
     [{ name: "CRM", scopes: ["contacts:read", "contacts:write", "contacts:write"] }, "invalid_api_key_scopes"],
     [{ name: "CRM", scopes: ["contacts:read", "contacts:delete"] }, "invalid_api_key_scopes"],
     [{ name: "CRM", scopes: ["contacts:read", "contacts:read"] }, "invalid_api_key_scopes"],
@@ -397,6 +403,18 @@ test("the OpenAPI document lists exactly the paths and methods the external API 
     "contact_tag_limit",
     "json_required",
     "request_too_large",
+    "flow_not_found",
+    "flow_unavailable",
+    "idempotency_conflict",
+    "sending_disabled",
+    "no_dm_identity",
+    "recipient_opted_out",
+    "marketing_consent_required",
+    "reply_window_closed",
+    "contact_paused",
+    "contact_busy",
+    "active_contact_limit",
+    "api_limit_unavailable",
   ])
     assert.ok(text.includes(`"${code}"`), code);
   // Every templated path matches its own template, and only that one.
@@ -408,6 +426,8 @@ test("the routes match whole path segments, and the write path keeps its raw par
   assert.deepEqual(matchPublicApiRoute(`/v1/contacts/${connectionId}/a%2Fb`), { path: "/v1/contacts/{connection_id}/{sender_id}", params: [connectionId, "a%2Fb"] });
   for (const path of ["/v1/contacts/", "/v1/contacts/x", "/v1/contacts/x/y/z", "/v1/contacts//y", "/v1/contacts/x/", "/v1/fields/", `/v1/contacts/${encodeURIComponent("{connection_id}")}`]) assert.equal(matchPublicApiRoute(path), undefined, path);
   assert.equal(matchPublicApiRoute("/v1/toString"), undefined);
+  assert.deepEqual(matchPublicApiRoute(`/v1/flows/${connectionId}/starts`), { path: "/v1/flows/{flow_id}/starts", params: [connectionId] });
+  for (const path of ["/v1/flows/", `/v1/flows/${connectionId}`, `/v1/flows/${connectionId}/starts/`, "/v1/flows//starts", `/v1/flows/${connectionId}/start`]) assert.equal(matchPublicApiRoute(path), undefined, path);
 });
 
 test("the write path needs a connection UUID and a decodable, non-empty sender ID", () => {
@@ -728,4 +748,139 @@ test("GET /v1/fields lists the active fields with contacts:read and records the 
   const post = await call({ Authorization: `Bearer ${generateApiKey()}` }, env, writePool([], keyRow, state), "/v1/fields", "POST");
   assert.equal(post.status, 405);
   assert.equal(post.headers.get("allow"), "GET");
+});
+
+const flowId = "77777777-7777-4777-8777-777777777777";
+const requestKey = "99999999-9999-4999-8999-999999999999";
+const startBody = { request_key: requestKey, connection_id: connectionId, sender_id: "sender/1" };
+
+test("a flow start names a flow, a UUID request key, a connection and a sender ID, and nothing else", () => {
+  const start = parseFlowStart(flowId.toUpperCase(), { ...startBody, request_key: requestKey.toUpperCase(), connection_id: connectionId.toUpperCase() });
+  assert.deepEqual(start, { flowId, requestKey, connectionId, senderId: "sender/1", hash: flowStartRequestHash(flowId, connectionId, "sender/1") });
+  // The sender ID is kept exactly, as the contact key stores it.
+  assert.equal(parseFlowStart(flowId, { ...startBody, sender_id: " Sender " }).senderId, " Sender ");
+  const refused: [string, unknown][] = [
+    ["not-a-uuid", startBody],
+    [flowId, null],
+    [flowId, []],
+    [flowId, {}],
+    [flowId, { ...startBody, extra: true }],
+    [flowId, { connection_id: connectionId, sender_id: "1" }],
+    [flowId, { ...startBody, request_key: "key-1" }],
+    [flowId, { ...startBody, connection_id: "shop" }],
+    [flowId, { ...startBody, sender_id: "" }],
+    [flowId, { ...startBody, sender_id: "   " }],
+    [flowId, { ...startBody, sender_id: "a\0b" }],
+    [flowId, { ...startBody, sender_id: 123 }],
+  ];
+  for (const [flow, input] of refused)
+    assert.throws(
+      () => parseFlowStart(flow, input),
+      (error) => error instanceof ApiError && error.status === 400 && error.message === "invalid_request",
+      JSON.stringify([flow, input]),
+    );
+  // JSON.parse would keep only the last value of a repeated key.
+  assert.throws(
+    () => parseFlowStartBody(`{"sender_id":"1","sender_id":"2"}`),
+    (error) => error instanceof ApiError && error.message === "invalid_request",
+  );
+  assert.deepEqual(parseFlowStartBody(JSON.stringify(startBody)), startBody);
+});
+
+test("the request hash covers the flow, the connection and the exact sender ID in a fixed order", () => {
+  const hash = flowStartRequestHash(flowId, connectionId, "1");
+  assert.match(hash, /^[0-9a-f]{64}$/);
+  assert.equal(flowStartRequestHash(flowId, connectionId, "1"), hash);
+  for (const other of [flowStartRequestHash(connectionId, flowId, "1"), flowStartRequestHash(flowId, connectionId, "2"), flowStartRequestHash(flowId, connectionId, " 1"), flowStartRequestHash(requestKey, connectionId, "1")]) assert.notEqual(other, hash);
+  // Separators cannot be shifted between the parts.
+  assert.notEqual(flowStartRequestHash("a", "b,c", "d"), flowStartRequestHash("a,b", "c", "d"));
+});
+
+const startKey = { ...keyRow, scopes: ["contacts:read", "flows:start"] };
+const startPath = `/v1/flows/${flowId}/starts`;
+function startPool(queries: (Recorded[number] & { client: boolean })[], key: Record<string, unknown>) {
+  const answer = (sql: string, params: unknown[], client: boolean) => {
+    queries.push({ sql, params, client });
+    if (sql.includes("FROM api_keys")) return { rows: [key], rowCount: 1 };
+    if (sql.startsWith("SELECT plan")) return { rows: [{ plan: "free" }], rowCount: 1 };
+    if (sql.includes("FROM flows f")) return { rows: [{ id: flowId, name: "Paid", connection_id: connectionId }], rowCount: 1 };
+    return { rows: [], rowCount: 0 };
+  };
+  return {
+    query: async (sql: string, params: unknown[] = []) => answer(sql, params, false),
+    connect: async () => ({ query: async (sql: string, params: unknown[] = []) => answer(sql, params, true), release: () => {} }),
+    end: async () => {},
+  } as unknown as Pool;
+}
+function post(pool: Pool, env: Parameters<typeof publicApi>[1], body: string | undefined, path = startPath, headers: Record<string, string> = { "Content-Type": "application/json" }) {
+  return publicApi(new Request(`https://app.test${path}`, { method: "POST", headers: { Authorization: `Bearer ${generateApiKey()}`, "CF-Connecting-IP": "203.0.113.9", ...headers }, body }), env, () => pool, "corr-4", {
+    enabled: true,
+    wake: async () => assert.fail("nothing to wake"),
+  });
+}
+
+test("both flow routes need flows:start, and a refused start spends no workspace write and opens no transaction", async () => {
+  const body = JSON.stringify(startBody);
+  const cases: [string, Record<string, unknown>, string | undefined, string, Record<string, string>, number, string][] = [
+    ["read key", keyRow, body, startPath, { "Content-Type": "application/json" }, 403, "insufficient_scope"],
+    ["write key", writeKey, body, startPath, { "Content-Type": "application/json" }, 403, "insufficient_scope"],
+    ["query", startKey, body, `${startPath}?dry_run=1`, { "Content-Type": "application/json" }, 400, "invalid_request"],
+    ["flow ID", startKey, body, "/v1/flows/flow-1/starts", { "Content-Type": "application/json" }, 400, "invalid_request"],
+    ["empty body", startKey, "{}", startPath, { "Content-Type": "application/json" }, 400, "invalid_request"],
+    ["not JSON", startKey, "{", startPath, { "Content-Type": "application/json" }, 400, "invalid_request"],
+    ["key twice", startKey, `{"request_key":"${requestKey}","connection_id":"${connectionId}","sender_id":"1","sender_id":"2"}`, startPath, { "Content-Type": "application/json" }, 400, "invalid_request"],
+    ["no JSON type", startKey, body, startPath, { "Content-Type": "text/plain" }, 415, "json_required"],
+    ["over 4 KiB", startKey, body.padEnd(4097, " "), startPath, { "Content-Type": "application/json" }, 413, "request_too_large"],
+  ];
+  for (const [name, key, input, path, headers, status, code] of cases) {
+    const workspace = countingLimit(true);
+    const queries: (Recorded[number] & { client: boolean })[] = [];
+    const response = await post(startPool(queries, key), { API_IP_LIMIT: allow, API_KEY_LIMIT: allow, API_WRITE_WORKSPACE_LIMIT: workspace.binding }, input, path, headers);
+    assert.equal(response.status, status, name);
+    assert.deepEqual(await response.json(), { error: code }, name);
+    assert.deepEqual(workspace.calls, [], name);
+    assert.ok(!queries.some((query) => query.client || query.sql.startsWith("UPDATE")), name);
+  }
+  const queries: (Recorded[number] & { client: boolean })[] = [];
+  const list = await call({ Authorization: `Bearer ${generateApiKey()}` }, { API_IP_LIMIT: allow, API_KEY_LIMIT: allow }, startPool(queries, writeKey), "/v1/flows");
+  assert.equal(list.status, 403);
+  assert.deepEqual(await list.json(), { error: "insufficient_scope" });
+  const get = await call({ Authorization: `Bearer ${generateApiKey()}` }, { API_IP_LIMIT: allow, API_KEY_LIMIT: allow }, startPool([], startKey), startPath);
+  assert.equal(get.status, 405);
+  assert.equal(get.headers.get("allow"), "POST");
+});
+
+test("a flow start fails closed: a missing, failing or refusing workspace limiter writes nothing", async () => {
+  const body = JSON.stringify(startBody);
+  for (const [binding, status, code] of [
+    [undefined, 503, "api_limit_unavailable"],
+    [countingLimit("throw").binding, 503, "api_limit_unavailable"],
+    [countingLimit(false).binding, 429, "rate_limited"],
+  ] as const) {
+    const queries: (Recorded[number] & { client: boolean })[] = [];
+    const response = await post(startPool(queries, startKey), { API_IP_LIMIT: allow, API_KEY_LIMIT: allow, API_WRITE_WORKSPACE_LIMIT: binding }, body);
+    assert.equal(response.status, status, code);
+    assert.deepEqual(await response.json(), { error: code });
+    assert.ok(!queries.some((query) => query.client || query.sql.startsWith("UPDATE")), code);
+  }
+  // The limit is the workspace's write limit with the plan's hourly count, spent once per start request.
+  const workspace = countingLimit(true);
+  const queries: (Recorded[number] & { client: boolean })[] = [];
+  await post(startPool(queries, startKey), { API_IP_LIMIT: allow, API_KEY_LIMIT: allow, API_WRITE_WORKSPACE_LIMIT: workspace.binding }, body);
+  assert.deepEqual(workspace.calls, [{ key: workspaceId, limit: 500 }]);
+  assert.equal(queries.filter((query) => query.client)[0]?.sql, "BEGIN");
+});
+
+test("GET /v1/flows lists the flows a key can start with flows:start, spends no workspace write and records the use", async () => {
+  const workspace = countingLimit(true);
+  const queries: (Recorded[number] & { client: boolean })[] = [];
+  const response = await call({ Authorization: `Bearer ${generateApiKey()}` }, { API_IP_LIMIT: allow, API_KEY_LIMIT: allow, API_WRITE_WORKSPACE_LIMIT: workspace.binding }, startPool(queries, startKey), "/v1/flows");
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { flows: [{ id: flowId, name: "Paid", connection_id: connectionId }] });
+  assert.deepEqual(workspace.calls, []);
+  const listed = queries.find((query) => query.sql.includes("FROM flows f"))!;
+  assert.deepEqual(listed.params, [workspaceId, ["instagram_dm_keyword", "instagram_dm_default"], 100]);
+  assert.match(queries.at(-1)!.sql, /^UPDATE api_keys SET last_used_at/);
+  const query = await call({ Authorization: `Bearer ${generateApiKey()}` }, { API_IP_LIMIT: allow, API_KEY_LIMIT: allow }, startPool([], startKey), "/v1/flows?limit=1");
+  assert.equal(query.status, 400);
 });

@@ -6,6 +6,7 @@ import { failureCode, logOperation } from "./operations-log.ts";
 import { isPlanKey, PLANS } from "./plans.ts";
 import { CONTACT_WRITE_REQUEST_BYTES, checkContactWriteFields, listWorkspaceFields, parseContactWrite, parseContactWriteBody, parseContactWriteTarget, writeContact } from "./public-contact-writes.ts";
 import { contactJson, contactsPageJson, parseContactsQuery, readContactsPage } from "./public-contacts.ts";
+import { FLOW_START_REQUEST_BYTES, listFlowsToStart, parseFlowStart, parseFlowStartBody, startFlow } from "./public-flow-starts.ts";
 
 // The external API under /v1/ (#48), for servers that hold a workspace API key. It is separate from /api/*: no
 // session, no same-origin check and no CORS headers. The key is accepted only as `Authorization: Bearer <key>`.
@@ -17,6 +18,8 @@ export const PUBLIC_API_ROUTES = {
   "/v1/contacts": ["GET"],
   "/v1/contacts/{connection_id}/{sender_id}": ["PATCH"],
   "/v1/fields": ["GET"],
+  "/v1/flows": ["GET"],
+  "/v1/flows/{flow_id}/starts": ["POST"],
   "/v1/key": ["GET"],
 } as const satisfies Record<string, readonly string[]>;
 type PublicApiPath = keyof typeof PUBLIC_API_ROUTES;
@@ -56,9 +59,9 @@ async function spend(binding: RateLimitBinding | undefined, key: string): Promis
 // missing JSON content type stays 415 json_required and a body over 16 KiB 413 request_too_large. A number that
 // JavaScript cannot hold exactly is read as a value parseContactWrite refuses, and a key named twice in one object is
 // 400 invalid_request (parseContactWriteBody).
-async function readWriteBody(request: Request): Promise<unknown> {
+async function readWriteBody(request: Request, bytes = CONTACT_WRITE_REQUEST_BYTES, parse = parseContactWriteBody): Promise<unknown> {
   try {
-    return await readJson(request, CONTACT_WRITE_REQUEST_BYTES, parseContactWriteBody);
+    return await readJson(request, bytes, parse);
   } catch (error) {
     if (error instanceof ApiError && error.status === 400) throw new ApiError(400, "invalid_request");
     throw error;
@@ -77,9 +80,32 @@ async function spendWorkspaceWrite(binding: RateLimitBinding | undefined, pool: 
   if (spent === "unavailable") logOperation({ event: "rate_limit_unavailable", code: "api_limit_unavailable", correlation_id: correlationId }, "warn");
 }
 
+// A flow start spends the same workspace write limit as a contact write, after the key, scope and body checks and
+// before any database check, so a start refused by those checks and a replay spend it too. Unlike a contact write it
+// fails closed, because a start sends a message: a missing or failing limiter is 503 api_limit_unavailable.
+async function spendWorkspaceStart(binding: RateLimitBinding | undefined, pool: Pick<Pool, "query">, workspaceId: string): Promise<void> {
+  if (!binding) throw new ApiError(503, "api_limit_unavailable");
+  const plan = (await pool.query<{ plan: unknown }>("SELECT plan FROM workspaces WHERE id=$1", [workspaceId])).rows[0]?.plan;
+  if ((await spendApiAllowance(binding, workspaceId, isPlanKey(plan) ? PLANS[plan].api_writes_per_hour : undefined)) === "unavailable") throw new ApiError(503, "api_limit_unavailable");
+}
+
+// The send switch and the queue wake of a flow start. Without them (the default), sending reads as off and a start is
+// refused with 409 sending_disabled.
+export interface PublicApiSend {
+  enabled: boolean;
+  wake(connectionId: string): Promise<void>;
+}
+const SEND_OFF: PublicApiSend = { enabled: false, wake: async () => undefined };
+
 const JSON_HEADERS = { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" };
 
-export async function publicApi(request: Request, env: Pick<AuthRateLimitEnv, "API_IP_LIMIT" | "API_KEY_LIMIT" | "API_WRITE_WORKSPACE_LIMIT">, openPool: (correlationId: string) => Pick<Pool, "query" | "connect" | "end">, correlationId: string): Promise<Response> {
+export async function publicApi(
+  request: Request,
+  env: Pick<AuthRateLimitEnv, "API_IP_LIMIT" | "API_KEY_LIMIT" | "API_WRITE_WORKSPACE_LIMIT">,
+  openPool: (correlationId: string) => Pick<Pool, "query" | "connect" | "end">,
+  correlationId: string,
+  send: PublicApiSend = SEND_OFF,
+): Promise<Response> {
   try {
     const url = new URL(request.url);
     const ip = clientIp(request.headers.get("CF-Connecting-IP"));
@@ -130,6 +156,33 @@ export async function publicApi(request: Request, env: Pick<AuthRateLimitEnv, "A
           logOperation({ event: "api_key_use_unrecorded", code: failureCode(error), correlation_id: correlationId }, "warn");
         }
         return new Response(contactJson(contact), { headers: JSON_HEADERS });
+      }
+      if (route.path === "/v1/flows" || route.path === "/v1/flows/{flow_id}/starts") {
+        // Every refusal before the workspace limit (403, 400, 413, 415) spends nothing of it.
+        if (!key.scopes.includes("flows:start")) return json({ error: "insufficient_scope" }, 403);
+        if (url.searchParams.size) return json({ error: "invalid_request" }, 400);
+        if (route.path === "/v1/flows") {
+          const flows = await listFlowsToStart(pool, key.workspace_id);
+          await recordApiKeyUse(pool, key.id, ip);
+          return json({ flows });
+        }
+        const start = parseFlowStart(route.params[0]!, await readWriteBody(request, FLOW_START_REQUEST_BYTES, parseFlowStartBody));
+        await spendWorkspaceStart(env.API_WRITE_WORKSPACE_LIMIT, pool, key.workspace_id);
+        const result = await startFlow(pool, key, start, send.enabled);
+        // The start is committed: neither a failure to record the key's last use nor a failed queue wake turns it
+        // into an error response (the cron repairs a missed wake). Each logs one fixed code.
+        try {
+          await recordApiKeyUse(pool, key.id, ip);
+        } catch (error) {
+          logOperation({ event: "api_key_use_unrecorded", code: failureCode(error), correlation_id: correlationId }, "warn");
+        }
+        if (result.created)
+          try {
+            await send.wake(result.connection_id);
+          } catch (error) {
+            logOperation({ event: "flow_start_wake_failed", code: failureCode(error), correlation_id: correlationId }, "warn");
+          }
+        return new Response(JSON.stringify({ start_id: result.start_id, run_id: result.run_id, status: result.status }), { status: 202, headers: JSON_HEADERS });
       }
       const page = await readContactsPage(pool, key.workspace_id, parseContactsQuery(url.searchParams));
       if (!page.found) return json({ error: "connection_not_found" }, 404);

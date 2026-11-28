@@ -2340,3 +2340,124 @@ test("workerd PATCH /v1/contacts and GET /v1/fields write and read through the r
     await pool.end();
   }
 });
+
+test("workerd GET /v1/flows and POST /v1/flows/{flow_id}/starts accept a start through the restricted role behind the key and limits (#48)", async () => {
+  const databaseUrl = process.env.TEST_DATABASE_URL;
+  const url = new URL(databaseUrl);
+  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
+  const pool = new Pool({ connectionString: databaseUrl });
+  const workspace = "11111111-1111-4111-8111-111111111111",
+    member = "66666666-6666-4666-8666-666666666666",
+    connection = "33333333-3333-4333-8333-333333333333";
+  const serverUrl = new URL(databaseUrl);
+  serverUrl.username = "auto_chatter_server";
+  serverUrl.password = "runtime-test-only";
+  const config = JSON.parse(await readFile(new URL("../../wrangler.json", import.meta.url), "utf8"));
+  // The queue has a producer and no consumer here, so an accepted start is queued and never delivered.
+  const runtime = new Miniflare({
+    modules: true,
+    scriptPath: ".wrangler/build/index.js",
+    compatibilityDate: config.compatibility_date,
+    compatibilityFlags: config.compatibility_flags,
+    hyperdrives: { HYPERDRIVE: serverUrl.href },
+    queueProducers: { REPLY_QUEUE: "auto-chatter-replies" },
+    durableObjects: Object.fromEntries(config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }])),
+    bindings: { SEND_ENABLED: "true" },
+    outboundService: async () => {
+      throw new Error("A flow start makes no outbound request");
+    },
+  });
+  const starter = `ac_live_${"s".repeat(43)}`;
+  const writer = `ac_live_${"w".repeat(43)}`;
+  const send = (key, path, init = {}) => runtime.dispatchFetch(`https://app.test${path}`, { ...init, headers: { Authorization: `Bearer ${key}`, "CF-Connecting-IP": "198.51.100.32", "Content-Type": "application/json" } });
+  try {
+    await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
+    await pool.query("TRUNCATE workspaces, active_contacts CASCADE");
+    await pool.query("INSERT INTO workspaces(id,plan) VALUES($1,'advanced')", [workspace]);
+    await pool.query("INSERT INTO workspace_members VALUES($1,$2)", [member, workspace]);
+    await pool.query(
+      `INSERT INTO instagram_connections(id,workspace_id,account_id,username,inbox_enabled,inbox_enabled_at,active,send_enabled,access_token_encrypted,token_expires_at)
+       VALUES($1,$2,'123','shop',true,now()-interval '1 day',true,true,'sealed-token',now()+interval '30 days')`,
+      [connection, workspace],
+    );
+    const event = (await pool.query("INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text) VALUES($1,$2,'c1','1789','00123','text') RETURNING id", [workspace, connection])).rows[0].id;
+    const rule = (await pool.query("INSERT INTO instagram_comment_rules(id,workspace_id,connection_id,media_id,keyword,private_reply_text) VALUES(gen_random_uuid(),$1,$2,'1789','hello','REPLY') RETURNING id", [workspace, connection])).rows[0].id;
+    await pool.query(
+      `INSERT INTO private_reply_outbox(workspace_id,connection_id,event_id,rule_id,comment_id,media_id,sender_id,private_reply_text,recipient_id,status,provider_message_id,sent_at)
+       VALUES($1,$2,$3,$4,'c1','1789','00123','REPLY','9001','sent','acknowledged',now()-interval '2 hours')`,
+      [workspace, connection, event, rule],
+    );
+    await pool.query("INSERT INTO instagram_inbox_messages(workspace_id,connection_id,recipient_id,message_id,text,kind,message_at) VALUES($1,$2,'9001','dm-1','DM','text',now()-interval '1 hour')", [workspace, connection]);
+    await recordChannelConsentEvent(pool, {
+      requestKey: randomUUID(),
+      workspaceId: workspace,
+      connectionId: connection,
+      channel: "instagram",
+      identityKind: "dm_recipient",
+      identityValue: "9001",
+      purpose: "marketing",
+      decision: "grant",
+      evidenceKind: "explicit",
+      evidenceReference: "test",
+      occurredAt: new Date(),
+      actorId: member,
+    });
+    const flow = (await pool.query("INSERT INTO flows(workspace_id,name,draft) VALUES($1,'Paid order','{}') RETURNING id::text", [workspace])).rows[0].id;
+    const definition = {
+      schema_version: 1,
+      nodes: [
+        { id: "start", type: "instagram_dm_default", config: { connection_id: connection } },
+        { id: "reply", type: "instagram_message", config: { text: "Thanks for your order" } },
+      ],
+      edges: [{ from: "start", port: "next", to: "reply" }],
+    };
+    const version = (
+      await pool.query(
+        `INSERT INTO flow_versions(flow_id,workspace_id,version_no,draft_revision,definition,trigger_connection_id,trigger_type,published_by)
+         VALUES($1,$2,1,0,$3::jsonb,$4,'instagram_dm_default',$5) RETURNING id`,
+        [flow, workspace, JSON.stringify(definition), connection, member],
+      )
+    ).rows[0].id;
+    await pool.query("UPDATE flows SET published_version_id=$2,enabled=true WHERE id=$1", [flow, version]);
+    for (const [name, key, scopes] of [
+      ["starter", starter, ["contacts:read", "flows:start"]],
+      ["writer", writer, ["contacts:read", "contacts:write"]],
+    ])
+      await pool.query(
+        `INSERT INTO api_keys(workspace_id,name,key_prefix,key_hash,scopes,created_by,expires_at)
+         VALUES($1,$2,$3,$4,$5::text[],$6,now()+interval '30 days')`,
+        [workspace, name, key.slice(0, 12), createHash("sha256").update(key).digest("hex"), scopes, member],
+      );
+    await pool.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8"));
+    await pool.query("ALTER ROLE auto_chatter_server LOGIN PASSWORD 'runtime-test-only'");
+
+    const listed = await send(starter, "/v1/flows");
+    assert.equal(listed.status, 200, await listed.clone().text());
+    assert.deepEqual(await listed.json(), { flows: [{ id: flow, name: "Paid order", connection_id: connection }] });
+    assert.equal((await send(writer, "/v1/flows")).status, 403);
+    const body = JSON.stringify({ request_key: randomUUID(), connection_id: connection, sender_id: "00123" });
+    assert.equal((await send(writer, `/v1/flows/${flow}/starts`, { method: "POST", body })).status, 403);
+    const accepted = await send(starter, `/v1/flows/${flow}/starts`, { method: "POST", body });
+    const text = await accepted.text();
+    assert.equal(accepted.status, 202, text);
+    assert.equal(accepted.headers.get("cache-control"), "no-store");
+    const result = JSON.parse(text);
+    assert.equal(result.status, "queued");
+    assert.deepEqual((await pool.query("SELECT d.recipient_id,d.status,r.id::text AS run FROM flow_dm_deliveries d JOIN flow_runs r ON r.id=d.flow_run_id")).rows, [{ recipient_id: "9001", status: "pending", run: result.run_id }]);
+    // The same request again answers the same start and writes nothing.
+    const again = await send(starter, `/v1/flows/${flow}/starts`, { method: "POST", body });
+    assert.equal(again.status, 202);
+    assert.equal(await again.text(), text);
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM flow_api_starts")).rows[0].n, 1);
+    // A new request key for the same recipient is refused while the first message waits.
+    const busy = await send(starter, `/v1/flows/${flow}/starts`, { method: "POST", body: JSON.stringify({ request_key: randomUUID(), connection_id: connection, sender_id: "00123" }) });
+    assert.equal(busy.status, 409);
+    assert.deepEqual(await busy.json(), { error: "contact_busy" });
+    const get = await send(starter, `/v1/flows/${flow}/starts`);
+    assert.equal(get.status, 405);
+    assert.equal(get.headers.get("allow"), "POST");
+  } finally {
+    await runtime.dispose();
+    await pool.end();
+  }
+});

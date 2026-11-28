@@ -97,7 +97,7 @@ test("an admin issues a key that is shown once, stored only as its hash, and wor
   assert.equal(listed.keys.length, 1);
   assert.ok(!("key" in listed.keys[0]!) && !("key_hash" in listed.keys[0]!));
   assert.ok(!JSON.stringify(listed).includes(issued.key.slice(12)));
-  assert.deepEqual(listed.scopes, ["contacts:read", "contacts:write"]);
+  assert.deepEqual(listed.scopes, ["contacts:read", "contacts:write", "flows:start"]);
   assert.equal(listed.max_active, MAX_ACTIVE_API_KEYS);
   assert.equal(listed.default_expiry_days, 90);
 

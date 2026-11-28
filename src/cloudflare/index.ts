@@ -153,7 +153,14 @@ async function receive(request: Request, env: Env, correlationId: string): Promi
       },
       correlationId,
     );
-  if (url.pathname.startsWith("/v1/")) return publicApi(request, durableLimits(env.AUTH_LIMITER), (poolCorrelationId) => openPool(env, poolCorrelationId), correlationId);
+  if (url.pathname.startsWith("/v1/"))
+    // A flow start (#48) wakes its connection like a dashboard manual reply; the cron repairs a missed wake.
+    return publicApi(request, durableLimits(env.AUTH_LIMITER), (poolCorrelationId) => openPool(env, poolCorrelationId), correlationId, {
+      enabled: env.SEND_ENABLED === "true",
+      wake: async (connectionId) => {
+        if (env.SEND_ENABLED === "true") await env.REPLY_QUEUE.send({ connectionId });
+      },
+    });
   if (url.pathname === "/instagram/deauthorize") return deauthorize(request, env, correlationId);
   if (url.pathname !== "/webhooks/instagram") return new Response(null, { status: 404 });
   if (!env.INSTAGRAM_APP_SECRET || !env.INSTAGRAM_VERIFY_TOKEN) throw new ConfigurationError("Webhook secrets missing");

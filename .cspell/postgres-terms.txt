@@ -23,6 +23,7 @@ indisvalid
 libpq
 locktype
 ndims
+nonnulls
 nspname
 nspowner
 pg_dumpall

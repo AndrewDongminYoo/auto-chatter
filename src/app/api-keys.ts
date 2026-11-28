@@ -5,9 +5,9 @@ import { roleAllows, workspaceFor, type WorkspaceRole } from "./settings.ts";
 
 // Workspace API keys (#48): an external system such as a CRM reads the workspace's data with one. The key is
 // returned once at issue; only its SHA-256 hash is stored. Every route needs the admin role, like the webhooks.
-// A key reads contacts, or reads and writes them: a write answers with the written contact, so contacts:write always
-// comes with contacts:read. The scopes are stored in this order, which the api_keys CHECK also requires.
-export const API_KEY_SCOPES = ["contacts:read", "contacts:write"] as const;
+// A key always reads contacts, and may also write contacts (a write answers with the written contact) and start flows
+// (flows:start, which sends messages). The scopes are stored in this order, which the api_keys CHECK also requires.
+export const API_KEY_SCOPES = ["contacts:read", "contacts:write", "flows:start"] as const;
 export const API_KEY_EXPIRY_DAYS = [30, 90, 180, 365] as const;
 export const DEFAULT_API_KEY_EXPIRY_DAYS = 90;
 export const MAX_ACTIVE_API_KEYS = 10;

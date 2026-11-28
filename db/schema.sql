@@ -1714,11 +1714,15 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 CREATE INDEX IF NOT EXISTS api_keys_workspace_idx ON api_keys(workspace_id,created_at);
 CREATE INDEX IF NOT EXISTS api_keys_creator_idx ON api_keys(workspace_id,created_by) WHERE revoked_at IS NULL;
--- A key is read-only ({contacts:read}) or reads and writes contacts ({contacts:read,contacts:write}), stored in this
--- order (migration 081). A write key always reads too, because a write answers with the written contact.
+-- A key always reads contacts, and may also write contacts and start flows (migrations 081 and 082):
+-- {contacts:read}, {contacts:read,contacts:write}, {contacts:read,flows:start} or
+-- {contacts:read,contacts:write,flows:start}, stored in this order. A write key always reads too, because a write
+-- answers with the written contact.
 ALTER TABLE api_keys DROP CONSTRAINT IF EXISTS api_keys_scopes_check;
 ALTER TABLE api_keys ADD CONSTRAINT api_keys_scopes_check
-  CHECK(scopes = ARRAY['contacts:read']::text[] OR scopes = ARRAY['contacts:read','contacts:write']::text[]);
+  CHECK(scopes = ARRAY['contacts:read']::text[] OR scopes = ARRAY['contacts:read','contacts:write']::text[]
+    OR scopes = ARRAY['contacts:read','flows:start']::text[]
+    OR scopes = ARRAY['contacts:read','contacts:write','flows:start']::text[]);
 -- Append-only audit of API key issue and revocation. An automatic revocation has no actor. Expiry is not
 -- recorded: expires_at already shows it.
 CREATE TABLE IF NOT EXISTS api_key_events (
@@ -1733,6 +1737,60 @@ CREATE TABLE IF NOT EXISTS api_key_events (
 );
 CREATE INDEX IF NOT EXISTS api_key_events_key_idx ON api_key_events(api_key_id,created_at);
 CREATE INDEX IF NOT EXISTS api_key_events_workspace_idx ON api_key_events(workspace_id,created_at);
+-- External flow starts (#48, docs/specs/2026-11-28-public-flow-start-design.md, migration 082). An API key with the
+-- flows:start scope starts one published DM flow for one comment contact. flow_api_start_keys keeps every accepted
+-- request key and the SHA-256 hex of its request, with no personal data and no connection, so a deletion of the
+-- person or the connection never lets the same key start again; only delete_workspace_data deletes it. Those two
+-- deletions set the hash of their starts' keys to 64 zeros, the unlinked marker that no request produces.
+-- flow_api_starts is one accepted start: the comment contact (connection_id, sender_id), the verified DM recipient
+-- chosen for it, the flow, the pinned version and the key. A refused request writes neither row. Server roles may only
+-- SELECT and INSERT both tables.
+CREATE TABLE IF NOT EXISTS flow_api_start_keys (
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  request_key uuid NOT NULL,
+  request_hash text NOT NULL CHECK(request_hash ~ '^[0-9a-f]{64}$'),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY(workspace_id,request_key)
+);
+CREATE TABLE IF NOT EXISTS flow_api_starts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL,
+  connection_id uuid NOT NULL,
+  sender_id text NOT NULL CHECK(length(btrim(sender_id))>0),
+  recipient_id text NOT NULL CHECK(recipient_id ~ '^[0-9]{1,40}$'),
+  flow_id uuid NOT NULL,
+  flow_version_id uuid NOT NULL,
+  api_key_id uuid NOT NULL,
+  request_key uuid NOT NULL,
+  request_hash text NOT NULL CHECK(request_hash ~ '^[0-9a-f]{64}$'),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE(workspace_id,request_key),
+  UNIQUE(id,connection_id,workspace_id),
+  FOREIGN KEY(connection_id,workspace_id) REFERENCES instagram_connections(id,workspace_id),
+  FOREIGN KEY(flow_id,workspace_id) REFERENCES flows(id,workspace_id),
+  FOREIGN KEY(flow_version_id,flow_id) REFERENCES flow_versions(id,flow_id),
+  FOREIGN KEY(api_key_id,workspace_id) REFERENCES api_keys(id,workspace_id),
+  FOREIGN KEY(workspace_id,request_key) REFERENCES flow_api_start_keys(workspace_id,request_key)
+);
+-- The DM start limits (dmStartSkipCodeSql) count these rows by recipient and by connection, and the person data
+-- deletion finds them by comment sender.
+CREATE INDEX IF NOT EXISTS flow_api_starts_recipient_idx ON flow_api_starts(connection_id,recipient_id,created_at);
+CREATE INDEX IF NOT EXISTS flow_api_starts_connection_idx ON flow_api_starts(connection_id,created_at);
+CREATE INDEX IF NOT EXISTS flow_api_starts_sender_idx ON flow_api_starts(workspace_id,connection_id,sender_id);
+-- A run starts from exactly one source: a comment event, a DM start event or an external start, with one run per
+-- flow and source.
+ALTER TABLE flow_runs ADD COLUMN IF NOT EXISTS api_start_id uuid;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='flow_runs'::regclass AND conname='flow_runs_api_start') THEN
+    ALTER TABLE flow_runs ADD CONSTRAINT flow_runs_api_start
+      FOREIGN KEY(api_start_id,connection_id,workspace_id) REFERENCES flow_api_starts(id,connection_id,workspace_id);
+  END IF;
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='flow_runs'::regclass AND conname='flow_runs_api_start_unique') THEN
+    ALTER TABLE flow_runs ADD CONSTRAINT flow_runs_api_start_unique UNIQUE(flow_id,api_start_id);
+  END IF;
+END $$;
+ALTER TABLE flow_runs DROP CONSTRAINT IF EXISTS flow_runs_source;
+ALTER TABLE flow_runs ADD CONSTRAINT flow_runs_source CHECK(num_nonnulls(event_id,dm_start_event_id,api_start_id)=1);
 -- The billing-month active contact ledger (#51, docs/specs/2026-11-24-active-contact-ledger-design.md). One row per
 -- workspace, billing month, connection and person key: the first recorded message exchanged with that person in that
 -- month. billing_month is the first day of the calendar month of the activity time in the workspace time zone that was
@@ -2148,6 +2206,16 @@ BEGIN
   DELETE FROM public.instagram_dm_start_events WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_dm_start_events', affected);
+  -- External starts go after their runs; their request keys stay, so the same key never starts again. Each kept
+  -- key's request hash becomes 64 zeros, which no SHA-256 of a request produces, so no deleted sender ID can be
+  -- tested against it, and a replay of the key still answers idempotency_conflict.
+  UPDATE public.flow_api_start_keys k SET request_hash=repeat('0',64)
+  FROM public.flow_api_starts start
+  WHERE start.workspace_id=p_workspace AND start.connection_id=p_connection
+    AND k.workspace_id=start.workspace_id AND k.request_key=start.request_key;
+  DELETE FROM public.flow_api_starts WHERE workspace_id=p_workspace AND connection_id=p_connection;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('flow_api_starts', affected);
   DELETE FROM public.instagram_comment_events WHERE workspace_id=p_workspace AND connection_id=p_connection;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_comment_events', affected);
@@ -2284,9 +2352,13 @@ BEGIN
     SELECT coalesce(array_agg(id), '{}') INTO campaign_rows FROM public.campaign_deliveries
     WHERE workspace_id=p_workspace AND connection_id=p_connection
       AND (sender_id=ANY(senders) OR recipient_id=ANY(recipients));
-    -- DM flow delivery rows are keyed by the messaging sender ID.
-    SELECT coalesce(array_agg(id), '{}') INTO dm_rows FROM public.flow_dm_deliveries
-    WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients);
+    -- DM flow delivery rows are keyed by the messaging sender ID; the first message of an external start also
+    -- belongs to the comment sender that start names.
+    SELECT coalesce(array_agg(dm.id), '{}') INTO dm_rows FROM public.flow_dm_deliveries dm
+    WHERE dm.workspace_id=p_workspace AND dm.connection_id=p_connection
+      AND (dm.recipient_id=ANY(recipients)
+        OR EXISTS(SELECT 1 FROM public.flow_runs run JOIN public.flow_api_starts start ON start.id=run.api_start_id
+          WHERE run.id=dm.flow_run_id AND start.sender_id=ANY(senders)));
 
     -- Lock the person's delivery rows before checking them. Workers claim with FOR UPDATE SKIP LOCKED,
     -- so a claim either committed first (and is seen as sending here) or skips these rows.
@@ -2481,19 +2553,22 @@ BEGIN
   DELETE FROM public.webhook_deliveries WHERE event_id=ANY(deliveries);
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('webhook_deliveries', affected);
-  -- The first-message rows of runs a DM started, keyed by the messaging sender ID like the inbox.
+  -- The first-message rows of runs a DM started, keyed by the messaging sender ID like the inbox, and those of the
+  -- person's external starts that were locked above.
   DELETE FROM public.flow_dm_deliveries
-  WHERE workspace_id=p_workspace AND connection_id=p_connection AND recipient_id=ANY(recipients);
+  WHERE workspace_id=p_workspace AND connection_id=p_connection AND (recipient_id=ANY(recipients) OR id=ANY(dm_rows));
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('flow_dm_deliveries', affected);
-  -- A flow run belongs to the person through its comment sender or, for a run a DM started, its messaging
-  -- sender ID. A run whose reply or webhook delivery was queued after the rows were locked stays with it.
+  -- A flow run belongs to the person through its comment sender, for a run a DM started its messaging sender ID,
+  -- and for an external start either the comment sender or the DM recipient it names. A run whose reply or webhook delivery was queued after the rows were locked stays with it.
   DELETE FROM public.flow_step_runs step USING public.flow_runs run
   WHERE step.run_id=run.id AND run.workspace_id=p_workspace AND run.connection_id=p_connection
     AND (EXISTS(SELECT 1 FROM public.instagram_comment_events event
         WHERE event.id=run.event_id AND event.sender_id=ANY(senders))
       OR EXISTS(SELECT 1 FROM public.instagram_dm_start_events start
-        WHERE start.id=run.dm_start_event_id AND start.sender_id=ANY(recipients)))
+        WHERE start.id=run.dm_start_event_id AND start.sender_id=ANY(recipients))
+      OR EXISTS(SELECT 1 FROM public.flow_api_starts start
+        WHERE start.id=run.api_start_id AND (start.sender_id=ANY(senders) OR start.recipient_id=ANY(recipients))))
     AND NOT EXISTS(SELECT 1 FROM public.private_reply_outbox reply WHERE reply.flow_run_id=run.id)
     AND NOT EXISTS(SELECT 1 FROM public.webhook_deliveries delivery WHERE delivery.flow_run_id=run.id)
     AND NOT EXISTS(SELECT 1 FROM public.flow_dm_deliveries dm WHERE dm.flow_run_id=run.id);
@@ -2504,7 +2579,9 @@ BEGIN
     AND (EXISTS(SELECT 1 FROM public.instagram_comment_events event
         WHERE event.id=run.event_id AND event.sender_id=ANY(senders))
       OR EXISTS(SELECT 1 FROM public.instagram_dm_start_events start
-        WHERE start.id=run.dm_start_event_id AND start.sender_id=ANY(recipients)))
+        WHERE start.id=run.dm_start_event_id AND start.sender_id=ANY(recipients))
+      OR EXISTS(SELECT 1 FROM public.flow_api_starts start
+        WHERE start.id=run.api_start_id AND (start.sender_id=ANY(senders) OR start.recipient_id=ANY(recipients))))
     AND NOT EXISTS(SELECT 1 FROM public.private_reply_outbox reply WHERE reply.flow_run_id=run.id)
     AND NOT EXISTS(SELECT 1 FROM public.webhook_deliveries delivery WHERE delivery.flow_run_id=run.id)
     AND NOT EXISTS(SELECT 1 FROM public.flow_dm_deliveries dm WHERE dm.flow_run_id=run.id)
@@ -2516,6 +2593,21 @@ BEGIN
     AND NOT EXISTS(SELECT 1 FROM public.flow_runs run WHERE run.dm_start_event_id=start.id);
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_dm_start_events', affected);
+  -- The person's external starts go after their runs; the request keys stay, so the same key never starts again.
+  -- Each kept key's request hash becomes 64 zeros first, as in connection deletion, so the hash no longer ties the
+  -- key to the person.
+  UPDATE public.flow_api_start_keys k SET request_hash=repeat('0',64)
+  FROM public.flow_api_starts start
+  WHERE start.workspace_id=p_workspace AND start.connection_id=p_connection
+    AND (start.sender_id=ANY(senders) OR start.recipient_id=ANY(recipients))
+    AND NOT EXISTS(SELECT 1 FROM public.flow_runs run WHERE run.api_start_id=start.id)
+    AND k.workspace_id=start.workspace_id AND k.request_key=start.request_key;
+  DELETE FROM public.flow_api_starts start
+  WHERE start.workspace_id=p_workspace AND start.connection_id=p_connection
+    AND (start.sender_id=ANY(senders) OR start.recipient_id=ANY(recipients))
+    AND NOT EXISTS(SELECT 1 FROM public.flow_runs run WHERE run.api_start_id=start.id);
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('flow_api_starts', affected);
   -- A comment that arrived after the rows were locked keeps its new reply or flow run and stays for a later run.
   DELETE FROM public.instagram_comment_events event
   WHERE event.workspace_id=p_workspace AND event.connection_id=p_connection AND event.sender_id=ANY(senders)
@@ -2788,6 +2880,13 @@ BEGIN
   DELETE FROM public.instagram_dm_start_events WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;
   deleted := deleted || jsonb_build_object('instagram_dm_start_events', affected);
+  -- External starts point at the flow versions and the API keys deleted later, and at their request keys.
+  DELETE FROM public.flow_api_starts WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('flow_api_starts', affected);
+  DELETE FROM public.flow_api_start_keys WHERE workspace_id=p_workspace;
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  deleted := deleted || jsonb_build_object('flow_api_start_keys', affected);
   UPDATE public.flows SET enabled=false,published_version_id=NULL WHERE workspace_id=p_workspace;
   DELETE FROM public.flow_versions WHERE workspace_id=p_workspace;
   GET DIAGNOSTICS affected = ROW_COUNT;

@@ -15,8 +15,10 @@ type Candidate = { flow_id: string; version_id: string; trigger_type: string; de
 // Serializes the DM trigger starts of one messaging sender (#400) for the rest of the ingestion transaction, so the
 // sender cooldown of a second DM sees the start event of the first. ingestMessages takes these locks right after the
 // message locks (lockMessageIds), before every other lock, in one statement and in key order: a transaction waiting
-// for one holds only message locks and sender locks that sort before it, and nothing else takes this key, so the
-// locks cannot close a cycle. The key is the account and the sender ID, because the connection is not read yet; it is
+// for one holds only message locks and sender locks that sort before it, so the locks cannot close a cycle. The
+// external flow start (#48, startFlow) takes one such key too, as the last lock of its transaction, after row locks
+// (workspace KEY SHARE, flow and connection FOR SHARE) that no ingestion lock waits for, so it cannot close one either.
+// The key is the account and the sender ID, because the connection is not read yet; it is
 // taken for every typed DM with a storable sender ID, whether or not the DM later starts a flow. The connection-wide
 // hourly limit takes no lock: a batch counts the committed starts and its own, not those of a batch ingesting at the
 // same time, so a connection can exceed the limit by at most the starts of the batches that overlapped it.
@@ -118,33 +120,41 @@ export function dmPlan(document: FlowDocument): Extract<FlowPlan, { status: "mes
   return plan as Extract<FlowPlan, { status: "message" | "ended" | "failed" }>;
 }
 
+// The conditions under which a messaging sender may not start a flow now, as one SQL condition (#33): the sender
+// has an active run that it can still resume, a pending follow confirmation, a kept DM still inside its 15-minute
+// window (the reconcile may still link it to a waiting run), or a handed-off conversation. A DM trigger start
+// (startBlocked) and an external flow start (#48, public-flow-starts.ts) read this one text. connection, recipient and
+// workspace are SQL expressions written by the caller (bind parameters), never request input.
+export function messagingSenderBusySql(connection: string, recipient: string, workspace: string): string {
+  return `EXISTS(SELECT 1 FROM instagram_unmatched_replies kept
+         WHERE kept.connection_id=${connection} AND kept.sender_id=${recipient} AND kept.matched_at IS NULL
+           AND kept.message_text IS NOT NULL AND kept.received_at>now()-interval '15 minutes')
+       OR EXISTS(SELECT 1 FROM instagram_follow_conversations flow
+         JOIN private_reply_outbox reply ON reply.id=flow.reply_id
+         JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
+         WHERE flow.connection_id=${connection} AND flow.recipient_id=${recipient} AND flow.status IN ('waiting','pending','sending')
+           AND rule.enabled)
+       OR EXISTS(SELECT 1 FROM flow_runs run
+         JOIN private_reply_outbox reply ON reply.flow_run_id=run.id JOIN flow_versions v ON v.id=run.flow_version_id
+         WHERE run.connection_id=${connection} AND run.status='awaiting_reply' AND reply.status='sent' AND reply.recipient_id=${recipient}
+           AND now()<${REPLY_DEADLINE})
+       OR EXISTS(SELECT 1 FROM flow_runs run JOIN instagram_dm_start_events start ON start.id=run.dm_start_event_id
+         WHERE run.connection_id=${connection} AND start.sender_id=${recipient} AND run.status IN ('waiting','awaiting_reply'))
+       OR EXISTS(SELECT 1 FROM instagram_inbox_handoffs
+         WHERE workspace_id=${workspace} AND connection_id=${connection} AND recipient_id=${recipient} AND active)`;
+}
+
 // Whether this DM may not start a DM trigger (#33). Existing consumers win: a message ID that a follow confirmation,
-// a reply wait or the kept-DM store already used (a redelivery), and any sender who has an active run that this
-// sender can still resume, a pending follow confirmation, or a kept DM still inside its 15-minute window (the
-// reconcile may still link it to a waiting run). An opted-out messaging identity (its own revoke or one reached
-// through a provider-acknowledged reply bridge, messagingRecipientOptedOut) and a handed-off conversation are
-// refused as well. The pause of a messaging ID is #291's, together with the send-time recheck.
+// a reply wait or the kept-DM store already used (a redelivery), and any sender that messagingSenderBusySql holds.
+// An opted-out messaging identity (its own revoke or one reached through a provider-acknowledged reply bridge,
+// messagingRecipientOptedOut) is refused as well. The pause of a messaging ID is #291's, together with the send-time
+// recheck.
 async function startBlocked(client: PoolClient, connection: Connection, message: InstagramMessage): Promise<boolean> {
   const blocked = await client.query<{ blocked: boolean }>(
     `SELECT EXISTS(SELECT 1 FROM instagram_message_receipts WHERE connection_id=$1 AND message_id=$3)
        OR EXISTS(SELECT 1 FROM flow_runs WHERE connection_id=$1 AND reply_message_id=$3)
        OR EXISTS(SELECT 1 FROM instagram_unmatched_replies WHERE connection_id=$1 AND message_id=$3)
-       OR EXISTS(SELECT 1 FROM instagram_unmatched_replies kept
-         WHERE kept.connection_id=$1 AND kept.sender_id=$2 AND kept.matched_at IS NULL
-           AND kept.message_text IS NOT NULL AND kept.received_at>now()-interval '15 minutes')
-       OR EXISTS(SELECT 1 FROM instagram_follow_conversations flow
-         JOIN private_reply_outbox reply ON reply.id=flow.reply_id
-         JOIN instagram_comment_rules rule ON rule.id=reply.rule_id
-         WHERE flow.connection_id=$1 AND flow.recipient_id=$2 AND flow.status IN ('waiting','pending','sending')
-           AND rule.enabled)
-       OR EXISTS(SELECT 1 FROM flow_runs run
-         JOIN private_reply_outbox reply ON reply.flow_run_id=run.id JOIN flow_versions v ON v.id=run.flow_version_id
-         WHERE run.connection_id=$1 AND run.status='awaiting_reply' AND reply.status='sent' AND reply.recipient_id=$2
-           AND now()<${REPLY_DEADLINE})
-       OR EXISTS(SELECT 1 FROM flow_runs run JOIN instagram_dm_start_events start ON start.id=run.dm_start_event_id
-         WHERE run.connection_id=$1 AND start.sender_id=$2 AND run.status IN ('waiting','awaiting_reply'))
-       OR EXISTS(SELECT 1 FROM instagram_inbox_handoffs
-         WHERE workspace_id=$4 AND connection_id=$1 AND recipient_id=$2 AND active)
+       OR ${messagingSenderBusySql("$1", "$2", "$4")}
        AS blocked`,
     [connection.id, message.senderId, message.messageId, connection.workspace_id],
   );
