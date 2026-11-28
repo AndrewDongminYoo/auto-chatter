@@ -23,6 +23,7 @@
 같은 날 #48 행을 #417과 migration 080 운영 적용(Worker `eb7c4df5`)에 맞춰 갱신했습니다.
 같은 날 #48 행을 운영 실제 키의 `GET /v1/key` 확인과 연락처 읽기 API 로컬 구현에 맞춰 다시 갱신했습니다.
 같은 날 #48 행을 #418 배포(Worker `7c39a743`)와 운영 실제 키의 `GET /v1/contacts` 확인에 맞춰 다시 갱신했습니다.
+2026-11-28에 #48 행을 #420과 migration 081 운영 적용(Worker `96e8d6d5`)에 맞춰 갱신했습니다.
 
 [목표 명세](../specs/2026-09-25-messaging-automation-platform.md)와 [백로그](2026-09-27-manychat-backlog.md)의 알려진 필수 작업을 코드·로컬 검사·실계정·운영 적용으로 구분합니다.
 기준은 `591cc091e5e3cdb55bba20fe65d3c662df800fd4`이며 아래 이슈별 목록의 미완료는 구현된 첫 DM·팔로우·연락처 기능을 없다고 판정한 것이 아닙니다.
@@ -225,10 +226,10 @@
   - 공급자·실계정: 미검증
   - 운영 완료: 031 적용·배포, 실제 전송 미검증
 - [#48](https://github.com/AndrewDongminYoo/auto-chatter/issues/48) 작업 공간 API 키·연락처/플로 외부 API·제한과 감사
-  - 현재 코드: 작업 공간 API 키의 발급·해시 보관·만료(30·90·180·365일)·폐기·만든 관리자의 제거와 강등 시 자동 폐기·추가 전용 감사 기록, 사용 중인 키 최대 10개, 권한 `contacts:read`, 키 확인 경로 `GET /v1/key`와 IP별·키별 요청 한도, 마지막 사용 시각과 IP 기록, 설정 화면 구현(#417, migration 080, [설계](../specs/2026-11-27-workspace-api-keys-design.md)); 댓글 연락처를 CSV v1 범위로 커서 페이지 단위로 읽는 `GET /v1/contacts`, OpenAPI 3.1 계약 문서(`docs/api/openapi-v1.json`), 작업 공간 경계와 키 거절의 권한 침해 테스트 구현(#418, [설계](../specs/2026-11-27-public-contacts-api-design.md)); 연락처 변경·플로 시작 외부 API는 미구현
-  - 로컬 증거: 단위·DB·workerd 테스트, 설정 화면 로컬 mock 미리보기; 연락처 API는 단위·DB·workerd 테스트
+  - 현재 코드: 작업 공간 API 키의 발급·해시 보관·만료(30·90·180·365일)·폐기·만든 관리자의 제거와 강등 시 자동 폐기·추가 전용 감사 기록, 사용 중인 키 최대 10개, 권한 `contacts:read`, 키 확인 경로 `GET /v1/key`와 IP별·키별 요청 한도, 마지막 사용 시각과 IP 기록, 설정 화면 구현(#417, migration 080, [설계](../specs/2026-11-27-workspace-api-keys-design.md)); 댓글 연락처를 CSV v1 범위로 커서 페이지 단위로 읽는 `GET /v1/contacts`, OpenAPI 3.1 계약 문서(`docs/api/openapi-v1.json`), 작업 공간 경계와 키 거절의 권한 침해 테스트 구현(#418, [설계](../specs/2026-11-27-public-contacts-api-design.md)); 권한 `contacts:write`로 기존 연락처 한 명의 태그 추가·제거와 필드 값 설정·지우기를 한 트랜잭션으로 적용하는 `PATCH /v1/contacts/{connection_id}/{sender_id}`, 활성 필드를 읽는 `GET /v1/fields`, 작업 공간 시간당 쓰기 한도 공유, 대시보드 태그 저장의 `409 contact_tags_stale` 충돌 거절 구현(#420, migration 081, [설계](../specs/2026-11-27-public-contact-writes-design.md)); 플로 시작 외부 API는 미구현
+  - 로컬 증거: 단위·DB·workerd 테스트, 설정 화면 로컬 mock 미리보기; 연락처 API는 단위·DB·workerd 테스트; 연락처 쓰기 API는 단위·DB·workerd 테스트와 키 발급 체크박스·태그 충돌 안내의 로컬 mock 미리보기
   - 공급자·실계정: 해당 없음
-  - 운영 완료: migration 080 2026-11-27 운영 적용(백업 후 runner), Worker `eb7c4df5`(main `11cfbae`) 배포와 공개 smoke 35/35 통과, 운영 `/v1/key`의 무인증·잘못된 키 `401 invalid_api_key` 확인, 운영 대시보드에서 발급한 실제 키(만료 2026-12-27)로 `GET /v1/key` `200` 확인([운영 확인](../specs/2026-11-27-workspace-api-keys-design.md#운영-확인)); 연락처 API는 #418(`ebe28fe`)이 2026-11-27 Worker `7c39a743`로 배포되고 공개 smoke 35/35 통과, 같은 날 실제 키로 `GET /v1/contacts?limit=5` `200` 확인(한 연결의 댓글 연락처 3명, CSV v1과 같은 필드, `next_cursor` `null`; 태그·필드 값이 있는 연락처는 확인하지 않음); 완료하지 않음
+  - 운영 완료: migration 080 2026-11-27 운영 적용(백업 후 runner), Worker `eb7c4df5`(main `11cfbae`) 배포와 공개 smoke 35/35 통과, 운영 `/v1/key`의 무인증·잘못된 키 `401 invalid_api_key` 확인, 운영 대시보드에서 발급한 실제 키(만료 2026-12-27)로 `GET /v1/key` `200` 확인([운영 확인](../specs/2026-11-27-workspace-api-keys-design.md#운영-확인)); 연락처 API는 #418(`ebe28fe`)이 2026-11-27 Worker `7c39a743`로 배포되고 공개 smoke 35/35 통과, 같은 날 실제 키로 `GET /v1/contacts?limit=5` `200` 확인(한 연결의 댓글 연락처 3명, CSV v1과 같은 필드, `next_cursor` `null`; 태그·필드 값이 있는 연락처는 확인하지 않음); 연락처 쓰기 API는 migration 081을 2026-11-28 운영에 적용(백업 후 runner, 적용 전 운영 키는 읽기 전용 1개)하고 #420(`284ec45`)을 [Deploy run](https://github.com/AndrewDongminYoo/auto-chatter/actions/runs/46093525400)으로 Worker `96e8d6d5`에 배포, 공개 smoke 35/35 통과, 키 없는 `GET /v1/fields`와 `PATCH /v1/contacts/...`의 `401` 확인(쓰기 키로 실제 연락처를 바꾸는 확인은 하지 않음); 완료하지 않음
 - [#49](https://github.com/AndrewDongminYoo/auto-chatter/issues/49) Google Sheets 리드 동기화·중복 방지·CSV 대안
   - 현재 코드: 미구현
   - 로컬 증거: 미검증
