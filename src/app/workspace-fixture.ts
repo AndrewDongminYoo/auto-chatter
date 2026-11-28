@@ -306,6 +306,16 @@ export async function seedWorkspace(pool: Pool, workspace: string, user: string,
     )
   ).rows[0].id;
   await pool.query("INSERT INTO api_key_events(workspace_id,api_key_id,kind,actor_id) VALUES($1,$2,'created',$3)", [workspace, apiKey, user]);
+  // An external flow start (#48): its request key, the start and its own run on the DM-trigger version.
+  const requestKey = (await pool.query("INSERT INTO flow_api_start_keys(workspace_id,request_key,request_hash) VALUES($1,gen_random_uuid(),repeat('a',64)) RETURNING request_key", [workspace])).rows[0].request_key;
+  const apiStart = (
+    await pool.query(
+      `INSERT INTO flow_api_starts(workspace_id,connection_id,sender_id,recipient_id,flow_id,flow_version_id,api_key_id,request_key,request_hash)
+       VALUES($1,$2,'124','901',$3,$4,$5,$6,repeat('a',64)) RETURNING id`,
+      [workspace, connection, dmFlow, dmVersion, apiKey, requestKey],
+    )
+  ).rows[0].id;
+  await pool.query("INSERT INTO flow_runs(workspace_id,connection_id,flow_id,flow_version_id,api_start_id,status) VALUES($1,$2,$3,$4,$5,'ended')", [workspace, connection, dmFlow, dmVersion, apiStart]);
   await pool.query(
     `INSERT INTO data_deletion_records(workspace_id,connection_id,requested_by,deleted_counts,retained_counts)
      VALUES($1,$2,$3,'{"instagram_comment_events":0}','{}')`,

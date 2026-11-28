@@ -38,7 +38,7 @@ BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'automations_app') THEN
     server_roles := server_roles || ', automations_app';
   END IF;
-  FOREACH product_table IN ARRAY ARRAY['active_contacts', 'api_keys', 'api_key_events', 'campaign_drafts', 'campaign_approvals', 'campaign_approval_events', 'campaign_runs', 'campaign_deliveries', 'webhook_endpoints', 'webhook_signing_keys', 'webhook_deliveries', 'webhook_redelivery_events', 'scheduled_steps', 'workspace_invites', 'data_deletion_records', 'instagram_inbox_conversations', 'instagram_inbox_conversation_events', 'instagram_inbox_read_state', 'instagram_inbox_labels', 'instagram_inbox_label_rules', 'workspace_reply_templates', 'instagram_inbox_conversation_labels', 'instagram_inbox_label_events', 'instagram_inbox_notes', 'instagram_inbox_reminders', 'instagram_inbox_reminder_events', 'flows', 'flow_versions', 'flow_runs', 'flow_step_runs', 'instagram_dm_start_events', 'flow_dm_deliveries', 'channel_consent_state', 'channel_consent_events', 'instagram_manual_replies', 'instagram_manual_reply_events', 'instagram_inbox_handoffs', 'instagram_inbox_handoff_events', 'instagram_inbox_messages', 'instagram_unmatched_replies', 'instagram_contact_automation', 'instagram_dm_automation', 'instagram_message_reads', 'instagram_dm_last_inbound', 'instagram_dm_profiles', 'instagram_contact_fields', 'instagram_contact_field_values', 'instagram_contact_segments', 'instagram_segment_snapshots', 'instagram_segment_snapshot_members', 'instagram_contact_identity_links', 'instagram_contact_identity_link_events', 'instagram_contact_tags', 'workspaces', 'workspace_members', 'instagram_follow_conversations', 'instagram_follow_messages', 'instagram_message_receipts', 'instagram_oauth_states', 'instagram_connections', 'instagram_comment_rules', 'instagram_comment_events', 'private_reply_outbox'] LOOP
+  FOREACH product_table IN ARRAY ARRAY['active_contacts', 'api_keys', 'api_key_events', 'campaign_drafts', 'campaign_approvals', 'campaign_approval_events', 'campaign_runs', 'campaign_deliveries', 'webhook_endpoints', 'webhook_signing_keys', 'webhook_deliveries', 'webhook_redelivery_events', 'scheduled_steps', 'workspace_invites', 'data_deletion_records', 'instagram_inbox_conversations', 'instagram_inbox_conversation_events', 'instagram_inbox_read_state', 'instagram_inbox_labels', 'instagram_inbox_label_rules', 'workspace_reply_templates', 'instagram_inbox_conversation_labels', 'instagram_inbox_label_events', 'instagram_inbox_notes', 'instagram_inbox_reminders', 'instagram_inbox_reminder_events', 'flows', 'flow_versions', 'flow_runs', 'flow_step_runs', 'instagram_dm_start_events', 'flow_dm_deliveries', 'flow_api_start_keys', 'flow_api_starts', 'channel_consent_state', 'channel_consent_events', 'instagram_manual_replies', 'instagram_manual_reply_events', 'instagram_inbox_handoffs', 'instagram_inbox_handoff_events', 'instagram_inbox_messages', 'instagram_unmatched_replies', 'instagram_contact_automation', 'instagram_dm_automation', 'instagram_message_reads', 'instagram_dm_last_inbound', 'instagram_dm_profiles', 'instagram_contact_fields', 'instagram_contact_field_values', 'instagram_contact_segments', 'instagram_segment_snapshots', 'instagram_segment_snapshot_members', 'instagram_contact_identity_links', 'instagram_contact_identity_link_events', 'instagram_contact_tags', 'workspaces', 'workspace_members', 'instagram_follow_conversations', 'instagram_follow_messages', 'instagram_message_receipts', 'instagram_oauth_states', 'instagram_connections', 'instagram_comment_rules', 'instagram_comment_events', 'private_reply_outbox'] LOOP
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', product_table);
     EXECUTE format('REVOKE ALL ON public.%I FROM PUBLIC, %s', product_table, server_roles);
     FOREACH api_role IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
@@ -143,6 +143,19 @@ BEGIN
   END LOOP;
 END $$;
 DROP POLICY IF EXISTS server_update ON public.api_key_events;
+
+-- External flow starts and their request keys are written once and never changed (#48).
+DO $$
+DECLARE server_role text;
+BEGIN
+  FOREACH server_role IN ARRAY ARRAY['auto_chatter_server','automations_app'] LOOP
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname=server_role) THEN
+      EXECUTE format('REVOKE UPDATE ON public.flow_api_start_keys, public.flow_api_starts FROM %I',server_role);
+    END IF;
+  END LOOP;
+END $$;
+DROP POLICY IF EXISTS server_update ON public.flow_api_start_keys;
+DROP POLICY IF EXISTS server_update ON public.flow_api_starts;
 
 -- The audit of manual webhook redelivery is append-only for both runtime roles.
 DO $$

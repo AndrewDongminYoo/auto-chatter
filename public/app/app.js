@@ -2374,7 +2374,7 @@ byId("api-key-form").addEventListener("submit", (event) => {
       const created = await api("/api/workspace/api-keys", "POST", {
         name: form.elements.name.value,
         expires_in_days: Number(form.elements.expires_in_days.value),
-        scopes: form.elements.contacts_write.checked ? ["contacts:read", "contacts:write"] : ["contacts:read"],
+        scopes: ["contacts:read", ...(form.elements.contacts_write.checked ? ["contacts:write"] : []), ...(form.elements.flows_start.checked ? ["flows:start"] : [])],
       });
       // A session reset while the request was in flight must not reveal the key to the next session.
       if (generation !== segmentsGeneration) return;

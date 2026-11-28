@@ -1,6 +1,6 @@
 // Evaluate in a fresh browser page serving public/app over loopback. Every API is synthetic.
 // Covers the workspace API key settings (#48): issue, the key shown once, list states, the revoke confirmation and the
-// contacts:write checkbox.
+// contacts:write and flows:start checkboxes.
 // The returned fixture remains available for inspecting the rendered section.
 (async () => {
   const page = globalThis;
@@ -56,7 +56,7 @@
     if (route.startsWith("/api/auth/")) return Response.json({ ok: true });
     if (route === "/api/workspace") return Response.json({ workspace_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", role: "admin", time_zone: "Asia/Seoul", ...entitlements });
     if (route === "/api/workspace/api-keys" && method === "GET") {
-      const listed = { keys: fixture.keys, scopes: ["contacts:read", "contacts:write"], expiry_days: [30, 90, 180, 365], default_expiry_days: 90, max_active: 10 };
+      const listed = { keys: fixture.keys, scopes: ["contacts:read", "contacts:write", "flows:start"], expiry_days: [30, 90, 180, 365], default_expiry_days: 90, max_active: 10 };
       if (fixture.holdList) {
         fixture.holdList = false;
         await new Promise((resolve) => (fixture.releaseList = resolve));
@@ -175,7 +175,18 @@
   check(JSON.stringify(fixture.posts.at(-1)) === JSON.stringify({ name: "CRM 쓰기", expires_in_days: 90, scopes: ["contacts:read", "contacts:write"] }), "The write key request body is wrong");
   check(text("CRM 쓰기").includes("권한 contacts:read, contacts:write"), "The write key does not show both scopes");
   check(!form.elements.contacts_write.checked, "The checkbox stays on after the issue");
+  check(!form.elements.flows_start.checked, "The flow start checkbox is on for a write key");
+  get("dismiss-api-key-secret").click();
+
+  // A flow start key: the second checkbox is off by default, adds flows:start after contacts:read, and resets.
+  form.elements.name.value = "CRM 플로";
+  form.elements.flows_start.checked = true;
+  submit.click();
+  await until(() => !get("api-key-secret").hidden && itemFor("CRM 플로"));
+  check(JSON.stringify(fixture.posts.at(-1)) === JSON.stringify({ name: "CRM 플로", expires_in_days: 90, scopes: ["contacts:read", "flows:start"] }), "The flow start key request body is wrong");
+  check(text("CRM 플로").includes("권한 contacts:read, flows:start"), "The flow start key does not show its scopes");
+  check(!form.elements.flows_start.checked && !form.elements.contacts_write.checked, "A checkbox stays on after the flow start issue");
   get("dismiss-api-key-secret").click();
   check(!fixture.unexpected.length, `Incomplete fixture: ${fixture.unexpected.join(", ")}`);
-  return { passed: ["list states", "issue and one-time key", "no key in storage", "dismiss clears key", "declined and accepted revoke", "stale list ignored", "write key checkbox"], fixture: "apiKeyFixture" };
+  return { passed: ["list states", "issue and one-time key", "no key in storage", "dismiss clears key", "declined and accepted revoke", "stale list ignored", "write key checkbox", "flow start key checkbox"], fixture: "apiKeyFixture" };
 })();

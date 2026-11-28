@@ -4,6 +4,7 @@ import { instagramAdapter } from "./channel-adapter.ts";
 import { messagingRecipientOptedOut, type ConsentQueryable } from "./channel-consent.ts";
 import type { FollowSendContext } from "./follow-transport.ts";
 import { PreSendVerificationError, rateLimitRetryDelaysSeconds } from "./reply-worker.ts";
+import { CONTACT_PAUSED, latestTextSql, recipientStageSql } from "../app/campaign-drafts.ts";
 import { ACTIVE_CONTACT_LIMIT, ACTIVE_CONTACT_LIMIT_UNAVAILABLE, activeContactLimitBlocks } from "../app/plans.ts";
 
 // The DM flow delivery worker (#291, docs/specs/2026-11-08-instagram-dm-start-triggers.md): it claims one pending
@@ -34,19 +35,25 @@ export function dmFlowDeliveryDueSql(d: string): string {
 // connection and sender (#300, instagram_dm_last_inbound) covers a DM that started nothing on a connection whose
 // inbox storage is off. Ingestion accepts a DM dated up to 60 s ahead, so each time is capped at the moment it was
 // stored (the last-inbound time already is); a fresh DM therefore opens the window instead of reading as unverified.
-const WINDOW_ANCHOR = `greatest(
+// `row` is the alias of a row with workspace_id, connection_id and recipient_id columns: the delivery row here, a
+// verified DM recipient in the external flow start (#48), which refuses a closed window with the same text.
+export function dmWindowAnchorSql(row: string): string {
+  return `greatest(
      (SELECT max(least(start.message_at,start.created_at)) FROM instagram_dm_start_events start
-      WHERE start.workspace_id=d.workspace_id AND start.connection_id=d.connection_id AND start.sender_id=d.recipient_id),
+      WHERE start.workspace_id=${row}.workspace_id AND start.connection_id=${row}.connection_id AND start.sender_id=${row}.recipient_id),
      (SELECT max(least(message.message_at,message.received_at)) FROM instagram_inbox_messages message
-      WHERE message.workspace_id=d.workspace_id AND message.connection_id=d.connection_id
-        AND message.recipient_id=d.recipient_id AND message.kind IN ('text','attachment','unsupported')),
+      WHERE message.workspace_id=${row}.workspace_id AND message.connection_id=${row}.connection_id
+        AND message.recipient_id=${row}.recipient_id AND message.kind IN ('text','attachment','unsupported')),
      (SELECT inbound.last_message_at FROM instagram_dm_last_inbound inbound
-      WHERE inbound.workspace_id=d.workspace_id AND inbound.connection_id=d.connection_id
-        AND inbound.recipient_id=d.recipient_id))`;
+      WHERE inbound.workspace_id=${row}.workspace_id AND inbound.connection_id=${row}.connection_id
+        AND inbound.recipient_id=${row}.recipient_id))`;
+}
+const WINDOW_ANCHOR = dmWindowAnchorSql("d");
 
 // The final guard, from the database in one statement: the claim, the run and its flow, the connection, the window,
 // the messaging-ID pause and the inbox handoff. A flow run keeps its pinned version, so a republish does not stop
-// the row and disabling or archiving the flow does, as for a comment flow's private reply.
+// the row and disabling or archiving the flow does, as for a comment flow's private reply. api_start_id names the
+// external start (#48) of the run, whose own checks API_START_GUARD_SQL reads.
 const GUARD_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp() AS as_of)
  SELECT d.recipient_id,run.status AS run_status,coalesce(f.enabled AND NOT f.archived,false) AS flow_on,
    coalesce(c.active AND c.send_enabled AND c.access_token_encrypted IS NOT NULL AND c.token_expires_at>evaluation.as_of,
@@ -57,12 +64,28 @@ const GUARD_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp()
    EXISTS(SELECT 1 FROM instagram_dm_automation pause WHERE pause.workspace_id=d.workspace_id
      AND pause.connection_id=d.connection_id AND pause.recipient_id=d.recipient_id AND pause.paused) AS recipient_paused,
    EXISTS(SELECT 1 FROM instagram_inbox_handoffs handoff WHERE handoff.workspace_id=d.workspace_id
-     AND handoff.connection_id=d.connection_id AND handoff.recipient_id=d.recipient_id AND handoff.active) AS handoff_active
+     AND handoff.connection_id=d.connection_id AND handoff.recipient_id=d.recipient_id AND handoff.active) AS handoff_active,
+   run.api_start_id::text AS api_start_id
  FROM flow_dm_deliveries d CROSS JOIN evaluation
  JOIN flow_runs run ON run.id=d.flow_run_id AND run.workspace_id=d.workspace_id AND run.connection_id=d.connection_id
  LEFT JOIN flows f ON f.id=run.flow_id AND f.workspace_id=run.workspace_id
  LEFT JOIN instagram_connections c ON c.workspace_id=d.workspace_id AND c.id=d.connection_id
  WHERE d.workspace_id=$1 AND d.id=$2 AND d.attempt_id=$3 AND d.status='sending' AND d.connection_id=$4`;
+
+// The checks of a run that an external start made (#48), which the guard above does not read because a DM flow row
+// holds only the messaging recipient: through the flow_api_starts row, the comment contact that start names. The
+// stage is the campaign recipient stage with the campaign's own text (recipientStageSql): 4 a marketing or service
+// reply revoke of the recipient or the comment sender, 5 no exact explicit marketing grant; 6 and 7 pass here,
+// because the guard above measures the window. contact_paused is the comment contact's pause, as campaigns read it.
+// $1 is the workspace, $2 the start and $3 the row's messaging recipient.
+const API_START_GUARD_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp() AS as_of)
+ SELECT ${recipientStageSql("$1")} AS stage,${CONTACT_PAUSED} AS contact_paused
+ FROM flow_api_starts api CROSS JOIN evaluation
+ CROSS JOIN LATERAL (SELECT api.connection_id,api.sender_id,$3::text AS recipient_id) v
+ CROSS JOIN LATERAL ${latestTextSql("$1")}
+ LEFT JOIN instagram_contact_automation a ON a.workspace_id=api.workspace_id AND a.connection_id=api.connection_id
+   AND a.sender_id=api.sender_id
+ WHERE api.workspace_id=$1 AND api.id=$2`;
 
 export interface DmFlowClaim {
   workspaceId: string;
@@ -90,6 +113,21 @@ export async function assertDmFlowDeliveryAllowed(pool: ConsentQueryable, claim:
   if (!row.window_open) blocks.push("reply_window_closed");
   if (row.recipient_paused) retries.push("contact_paused");
   if (row.handoff_active) retries.push("handoff_active");
+  // An external start's own checks end the row: waiting for a consent or a pause to change could send it long after
+  // the external system gave up. A failed read defers it, as for the other consent reads.
+  if (row.api_start_id) {
+    try {
+      const api = (await pool.query<{ stage: number; contact_paused: boolean }>(API_START_GUARD_SQL, [claim.workspaceId, row.api_start_id, row.recipient_id])).rows[0];
+      if (!api) blocks.push("delivery_changed");
+      else {
+        if (api.stage === 4) blocks.push("recipient_opted_out");
+        else if (api.stage === 5) blocks.push("marketing_consent_required");
+        if (api.contact_paused) blocks.push("contact_paused");
+      }
+    } catch {
+      retries.push("consent_unavailable");
+    }
+  }
   try {
     if (
       await messagingRecipientOptedOut(pool, {

@@ -3,7 +3,7 @@
   "info": {
     "title": "auto-chatter external API",
     "version": "1",
-    "description": "The external API for servers that hold a workspace API key. A workspace admin issues the key in the dashboard. The key is shown once, and it reads only the data of its own workspace.\n\nEvery request counts toward a limit of 600 requests per minute per client IP address, before the key is read. Each valid key then has a limit of 60 requests per minute. Both limits apply to all paths together.\n\nA contact write also counts toward the workspace's hourly write limit of its plan, which writes in the dashboard use too. A write refused with 400, 401, 403, 413 or 415 does not count toward it.\n\nThe server does not serve this document."
+    "description": "The external API for servers that hold a workspace API key. A workspace admin issues the key in the dashboard. The key is shown once, and it reads only the data of its own workspace.\n\nEvery request counts toward a limit of 600 requests per minute per client IP address, before the key is read. Each valid key then has a limit of 60 requests per minute. Both limits apply to all paths together.\n\nA contact write also counts toward the workspace's hourly write limit of its plan, which writes in the dashboard use too. A write refused with 400, 401, 403, 413 or 415 does not count toward it.\n\nA flow start counts toward the same hourly write limit. A start refused with 400, 401, 403, 413 or 415 does not count toward it; every other start request counts, also a refused one and a repeated one.\n\nThe server does not serve this document."
   },
   "servers": [{ "url": "https://auto-chat.donminzzi.kr" }],
   "security": [{ "apiKey": [] }],
@@ -190,6 +190,90 @@
           "503": { "$ref": "#/components/responses/Unavailable" }
         }
       }
+    },
+    "/v1/flows": {
+      "get": {
+        "operationId": "listFlows",
+        "summary": "List the flows that this key can start",
+        "description": "Returns at most 100 flows of the key's workspace that `POST /v1/flows/{flow_id}/starts` can start, in the order they were created: flows that are turned on, not archived, and whose published version starts with a direct message (a DM keyword or a DM default reply trigger). `connection_id` is the connected account of the flow's trigger; a start must name a contact of that connection. The flow definition and the message text are not returned.\n\nThe key needs the `flows:start` scope.",
+        "responses": {
+          "200": { "description": "The flows.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FlowList" } } } },
+          "400": { "description": "The request has a query parameter.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "invalid_request" } } } },
+          "401": { "$ref": "#/components/responses/InvalidApiKey" },
+          "403": { "description": "The key does not have the `flows:start` scope.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "insufficient_scope" } } } },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "405": { "$ref": "#/components/responses/MethodNotAllowed" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/flows/{flow_id}/starts": {
+      "post": {
+        "operationId": "startFlow",
+        "summary": "Start a flow for one contact",
+        "description": "Starts one run of a flow from `GET /v1/flows` for one existing comment contact of the flow's connection, and queues the first message of the flow's published version as a direct message. The response does not promise that the message is sent: just before the send, the service checks again that sending is on, the run and the flow are still active, the 24-hour reply window is open, the person has not opted out and has explicit marketing consent, the contact and the conversation are not paused or handed off to an agent, and the plan's active contact limit allows the send. When one of these checks fails, the message is not sent and is not tried again later.\n\nThe message goes to the Instagram messaging account that the contact is verified to use: the account that received a private reply to one of the contact's comments and then sent a direct message. When there is more than one, the service uses the one with the most recent stored direct message among those that pass the consent and window checks.\n\nThe request is idempotent by `request_key`. Send a new UUID for each start, and send the same body with the same `request_key` again after a timeout or a `5xx` or `429` response. A request with a `request_key` that already started a flow returns that start with `202` and starts nothing new, also when the conditions changed since then. A `request_key` is never used again: a different body with the same key, or the key of a start whose data was deleted, is refused with `409 idempotency_conflict`. A refused request stores nothing, so a key refused with `4xx` can be sent again when the cause is fixed.\n\nNo contact, tag or field value proves messaging consent or delivery eligibility.\n\nThe key needs the `flows:start` scope.",
+        "parameters": [{ "name": "flow_id", "in": "path", "required": true, "description": "The `id` of a flow from `GET /v1/flows`.", "schema": { "type": "string", "format": "uuid" } }],
+        "requestBody": {
+          "required": true,
+          "description": "At most 4 KiB of JSON with the `Content-Type: application/json` header.",
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FlowStartRequest" }, "example": { "request_key": "6f1c2d3e-4b5a-4c7d-8e9f-0a1b2c3d4e5f", "connection_id": "3f0c8f5e-2d7a-4c3b-9a51-6d1e2b7c9f00", "sender_id": "17841400000000000" } } }
+        },
+        "responses": {
+          "202": { "description": "The start is accepted and the first message is queued, or the same request was accepted before. Sending is not promised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FlowStart" } } } },
+          "400": {
+            "description": "`invalid_request`: the request has a query string, the body is not JSON, names a key twice in one object, misses a key or has an unknown key, or `flow_id`, `request_key` or `connection_id` is not a UUID, or `sender_id` is not a non-empty string.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "invalid_request" } } }
+          },
+          "401": { "$ref": "#/components/responses/InvalidApiKey" },
+          "403": { "description": "The key does not have the `flows:start` scope.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "insufficient_scope" } } } },
+          "404": {
+            "description": "`flow_not_found`: the workspace has no flow with this ID. `contact_not_found`: the sender has not commented on the connection. `not_found`: the path does not exist.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "examples": { "flow_not_found": { "value": { "error": "flow_not_found" } }, "contact_not_found": { "value": { "error": "contact_not_found" } }, "not_found": { "value": { "error": "not_found" } } }
+              }
+            }
+          },
+          "405": { "$ref": "#/components/responses/MethodNotAllowed" },
+          "409": {
+            "description": "The start is refused and nothing is stored. The checks run in this order and the first that fails is returned. `idempotency_conflict`: the `request_key` was used for a different request or for a start whose data was deleted. `flow_unavailable`: the flow is off, archived, has no published version, does not start with a direct message, its published version sends no first message (for example a version that also changes tags or fields, or waits), or its trigger is on another connection. `sending_disabled`: sending is off for the service or for the connection, or the connection has no valid token. `no_dm_identity`: the contact has no verified messaging account. `recipient_opted_out`: the person revoked marketing or service messages. `marketing_consent_required`: the person has no explicit marketing consent. `reply_window_closed`: the person sent no direct message in the last 24 hours. `contact_paused`: automation is paused for the contact or the messaging account. `contact_busy`: the person has a conversation handed off to an agent, a flow run that waits for them, a pending follow-up, a recent direct message the service has not handled yet, or a first message of an earlier start that is not sent yet. `active_contact_limit`: the plan's monthly active contact limit stops the send.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "examples": {
+                  "idempotency_conflict": { "value": { "error": "idempotency_conflict" } },
+                  "flow_unavailable": { "value": { "error": "flow_unavailable" } },
+                  "sending_disabled": { "value": { "error": "sending_disabled" } },
+                  "no_dm_identity": { "value": { "error": "no_dm_identity" } },
+                  "recipient_opted_out": { "value": { "error": "recipient_opted_out" } },
+                  "marketing_consent_required": { "value": { "error": "marketing_consent_required" } },
+                  "reply_window_closed": { "value": { "error": "reply_window_closed" } },
+                  "contact_paused": { "value": { "error": "contact_paused" } },
+                  "contact_busy": { "value": { "error": "contact_busy" } },
+                  "active_contact_limit": { "value": { "error": "active_contact_limit" } }
+                }
+              }
+            }
+          },
+          "413": { "description": "The body is larger than 4 KiB.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "request_too_large" } } } },
+          "415": { "description": "The request does not have the `Content-Type: application/json` header.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "json_required" } } } },
+          "429": {
+            "description": "`rate_limited`: the client IP address or the key used its requests for this minute, the workspace used its hourly write limit, the person was started in the last 10 minutes (by a direct message or by this API), or the connection started 700 flows in the last hour.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "rate_limited" } } }
+          },
+          "503": {
+            "description": "The service cannot answer now. `api_limit_unavailable`: the workspace write limiter is not available; the start is refused and nothing is stored. Try again later.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "examples": { "api_key_limit_unavailable": { "value": { "error": "api_key_limit_unavailable" } }, "api_limit_unavailable": { "value": { "error": "api_limit_unavailable" } }, "service_unavailable": { "value": { "error": "service_unavailable" } } }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -246,8 +330,8 @@
           "name": { "type": "string" },
           "scopes": {
             "type": "array",
-            "description": "`contacts:read` reads contacts and fields. `contacts:write` also changes contacts; a key with it always has `contacts:read`.",
-            "items": { "type": "string", "enum": ["contacts:read", "contacts:write"] }
+            "description": "`contacts:read` reads contacts and fields. `contacts:write` also changes contacts. `flows:start` also lists and starts flows, which sends messages. A key with `contacts:write` or `flows:start` always has `contacts:read`.",
+            "items": { "type": "string", "enum": ["contacts:read", "contacts:write", "flows:start"] }
           },
           "workspace_id": { "type": "string", "format": "uuid" },
           "expires_at": { "type": "string", "format": "date-time" }
@@ -337,6 +421,40 @@
           "name": { "type": "string" },
           "type": { "type": "string", "enum": ["text", "number", "boolean", "date"] },
           "value": { "type": ["string", "number", "boolean"], "description": "A string for text and date (YYYY-MM-DD) fields, a number or a boolean." }
+        }
+      },
+      "FlowList": {
+        "type": "object",
+        "required": ["flows"],
+        "properties": {
+          "flows": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "required": ["id", "name", "connection_id"],
+              "properties": { "id": { "type": "string", "format": "uuid" }, "name": { "type": "string" }, "connection_id": { "type": "string", "format": "uuid", "description": "The connection of the flow's trigger. A start names a contact of this connection." } }
+            }
+          }
+        }
+      },
+      "FlowStartRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["request_key", "connection_id", "sender_id"],
+        "properties": {
+          "request_key": { "type": "string", "format": "uuid", "description": "A new UUID for each start. Send the same key again only to repeat the same request." },
+          "connection_id": { "type": "string", "format": "uuid", "description": "The `connection_id` of the contact. It must be the connection of the flow's trigger." },
+          "sender_id": { "type": "string", "minLength": 1, "description": "The `sender_id` of the contact, as `GET /v1/contacts` returns it." }
+        }
+      },
+      "FlowStart": {
+        "type": "object",
+        "required": ["start_id", "run_id", "status"],
+        "properties": {
+          "start_id": { "type": "string", "format": "uuid" },
+          "run_id": { "type": "string", "format": "uuid", "description": "The flow run. It appears in the dashboard's flow run list." },
+          "status": { "type": "string", "enum": ["queued"], "description": "Always `queued`: the first message waits for its final checks and the send." }
         }
       }
     }

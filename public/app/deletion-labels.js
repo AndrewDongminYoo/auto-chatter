@@ -9,6 +9,7 @@ const deletedLabels = {
   flow_step_runs: "플로 실행 단계",
   flow_dm_deliveries: "플로 DM 발송",
   instagram_dm_start_events: "DM 플로 시작 기록",
+  flow_api_starts: "외부 플로 시작 기록",
   webhook_deliveries: "외부 전송",
   webhook_redelivery_events: "외부 전송 재시도 기록",
   instagram_follow_conversations: "팔로우 후속 메시지",

@@ -957,6 +957,7 @@ test("migration 031 replays and, with the later migrations, leaves the deletion 
     "077_active_contacts.sql",
     "078_active_contact_deletion_counts.sql",
     "080_api_keys.sql",
+    "082_flow_api_starts.sql",
   ])
     await pool.query(await readFile(new URL(`../../db/migrations/${file}`, import.meta.url), "utf8"));
   assert.deepEqual(await functions(), current);
