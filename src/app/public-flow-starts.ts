@@ -45,14 +45,15 @@ export function flowStartRequestHash(flowId: string, connectionId: string, sende
 }
 
 // The path's flow ID and the body { request_key, connection_id, sender_id }. A flow ID, request key or connection ID
-// that is not a UUID, a sender ID that is not a non-empty string or contains NUL (which PostgreSQL text cannot hold),
+// that is not a UUID, a sender ID that is not a non-empty string or contains NUL (which PostgreSQL text cannot hold)
+// or an unpaired surrogate (which PostgreSQL stores as U+FFFD while the request hash covers the original string),
 // and a missing or unknown key are 400 invalid_request.
 export function parseFlowStart(flow: string, input: unknown): FlowStartRequest {
   if (!isUuid(flow) || !isRecord(input)) throw invalid();
   const keys = Object.keys(input).sort();
   if (keys.length !== BODY_KEYS.length || keys.some((key, index) => key !== BODY_KEYS[index])) throw invalid();
   if (!isUuid(input.request_key) || !isUuid(input.connection_id)) throw invalid();
-  if (typeof input.sender_id !== "string" || !input.sender_id.trim() || input.sender_id.includes("\0")) throw invalid();
+  if (typeof input.sender_id !== "string" || !input.sender_id.trim() || input.sender_id.includes("\0") || /\p{Cs}/u.test(input.sender_id)) throw invalid();
   const flowId = flow.toLowerCase();
   const connectionId = input.connection_id.toLowerCase();
   return { flowId, requestKey: input.request_key.toLowerCase(), connectionId, senderId: input.sender_id, hash: flowStartRequestHash(flowId, connectionId, input.sender_id) };
@@ -121,8 +122,8 @@ async function replay(client: PoolClient, workspaceId: string, request: FlowStar
 }
 
 // Accepts one start in one transaction, or refuses it with the first code of the spec's table and writes nothing.
-// Lock order: the workspace FOR KEY SHARE (as writeContact, before a workspace deletion's FOR UPDATE), the request
-// key row, the flow FOR SHARE and then the connection FOR SHARE (the order publish and enable lock them), then the
+// Lock order: the workspace FOR KEY SHARE (as writeContact, before a workspace deletion's FOR UPDATE), the API key
+// row FOR SHARE, the request key row, the flow FOR SHARE and then the connection FOR SHARE (the order publish and enable lock them), then the
 // messaging sender's dm-start-sender advisory lock, the key that DM trigger starts take, so a DM start and an
 // external start of one recipient see each other's start for the cooldown. The request key row is inserted first:
 // a concurrent request with the same key waits on its unique index and then reads the stored result, or proceeds
@@ -131,6 +132,13 @@ export async function startFlow(pool: Pick<Pool, "connect">, apiKey: { id: strin
   const workspaceId = apiKey.workspace_id;
   return transaction(pool, async (client) => {
     await client.query("SELECT 1 FROM workspaces WHERE id=$1 FOR KEY SHARE", [workspaceId]);
+    // The auth step read the key outside this transaction. A revocation (revokeApiKey, revokeMemberApiKeys) changes no
+    // key column, so it takes FOR NO KEY UPDATE, which FOR KEY SHARE (also the flow_api_starts foreign key's lock)
+    // does not wait for; FOR SHARE is the weakest lock that does. A revocation in progress is therefore waited for and
+    // the revoked row then fails the condition, and one that starts later waits for this start. The replay comes after
+    // this check, so a revoked or expired key replays nothing either, as the auth step already refuses it.
+    const active = await client.query("SELECT 1 FROM api_keys WHERE id=$1 AND workspace_id=$2 AND revoked_at IS NULL AND expires_at>now() FOR SHARE", [apiKey.id, workspaceId]);
+    if (!active.rowCount) throw new ApiError(401, "invalid_api_key");
     const claimed = await client.query(
       `INSERT INTO flow_api_start_keys(workspace_id,request_key,request_hash) VALUES($1,$2,$3)
        ON CONFLICT(workspace_id,request_key) DO NOTHING RETURNING request_key`,

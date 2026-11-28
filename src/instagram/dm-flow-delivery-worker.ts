@@ -5,6 +5,7 @@ import { messagingRecipientOptedOut, type ConsentQueryable } from "./channel-con
 import type { FollowSendContext } from "./follow-transport.ts";
 import { PreSendVerificationError, rateLimitRetryDelaysSeconds } from "./reply-worker.ts";
 import { CONTACT_PAUSED, latestTextSql, recipientStageSql } from "../app/campaign-drafts.ts";
+import { verifiedDmRecipientsSql } from "../app/inbox-identity.ts";
 import { ACTIVE_CONTACT_LIMIT, ACTIVE_CONTACT_LIMIT_UNAVAILABLE, activeContactLimitBlocks } from "../app/plans.ts";
 
 // The DM flow delivery worker (#291, docs/specs/2026-11-08-instagram-dm-start-triggers.md): it claims one pending
@@ -77,9 +78,14 @@ const GUARD_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp()
 // stage is the campaign recipient stage with the campaign's own text (recipientStageSql): 4 a marketing or service
 // reply revoke of the recipient or the comment sender, 5 no exact explicit marketing grant; 6 and 7 pass here,
 // because the guard above measures the window. contact_paused is the comment contact's pause, as campaigns read it.
-// $1 is the workspace, $2 the start and $3 the row's messaging recipient.
-const API_START_GUARD_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp() AS as_of)
- SELECT ${recipientStageSql("$1")} AS stage,${CONTACT_PAUSED} AS contact_paused
+// verified is whether the recipient is still the comment contact's verified DM recipient (verifiedDmRecipientsSql over
+// the recipient's whole candidate group, so a reply from another comment sender makes it ambiguous), which a campaign
+// delivery also checks again (no_dm_identity). $1 is the workspace, $2 the start and $3 the row's messaging recipient.
+const API_START_GUARD_SQL = `WITH evaluation AS MATERIALIZED (SELECT statement_timestamp() AS as_of),
+ verified AS MATERIALIZED (${verifiedDmRecipientsSql("workspace_id=$1 AND id=(SELECT connection_id FROM flow_api_starts WHERE workspace_id=$1 AND id=$2)", "reply.recipient_id=$3::text")})
+ SELECT ${recipientStageSql("$1")} AS stage,${CONTACT_PAUSED} AS contact_paused,
+   EXISTS(SELECT 1 FROM verified identity WHERE identity.workspace_id=api.workspace_id
+     AND identity.connection_id=api.connection_id AND identity.recipient_id=$3::text AND identity.sender_id=api.sender_id) AS verified
  FROM flow_api_starts api CROSS JOIN evaluation
  CROSS JOIN LATERAL (SELECT api.connection_id,api.sender_id,$3::text AS recipient_id) v
  CROSS JOIN LATERAL ${latestTextSql("$1")}
@@ -117,10 +123,11 @@ export async function assertDmFlowDeliveryAllowed(pool: ConsentQueryable, claim:
   // the external system gave up. A failed read defers it, as for the other consent reads.
   if (row.api_start_id) {
     try {
-      const api = (await pool.query<{ stage: number; contact_paused: boolean }>(API_START_GUARD_SQL, [claim.workspaceId, row.api_start_id, row.recipient_id])).rows[0];
+      const api = (await pool.query<{ stage: number; contact_paused: boolean; verified: boolean }>(API_START_GUARD_SQL, [claim.workspaceId, row.api_start_id, row.recipient_id])).rows[0];
       if (!api) blocks.push("delivery_changed");
       else {
-        if (api.stage === 4) blocks.push("recipient_opted_out");
+        if (!api.verified) blocks.push("no_dm_identity");
+        else if (api.stage === 4) blocks.push("recipient_opted_out");
         else if (api.stage === 5) blocks.push("marketing_consent_required");
         if (api.contact_paused) blocks.push("contact_paused");
       }

@@ -73,6 +73,27 @@ test("only an address in the CF-Connecting-IP form is kept for the last use", ()
   for (const value of [null, "", "203.0.113.9, 10.0.0.1", "<script>", "a".repeat(46)]) assert.equal(clientIp(value), null);
 });
 
+// Security audit #62, fifth pass: an IPv6 client usually holds a whole /64, so the per-IP limit counts the /64.
+test("the per-IP limit key is the /64 of an IPv6 address, an IPv4 address in full, and unattributed otherwise", async () => {
+  const spent: string[] = [];
+  const env = { API_IP_LIMIT: { limit: async ({ key }: { key: string }) => (spent.push(key), { success: true }) }, API_KEY_LIMIT: { limit: async () => ({ success: true }) } };
+  const limitKey = async (ip: string | null) => {
+    spent.length = 0;
+    const response = await call(ip === null ? {} : { "CF-Connecting-IP": ip }, env, {} as Pool);
+    assert.equal(response.status, 401);
+    return spent[0];
+  };
+  const prefix = "2001:db8:1:2::/64";
+  for (const ip of ["2001:db8:1:2::1", "2001:0DB8:0001:0002:0000:0000:0000:00ff", "2001:db8:1:2:ffff:ffff:ffff:ffff", "2001:db8:1:2:3:4:1.2.3.4"]) assert.equal(await limitKey(ip), prefix, ip);
+  assert.equal(await limitKey("2001:db8:1:3::1"), "2001:db8:1:3::/64");
+  assert.equal(await limitKey("::1"), "0:0:0:0::/64");
+  assert.equal(await limitKey("203.0.113.9"), "203.0.113.9");
+  // An IPv4-mapped address is the IPv4 client, not one shared ::ffff:0:0/64 bucket.
+  assert.equal(await limitKey("::ffff:203.0.113.9"), "203.0.113.9");
+  assert.equal(await limitKey("::ffff:cb00:7109"), "203.0.113.9");
+  for (const ip of [null, "", "203.0.113.9, 10.0.0.1", "<script>", "a".repeat(46), "1::2::3", "2001:db8", "1:2:3:4:5:6:7:8:9", "203.0.113.999", "12345::1", ":1:2:3:4:5:6:7"]) assert.equal(await limitKey(ip), "unattributed", String(ip));
+});
+
 type Recorded = { sql: string; params: unknown[] }[];
 function keyPool(queries: Recorded, row: Record<string, unknown> | undefined, options: { failLookup?: boolean } = {}) {
   let ended = 0;
@@ -771,6 +792,9 @@ test("a flow start names a flow, a UUID request key, a connection and a sender I
     [flowId, { ...startBody, sender_id: "" }],
     [flowId, { ...startBody, sender_id: "   " }],
     [flowId, { ...startBody, sender_id: "a\0b" }],
+    // PostgreSQL would store U+FFFD for an unpaired surrogate while the request hash covers the original string.
+    [flowId, { ...startBody, sender_id: `a${String.fromCharCode(0xd800)}b` }],
+    [flowId, { ...startBody, sender_id: `a${String.fromCharCode(0xdc00)}` }],
     [flowId, { ...startBody, sender_id: 123 }],
   ];
   for (const [flow, input] of refused)

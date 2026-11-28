@@ -4,9 +4,12 @@ import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 import { Pool } from "pg";
 import { appApi } from "./api.ts";
+import { ApiError } from "./auth.ts";
+import { revokeMemberApiKeys } from "./api-keys.ts";
 import { EXCLUDED_TABLES, EXPORTED_TABLES } from "./workspace-export.ts";
 import { exceedActiveContactLimit } from "./workspace-fixture.ts";
 import { publicApi } from "./public-api.ts";
+import { parseFlowStart, startFlow } from "./public-flow-starts.ts";
 import { resetTestSchema } from "../test-schema.ts";
 import { recordChannelConsentEvent } from "../instagram/channel-consent.ts";
 import { assertDmFlowDeliveryAllowed, processNextDmFlowDelivery } from "../instagram/dm-flow-delivery-worker.ts";
@@ -302,6 +305,52 @@ test("concurrent requests with one key create one start and one run, and every o
   assert.equal(await count("flow_api_starts"), 1);
 });
 
+// Security audit #62, fifth pass: the auth step reads the key outside the start transaction, so the start reads it
+// again under a lock that waits for a revocation in progress.
+test("a key revoked while its start is in progress starts nothing and is the auth step's 401", async () => {
+  const flowId = await flow();
+  await qualifying();
+  const revoker = await pool.connect();
+  try {
+    await revoker.query("BEGIN");
+    // The member removal path: both of this workspace's keys were made by the removed member.
+    assert.equal(await revokeMemberApiKeys(revoker, W, admin, "member_removed"), 2);
+    let settled = false;
+    const pending = start(flowId, startBody()).finally(() => {
+      settled = true;
+    });
+    for (let tries = 0; tries < 200 && !settled; tries++) {
+      const waiting = await pool.query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%api_keys%'");
+      if (waiting.rowCount) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    await revoker.query("COMMIT");
+    const response = await pending;
+    assert.equal(response.status, 401, await response.clone().text());
+    assert.equal(response.headers.get("www-authenticate"), 'Bearer realm="auto-chatter"');
+    assert.deepEqual(await response.json(), { error: "invalid_api_key" });
+  } finally {
+    await revoker.query("ROLLBACK").catch(() => undefined);
+    revoker.release();
+  }
+  assert.deepEqual(await written(), nothing);
+});
+
+test("an expired key passed straight to startFlow starts nothing, and a revoked key cannot replay its start", async () => {
+  const flowId = await flow();
+  await qualifying();
+  const key = (await pool.query("SELECT id::text,workspace_id::text FROM api_keys WHERE name='starter'")).rows[0] as { id: string; workspace_id: string };
+  const body = startBody();
+  await accepted(flowId, body);
+  const before = await written();
+  const refusedKey = (error: unknown) => error instanceof ApiError && error.status === 401 && error.message === "invalid_api_key";
+  await pool.query("UPDATE api_keys SET revoked_at=clock_timestamp(),revoked_reason='revoked',revoked_by=$1 WHERE name='starter'", [admin]);
+  await assert.rejects(startFlow(pool, key, parseFlowStart(flowId, body), true), refusedKey);
+  await pool.query("UPDATE api_keys SET revoked_at=NULL,revoked_reason=NULL,revoked_by=NULL,created_at=now()-interval '2 days',expires_at=now()-interval '1 minute' WHERE name='starter'");
+  await assert.rejects(startFlow(pool, key, parseFlowStart(flowId, startBody()), true), refusedKey);
+  assert.deepEqual(await written(), before);
+});
+
 test("each refusal code of the table writes nothing, and a refused key can start once the cause is fixed", async () => {
   const flowId = await flow();
   const cases: [string, number, string, () => Promise<unknown>, Partial<StartBody>?, Parameters<typeof start>[2]?][] = [
@@ -578,6 +627,20 @@ test("the delivery guard ends an external start's message on a later marketing r
   assert.deepEqual(await delivery(), { status: "sent", failure_code: null });
   assert.deepEqual(held.posts, [{ recipient: RECIPIENT }]);
   assert.equal(await count("active_contacts WHERE activity_kind='flow_dm'"), 1);
+});
+
+// Security audit #62, fifth pass: the recipient must still be the comment contact's verified DM identity at send time,
+// as a campaign delivery rechecks it.
+test("the delivery guard ends an external start's message once its recipient is no longer the comment contact's verified DM identity", async () => {
+  const flowId = await flow();
+  await qualifying();
+  await accepted(flowId, startBody());
+  // Another comment sender's acknowledged private reply reached the same recipient: the bridge is now ambiguous.
+  await bridge("another-sender", RECIPIENT);
+  const seen: Graph = { posts: [] };
+  assert.equal(await deliver(seen), true);
+  assert.deepEqual(await delivery(), { status: "blocked", failure_code: "no_dm_identity" });
+  assert.deepEqual(seen.posts, []);
 });
 
 test("GET /v1/flows lists only this workspace's enabled DM flows with their connection, and an external start run is in the flow run report", async () => {

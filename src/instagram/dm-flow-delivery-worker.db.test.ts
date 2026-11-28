@@ -489,6 +489,18 @@ for (const { name, change, expect } of guardCases.filter((guard) =>
     assert.equal(state.attempted, expect[0] !== "pending");
   });
 
+// A DM trigger run reads no comment contact: its messaging sender ID wrote the DM, so an ambiguous reply bridge of
+// that ID does not stop it (security audit #62, fifth pass, checks only external starts).
+test("a DM trigger run is sent although its messaging ID is bridged to two comment senders", async () => {
+  const id = await dmRow("9001");
+  await bridge("1001", "9001");
+  await bridge("1002", "9001");
+  const seen = graph();
+  assert.equal(await deliver(seen), true);
+  assert.equal((await row(id)).status, "sent");
+  assert.deepEqual(recipients(seen), ["9001"]);
+});
+
 test("with the global send switch off the guard defers without any Graph call", async () => {
   const id = await dmRow("9001");
   const seen = graph();
