@@ -3134,7 +3134,7 @@ function contactDetail(contact, renderRow) {
         // Moves the draft's own changes onto the reread tags, so saving it again without an edit keeps what changed elsewhere.
         // Tags compare the way the server normalizes them, so a draft that only changes a tag's spelling (VIP for vip)
         // neither removes nor adds it; the reread tags keep their stored spelling.
-        const key = (tag) => tag.trim().normalize("NFC").toLowerCase();
+        const key = (tag) => tag.trim().normalize("NFC").toLowerCase().normalize("NFC");
         const draft = list(input.value);
         const draftKeys = new Set(draft.map(key));
         const baseKeys = new Set(tagBase.map(key));
@@ -3337,7 +3337,7 @@ function contactFilterTags() {
   const tags = [];
   for (const input of contactTagInputs()) {
     const value = input.value.trim();
-    const key = value.normalize("NFC").toLowerCase();
+    const key = value.normalize("NFC").toLowerCase().normalize("NFC");
     if (value && !seen.has(key)) {
       seen.add(key);
       tags.push(value);

@@ -441,10 +441,10 @@ test("a contact write body adds and removes normalized tags and names fields by 
   });
   // An empty tag object is no change, but the fields still are.
   assert.deepEqual(parseContactWrite({ tags: {}, fields: { [fieldA]: 0 } }).fields, [[fieldA, 0]]);
-  // A tag keeps the dashboard's single-pass form: "J" + U+030C becomes "j" + U+030C, as the dashboard stores it, not the
-  // U+01F0 a second pass gives. Two single-pass forms of one repeated-pass form both stay, as in the dashboard save.
-  assert.deepEqual(parseContactWrite({ tags: { add: ["J\u030C"] } }).add, ["j\u030C"]);
-  assert.deepEqual(parseContactWrite({ tags: { add: ["J\u030C", "j\u030C", "\u01F0"] } }).add, ["j\u030C", "\u01F0"]);
+  // A tag gets the dashboard's form: "J" + U+030C lowercases to "j" + U+030C, which NFC composes to U+01F0, so the three
+  // spellings are one tag.
+  assert.deepEqual(parseContactWrite({ tags: { add: ["J\u030C"] } }).add, ["\u01F0"]);
+  assert.deepEqual(parseContactWrite({ tags: { add: ["J\u030C", "j\u030C", "\u01F0"] } }).add, ["\u01F0"]);
   const refused: [unknown, string][] = [
     [null, "invalid_request"],
     [[], "invalid_request"],

@@ -306,38 +306,40 @@ test("a write waiting behind a workspace deletion holds no connection lock, so t
   }
 });
 
-test("a stored tag the normalization changes again matches itself in a dashboard save and an API removal", async () => {
+test("a tag the old rule stored matches its normalized form in a dashboard save and an API removal", async () => {
   const { key } = await issue();
   const path = `/api/connections/${connection}/contacts/${encodeURIComponent(sender)}`;
-  // "J" + U+030C has no composed capital; lowercasing makes "j" + U+030C, which NFC composes to U+01F0.
+  const legacy = (tags: string[]) => pool.query("UPDATE instagram_contact_tags SET tags=$3::text[] WHERE connection_id=$1 AND sender_id=$2", [connection, sender, tags]);
+  // "J" + U+030C has no composed capital; lowercasing makes "j" + U+030C, which NFC composes to U+01F0. The old rule
+  // stopped after lowercasing and stored "j" + U+030C; the rule now stores U+01F0.
   const saved = await dashboard(ownerId, "PATCH", path, { tags: ["J\u030C", "keep"], expected_tags: [] });
   assert.equal(saved.status, 200, await saved.clone().text());
-  assert.deepEqual((await stored()).tags, ["j\u030C", "keep"]);
-  // The editor sends back the tags it read, and the save is not stale.
-  const again = await dashboard(ownerId, "PATCH", path, { tags: ["j\u030C", "keep", "new"], expected_tags: ["j\u030C", "keep"] });
+  assert.deepEqual((await stored()).tags, ["keep", "\u01F0"]);
+  // The editor sends back the tags it read, and a save of the same list stores the same strings.
+  const again = await dashboard(ownerId, "PATCH", path, { tags: ["keep", "\u01F0"], expected_tags: ["keep", "\u01F0"] });
   assert.equal(again.status, 200, await again.clone().text());
-  // A tag whose single-pass form is already stored adds nothing.
-  assert.deepEqual((await ok(await write(key, { tags: { add: ["j\u030C"] } }))).tags, ["keep", "new", "\u01F0"]);
-  await pool.query("UPDATE instagram_contact_tags SET tags=ARRAY['j\u030C','keep'] WHERE connection_id=$1 AND sender_id=$2", [connection, sender]);
+  assert.deepEqual((await stored()).tags, ["keep", "\u01F0"]);
+  // Every spelling of the tag is the stored tag, so an add changes nothing.
+  for (const spelling of ["J\u030C", "j\u030C", "\u01F0"]) {
+    assert.deepEqual((await ok(await write(key, { tags: { add: [spelling] } }))).tags, ["keep", "\u01F0"]);
+  }
+  // A dashboard save of a list the old rule stored moves the tag to its normalized form.
+  await legacy(["j\u030C", "keep"]);
+  const moved = await dashboard(ownerId, "PATCH", path, { tags: ["j\u030C", "keep"], expected_tags: ["j\u030C", "keep"] });
+  assert.equal(moved.status, 200, await moved.clone().text());
+  assert.deepEqual((await stored()).tags, ["keep", "\u01F0"]);
+  await legacy(["j\u030C", "keep"]);
   assert.deepEqual((await ok(await write(key, { tags: { add: ["vip"] } }))).tags, ["j\u030C", "keep", "vip"]);
-  // U+01F0 is another single-pass form of the kept tag: it is stored beside it, so a segment condition on U+01F0, which
-  // compares that exact string, finds the contact. A repeated add changes nothing, and one remove takes both forms.
-  assert.deepEqual((await ok(await write(key, { tags: { add: ["\u01F0"] } }))).tags, ["j\u030C", "keep", "vip", "\u01F0"]);
+  // The API stores the normalized form beside the old one, which it keeps. A repeated add changes nothing, and one
+  // remove takes both forms.
+  assert.deepEqual((await ok(await write(key, { tags: { add: ["J\u030C"] } }))).tags, ["j\u030C", "keep", "vip", "\u01F0"]);
   assert.deepEqual((await ok(await write(key, { tags: { add: ["\u01F0"] } }))).tags, ["j\u030C", "keep", "vip", "\u01F0"]);
   assert.deepEqual((await ok(await write(key, { tags: { remove: ["j\u030C"] } }))).tags, ["keep", "vip"]);
-  // A tag sent in its original form is stored in the form the dashboard save stores ("j" + U+030C, above), gives one
-  // stored tag however often it is added, and the same form removes it.
-  assert.deepEqual((await ok(await write(key, { tags: { add: ["J\u030C"] } }))).tags, ["j\u030C", "keep", "vip"]);
-  assert.deepEqual((await ok(await write(key, { tags: { add: ["J\u030C"] } }))).tags, ["j\u030C", "keep", "vip"]);
-  assert.deepEqual((await stored()).tags, ["j\u030C", "keep", "vip"]);
-  assert.deepEqual((await ok(await write(key, { tags: { remove: ["J\u030C"] } }))).tags, ["keep", "vip"]);
-  await pool.query("UPDATE instagram_contact_tags SET tags=ARRAY['j\u030C','keep'] WHERE connection_id=$1 AND sender_id=$2", [connection, sender]);
-  assert.deepEqual((await ok(await write(key, { tags: { add: ["J\u030C"] } }))).tags, ["j\u030C", "keep"]);
+  await legacy(["j\u030C", "keep"]);
   assert.deepEqual((await ok(await write(key, { tags: { remove: ["J\u030C"] } }))).tags, ["keep"]);
-  // The dashboard save compares the exact stored strings. An editor that read only U+01F0 is stale after the API stored
-  // "j" + U+030C beside it, so its save cannot remove that tag; a list in another spelling is stale too.
-  await pool.query("UPDATE instagram_contact_tags SET tags=ARRAY['\u01F0'] WHERE connection_id=$1 AND sender_id=$2", [connection, sender]);
-  assert.deepEqual((await ok(await write(key, { tags: { add: ["J\u030C"] } }))).tags, ["j\u030C", "\u01F0"]);
+  // The dashboard save compares the exact stored strings. An editor that read only U+01F0 is stale when the old form is
+  // stored beside it, so its save cannot remove that tag; a list in another spelling is stale too.
+  await legacy(["j\u030C", "\u01F0"]);
   const behind = await dashboard(ownerId, "PATCH", path, { tags: ["\u01F0", "new"], expected_tags: ["\u01F0"] });
   assert.equal(await errorOf(behind, 409), "contact_tags_stale");
   const respelled = await dashboard(ownerId, "PATCH", path, { tags: ["\u01F0", "new"], expected_tags: ["J\u030C", "\u01F0"] });

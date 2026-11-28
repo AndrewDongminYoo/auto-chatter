@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { flowReferences, parseFlowDocument, validateFlowForPublish, type PublishContext } from "./flow-schema.ts";
+import { normalizeContactTags } from "./contacts.ts";
+import { flowReferences, normalizeTag, parseFlowDocument, validateFlowForPublish, type PublishContext } from "./flow-schema.ts";
 
 const connection = "11111111-1111-4111-8111-111111111111";
 const field = "22222222-2222-4222-8222-222222222222";
@@ -574,4 +575,17 @@ test("references include the field a reply wait saves into", () => {
   const parsed = parseFlowDocument(replyWait({ timeout_minutes: 60, save_field_id: field.toUpperCase() }));
   assert.ok("document" in parsed);
   assert.deepEqual(flowReferences(parsed.document).field_ids, [field]);
+});
+
+test("the tag rule gives its own result back and matches the contact tag rule", () => {
+  // Each pair lowercases to one that NFC composes ("J" + U+030C to U+01F0, "T" + U+0308 to U+1E97, "W" + U+030A to
+  // U+1E98, "H" + U+0331 to U+1E96), so a rule that stops after lowercasing changes its own result.
+  assert.equal(normalizeTag("J̌"), "ǰ");
+  const samples = ["J̌", "ǰ", "ǰ", "T̈", "W̊", "H̱", " VIP ", "İ", "Å", "Å", "고객"];
+  for (const sample of samples) {
+    const once = normalizeTag(sample);
+    assert.ok(once !== null, sample);
+    assert.equal(normalizeTag(once), once, sample);
+    assert.deepEqual(normalizeContactTags([sample]), [once], sample);
+  }
 });
