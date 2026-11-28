@@ -504,7 +504,8 @@ test("a run waits for an open manual field edit and plans from the committed val
 test("manual tag and field edits that start after a run read the contact wait for that run", async () => {
   const id = await enabledActionFlow("Thanks");
   await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'sender-1','{old}')", [workspaceId, connectionId]);
-  await withRunPausedAfterRead(id, "comment-1", () => request("PATCH", `/api/connections/${connectionId}/contacts/sender-1`, { tags: ["old", "manual"] }));
+  // The edit expects the run's result (lead added, old removed), so it is accepted only when it runs after the run.
+  await withRunPausedAfterRead(id, "comment-1", () => request("PATCH", `/api/connections/${connectionId}/contacts/sender-1`, { tags: ["old", "manual"], expected_tags: ["lead"] }));
   // The edit ran after the run, so it replaced the run's result instead of being overwritten by it.
   assert.deepEqual((await contact("sender-1")).tags, ["manual", "old"]);
   assert.deepEqual(

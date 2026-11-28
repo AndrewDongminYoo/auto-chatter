@@ -1696,7 +1696,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   name text NOT NULL CHECK(length(btrim(name)) BETWEEN 1 AND 80),
   key_prefix text NOT NULL CHECK(key_prefix ~ '^ac_live_[A-Za-z0-9_-]{4}$'),
   key_hash text NOT NULL UNIQUE CHECK(key_hash ~ '^[0-9a-f]{64}$'),
-  scopes text[] NOT NULL CHECK(cardinality(scopes) >= 1 AND scopes <@ ARRAY['contacts:read']::text[]),
+  scopes text[] NOT NULL,
   created_by uuid NOT NULL,
   created_by_email text CHECK(length(created_by_email) BETWEEN 3 AND 320),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -1714,6 +1714,11 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 CREATE INDEX IF NOT EXISTS api_keys_workspace_idx ON api_keys(workspace_id,created_at);
 CREATE INDEX IF NOT EXISTS api_keys_creator_idx ON api_keys(workspace_id,created_by) WHERE revoked_at IS NULL;
+-- A key is read-only ({contacts:read}) or reads and writes contacts ({contacts:read,contacts:write}), stored in this
+-- order (migration 081). A write key always reads too, because a write answers with the written contact.
+ALTER TABLE api_keys DROP CONSTRAINT IF EXISTS api_keys_scopes_check;
+ALTER TABLE api_keys ADD CONSTRAINT api_keys_scopes_check
+  CHECK(scopes = ARRAY['contacts:read']::text[] OR scopes = ARRAY['contacts:read','contacts:write']::text[]);
 -- Append-only audit of API key issue and revocation. An automatic revocation has no actor. Expiry is not
 -- recorded: expires_at already shows it.
 CREATE TABLE IF NOT EXISTS api_key_events (

@@ -4,7 +4,8 @@ import { test } from "node:test";
 import type { Pool } from "pg";
 import { API_KEY_SCOPES, apiKeyHash, apiKeyPrefix, clientIp, generateApiKey, isApiKeyFormat, parseApiKeyRequest } from "./api-keys.ts";
 import { ApiError } from "./auth.ts";
-import { PUBLIC_API_ROUTES, publicApi } from "./public-api.ts";
+import { matchPublicApiRoute, PUBLIC_API_ROUTES, publicApi } from "./public-api.ts";
+import { exactNumberReviver, hasDuplicateJsonKey, parseContactWrite, parseContactWriteBody, parseContactWriteTarget } from "./public-contact-writes.ts";
 import { decodeContactsCursor, encodeContactsCursor, parseContactsQuery } from "./public-contacts.ts";
 
 const keyId = "44444444-4444-4444-8444-444444444444";
@@ -23,9 +24,15 @@ test("a generated API key is ac_live_ and 43 base64url characters, and only its 
   for (const value of [undefined, "", `ac_test_${"a".repeat(43)}`, `ac_live_${"a".repeat(42)}`, `ac_live_${"a".repeat(44)}`, `ac_live_${"a".repeat(42)}=`, ` ${key}`]) assert.equal(isApiKeyFormat(value), false, String(value));
 });
 
-test("an API key request accepts a subset of the scope list, a listed expiry and a 1-80 character name", () => {
-  assert.deepEqual(API_KEY_SCOPES, ["contacts:read"]);
+test("an API key request accepts contacts:read with or without contacts:write, a listed expiry and a 1-80 character name", () => {
+  assert.deepEqual(API_KEY_SCOPES, ["contacts:read", "contacts:write"]);
   assert.deepEqual(parseApiKeyRequest({ name: "  CRM  ", scopes: ["contacts:read"] }), { name: "CRM", expiresInDays: 90, scopes: ["contacts:read"] });
+  // A write key is stored in one order, the order the api_keys CHECK compares.
+  for (const scopes of [
+    ["contacts:read", "contacts:write"],
+    ["contacts:write", "contacts:read"],
+  ])
+    assert.deepEqual(parseApiKeyRequest({ name: "CRM", scopes }).scopes, ["contacts:read", "contacts:write"]);
   for (const days of [30, 90, 180, 365]) assert.equal(parseApiKeyRequest({ name: "CRM", scopes: ["contacts:read"], expires_in_days: days }).expiresInDays, days);
   assert.equal(parseApiKeyRequest({ name: "a".repeat(80), scopes: ["contacts:read"] }).name.length, 80);
   const refused: [unknown, string][] = [
@@ -41,6 +48,8 @@ test("an API key request accepts a subset of the scope list, a listed expiry and
     [{ name: "CRM" }, "invalid_api_key_scopes"],
     [{ name: "CRM", scopes: [] }, "invalid_api_key_scopes"],
     [{ name: "CRM", scopes: ["contacts:write"] }, "invalid_api_key_scopes"],
+    [{ name: "CRM", scopes: ["contacts:read", "contacts:write", "contacts:write"] }, "invalid_api_key_scopes"],
+    [{ name: "CRM", scopes: ["contacts:read", "contacts:delete"] }, "invalid_api_key_scopes"],
     [{ name: "CRM", scopes: ["contacts:read", "contacts:read"] }, "invalid_api_key_scopes"],
     [{ name: "CRM", scopes: "contacts:read" }, "invalid_api_key_scopes"],
   ];
@@ -372,5 +381,351 @@ test("the OpenAPI document lists exactly the paths and methods the external API 
   assert.deepEqual(documented, served);
   // Every error code the contacts path answers is in the document.
   const text = JSON.stringify(document);
-  for (const code of ["invalid_request", "invalid_api_key", "insufficient_scope", "connection_not_found", "not_found", "method_not_allowed", "rate_limited", "api_key_limit_unavailable", "service_unavailable"]) assert.ok(text.includes(`"${code}"`), code);
+  for (const code of [
+    "invalid_request",
+    "invalid_api_key",
+    "insufficient_scope",
+    "connection_not_found",
+    "not_found",
+    "method_not_allowed",
+    "rate_limited",
+    "api_key_limit_unavailable",
+    "service_unavailable",
+    "invalid_field_value",
+    "contact_not_found",
+    "field_not_found",
+    "contact_tag_limit",
+    "json_required",
+    "request_too_large",
+  ])
+    assert.ok(text.includes(`"${code}"`), code);
+  // Every templated path matches its own template, and only that one.
+  for (const path of Object.keys(PUBLIC_API_ROUTES)) assert.equal(matchPublicApiRoute(path.replace(/\{[a-z_]+\}/g, "x"))?.path, path);
+});
+
+test("the routes match whole path segments, and the write path keeps its raw parameters", () => {
+  assert.deepEqual(matchPublicApiRoute("/v1/contacts"), { path: "/v1/contacts", params: [] });
+  assert.deepEqual(matchPublicApiRoute(`/v1/contacts/${connectionId}/a%2Fb`), { path: "/v1/contacts/{connection_id}/{sender_id}", params: [connectionId, "a%2Fb"] });
+  for (const path of ["/v1/contacts/", "/v1/contacts/x", "/v1/contacts/x/y/z", "/v1/contacts//y", "/v1/contacts/x/", "/v1/fields/", `/v1/contacts/${encodeURIComponent("{connection_id}")}`]) assert.equal(matchPublicApiRoute(path), undefined, path);
+  assert.equal(matchPublicApiRoute("/v1/toString"), undefined);
+});
+
+test("the write path needs a connection UUID and a decodable, non-empty sender ID", () => {
+  assert.deepEqual(parseContactWriteTarget(connectionId.toUpperCase(), encodeURIComponent("sender/one% x")), { connectionId, senderId: "sender/one% x" });
+  for (const [connection, sender] of [
+    ["not-a-uuid", "1"],
+    [connectionId, "%E0%A4%A"],
+    [connectionId, "%20%20"],
+    [connectionId, "a%00b"],
+  ])
+    assert.throws(
+      () => parseContactWriteTarget(connection!, sender!),
+      (error) => error instanceof ApiError && error.status === 400 && error.message === "invalid_request",
+      `${connection} ${sender}`,
+    );
+});
+
+const fieldA = "55555555-5555-4555-8555-555555555555";
+const fieldB = "66666666-6666-4666-8666-666666666666";
+const fieldC = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+test("a contact write body adds and removes normalized tags and names fields by ID", () => {
+  assert.deepEqual(parseContactWrite({ tags: { add: [" VIP ", "vip", "구매"], remove: ["Old"] } }), { add: ["vip", "구매"], remove: ["old"], fields: [] });
+  assert.deepEqual(parseContactWrite({ fields: { [fieldB.toUpperCase()]: null, [fieldA]: "gold" } }), {
+    add: [],
+    remove: [],
+    fields: [
+      [fieldA, "gold"],
+      [fieldB, null],
+    ],
+  });
+  // An empty tag object is no change, but the fields still are.
+  assert.deepEqual(parseContactWrite({ tags: {}, fields: { [fieldA]: 0 } }).fields, [[fieldA, 0]]);
+  // A tag keeps the dashboard's single-pass form: "J" + U+030C becomes "j" + U+030C, as the dashboard stores it, not the
+  // U+01F0 a second pass gives. Two single-pass forms of one repeated-pass form both stay, as in the dashboard save.
+  assert.deepEqual(parseContactWrite({ tags: { add: ["J\u030C"] } }).add, ["j\u030C"]);
+  assert.deepEqual(parseContactWrite({ tags: { add: ["J\u030C", "j\u030C", "\u01F0"] } }).add, ["j\u030C", "\u01F0"]);
+  const refused: [unknown, string][] = [
+    [null, "invalid_request"],
+    [[], "invalid_request"],
+    [{}, "invalid_request"],
+    [{ tags: { add: [] }, fields: {} }, "invalid_request"],
+    [{ tags: { add: ["a"] }, extra: 1 }, "invalid_request"],
+    [{ tags: { add: ["a"], replace: ["b"] } }, "invalid_request"],
+    [{ tags: ["a"] }, "invalid_request"],
+    [{ tags: { add: "a" } }, "invalid_request"],
+    [{ tags: { add: ["x".repeat(41)] } }, "invalid_request"],
+    [{ tags: { add: ["a\u0000"] } }, "invalid_request"],
+    // A lone surrogate would be stored as U+FFFD.
+    [{ tags: { add: ["a\ud800"] } }, "invalid_request"],
+    [{ tags: { remove: ["\udc00b"] } }, "invalid_request"],
+    [{ tags: { add: Array.from({ length: 21 }, (_, index) => `t${index}`) } }, "invalid_request"],
+    // The same tag after normalization in both lists.
+    [{ tags: { add: ["VIP"], remove: [" vip"] } }, "invalid_request"],
+    [{ tags: { add: ["J\u030C"], remove: ["\u01F0"] } }, "invalid_request"],
+    [{ fields: [] }, "invalid_request"],
+    [{ fields: { "not-a-uuid": 1 } }, "invalid_request"],
+    [{ fields: { [fieldC]: 1, [fieldC.toUpperCase()]: 2 } }, "invalid_request"],
+    [{ fields: Object.fromEntries(Array.from({ length: 21 }, (_, index) => [`${String(index).padStart(8, "0")}-5555-4555-8555-555555555555`, 1])) }, "invalid_request"],
+    [{ fields: { [fieldA]: { value: 1 } } }, "invalid_field_value"],
+    [{ fields: { [fieldA]: [1] } }, "invalid_field_value"],
+    [{ fields: { [fieldA]: "\ud800" } }, "invalid_field_value"],
+  ];
+  for (const [input, code] of refused)
+    assert.throws(
+      () => parseContactWrite(input),
+      (error) => error instanceof ApiError && error.status === 400 && error.message === code,
+      JSON.stringify(input),
+    );
+  assert.equal(parseContactWrite({ fields: Object.fromEntries(Array.from({ length: 20 }, (_, index) => [`${String(index).padStart(8, "0")}-5555-4555-8555-555555555555`, 1])) }).fields.length, 20);
+});
+
+test("a body that names a key twice in one object is refused", () => {
+  for (const text of ['{"a":1,"a":2}', '{"a":1,"\\u0061":2}', '{"x":[{"a":1},{"b":{"a":1,"c":[1,{"a":2,"a":3}]}}]}', '{"a":{"b":1},"c":{"b":2},"a":3}']) assert.equal(hasDuplicateJsonKey(text), true, text);
+  for (const text of ['{"a":1,"b":{"a":2},"c":[{"a":3},{"a":4}]}', '{"a":"\\"a\\":1,{\\"a\\":2}","b":["a","a"]}', '[{"a":1},{"a":1}]', "{}", '"a"']) assert.equal(hasDuplicateJsonKey(text), false, text);
+  assert.throws(
+    () => parseContactWriteBody(`{"fields":{"${fieldA}":true,"${fieldA}":false}}`),
+    (error) => error instanceof ApiError && error.status === 400 && error.message === "invalid_request",
+  );
+  assert.deepEqual(parseContactWriteBody(`{"fields":{"${fieldA}":true}}`), { fields: { [fieldA]: true } });
+});
+
+test("a body number is kept only when its double denotes the same decimal value as its source text", () => {
+  const read = (text: string) => (JSON.parse(`[${text}]`, exactNumberReviver) as unknown[])[0];
+  for (const [text, value] of [
+    ["0", 0],
+    ["-0", -0],
+    ["1.50", 1.5],
+    ["15e-1", 1.5],
+    ["0.1", 0.1],
+    ["1E21", 1e21],
+    ["-12.5e3", -12500],
+    ["9007199254740992", 9007199254740992],
+    ["1.7976931348623157e308", Number.MAX_VALUE],
+  ] as const)
+    assert.equal(read(text), value, text);
+  for (const text of ["9007199254740993", "0.10000000000000000001", "1e400", "123456789012345678901234567890"]) {
+    const value = read(text);
+    assert.equal(typeof value, "object", text);
+    assert.throws(
+      () => parseContactWrite({ fields: { [fieldA]: value } }),
+      (error) => error instanceof ApiError && error.status === 400 && error.message === "invalid_field_value",
+      text,
+    );
+  }
+  // Without the source text every number is refused rather than possibly changed.
+  assert.equal(typeof exactNumberReviver("", 1), "object");
+  assert.equal(exactNumberReviver("", "9007199254740993"), "9007199254740993");
+});
+
+type WriteState = { found: boolean; tags: string[] | null; fields: { id: string; type: string }[]; connection: boolean };
+// A pool for the write path: the key lookup, the unlocked field check, the plan and the use record on the pool, and the
+// transaction on a client. Every statement is recorded with whether it ran on the client.
+function writePool(queries: (Recorded[number] & { client: boolean })[], key: Record<string, unknown>, state: WriteState) {
+  const answer = (sql: string, params: unknown[], client: boolean) => {
+    queries.push({ sql, params, client });
+    if (sql.includes("FROM api_keys")) return { rows: [key], rowCount: 1 };
+    if (sql.includes("FROM instagram_contact_fields")) {
+      const ids = (params[1] as string[] | undefined) ?? [];
+      const rows = sql.includes("id=ANY") ? state.fields.filter((field) => ids.includes(field.id)) : state.fields.map((field) => ({ ...field, name: `name-${field.id}` }));
+      return { rows, rowCount: rows.length };
+    }
+    if (sql.startsWith("SELECT plan")) return { rows: [{ plan: "free" }], rowCount: 1 };
+    if (sql.startsWith("SELECT id FROM instagram_connections")) return { rows: state.connection ? [{ id: connectionId }] : [], rowCount: state.connection ? 1 : 0 };
+    if (sql.startsWith("SELECT EXISTS")) return { rows: [{ found: state.found, tags: state.tags }], rowCount: 1 };
+    if (sql.startsWith("WITH contacts")) return { rows: [{ ...contactRow("sender/1"), tags_json: '["vip"]', fields_json: "{}" }], rowCount: 1 };
+    return { rows: [], rowCount: 1 };
+  };
+  return {
+    query: async (sql: string, params: unknown[] = []) => answer(sql, params, false),
+    connect: async () => ({ query: async (sql: string, params: unknown[] = []) => answer(sql, params, true), release: () => {} }),
+    end: async () => {},
+  } as unknown as Pool;
+}
+const writeKey = { ...keyRow, scopes: ["contacts:read", "contacts:write"] };
+const writePath = `/v1/contacts/${connectionId}/sender%2F1`;
+function patch(pool: Pool, env: Parameters<typeof publicApi>[1], body: string | undefined, path = writePath, headers: Record<string, string> = { "Content-Type": "application/json" }) {
+  return publicApi(new Request(`https://app.test${path}`, { method: "PATCH", headers: { Authorization: `Bearer ${generateApiKey()}`, "CF-Connecting-IP": "203.0.113.9", ...headers }, body }), env, () => pool, "corr-2");
+}
+function countingLimit(result: boolean | "throw") {
+  const calls: { key: string; limit?: number }[] = [];
+  return {
+    calls,
+    binding: {
+      limit: async (input: { key: string; limit?: number }) => {
+        calls.push(input);
+        if (result === "throw") throw new Error("limiter down");
+        return { success: result };
+      },
+    },
+  };
+}
+
+test("PATCH /v1/contacts/{connection_id}/{sender_id} removes, then adds, writes the fields in one transaction and answers the contact", async () => {
+  const workspace = countingLimit(true);
+  const env = { API_IP_LIMIT: allow, API_KEY_LIMIT: allow, API_WRITE_WORKSPACE_LIMIT: workspace.binding };
+  const queries: (Recorded[number] & { client: boolean })[] = [];
+  const state = { found: true, tags: ["agent", "old"], fields: [{ id: fieldA, type: "text" }], connection: true };
+  const response = await patch(writePool(queries, writeKey, state), env, JSON.stringify({ tags: { add: ["VIP"], remove: ["old", "never"] }, fields: { [fieldA]: "gold" } }));
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("access-control-allow-origin"), null);
+  const body = await response.json();
+  assert.deepEqual(Object.keys(body), ["channel", "identity_kind", "connection_id", "sender_id", "connection_username", "first_comment_recorded_at", "last_comment_recorded_at", "comment_count", "automation_paused", "tags", "fields"]);
+  // The workspace write limit is the dashboard's: the workspace ID and the plan's hourly count.
+  assert.deepEqual(workspace.calls, [{ key: workspaceId, limit: 500 }]);
+  // The workspace key share, then the connection, the fields and the contact lock, as the dashboard saves take them.
+  const client = queries.filter((query) => query.client).map((query) => query.sql);
+  const expected = [
+    "BEGIN",
+    "SELECT 1 FROM workspaces WHERE id=$1 FOR KEY SHARE",
+    "SELECT id FROM instagram_connections",
+    "SELECT id::text,type FROM instagram_contact_fields",
+    "SELECT pg_advisory_xact_lock",
+    "SELECT EXISTS",
+    "INSERT INTO instagram_contact_tags",
+    "INSERT INTO instagram_contact_field_values",
+    "WITH contacts",
+    "COMMIT",
+  ];
+  assert.equal(client.length, expected.length);
+  expected.forEach((prefix, index) => assert.ok(client[index]!.startsWith(prefix), `${index}: ${client[index]}`));
+  const locked = queries.find((query) => query.client && query.sql.includes("instagram_contact_fields"))!;
+  assert.match(locked.sql, /ORDER BY id FOR SHARE$/);
+  const tags = queries.find((query) => query.sql.startsWith("INSERT INTO instagram_contact_tags"))!;
+  // The agent's tag stays, the removed one goes, a tag that was never there is ignored.
+  assert.deepEqual(tags.params, [workspaceId, connectionId, "sender/1", ["agent", "vip"]]);
+  const value = queries.find((query) => query.sql.startsWith("INSERT INTO instagram_contact_field_values"))!;
+  assert.deepEqual(value.params, [workspaceId, connectionId, "sender/1", fieldA, '"gold"']);
+  // The unlocked field check and the limit come before the transaction; the use is recorded after it.
+  const order = queries.map((query) => (query.client ? "client" : query.sql.split(" ")[0]));
+  assert.ok(order.indexOf("client") > queries.findIndex((query) => query.sql.startsWith("SELECT plan")));
+  assert.match(queries.at(-1)!.sql, /^UPDATE api_keys SET last_used_at/);
+  assert.equal(queries.at(-1)!.client, false);
+  // Fields only: the tags are not touched, and null clears the value.
+  const only: typeof queries = [];
+  assert.equal((await patch(writePool(only, writeKey, state), env, JSON.stringify({ fields: { [fieldA]: null } }))).status, 200);
+  assert.ok(!only.some((query) => query.sql.startsWith("INSERT INTO instagram_contact_tags")));
+  assert.deepEqual(only.find((query) => query.sql.startsWith("INSERT INTO instagram_contact_field_values"))!.params[4], null);
+});
+
+test("a committed contact write answers 200 when recording the key's last use fails", async () => {
+  const env = { API_IP_LIMIT: allow, API_KEY_LIMIT: allow, API_WRITE_WORKSPACE_LIMIT: countingLimit(true).binding };
+  const queries: (Recorded[number] & { client: boolean })[] = [];
+  const pool = writePool(queries, writeKey, { found: true, tags: [], fields: [], connection: true });
+  const query = pool.query.bind(pool) as (sql: string, params?: unknown[]) => Promise<unknown>;
+  (pool as unknown as { query: typeof query }).query = async (sql, params) => {
+    if (sql.startsWith("UPDATE api_keys")) throw new Error("connection lost");
+    return query(sql, params);
+  };
+  const response = await patch(pool, env, JSON.stringify({ tags: { add: ["vip"] } }));
+  assert.equal(response.status, 200);
+  assert.ok(queries.some((recorded) => recorded.client && recorded.sql === "COMMIT"));
+});
+
+test("a contact write refused with 401, 403, 400, 413 or 415 spends no workspace write and writes nothing", async () => {
+  const state = { found: true, tags: null, fields: [{ id: fieldA, type: "number" }], connection: true };
+  const cases: [string, Record<string, unknown>, string | undefined, Record<string, string>, number, string][] = [
+    ["read-only key", keyRow, JSON.stringify({ tags: { add: ["vip"] } }), { "Content-Type": "application/json" }, 403, "insufficient_scope"],
+    ["empty body", writeKey, "{}", { "Content-Type": "application/json" }, 400, "invalid_request"],
+    ["not JSON", writeKey, "{", { "Content-Type": "application/json" }, 400, "invalid_request"],
+    ["no JSON type", writeKey, JSON.stringify({ tags: { add: ["vip"] } }), { "Content-Type": "text/plain" }, 415, "json_required"],
+    ["over 16 KiB", writeKey, JSON.stringify({ tags: { add: ["vip"] } }).padEnd(16_385, " "), { "Content-Type": "application/json" }, 413, "request_too_large"],
+    ["wrong type", writeKey, JSON.stringify({ fields: { [fieldA]: "1" } }), { "Content-Type": "application/json" }, 400, "invalid_field_value"],
+    ["unknown field", writeKey, JSON.stringify({ fields: { [fieldB]: 1 } }), { "Content-Type": "application/json" }, 404, "field_not_found"],
+    // JSON.parse would read 9007199254740992 and store a value the caller did not send.
+    ["inexact number", writeKey, `{"fields":{"${fieldA}":9007199254740993}}`, { "Content-Type": "application/json" }, 400, "invalid_field_value"],
+    // JSON.parse would keep only the last value of a repeated key.
+    ["field ID twice", writeKey, `{"fields":{"${fieldA}":1,"${fieldA}":2}}`, { "Content-Type": "application/json" }, 400, "invalid_request"],
+    ["escaped key twice", writeKey, `{"tags":{"add":["vip"]},"\\u0074ags":{"remove":["vip"]}}`, { "Content-Type": "application/json" }, 400, "invalid_request"],
+  ];
+  for (const [name, key, body, headers, status, code] of cases) {
+    const workspace = countingLimit(true);
+    const queries: (Recorded[number] & { client: boolean })[] = [];
+    const response = await patch(writePool(queries, key, state), { API_IP_LIMIT: allow, API_KEY_LIMIT: allow, API_WRITE_WORKSPACE_LIMIT: workspace.binding }, body, writePath, headers);
+    assert.equal(response.status, status, name);
+    assert.deepEqual(await response.json(), { error: code }, name);
+    assert.deepEqual(workspace.calls, [], name);
+    assert.ok(!queries.some((query) => query.client || query.sql.startsWith("UPDATE")), name);
+  }
+  const queries: (Recorded[number] & { client: boolean })[] = [];
+  const bad = await patch(writePool(queries, writeKey, state), { API_IP_LIMIT: allow, API_KEY_LIMIT: allow }, JSON.stringify({ tags: { add: ["vip"] } }), "/v1/contacts/not-a-uuid/1");
+  assert.equal(bad.status, 400);
+  // A key that is not valid is refused before the route.
+  const unknown = await publicApi(new Request(`https://app.test${writePath}`, { method: "PATCH", body: "{}", headers: { "Content-Type": "application/json" } }), { API_IP_LIMIT: allow, API_KEY_LIMIT: allow }, () => writePool([], writeKey, state), "corr-3");
+  assert.equal(unknown.status, 401);
+  // GET on the write path is 405 with the method it serves.
+  const get = await call({ Authorization: `Bearer ${generateApiKey()}` }, { API_IP_LIMIT: allow, API_KEY_LIMIT: allow }, writePool([], writeKey, state), writePath);
+  assert.equal(get.status, 405);
+  assert.equal(get.headers.get("allow"), "PATCH");
+});
+
+test("a contact write over the workspace limit is 429 before the transaction, and an unavailable limiter lets it through with one log line", async () => {
+  const state = { found: true, tags: null, fields: [], connection: true };
+  const body = JSON.stringify({ tags: { add: ["vip"] } });
+  const refused = countingLimit(false);
+  let queries: (Recorded[number] & { client: boolean })[] = [];
+  const limited = await patch(writePool(queries, writeKey, state), { API_IP_LIMIT: allow, API_KEY_LIMIT: allow, API_WRITE_WORKSPACE_LIMIT: refused.binding }, body);
+  assert.equal(limited.status, 429);
+  assert.deepEqual(await limited.json(), { error: "rate_limited" });
+  assert.ok(!queries.some((query) => query.client || query.sql.startsWith("UPDATE")));
+  for (const binding of [undefined, countingLimit("throw").binding]) {
+    const lines: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => lines.push(args.map(String).join(" "));
+    queries = [];
+    try {
+      const response = await patch(writePool(queries, writeKey, state), { API_IP_LIMIT: allow, API_KEY_LIMIT: allow, API_WRITE_WORKSPACE_LIMIT: binding }, body);
+      assert.equal(response.status, 200);
+    } finally {
+      console.warn = original;
+    }
+    assert.equal(lines.length, 1);
+    assert.match(lines[0]!, /"code":"api_limit_unavailable"/);
+    assert.ok(queries.some((query) => query.sql.startsWith("INSERT INTO instagram_contact_tags")));
+  }
+});
+
+test("a contact write answers 404 for a missing connection or contact and 409 above 20 tags, rolls back and records no use", async () => {
+  const env = { API_IP_LIMIT: allow, API_KEY_LIMIT: allow, API_WRITE_WORKSPACE_LIMIT: allow };
+  const cases: [Partial<WriteState>, string, number, string][] = [
+    [{ connection: false }, JSON.stringify({ tags: { add: ["vip"] } }), 404, "connection_not_found"],
+    [{ found: false }, JSON.stringify({ tags: { add: ["vip"] } }), 404, "contact_not_found"],
+    [{ tags: Array.from({ length: 20 }, (_, index) => `t${index}`) }, JSON.stringify({ tags: { add: ["vip"], remove: ["missing"] } }), 409, "contact_tag_limit"],
+  ];
+  for (const [change, body, status, code] of cases) {
+    const queries: (Recorded[number] & { client: boolean })[] = [];
+    const response = await patch(writePool(queries, writeKey, { found: true, tags: null, fields: [], connection: true, ...change }), env, body);
+    assert.equal(response.status, status, code);
+    assert.deepEqual(await response.json(), { error: code });
+    assert.equal(queries.filter((query) => query.client).at(-1)!.sql, "ROLLBACK");
+    assert.ok(!queries.some((query) => query.sql.startsWith("INSERT") || query.sql.startsWith("UPDATE")), code);
+  }
+  // Removing one of 20 makes room for one more.
+  const queries: (Recorded[number] & { client: boolean })[] = [];
+  const full = Array.from({ length: 20 }, (_, index) => `t${String(index).padStart(2, "0")}`);
+  assert.equal((await patch(writePool(queries, writeKey, { found: true, tags: full, fields: [], connection: true }), env, JSON.stringify({ tags: { add: ["vip"], remove: ["t00"] } }))).status, 200);
+  assert.equal((queries.find((query) => query.sql.startsWith("INSERT INTO instagram_contact_tags"))!.params[3] as string[]).length, 20);
+});
+
+test("GET /v1/fields lists the active fields with contacts:read and records the use", async () => {
+  const env = { API_IP_LIMIT: allow, API_KEY_LIMIT: allow };
+  const queries: (Recorded[number] & { client: boolean })[] = [];
+  const state = { found: true, tags: null, fields: [{ id: fieldA, type: "text" }], connection: true };
+  const response = await call({ Authorization: `Bearer ${generateApiKey()}` }, env, writePool(queries, keyRow, state), "/v1/fields");
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { fields: [{ id: fieldA, type: "text", name: `name-${fieldA}` }] });
+  const list = queries.find((query) => query.sql.includes("instagram_contact_fields"))!;
+  assert.match(list.sql, /WHERE workspace_id=\$1 AND NOT archived ORDER BY name,id$/);
+  assert.deepEqual(list.params, [workspaceId]);
+  assert.match(queries.at(-1)!.sql, /^UPDATE api_keys SET last_used_at/);
+  const noScope: typeof queries = [];
+  const refused = await call({ Authorization: `Bearer ${generateApiKey()}` }, env, writePool(noScope, { ...keyRow, scopes: [] }, state), "/v1/fields");
+  assert.equal(refused.status, 403);
+  assert.equal(noScope.length, 1);
+  const query = await call({ Authorization: `Bearer ${generateApiKey()}` }, env, writePool([], keyRow, state), "/v1/fields?limit=1");
+  assert.equal(query.status, 400);
+  const post = await call({ Authorization: `Bearer ${generateApiKey()}` }, env, writePool([], keyRow, state), "/v1/fields", "POST");
+  assert.equal(post.status, 405);
+  assert.equal(post.headers.get("allow"), "GET");
 });

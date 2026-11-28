@@ -373,7 +373,7 @@ test("contact writes wait for an in-progress deletion and then find no contact",
     await deletion.query("SELECT id FROM instagram_connections WHERE id=$1 FOR NO KEY UPDATE", [connectionId]);
     await deletion.query("DELETE FROM instagram_contact_tags WHERE connection_id=$1", [connectionId]);
     let settled = false;
-    const pending = request("PATCH", `/api/connections/${connectionId}/contacts/123`, { tags: ["late"] }).finally(() => {
+    const pending = request("PATCH", `/api/connections/${connectionId}/contacts/123`, { tags: ["late"], expected_tags: [] }).finally(() => {
       settled = true;
     });
     for (let attempt = 0; attempt < 100 && !settled; attempt += 1) {

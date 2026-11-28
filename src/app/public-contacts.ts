@@ -106,22 +106,25 @@ export async function readContactsPage(pool: Pick<Pool, "query">, workspaceId: s
   return { found, rows: page, nextCursor: encodeContactsCursor({ connectionId: last.connection_id, senderId: last.sender_id }) };
 }
 
-// The response text. tags_json and fields_json are PostgreSQL's JSON text, inserted unchanged so that no number
-// passes through a JavaScript number. Unlike the CSV, no value carries the spreadsheet quote marker.
-export function contactsPageJson(page: ContactsPage): string {
-  const contacts = page.rows.map((row) => {
-    const scalars = JSON.stringify({
-      channel: "instagram",
-      identity_kind: "comment_sender",
-      connection_id: row.connection_id,
-      sender_id: row.sender_id,
-      connection_username: row.username,
-      first_comment_recorded_at: row.first_at,
-      last_comment_recorded_at: row.last_at,
-      comment_count: row.comment_count,
-      automation_paused: row.paused,
-    });
-    return `${scalars.slice(0, -1)},"tags":${row.tags_json},"fields":${row.fields_json}}`;
+// One contact's JSON text. tags_json and fields_json are PostgreSQL's JSON text, inserted unchanged so that no number
+// passes through a JavaScript number. Unlike the CSV, no value carries the spreadsheet quote marker. The contact
+// write answers with the same text.
+export function contactJson(row: CsvContact): string {
+  const scalars = JSON.stringify({
+    channel: "instagram",
+    identity_kind: "comment_sender",
+    connection_id: row.connection_id,
+    sender_id: row.sender_id,
+    connection_username: row.username,
+    first_comment_recorded_at: row.first_at,
+    last_comment_recorded_at: row.last_at,
+    comment_count: row.comment_count,
+    automation_paused: row.paused,
   });
-  return `{"contacts":[${contacts.join(",")}],"next_cursor":${JSON.stringify(page.nextCursor)}}`;
+  return `${scalars.slice(0, -1)},"tags":${row.tags_json},"fields":${row.fields_json}}`;
+}
+
+// The response text of one page.
+export function contactsPageJson(page: ContactsPage): string {
+  return `{"contacts":[${page.rows.map(contactJson).join(",")}],"next_cursor":${JSON.stringify(page.nextCursor)}}`;
 }

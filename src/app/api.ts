@@ -17,7 +17,7 @@ import { archiveLabelRule, createLabelRule, listLabelRules, updateLabelRule } fr
 import { changeReminder, closeReminder, createReminder, listReminders } from "./inbox-reminders.ts";
 import type { Pool } from "pg";
 import { ApiError, AuthClient, clearSession, isUuid, json, readJson, readOptionalJson, requireSameOrigin, type AuthEnv, type User } from "./auth.ts";
-import { limitAuthRequest, type AuthRateLimitEnv, type RateLimitBinding } from "./auth-rate-limit.ts";
+import { limitAuthRequest, spendApiAllowance, type AuthRateLimitEnv, type RateLimitBinding } from "./auth-rate-limit.ts";
 import { archiveRule, listActivity, currentWorkspace, disconnectConnection, ensureWorkspace, listConnections, listRules, saveRule, saveWorkspaceSettings, parseRule, updateConnection } from "./settings.ts";
 import { acceptInvite, changeMemberRole, createInvite, listInvites, listMembers, memberEntitlements, removeMember, revokeInvite } from "./workspace-members.ts";
 import { beginInstagramOAuth, finishInstagramOAuth, type InstagramOAuthEnv } from "./instagram-oauth.ts";
@@ -58,21 +58,6 @@ async function spendUserAllowance(binding: RateLimitBinding | undefined, key: st
     throw new ApiError(503, codes.unavailable);
   }
   if (!allowance.success) throw new ApiError(429, codes.limited);
-}
-
-// Spends one request from a default API limit (#167). Unlike spendUserAllowance, a missing binding or a limiter
-// that does not answer lets the request through and reports "unavailable": these limits bound growth, and a
-// limiter outage must not stop every dashboard write. The caller logs the outage once per request.
-async function spendApiAllowance(binding: RateLimitBinding | undefined, key: string, limit?: number): Promise<"ok" | "unavailable"> {
-  if (!binding) return "unavailable";
-  let allowance: { success: boolean };
-  try {
-    allowance = await binding.limit(limit === undefined ? { key } : { key, limit });
-  } catch {
-    return "unavailable";
-  }
-  if (!allowance.success) throw new ApiError(429, "rate_limited");
-  return "ok";
 }
 
 // The reply is stored; the cron repairs the missing queue notification.

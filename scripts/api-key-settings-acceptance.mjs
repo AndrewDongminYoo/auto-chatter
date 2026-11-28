@@ -1,5 +1,6 @@
 // Evaluate in a fresh browser page serving public/app over loopback. Every API is synthetic.
-// Covers the workspace API key settings (#48): issue, the key shown once, list states and the revoke confirmation.
+// Covers the workspace API key settings (#48): issue, the key shown once, list states, the revoke confirmation and the
+// contacts:write checkbox.
 // The returned fixture remains available for inspecting the rendered section.
 (async () => {
   const page = globalThis;
@@ -55,7 +56,7 @@
     if (route.startsWith("/api/auth/")) return Response.json({ ok: true });
     if (route === "/api/workspace") return Response.json({ workspace_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", role: "admin", time_zone: "Asia/Seoul", ...entitlements });
     if (route === "/api/workspace/api-keys" && method === "GET") {
-      const listed = { keys: fixture.keys, scopes: ["contacts:read"], expiry_days: [30, 90, 180, 365], default_expiry_days: 90, max_active: 10 };
+      const listed = { keys: fixture.keys, scopes: ["contacts:read", "contacts:write"], expiry_days: [30, 90, 180, 365], default_expiry_days: 90, max_active: 10 };
       if (fixture.holdList) {
         fixture.holdList = false;
         await new Promise((resolve) => (fixture.releaseList = resolve));
@@ -65,7 +66,7 @@
     if (route === "/api/workspace/api-keys" && method === "POST") {
       const body = JSON.parse(init.body);
       fixture.posts.push(body);
-      const created = key("55555555-5555-4555-8555-555555555555", body.name, { created_at: iso(0), expires_at: iso(body.expires_in_days * day), key_prefix: issuedKey.slice(0, 12) });
+      const created = key("55555555-5555-4555-8555-555555555555", body.name, { created_at: iso(0), expires_at: iso(body.expires_in_days * day), key_prefix: issuedKey.slice(0, 12), scopes: body.scopes });
       fixture.keys = [created, ...fixture.keys];
       return Response.json({ ...created, key: issuedKey }, { status: 201 });
     }
@@ -112,6 +113,7 @@
   // Issue: the key is shown once, issuing stays locked while it shows, and no browser storage holds it.
   const form = get("api-key-form");
   const submit = form.querySelector("button[type=submit]");
+  check(!form.elements.contacts_write.checked, "Contact writes are allowed by default");
   form.elements.name.value = "새 CRM";
   form.elements.expires_in_days.value = "30";
   submit.click();
@@ -164,6 +166,16 @@
   await until(() => !get("api-keys-refresh").disabled);
   await new Promise((resolve) => page.setTimeout(resolve, 50));
   check(text("만료 임박 키").includes("폐기됨 · 관리자가 폐기") && !itemFor("만료 임박 키").querySelector("button"), "A stale list response restored a revoked key");
+
+  // A write key: the checkbox adds contacts:write, the list shows both scopes, and the form resets the checkbox.
+  form.elements.name.value = "CRM 쓰기";
+  form.elements.contacts_write.checked = true;
+  submit.click();
+  await until(() => !get("api-key-secret").hidden && itemFor("CRM 쓰기"));
+  check(JSON.stringify(fixture.posts.at(-1)) === JSON.stringify({ name: "CRM 쓰기", expires_in_days: 90, scopes: ["contacts:read", "contacts:write"] }), "The write key request body is wrong");
+  check(text("CRM 쓰기").includes("권한 contacts:read, contacts:write"), "The write key does not show both scopes");
+  check(!form.elements.contacts_write.checked, "The checkbox stays on after the issue");
+  get("dismiss-api-key-secret").click();
   check(!fixture.unexpected.length, `Incomplete fixture: ${fixture.unexpected.join(", ")}`);
-  return { passed: ["list states", "issue and one-time key", "no key in storage", "dismiss clears key", "declined and accepted revoke", "stale list ignored"], fixture: "apiKeyFixture" };
+  return { passed: ["list states", "issue and one-time key", "no key in storage", "dismiss clears key", "declined and accepted revoke", "stale list ignored", "write key checkbox"], fixture: "apiKeyFixture" };
 })();

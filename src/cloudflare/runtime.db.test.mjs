@@ -885,7 +885,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     const saved = await runtime.dispatchFetch(`https://app.test/api/connections/${connection}/contacts/sender-1`, {
       method: "PATCH",
       headers,
-      body: JSON.stringify({ tags: [" Lead "] }),
+      body: JSON.stringify({ tags: [" Lead "], expected_tags: [] }),
     });
     assert.equal(saved.status, 200);
     assert.deepEqual(await saved.json(), { tags: ["lead"] });
@@ -964,10 +964,10 @@ test("workerd contact API uses restricted server privileges and verified workspa
     assert.equal((await (await runtime.dispatchFetch(combinedPath, { headers })).json()).contacts[0].sender_id, "sender-1");
     assert.equal((await runtime.dispatchFetch(combinedPath, { headers: { ...headers, cookie: "__Host-ac-access=foreign" } })).status, 404);
     const tagPath = `https://app.test/api/connections/${connection}/contacts/sender-1`;
-    assert.equal((await runtime.dispatchFetch(tagPath, { method: "PATCH", headers, body: JSON.stringify({ tags: ["lead"] }) })).status, 200);
+    assert.equal((await runtime.dispatchFetch(tagPath, { method: "PATCH", headers, body: JSON.stringify({ tags: ["lead"], expected_tags: ["lead"] }) })).status, 200);
     await runtime.dispatchFetch(valuePath, { method: "PUT", headers, body: JSON.stringify({ value: -1 }) });
     assert.equal((await (await runtime.dispatchFetch(combinedPath, { headers })).json()).contacts.length, 1);
-    assert.equal((await runtime.dispatchFetch(tagPath, { method: "PATCH", headers, body: JSON.stringify({ tags: [] }) })).status, 200);
+    assert.equal((await runtime.dispatchFetch(tagPath, { method: "PATCH", headers, body: JSON.stringify({ tags: [], expected_tags: ["lead"] }) })).status, 200);
     assert.equal((await (await runtime.dispatchFetch(combinedPath, { headers })).json()).contacts.length, 0);
     await runtime.dispatchFetch(valuePath, { method: "PUT", headers, body: JSON.stringify({ value: 0 }) });
     assert.equal(
@@ -979,7 +979,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
       ).status,
       200,
     );
-    assert.equal((await runtime.dispatchFetch(tagPath, { method: "PATCH", headers, body: JSON.stringify({ tags: ["lead"] }) })).status, 200);
+    assert.equal((await runtime.dispatchFetch(tagPath, { method: "PATCH", headers, body: JSON.stringify({ tags: ["lead"], expected_tags: [] }) })).status, 200);
     // The restricted server role can read every exported table, and the export omits token ciphertext.
     const templateRoot = "https://app.test/api/inbox/reply-templates";
     const templateCreated = await runtime.dispatchFetch(templateRoot, {
@@ -1645,7 +1645,7 @@ test("workerd contact API uses restricted server privileges and verified workspa
     const other = await runtime.dispatchFetch(`https://app.test/api/connections/${connection}/contacts/sender-1`, {
       method: "PATCH",
       headers: { ...headers, cookie: "__Host-ac-access=foreign" },
-      body: JSON.stringify({ tags: ["foreign"] }),
+      body: JSON.stringify({ tags: ["foreign"], expected_tags: [] }),
     });
     assert.equal(other.status, 404);
     assert.deepEqual((await pool.query("SELECT tags FROM instagram_contact_tags")).rows[0].tags, ["lead"]);
@@ -2246,6 +2246,95 @@ test("workerd /v1/contacts reads the key's workspace through the restricted role
     const limited = await get("/v1/contacts");
     assert.equal(limited.status, 429);
     assert.deepEqual(await limited.json(), { error: "rate_limited" });
+  } finally {
+    await runtime.dispose();
+    await pool.end();
+  }
+});
+
+test("workerd PATCH /v1/contacts and GET /v1/fields write and read through the restricted role behind the key and limits (#48)", async () => {
+  const databaseUrl = process.env.TEST_DATABASE_URL;
+  const url = new URL(databaseUrl);
+  if (url.pathname !== "/automations_test" || !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Database tests require a local automations_test database");
+  const pool = new Pool({ connectionString: databaseUrl });
+  const workspace = "11111111-1111-4111-8111-111111111111",
+    other = "22222222-2222-4222-8222-222222222222",
+    member = "66666666-6666-4666-8666-666666666666",
+    connection = "33333333-3333-4333-8333-333333333333",
+    foreignConnection = "44444444-4444-4444-8444-444444444444";
+  const serverUrl = new URL(databaseUrl);
+  serverUrl.username = "auto_chatter_server";
+  serverUrl.password = "runtime-test-only";
+  const config = JSON.parse(await readFile(new URL("../../wrangler.json", import.meta.url), "utf8"));
+  const runtime = new Miniflare({
+    modules: true,
+    scriptPath: ".wrangler/build/index.js",
+    compatibilityDate: config.compatibility_date,
+    compatibilityFlags: config.compatibility_flags,
+    hyperdrives: { HYPERDRIVE: serverUrl.href },
+    durableObjects: Object.fromEntries(config.durable_objects.bindings.map(({ name, class_name }) => [name, { className: class_name, useSQLite: true }])),
+    bindings: { SEND_ENABLED: "false" },
+    outboundService: async () => {
+      throw new Error("The external API makes no outbound request");
+    },
+  });
+  const writer = `ac_live_${"w".repeat(43)}`;
+  const reader = `ac_live_${"r".repeat(43)}`;
+  const send = (key, path, init = {}) => runtime.dispatchFetch(`https://app.test${path}`, { ...init, headers: { Authorization: `Bearer ${key}`, "CF-Connecting-IP": "198.51.100.31", "Content-Type": "application/json" } });
+  try {
+    await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
+    await pool.query("TRUNCATE workspaces CASCADE");
+    await pool.query("INSERT INTO workspaces(id) VALUES($1),($2)", [workspace, other]);
+    await pool.query("INSERT INTO workspace_members VALUES($1,$2)", [member, workspace]);
+    await pool.query("INSERT INTO instagram_connections(id,workspace_id,account_id,username) VALUES($1,$2,'123','shop'),($3,$4,'900','foreign_shop')", [connection, workspace, foreignConnection, other]);
+    await pool.query(
+      `INSERT INTO instagram_comment_events(workspace_id,connection_id,comment_id,media_id,sender_id,comment_text)
+       VALUES($1,$2,'c1','m','00123','text'),($3,$4,'c2','m','00123','foreign text')`,
+      [workspace, connection, other, foreignConnection],
+    );
+    await pool.query("INSERT INTO instagram_contact_tags(workspace_id,connection_id,sender_id,tags) VALUES($1,$2,'00123',ARRAY['agent','trial'])", [workspace, connection]);
+    const field = (await pool.query("INSERT INTO instagram_contact_fields(workspace_id,name,type) VALUES($1,'spent','number') RETURNING id", [workspace])).rows[0].id;
+    for (const [name, key, scopes] of [
+      ["writer", writer, ["contacts:read", "contacts:write"]],
+      ["reader", reader, ["contacts:read"]],
+    ])
+      await pool.query(
+        `INSERT INTO api_keys(workspace_id,name,key_prefix,key_hash,scopes,created_by,expires_at)
+         VALUES($1,$2,$3,$4,$5::text[],$6,now()+interval '30 days')`,
+        [workspace, name, key.slice(0, 12), createHash("sha256").update(key).digest("hex"), scopes, member],
+      );
+    await pool.query(await readFile(new URL("../../deploy/supabase-access.sql", import.meta.url), "utf8"));
+    await pool.query("ALTER ROLE auto_chatter_server LOGIN PASSWORD 'runtime-test-only'");
+
+    const fields = await send(reader, "/v1/fields");
+    assert.equal(fields.status, 200);
+    assert.deepEqual(await fields.json(), { fields: [{ id: field, name: "spent", type: "number" }] });
+    const body = JSON.stringify({ tags: { add: ["VIP"], remove: ["trial"] }, fields: { [field]: 1234.5 } });
+    const refused = await send(reader, `/v1/contacts/${connection}/00123`, { method: "PATCH", body });
+    assert.equal(refused.status, 403);
+    assert.deepEqual(await refused.json(), { error: "insufficient_scope" });
+    const written = await send(writer, `/v1/contacts/${connection}/00123`, { method: "PATCH", body });
+    const text = await written.text();
+    assert.equal(written.status, 200, text);
+    assert.equal(written.headers.get("cache-control"), "no-store");
+    const contact = JSON.parse(text);
+    assert.deepEqual(contact.tags, ["agent", "vip"]);
+    assert.equal(contact.fields[field].type, "number");
+    assert.equal((await pool.query("SELECT last_used_ip FROM api_keys WHERE name='writer'")).rows[0].last_used_ip, "198.51.100.31");
+    // The same request again gives the same contact.
+    const again = await send(writer, `/v1/contacts/${connection}/00123`, { method: "PATCH", body });
+    assert.equal(await again.text(), text);
+    // workerd passes the source text to the reviver: a number a double cannot hold is refused, not rounded.
+    const inexact = await send(writer, `/v1/contacts/${connection}/00123`, { method: "PATCH", body: `{"fields":{"${field}":9007199254740993}}` });
+    assert.equal(inexact.status, 400);
+    assert.deepEqual(await inexact.json(), { error: "invalid_field_value" });
+    const foreign = await send(writer, `/v1/contacts/${foreignConnection}/00123`, { method: "PATCH", body });
+    assert.equal(foreign.status, 404);
+    assert.deepEqual(await foreign.json(), { error: "connection_not_found" });
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM instagram_contact_tags WHERE connection_id=$1", [foreignConnection])).rows[0].n, 0);
+    const get = await send(writer, `/v1/contacts/${connection}/00123`);
+    assert.equal(get.status, 405);
+    assert.equal(get.headers.get("allow"), "PATCH");
   } finally {
     await runtime.dispose();
     await pool.end();

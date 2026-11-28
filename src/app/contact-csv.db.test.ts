@@ -18,6 +18,12 @@ if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
 const local = new URL(databaseUrl);
 if (local.pathname !== "/automations_test" || !["127.0.0.1", "localhost"].includes(local.hostname)) throw new Error("Database tests require local automations_test");
 const pool = new Pool({ connectionString: databaseUrl });
+
+// The dashboard tag save with the stored tags as expected_tags, for tests that set tags without an editing conflict.
+async function saveTags(db: Pool, user: Parameters<typeof saveContactTags>[1], connectionId: string, senderId: string, input: { tags: unknown }) {
+  const stored = await db.query<{ tags: string[] }>("SELECT tags FROM instagram_contact_tags WHERE connection_id::text=$1 AND sender_id=$2", [connectionId, senderId]);
+  return saveContactTags(db, user, connectionId, senderId, { ...input, expected_tags: stored.rows[0]?.tags ?? [] });
+}
 const workspace = "11111111-1111-4111-8111-111111111111",
   foreign = "22222222-2222-4222-8222-222222222222";
 const connection = "33333333-3333-4333-8333-333333333333",
@@ -429,7 +435,7 @@ test("CSV tag apply refuses stale rows after an edit committed before its read o
   const body = applyBody(file, preview);
   // 1. The edit commits before the apply reads: it runs right after the workspace import lock.
   afterQuery = async (_client, sql) => {
-    if (sql.includes("contact-import:")) await saveContactTags(pool, user, connection, "00123", { tags: ["edited"] });
+    if (sql.includes("contact-import:")) await saveTags(pool, user, connection, "00123", { tags: ["edited"] });
   };
   const stale = await applyRequest(body);
   assert.equal(stale.status, 409, await stale.clone().text());
@@ -805,7 +811,7 @@ async function segmentFixture() {
     ["c", ["vip"], connection],
     ["e", ["lead"], second],
   ] as const)
-    await saveContactTags(pool, user, conn, sender, { tags });
+    await saveTags(pool, user, conn, sender, { tags });
   const field = async (name: string, type: string) => (await pool.query("INSERT INTO instagram_contact_fields(workspace_id,name,type) VALUES($1,$2,$3) RETURNING id", [workspace, name, type])).rows[0].id as string;
   const score = await field("score", "number"),
     plan = await field("plan", "text");

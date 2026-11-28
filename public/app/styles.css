@@ -806,6 +806,13 @@ button.switch:hover:not(:disabled) {
 .invite-form input {
   min-width: min(260px, 100%);
 }
+.invite-form label.toggle {
+  display: flex;
+  width: 100%;
+}
+.invite-form .toggle input {
+  min-width: 0;
+}
 .invite-result input {
   flex: 1;
   min-width: min(260px, 100%);
