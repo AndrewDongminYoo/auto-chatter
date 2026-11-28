@@ -26,6 +26,7 @@
 2026-11-28에 #48 행을 #420과 migration 081 운영 적용(Worker `96e8d6d5`)에 맞춰 갱신했습니다.
 같은 날 #48 행을 #422와 migration 082 운영 적용(Worker `968b2a82`)에 맞춰 다시 갱신했습니다.
 같은 날 #48 행을 플로 시작 API의 실계정 실발송 확인에 맞춰 다시 갱신하고 #48을 닫았습니다.
+같은 날 #17, #18, #19 행을 인박스 상담 전환과 수동 답장의 실계정 확인에 맞춰 갱신하고 세 이슈를 닫았습니다.
 
 [목표 명세](../specs/2026-09-25-messaging-automation-platform.md)와 [백로그](2026-09-27-manychat-backlog.md)의 알려진 필수 작업을 코드·로컬 검사·실계정·운영 적용으로 구분합니다.
 기준은 `591cc091e5e3cdb55bba20fe65d3c662df800fd4`이며 아래 이슈별 목록의 미완료는 구현된 첫 DM·팔로우·연락처 기능을 없다고 판정한 것이 아닙니다.
@@ -62,18 +63,18 @@
 - [#17](https://github.com/AndrewDongminYoo/auto-chatter/issues/17) DM 대화와 댓글 연락처 연결 및 상담 전환 정책 확정
   - 현재 코드: 조회·상담 전환 API 구현; [기존 정책과 세 완료 조건의 로컬 근거 대조](2026-10-19-issue17-policy-evidence.md)
   - 로컬 증거: DB·workerd 조회·전환 확인
-  - 공급자·실계정: 미검증
-  - 운영 완료: 완료하지 않음
+  - 공급자·실계정: 2026-11-28 테스트 계정 대화에서 상담 시작과 자동화 재개 확인(상담 전환 `version` 2)([실계정 검증](2026-11-28-live-manual-reply-verification.md))
+  - 운영 완료: 2026-11-28 완료(#17 닫음)
 - [#18](https://github.com/AndrewDongminYoo/auto-chatter/issues/18) 인박스 수동 답장 outbox·정책 검사·발신 이력 구현
   - 현재 코드: PR #67 병합
   - 로컬 증거: DB·workerd·단위 검사 확인
-  - 공급자·실계정: 미검증
-  - 운영 완료: 완료하지 않음
+  - 공급자·실계정: 2026-11-28 테스트 계정에 수동 답장 1건 실제 발송(`sent`, Meta 메시지 ID 기록, 수신 확인)([실계정 검증](2026-11-28-live-manual-reply-verification.md))
+  - 운영 완료: 2026-11-28 완료(#18 닫음)
 - [#19](https://github.com/AndrewDongminYoo/auto-chatter/issues/19) 인박스 답장 작성·전송 상태·실패 안내 화면
   - 현재 코드: 서버 판정·작성기·이력 구현
   - 로컬 증거: [로컬 화면 검증](2026-09-28-inbox-manual-reply-ui-verification.md)
-  - 공급자·실계정: 미검증
-  - 운영 완료: 완료하지 않음
+  - 공급자·실계정: 2026-11-28 운영 화면에서 차단 사유, 답장 가능 시각, 요청 중, 발송 대기, Meta 접수와 처리 기록 확인과 화면 승인([실계정 검증](2026-11-28-live-manual-reply-verification.md))
+  - 운영 완료: 2026-11-28 완료(#19 닫음)
 - [#20](https://github.com/AndrewDongminYoo/auto-chatter/issues/20) Instagram 첨부·발신 echo·수정·삭제·전달 이벤트 처리
   - 현재 코드: 미구현
   - 로컬 증거: 미검증
