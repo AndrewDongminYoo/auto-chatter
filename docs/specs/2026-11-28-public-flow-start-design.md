@@ -49,7 +49,7 @@ CRM이나 자체 서버가 API 키로 기존 연락처 한 명에게 발행된 �
 
 - 본문은 `{ "request_key": "<UUID>", "connection_id": "<UUID>", "sender_id": "<댓글 작성자 ID>" }`입니다. 연락처는 `/v1/contacts`와 같은 `(connection_id, sender_id)` 키로 지정합니다.
 - 플로는 작업 공간 안에서 켜져 있고(`enabled`), 보관되지 않았고, 발행된 버전이 있고, 그 버전의 트리거가 `DM_TRIGGER_TYPES` 중 하나이며, 트리거 연결이 `connection_id`와 같아야 합니다. 작업 공간 밖이거나 없는 플로는 `404 flow_not_found`, 조건을 채우지 못한 플로는 `409 flow_unavailable`입니다.
-- 실행은 발행된 버전에 고정되며, DM 트리거 실행과 같은 `dmPlan`으로 계획합니다. 그래서 첫 메시지 하나만 보내고, 태그·필드 변경이나 대기가 있는 버전은 지금처럼 `unsupported_node`로 실패합니다.
+- 실행은 발행된 버전에 고정되며, DM 트리거 실행과 같은 `dmPlan`으로 계획합니다. 그래서 첫 메시지 하나만 보냅니다. 계획이 첫 메시지에 이르지 못하는 버전(태그·필드 변경이나 대기가 있어 `unsupported_node`로 실패하거나, 메시지 없이 끝나는 버전)은 아무것도 쓰지 않고 `409 flow_unavailable`로 거절합니다. 보내지 않을 시작을 `202 queued`로 답하지 않기 위해서입니다.
 - 성공 응답은 `202`이며 본문은 `{ "start_id", "run_id", "status": "queued" }`입니다. `202`는 발송을 약속하지 않습니다. 발송 직전의 검사가 실행을 막을 수 있습니다.
 - 본문 크기는 4 KiB까지이며, 앞 단계처럼 한 객체 안의 중복 키는 `400 invalid_request`입니다.
 - `GET /v1/flows`는 위의 조건을 채우는 플로만, 최대 100개를 생성 순서로 돌려줍니다. 플로 정의와 메시지 문구는 돌려주지 않습니다.
@@ -116,7 +116,8 @@ CRM이나 자체 서버가 API 키로 기존 연락처 한 명에게 발행된 �
 - `flow_runs`에 `api_start_id`를 더하고, `flow_runs_source` CHECK를 세 출처(`event_id`, `dm_start_event_id`, `api_start_id`) 중 정확히 하나로 바꿉니다. `(flow_id, api_start_id)`가 유일합니다.
 - DM 시작 한도(`dmStartSkipCodeSql`)는 지금 `instagram_dm_start_events`의 `sender_id`만 셉니다. 외부 시작의 수신자(`flow_api_starts.recipient_id`)도 함께 세도록 넓힙니다.
 - `flow_api_starts`는 연결 범위이며 사람을 키로 가지므로 `delete_connection_data`, `delete_workspace_data`, `delete_person_data`에 등록하고, `src/app/workspace-export.ts`의 `EXPORTED_TABLES` 또는 `EXCLUDED_TABLES`에 넣습니다.
-- 요청 키는 별도 테이블 `flow_api_start_keys`(`workspace_id`, `request_key`, `request_hash`, `created_at`)에도 씁니다. 개인 정보와 연결 ID가 없는 작업 공간 범위 테이블이라 `delete_workspace_data`에만 등록하고, 두 작업 공간 이동 검사에도 넣습니다. 사람이나 연결을 지워도 남으므로, 지운 시작의 키로 다시 보내지 않습니다.
+- 요청 키는 별도 테이블 `flow_api_start_keys`(`workspace_id`, `request_key`, `request_hash`, `created_at`)에도 씁니다. 연결 ID가 없는 작업 공간 범위 테이블이라 행은 `delete_workspace_data`만 지우고, 두 작업 공간 이동 검사에도 넣습니다. 사람이나 연결을 지워도 행이 남으므로, 지운 시작의 키로 다시 보내지 않습니다.
+- `request_hash`는 플로, 연결, 댓글 작성자로 만든 값이라서 후보 작성자 ID를 대입하면 그 사람의 시작 여부를 알아낼 수 있습니다. 그래서 `delete_person_data`와 `delete_connection_data`는 지우는 시작의 키 행에서 `request_hash`를 어떤 요청도 만들 수 없는 고정 표시값으로 덮어씁니다. 같은 키로 다시 요청하면 해시가 맞지 않으므로 `409 idempotency_conflict`입니다.
 - 사람이나 연결을 지우면 그 시작이 DM 시작 한도에서 빠집니다. DM 시작 이벤트도 같은 삭제로 지워지므로 기존 DM 시작 한도와 같은 동작이며, 이월은 만들지 않습니다.
 - 서버 역할에는 SELECT와 INSERT만 줍니다. 행은 바뀌지 않습니다.
 - migration `082`가 위 테이블과 열, CHECK를 만들고 `api_keys_scopes_check`를 넓힙니다. `db/schema.sql`과 `deploy/migrate-multi-user.sql`에 함께 반영합니다.
