@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
 import { ApiError, json, readJson } from "./auth.ts";
 import { spendApiAllowance, type AuthRateLimitEnv, type RateLimitBinding } from "./auth-rate-limit.ts";
-import { clientIp, findActiveApiKey, recordApiKeyUse } from "./api-keys.ts";
+import { clientIp, clientIpLimitKey, findActiveApiKey, recordApiKeyUse } from "./api-keys.ts";
 import { failureCode, logOperation } from "./operations-log.ts";
 import { isPlanKey, PLANS } from "./plans.ts";
 import { CONTACT_WRITE_REQUEST_BYTES, checkContactWriteFields, listWorkspaceFields, parseContactWrite, parseContactWriteBody, parseContactWriteTarget, writeContact } from "./public-contact-writes.ts";
@@ -110,7 +110,7 @@ export async function publicApi(
     const url = new URL(request.url);
     const ip = clientIp(request.headers.get("CF-Connecting-IP"));
     // Counted before the key is read, refused requests included, so failing keys cannot query the database freely.
-    await spend(env.API_IP_LIMIT, ip ?? "unattributed");
+    await spend(env.API_IP_LIMIT, clientIpLimitKey(ip));
     const presented = BEARER.exec(request.headers.get("Authorization") ?? "")?.[1];
     if (!presented) return invalidKey();
     const pool = openPool(correlationId);
@@ -192,6 +192,8 @@ export async function publicApi(
       await pool.end();
     }
   } catch (error) {
+    // A key that the flow start finds revoked or expired inside its transaction answers as the auth step does.
+    if (error instanceof ApiError && error.status === 401 && error.message === "invalid_api_key") return invalidKey();
     if (error instanceof ApiError) return json({ error: error.message }, error.status);
     // Only a fixed code is logged: never the Authorization header or a key.
     logOperation({ event: "request_failed", code: failureCode(error), correlation_id: correlationId });

@@ -154,6 +154,47 @@ export function clientIp(value: string | null): string | null {
   return value !== null && /^[0-9A-Fa-f.:]{2,45}$/.test(value) ? value : null;
 }
 
+// An IPv4 address in dotted decimal form as its four bytes, or null.
+function ipv4Bytes(value: string): number[] | null {
+  const parts = value.split(".");
+  if (parts.length !== 4 || parts.some((part) => !/^[0-9]{1,3}$/.test(part) || Number(part) > 255)) return null;
+  return parts.map(Number);
+}
+
+// The eight 16-bit groups of an IPv6 address (at most one "::" and an optional dotted IPv4 tail), or null.
+function ipv6Groups(value: string): number[] | null {
+  let text = value.toLowerCase();
+  const tail = /^(.*:)([0-9.]+)$/.exec(text);
+  if (tail && tail[2]!.includes(".")) {
+    const bytes = ipv4Bytes(tail[2]!);
+    if (!bytes) return null;
+    text = `${tail[1]}${(bytes[0]! * 256 + bytes[1]!).toString(16)}:${(bytes[2]! * 256 + bytes[3]!).toString(16)}`;
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const rest = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const count = head.length + rest.length;
+  if ([...head, ...rest].some((group) => !/^[0-9a-f]{1,4}$/.test(group)) || (halves.length === 1 ? count !== 8 : count > 7)) return null;
+  const parse = (group: string) => parseInt(group, 16);
+  return [...head.map(parse), ...Array<number>(8 - count).fill(0), ...rest.map(parse)];
+}
+
+// The key of the external API's per-IP limit, from a clientIp value. An IPv6 client usually holds a whole /64, so an
+// IPv6 address counts as its /64 (the first four groups, normalized), and an IPv4-mapped IPv6 address as its IPv4
+// address. An IPv4 address counts in full as given. A missing value, or one that is not an address, is unattributed.
+export function clientIpLimitKey(ip: string | null): string {
+  if (ip === null) return "unattributed";
+  if (!ip.includes(":")) return ipv4Bytes(ip) ? ip : "unattributed";
+  const groups = ipv6Groups(ip);
+  if (!groups) return "unattributed";
+  if (groups.slice(0, 5).every((group) => group === 0) && groups[5] === 0xffff) return [groups[6]! >> 8, groups[6]! & 255, groups[7]! >> 8, groups[7]! & 255].join(".");
+  return `${groups
+    .slice(0, 4)
+    .map((group) => group.toString(16))
+    .join(":")}::/64`;
+}
+
 // Stores the time and client address of an authenticated request, at most once a minute per key, so a busy key
 // does not write on every request.
 export async function recordApiKeyUse(pool: Pick<Pool, "query">, id: string, ip: string | null): Promise<void> {
